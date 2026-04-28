@@ -1,0 +1,5 @@
+{
+  "name": "email_reply",
+  "description": "Draft a professional email reply.",
+  "instructions": "1. Acknowledge the sender\n2. Address each question\n3. Close with clear next steps"
+}

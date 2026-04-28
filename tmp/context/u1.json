@@ -1,0 +1,14 @@
+{
+  "session_001": {
+    "summary": "We discussed spaceship designs and rocket fuel options for a CubeSat project.",
+    "vector": [],
+    "timestamp": "2026-04-20T15:00:00Z",
+    "metadata": {"topic": "engineering"}
+  },
+  "session_002": {
+    "summary": "Conversation about bicycle frame materials and gear ratios.",
+    "vector": [],
+    "timestamp": "2026-04-22T10:00:00Z",
+    "metadata": {"topic": "cycling"}
+  }
+}

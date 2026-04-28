@@ -1,0 +1,22 @@
+{% if current_session_summary %}
+<SESSION_CONTEXT>
+<purpose>
+Summary of this session so far. Continuity context — never expose to
+the user.
+</purpose>
+
+<summary>
+{{ current_session_summary }}
+</summary>
+
+<usage>
+- Continue from where the session left off. Don't re-explain or re-ask
+  what's already been covered, unless the user revisits it.
+- The summary is partial. If the user references something not in it,
+  use `search_context` to recall earlier sessions before assuming you
+  don't know.
+- If the current message contradicts the summary, the current message
+  wins.
+</usage>
+</SESSION_CONTEXT>
+{% endif %}
