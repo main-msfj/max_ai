@@ -28,18 +28,20 @@ from ..types.completions import Usage
 from ..types.run_context import RunContext
 from ..types.stacks import PromptCtx
 from ..termination import CancellationToken
-from ..validators.stacks import PromptVariablesBuilder, build_default_stack
-from ..validators.registry import CapabilityRegistry
+from ..manager import CapabilityRegistry
+from ..manager.stacks import PromptVariablesBuilder, build_default_stack
 from ..errors.agent import AgentError
+from ..executor.local import LocalExecutor
 
 if t.TYPE_CHECKING:
+    from .executor import CoreExecutor
     from ..stacks import CoreLayer
     from .tools import CoreTool
     from .skill import CoreSkillRegistry
     from .memory import CoreMemoryRegistry
-    from .context import CoreContextRegistry
+    from .context import CoreLogBookRegistry
     from .routines import CoreRoutineRegistry
-    from ..validators.stacks import PromptStack
+    from ..manager.stacks import LayerContainer
     from .knowledge import CoreKnowledgeRegistry
     from .reasoning import BaseReasoning
 
@@ -51,7 +53,7 @@ RunYield = t.Union[CoreEvent, AgentResponse]
 
 # -------- LOGGER -----------------------------------------------------------
 logger = logging.getLogger(__name__)
-log = ScopedLogger(logger, scope="Agent")
+log = ScopedLogger(logger, scope=["Agent"])
 
 
 class Agent(ComponentBase[BaseModel], ABC):
@@ -61,7 +63,7 @@ class Agent(ComponentBase[BaseModel], ABC):
     Lifecycle:
       1. ``__init__`` — sync. Stores configuration, builds the
          ``CapabilityRegistry`` (validating tool name uniqueness,
-         priority_tools coherence, etc.) and the ``PromptStack``
+         priority_tools coherence, etc.) and the ``LayerContainer``
          (validating every layer's template against its declared
          contract). Anything broken at this stage raises immediately.
       2. ``await agent.prepare()`` — async. Loads skills via their
@@ -85,18 +87,19 @@ class Agent(ComponentBase[BaseModel], ABC):
         self,
         name: str,
         description: str,
-        instructions: str,
+        instructions: str,  # change to lsit
         client: CoreChatCompletionClient,
-        memory: "CoreMemoryRegistry | None" = None,
-        skills: "CoreSkillRegistry | None" = None,
-        context: "CoreContextRegistry | None" = None,
-        routines: "CoreRoutineRegistry | None" = None,
-        tools: "t.Sequence[CoreTool] | None" = None,
-        knowledge: "t.Sequence[CoreKnowledgeRegistry] | None" = None,
-        middlewares: "t.Sequence[CoreMiddleware] | None" = None,
-        framework_layers: "t.Sequence[CoreLayer] | None" = None,
-        reasoning: "BaseReasoning | None" = None,
-        output_format: "t.Type[BaseModel] | None" = None,
+        memory: CoreMemoryRegistry | None = None,
+        skills: CoreSkillRegistry | None = None,
+        logbook: CoreLogBookRegistry | None = None,
+        routines: CoreRoutineRegistry | None = None,
+        toolset: t.Sequence[CoreTool] | None = None,
+        knowledge: t.Sequence[CoreKnowledgeRegistry] | None = None,
+        middlewares: t.Sequence[CoreMiddleware] | None = None,
+        framework_layers: t.Sequence[CoreLayer] | None = None,
+        reasoning: BaseReasoning | None = None,
+        executor: CoreExecutor | None = None,
+        output_format: t.Type[BaseModel] | None = None,
         priority_tools: list[str] | None = None,
         config: AgentConfig | None = None,
     ) -> None:
@@ -110,9 +113,9 @@ class Agent(ComponentBase[BaseModel], ABC):
             client: LLM provider abstraction for API interactions.
             memory: Persistent user-fact backend.
             skills: Skill registry — resolved during ``prepare()``.
-            context: Conversation-context registry (per session
+            logbook: Conversation-logbook registry (per session
                 summaries + cross-session search).
-            tools: Executable functions available to the agent.
+            toolset: Executable functions available to the agent.
             routines: Repetitive task procedures discovered via tools.
             knowledge: Persistent sources of truth (RAG backends).
             middlewares: Logic hooks to intercept and process
@@ -125,6 +128,8 @@ class Agent(ComponentBase[BaseModel], ABC):
             reasoning: Optional user-provided reasoning loop. Defaults
                 to ReActLoop. Config-only at construction; runtime
                 wiring is injected later via ``bind()``.
+            executor: Optional user-provided execution strategy. Defaults to
+                ``LocalExecutor``.
             output_format: Pydantic model for structured response.
                 Forwarded to the client on every LLM call.
             priority_tools: Tool names the agent should strongly prefer
@@ -138,23 +143,18 @@ class Agent(ComponentBase[BaseModel], ABC):
         self.description = self.require_type(description, str, "description")
         self.instructions = self.require_type(instructions, str, "instructions")
         self.client = self.require_type(client, CoreChatCompletionClient, "client")
-
-        self.middlewares = list(middlewares or [])
         self.config = self.require_type(config or AgentConfig(), AgentConfig, "config")
+
         self.reasoning = reasoning
         self.output_format = output_format
+        self.middlewares = list(middlewares or [])
+        self.executor = executor or LocalExecutor(self.config.tool_timeout)
 
-        self.capabilities: CapabilityRegistry = CapabilityRegistry(
-            tools=tools,
-            memory=memory,
-            knowledge=knowledge,
-            routines=routines,
-            skills=skills,
-            context=context,
-            priority_tools=priority_tools,
+        self.capabilities = CapabilityRegistry(
+            memory, routines, skills, logbook, priority_tools, toolset, knowledge
         )
 
-        self.prompt_stack: PromptStack = build_default_stack(overrides=framework_layers)
+        self.prompt_stack: LayerContainer = build_default_stack(framework_layers)
         self._variables_builder: PromptVariablesBuilder = PromptVariablesBuilder(self)
         self._rendered_layers: dict[type[CoreLayer], str] = {}
         self._prepared: bool = False
@@ -335,7 +335,7 @@ class Agent(ComponentBase[BaseModel], ABC):
             tools=self.capabilities.all_tools,
             middlewares=self.middlewares,
             agent_name=self.name,
-            waiting_timeout=self.config.tool_call_timeout,
+            executor=self.executor,
             max_concurrent_tools=self.config.tool_call_concurrency,
         )
         reasoning = self._build_reasoning(tool_executor)
@@ -589,7 +589,7 @@ class Agent(ComponentBase[BaseModel], ABC):
         stale = ctx.tool_state.stale_executions
         if not actionable and not rejected and not stale:
             raise AgentError.nothing_to_resume(agent_name=self.name)
-        
+
     def _handle_stale_executions(self, ctx: RunContext) -> None:
         """Default stale-execution policy: mark them all as failed.
 

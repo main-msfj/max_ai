@@ -4,14 +4,12 @@ import logging
 import typing as t
 from collections.abc import AsyncGenerator
 
-
-
 from ..types.middleware import MiddlewareCtx
+from ..loggers import MiddlewareLogger
 from ..types.run_context import RunContext
 from ..core.event_type import CoreEvent, ToolApprovalEvent
 
 if t.TYPE_CHECKING:
-    from ..loggers import MiddlewareLogger
     from ..base.middleware import CoreMiddleware
 
 class MiddlewareChain:

@@ -5,7 +5,9 @@ from .memory import CoreMemoryRegistry
 from .knowledge import CoreKnowledgeRegistry
 from .routines import CoreRoutineRegistry
 from .middleware import CoreMiddleware
-from .component_config import Component, ComponentBase  
+from .component_config import Component, ComponentBase
+from .context import CoreLogBookRegistry
+from .skill import CoreSkillRegistry
 
 __all__ = [
     "Agent",
@@ -17,5 +19,7 @@ __all__ = [
     "CoreMemoryRegistry",
     "CoreKnowledgeRegistry",
     "CoreRoutineRegistry",
+    "CoreLogBookRegistry",
     "ToolContext",
+    "CoreSkillRegistry"
 ]

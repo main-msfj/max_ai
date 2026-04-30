@@ -26,7 +26,7 @@ class AgentConfig(BaseModel):
     summarize_tool_result: bool = Field(default=True)
     enable_self_reflection: bool = Field(default=False)
     max_loop_iterations: int = Field(default=10)
-    tool_call_timeout: int = Field(default=300)
+    tool_timeout: int = Field(default=300)
     tool_call_concurrency: int = Field(default=5)
     max_connection_retries: int = Field(default=3)
     exponential_backoff_base: float = Field(default=1.0)

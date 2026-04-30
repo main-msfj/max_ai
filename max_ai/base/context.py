@@ -39,10 +39,10 @@ from ..types.tools import ToolApprovalMode
 from ..core.blocks import ContextBlock
 
 logger = logging.getLogger(__name__)
-log = ScopedLogger(logger, scope="CoreContextRegistry")
+log = ScopedLogger(logger, scope="CoreLogBookRegistry")
 
 
-class ContextToolMode(str, Enum):
+class LogBookToolMode(str, Enum):
     """Controls whether the context-search tool is exposed to the LLM.
 
     - ``NONE``      : No tool. The current-session summary may still be
@@ -56,7 +56,7 @@ class ContextToolMode(str, Enum):
     READ_ONLY = "read_only"
 
 
-class CoreContextRegistry(ComponentBase[BaseModel], ABC):
+class CoreLogBookRegistry(ComponentBase[BaseModel], ABC):
     """Abstract base class for read-only conversation context.
 
     A registry instance is scoped to a single ``(user_id, session_id)``
@@ -69,12 +69,12 @@ class CoreContextRegistry(ComponentBase[BaseModel], ABC):
         self,
         user_id: str,
         session_id: str,
-        tool_mode: ContextToolMode = ContextToolMode.READ_ONLY,
+        tool_mode: LogBookToolMode = LogBookToolMode.READ_ONLY,
     ) -> None:
         self.user_id: str = self.require_type(user_id, str, "user_id")
         self.session_id: str = self.require_type(session_id, str, "session_id")
-        self.tool_mode: ContextToolMode = self.require_type(
-            tool_mode, ContextToolMode, "tool_mode"
+        self.tool_mode: LogBookToolMode = self.require_type(
+            tool_mode, LogBookToolMode, "tool_mode"
         )
         self._connected: bool = False
         self._connect_lock: asyncio.Lock = asyncio.Lock()
@@ -140,9 +140,14 @@ class CoreContextRegistry(ComponentBase[BaseModel], ABC):
           - ``NONE``      → []
           - ``READ_ONLY`` → [search_context]
         """
-        if self.tool_mode == ContextToolMode.NONE:
+        if self.tool_mode == LogBookToolMode.NONE:
             return []
         return [self._build_search_tool()]
+
+    @property
+    def tools(self) -> list[CoreTool]:
+        """Public capability surface for tool aggregation."""
+        return self.as_tools()
 
     # -------- TOOL FACTORIES -----------------------------------------------------------
     def _build_search_tool(self) -> CoreTool:

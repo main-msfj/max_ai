@@ -35,7 +35,7 @@ from max_ai.types.tool_call import ToolCallRecord, ToolResult
 from max_ai.types.run_context import RunContext
 from max_ai.types.stacks import PromptCtx
 from max_ai.types.tools import ToolApprovalMode
-from max_ai.validators.stacks import build_default_stack
+from max_ai.manager.stacks import build_default_stack
 
 
 # -------- TEST CONFIGURATION -----------------------------------------------------------

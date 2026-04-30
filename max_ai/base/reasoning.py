@@ -259,10 +259,10 @@ class BaseReasoning(ABC):
         """
         _log = log.child(
             run_id=ctx.run_id,
-            session_id=ctx.runtime_state.session_id,
+            session_id=ctx.session_id,
         )
-        
-        model_metadata = {
+
+        model_metadata: dict[str, t.Any] = {
             "model": getattr(self.client, "model", None),
             "tools": self._tools,
         }
@@ -373,9 +373,12 @@ class BaseReasoning(ABC):
         """
         _log = log.child(
             run_id=ctx.run_id,
-            session_id=ctx.runtime_state.session_id,
+            session_id=ctx.session_id,
         )
-        model_metadata = {"model": getattr(self.client, "model", None)}
+        model_metadata = {
+            "model": getattr(self.client, "model", None),
+            "tools": self._tools,
+        }
 
         if cancellation_token and cancellation_token.is_cancelled():
             raise asyncio.CancelledError()

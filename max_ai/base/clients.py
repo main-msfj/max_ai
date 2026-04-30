@@ -152,9 +152,10 @@ class CoreChatCompletionClient(ComponentBase[BaseModel], ABC):
         messages = self.format_messages(ctx, prompts)
         api_messages = self.build_api_messages(messages)
         tool_schema = self.build_tool_schema(tools or [])
-
         if stream:
+            # Return the async generator directly — caller iterates with `async for`.
             return self.stream(api_messages, tool_schema, output_format, **kwargs)
+
         return await self.complete(api_messages, tool_schema, output_format, **kwargs)
 
     # -------- ABSTRACT — MESSAGE ASSEMBLY -----------------------------------------------------------

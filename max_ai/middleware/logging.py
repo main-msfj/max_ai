@@ -179,7 +179,7 @@ class LoggingMiddleware(CoreMiddleware):
         """Build and emit the finish line for a model_call."""
         tokens_in = 0
         tokens_out = 0
-        finish_reason = "?"
+        finish_reason = True
 
         if isinstance(result, ChatCompletionResult):
             tokens_in = result.usage.tokens_input

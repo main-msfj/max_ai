@@ -16,7 +16,7 @@ class ContextLayer(Component[StackConfig], CoreLayer):
     Prompt layer that surfaces continuity context for the active session.
 
     On session resume, the framework asks the configured
-    ``CoreContextRegistry`` for the stored summary of the current session
+    ``CoreLogBookRegistry`` for the stored summary of the current session
     (via ``get_current_session_summary()``) and feeds it into this layer
     as ``current_session_summary``. The result is rendered as a small
     background block at the top of the system prompt so the agent can
@@ -32,7 +32,7 @@ class ContextLayer(Component[StackConfig], CoreLayer):
 
     Template Variables:
         current_session_summary (optional): Stored summary of the active
-            session, returned by ``CoreContextRegistry.get_current_session_summary()``.
+            session, returned by ``CoreLogBookRegistry.get_current_session_summary()``.
             ``None`` or an empty string causes the layer to render empty.
     """
     

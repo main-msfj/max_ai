@@ -20,8 +20,6 @@ def build_client() -> OllamaChatCompletionClient:
         config=ModelConfig(
             supports_function_calling=True,
             supports_thinking=False,
-            thinking_tag="think",
-            thinking_position="start",
         ),
         think=False,
     )
@@ -49,7 +47,7 @@ async def test_agent_run():
         middlewares=[LoggingMiddleware(level="info")],
     )
 
-    response = await agent.run(task="What's the weather in tokio?")
+    response = await agent.run(task="Please tell me a joke about fish and check how is the weather in Tokyo and in Nicargua")
     print("Final response:", response)
 
 if __name__ == "__main__":

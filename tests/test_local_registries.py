@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 from max_ai.base.memory import MemoryToolMode
-from max_ai.base.context import ContextToolMode
+from max_ai.base.context import LogBookToolMode
 from max_ai.base.knowledge import KnowledgeToolMode
 from max_ai.base.routines import RoutineToolMode
 
@@ -123,7 +123,7 @@ async def test_local_context_registry_summary_and_search(tmp_path: Path):
         user_id="u1",
         session_id="session_002",  # current session is 002
         base_path=tmp_path,
-        tool_mode=ContextToolMode.READ_ONLY,
+        tool_mode=LogBookToolMode.READ_ONLY,
     )
 
     async with ctx:

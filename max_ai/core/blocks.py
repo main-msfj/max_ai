@@ -25,7 +25,6 @@ class RoutineBlocks(BaseModel):
 class RunTimeBlock(BaseModel):
     """Single block of Run Time context information"""
 
-    session_id: str | None = Field(default=None)
     metadata: dict[str, t.Any] = Field(default_factory=dict)
     environment: dict[str, t.Any] = Field(default_factory=dict)
     shared_state: dict[str, t.Any] = Field(default_factory=dict)

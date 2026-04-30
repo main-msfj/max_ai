@@ -20,13 +20,13 @@ from pathlib import Path
 
 import pytest
 
-from max_ai.validators.registry import CapabilityRegistry
+from max_ai.manager.registry import CapabilityRegistry
 from max_ai.errors.capabilities import CapabilityError
 
 from max_ai.tools import FunctionAsTool
 
 from max_ai.base.memory import MemoryToolMode
-from max_ai.base.context import ContextToolMode
+from max_ai.base.context import LogBookToolMode
 from max_ai.base.routines import RoutineToolMode
 
 from max_ai.capabilities.memory import LocalMemoryRegistry
@@ -211,7 +211,7 @@ async def test_context_contributes_tools(tmp_path: Path):
         user_id="u1",
         session_id="s1",
         base_path=tmp_path,
-        tool_mode=ContextToolMode.READ_ONLY,
+        tool_mode=LogBookToolMode.READ_ONLY,
     )
     cr = CapabilityRegistry(context=ctx)
     names = {t.name for t in cr.context_tools}

@@ -44,11 +44,9 @@ from dataclasses import dataclass
 
 from pydantic import ValidationError
 
-from .executor import CoreExecutor
 from ..base.tools import CoreTool, ToolContext
 from ..base.middleware import CoreMiddleware
 from ..middleware.chain import MiddlewareChain
-from ..executor.local import LocalExecutor
 
 from ..loggers import ScopedLogger
 from ..termination import CancellationToken
@@ -101,8 +99,8 @@ class ToolExecutor:
         tools: list[CoreTool] | None = None,
         middlewares: list[CoreMiddleware] | None = None,
         agent_name: str = "unknown",
+        waiting_timeout: int = 300,
         max_concurrent_tools: int = 5,
-        executor: CoreExecutor | None = None,
     ) -> None:
         """Initialize the executor.
 
@@ -112,17 +110,15 @@ class ToolExecutor:
                 tool execution.
             agent_name: Used for logging and as the ``source`` field
                 of emitted events and ``ToolMessage`` instances.
+            waiting_timeout: Default timeout (seconds) when a tool
+                does not declare its own ``timeout_seconds``.
             max_concurrent_tools: Bound on parallel tool execution.
-            executor: Strategy that actually runs the tool. Defaults
-                to ``LocalExecutor``. Choosing a different strategy
-                (Docker, MCP, etc.) changes where every tool of this
-                agent runs — the choice is per-agent, not per-tool.
         """
         self.tools: dict[str, CoreTool] = {t.name: t for t in (tools or [])}
         self.mw_chain = MiddlewareChain(middlewares=middlewares or [])
         self.agent_name = agent_name
+        self.waiting_timeout = waiting_timeout
         self.max_concurrent_tools = max_concurrent_tools
-        self.executor: CoreExecutor = executor or LocalExecutor()
 
     # -------- PUBLIC ENTRY POINT -----------------------------------------------------------
     async def execute_tool_call(
@@ -299,6 +295,16 @@ class ToolExecutor:
         record: ToolCallRecord,
         cancellation_token: CancellationToken | None,
     ) -> AsyncGenerator[ToolExecutorYield, None]:
+        """Execute the tool wrapped by the middleware chain.
+
+        The chain receives ``action="tool_call"``, ``data=record``, and
+        a ``func`` that actually invokes ``tool.execute()`` with all
+        the safety wrappers (timeout, cancellation linking, exception
+        mapping). Whatever events the chain emits flow through
+        unchanged; the final non-event yield is the ``ToolResult``,
+        which we use to consume the record and emit the response event
+        + ``ToolMessage``.
+        """
         _log = log.child(
             agent_name=self.agent_name,
             run_id=ctx.run_id,
@@ -306,17 +312,13 @@ class ToolExecutor:
             tool_call_id=record.id,
         )
 
+        # Move record to EXECUTING right before invoking the tool. This
+        # is a hard barrier: from here on, the only valid terminal
+        # transition is mark_consumed().
         record.start_execution()
 
-        # Build the per-call ToolContext once. The executor never sees
-        # the full RunContext — it only gets what tools legitimately need.
-        tool_ctx = ToolContext(
-            run_id=ctx.run_id,
-            session_id=ctx.session_id or "",
-        )
-
         async def func(rec: ToolCallRecord) -> ToolResult:
-            return await self.executor.run(tool, rec, tool_ctx, cancellation_token)
+            return await self._invoke_tool(tool, rec, ctx, cancellation_token)
 
         result: ToolResult | None = None
         try:
@@ -337,11 +339,14 @@ class ToolExecutor:
                     item_type=type(item).__name__,
                 )
         except Exception as e:
+            # Catastrophic chain failure (not a tool-level error — those
+            # are captured inside _invoke_tool and surfaced as ToolResult).
             _log.error("Middleware chain failed", err=str(e))
             result = ToolResult.execution_error(
                 record.id, f"Middleware chain failure: {e}"
             )
 
+        # Defensive: if the chain returned no result, synthesize one.
         if result is None:
             _log.error("Middleware chain produced no result")
             result = ToolResult.execution_error(record.id, "Tool produced no result.")
@@ -349,43 +354,43 @@ class ToolExecutor:
         async for item in self._consume_and_yield(record, result):
             yield item
 
-    # async def _invoke_tool(
-    #     self,
-    #     tool: CoreTool,
-    #     record: ToolCallRecord,
-    #     ctx: RunContext,
-    #     cancellation_token: CancellationToken | None,
-    # ) -> ToolResult:
-    #     """Actually call ``tool.execute(...)`` with timeout + cancellation + try/except.
+    async def _invoke_tool(
+        self,
+        tool: CoreTool,
+        record: ToolCallRecord,
+        ctx: RunContext,
+        cancellation_token: CancellationToken | None,
+    ) -> ToolResult:
+        """Actually call ``tool.execute(...)`` with timeout + cancellation + try/except.
 
-    #     Returns a ``ToolResult`` — never raises (every exception is
-    #     captured and turned into a ``tool_failure``).
-    #     """
-    #     timeout = tool.timeout_seconds or self.waiting_timeout
-    #     tool_ctx = ToolContext(
-    #         run_id=ctx.run_id,
-    #         session_id=ctx.session_id or "",
-    #     )
+        Returns a ``ToolResult`` — never raises (every exception is
+        captured and turned into a ``tool_failure``).
+        """
+        timeout = tool.timeout_seconds or self.waiting_timeout
+        tool_ctx = ToolContext(
+            run_id=ctx.run_id,
+            session_id=ctx.session_id or "",
+        )
 
-    #     try:
-    #         task = asyncio.create_task(
-    #             tool.execute(record, tool_ctx, cancellation_token)
-    #         )
-    #         if cancellation_token is not None:
-    #             cancellation_token.link_future(task)
-    #         return await asyncio.wait_for(task, timeout=timeout)
+        try:
+            task = asyncio.create_task(
+                tool.execute(record, tool_ctx, cancellation_token)
+            )
+            if cancellation_token is not None:
+                cancellation_token.link_future(task)
+            return await asyncio.wait_for(task, timeout=timeout)
 
-    #     except asyncio.TimeoutError:
-    #         return ToolResult.timeout(record.id, timeout_seconds=timeout)
+        except asyncio.TimeoutError:
+            return ToolResult.timeout(record.id, timeout_seconds=timeout)
 
-    #     except asyncio.CancelledError:
-    #         return ToolResult.cancelled_during_execution(record.id)
+        except asyncio.CancelledError:
+            return ToolResult.cancelled_during_execution(record.id)
 
-    #     except ValidationError as ve:
-    #         return ToolResult.invalid_parameters(record.id, str(ve))
+        except ValidationError as ve:
+            return ToolResult.invalid_parameters(record.id, str(ve))
 
-    #     except Exception as e:
-    #         return ToolResult.execution_error(record.id, str(e))
+        except Exception as e:
+            return ToolResult.execution_error(record.id, str(e))
 
     # -------- PARALLEL EXECUTION -----------------------------------------------------------
     async def _execute_parallel(
@@ -472,6 +477,7 @@ class ToolExecutor:
             tool_call_id=record.id,
             tool_result=result,
         )
+
 
     async def _consume_and_yield(
         self,

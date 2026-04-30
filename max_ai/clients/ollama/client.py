@@ -800,9 +800,16 @@ class OllamaChatCompletionClient(
                     is_complete=False,
                     tool_call_chunk={
                         "id": tc.id,
-                        "name": tc.tool_name,
-                        "arguments": tc.parameters,
+                        "function": {
+                            "name": tc.tool_name,
+                            "arguments": json.dumps(tc.parameters),  # str, not dict
+                        },
                     },
+                    # tool_call_chunk={
+                    #     "id": tc.id,
+                    #     "name": tc.tool_name,
+                    #     "arguments": tc.parameters,
+                    # },
                 )
 
             # Native thinking field — Ollama already split it for us. Emit

@@ -144,20 +144,8 @@ class ReActLoop(BaseReasoning):
 
         _log = log.child(
             run_id=ctx.run_id,
-            session_id=ctx.runtime_state.session_id,
+            session_id=ctx.session_id,
         )
-
-        # while loop_state.iteration < self.max_loop_iterations:
-        #     if cancellation_token and cancellation_token.is_cancelled():
-        #         raise asyncio.CancelledError()
-
-        #     loop_state.iteration += 1
-
-        #     yield ReasoningIterationEvent(
-        #         source=self.name,
-        #         iteration=loop_state.iteration,
-        #         max_iterations=self.max_loop_iterations,
-        #     )
 
         while loop_state.iteration < self.max_loop_iterations:
             if cancellation_token and cancellation_token.is_cancelled():
@@ -168,7 +156,8 @@ class ReActLoop(BaseReasoning):
             # Must run BEFORE the LLM call so the LLM sees the tool results
             # in this same turn.
             pending = [
-                r for r in ctx.tool_state.records.values()
+                r
+                for r in ctx.tool_state.records.values()
                 if r.is_actionable or r.is_rejected
             ]
             if pending:
@@ -302,7 +291,7 @@ class ReActLoop(BaseReasoning):
                 id=tc.id,
                 tool_name=tc.tool_name,
                 parameters=tc.parameters,
-                session_id=ctx.runtime_state.session_id,
+                session_id=ctx.session_id,
             )
             ctx.tool_state.add(record)
             records.append(record)

@@ -1,0 +1,26 @@
+14:30:08 INFO  max_ai.middleware.logging | → model_call_stream started | model=qwen3:4b-instruct-2507-q4_K_M | msgs=1 | tools=3
+14:33:41 INFO  max_ai.middleware.logging | ← model_call_stream finished | duration=212880ms | tokens_in=0 | tokens_out=0 | finish=True
+14:33:44 ERROR asyncio | an error occurred during closing of asynchronous generator <async_generator object AsyncClient.stream at 0x78686e761df0>
+asyncgen: <async_generator object AsyncClient.stream at 0x78686e761df0>
+Traceback (most recent call last):
+  File "/root/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/asyncio/base_events.py", line 654, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+asyncio.exceptions.CancelledError
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/root/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/asyncio/runners.py", line 190, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/root/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/asyncio/runners.py", line 123, in run
+    raise KeyboardInterrupt()
+KeyboardInterrupt
+
+During handling of the above exception, another exception occurred:
+
+RuntimeError: aclose(): asynchronous generator is already running

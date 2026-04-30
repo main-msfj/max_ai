@@ -1,4 +1,4 @@
-"""Builder for the default PromptStack with user overrides."""
+"""Builder for the default LayerContainer with user overrides."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import logging
 import typing as t
 from collections.abc import Callable, Awaitable
 
+from ..errors.manager import LayerContainerError
 
 from ..base.layer import CoreLayer
 from ..stacks.memory_layer import MemoryLayer
@@ -42,10 +43,10 @@ LayerT = t.TypeVar("LayerT", bound=CoreLayer)
 CollectorFn = Callable[["PromptVariablesBuilder"], Awaitable[dict[str, t.Any]]]
 
 logger = logging.getLogger(__name__)
-log = ScopedLogger(logger, scope="PromptStackBuilder")
+log = ScopedLogger(logger, scope="[LayerContainer")
 
 
-class PromptStack:
+class LayerContainer:
     """
     Validated container of ``CoreLayer`` layers.
 
@@ -64,18 +65,7 @@ class PromptStack:
     """
 
     def __init__(self, layers: t.Sequence[CoreLayer]) -> None:
-        if not layers:
-            raise ValueError("PromptStack requires at least one layer.")
-
-        self._check_no_duplicates(layers)
-
-        # Revalidate every layer up front. Each CoreLayer already validates
-        # itself in __init__, but calling it here makes the guarantee
-        # explicit: a PromptStack only exists if every layer is healthy.
-        for layer in layers:
-            layer._validate_placeholders()
-
-        self._layers: dict[type, CoreLayer] = {type(layer): layer for layer in layers}
+        self._layers = self._check_no_duplicates(layers)
 
     # -------- INTROSPECTION -----------------------------------------------------------
     def __iter__(self) -> t.Iterator[CoreLayer]:
@@ -85,65 +75,65 @@ class PromptStack:
     def __len__(self) -> int:
         return len(self._layers)
 
-    def __contains__(self, layer_type: type) -> bool:
-        return layer_type in self._layers
+    def __repr__(self) -> str:
+        names = ", ".join(type(layer).__name__ for layer in self._layers.values())
+        return f"LayerContainer([{names}])"
 
-    def as_list(self) -> list[CoreLayer]:
-        """Return a shallow copy of the layers in insertion order."""
-        return list(self._layers.values())
+    def _check_no_duplicates(
+        self, layers: t.Sequence[CoreLayer]
+    ) -> dict[type, CoreLayer]:
+        if not layers:
+            raise LayerContainerError.required_one_layer()
 
-    def get(self, layer_type: type[LayerT]) -> LayerT:
-        """Return the layer of the given type. Raises KeyError if absent."""
-        try:
-            return t.cast(LayerT, self._layers[layer_type])
-        except KeyError:
-            raise KeyError(f"No layer of type {layer_type.__name__} in stack.")
-
-    def find(self, layer_type: type[LayerT]) -> LayerT | None:
-        """Return the layer of the given type, or None if absent."""
-        layer = self._layers.get(layer_type)
-        return t.cast(LayerT, layer) if layer is not None else None
-
-    # -------- MUTATION -----------------------------------------------------------
-    def replace(self, layer: CoreLayer) -> None:
-        """Replace the layer of the same concrete type with ``layer``."""
-        layer_type = type(layer)
-        if layer_type not in self._layers:
-            raise KeyError(f"No layer of type {layer_type.__name__} to replace.")
-        layer._validate_placeholders()
-        self._layers[layer_type] = layer
-
-    def append(self, layer: CoreLayer) -> None:
-        """Add a new layer type to the stack."""
-        layer_type = type(layer)
-        if layer_type in self._layers:
-            raise ValueError(
-                f"Stack already has a layer of type {layer_type.__name__}."
-            )
-        layer._validate_placeholders()
-        self._layers[layer_type] = layer
-
-    def remove(self, layer_type: type) -> None:
-        """Remove the layer of the given type."""
-        if layer_type not in self._layers:
-            raise KeyError(f"No layer of type {layer_type.__name__} to remove.")
-        del self._layers[layer_type]
-
-    # -------- INTERNALS -----------------------------------------------------------
-    @staticmethod
-    def _check_no_duplicates(layers: t.Sequence[CoreLayer]) -> None:
         seen: set[type] = set()
+        validated: dict[type, CoreLayer] = {}
         for layer in layers:
             layer_type = type(layer)
             if layer_type in seen:
-                raise ValueError(
-                    f"Duplicate layer type in stack: {layer_type.__name__}"
-                )
-            seen.add(layer_type)
+                raise LayerContainerError.duplicated_layers(layer_type.__name__)
 
-    def __repr__(self) -> str:
-        names = ", ".join(type(i).__name__ for i in self._layers.values())
-        return f"PromptStack([{names}])"
+            seen.add(layer_type)
+            layer.validate_placeholders()
+            validated[layer_type] = layer
+
+        return validated
+    
+    @classmethod
+    def build_default_stack(
+        cls,
+        overrides: t.Sequence[CoreLayer] | None = None,
+    ) -> "LayerContainer":
+        """
+        Build the default LayerContainer with any user-provided overrides.
+        """
+        # Instantiate default layers defined by the framework
+        layers: list[CoreLayer] = [layer_cls() for layer_cls in DEFAULT_FRAMEWORK_LAYERS]
+
+        if not overrides:
+            # Return an instance of the class (LayerContainer)
+            return cls(layers)
+
+        override_by_type: dict[type, CoreLayer] = {}
+        for override in overrides:
+            override_type = type(override)
+            if override_type in override_by_type:
+                raise ValueError(
+                    f"Duplicate override for layer type {override_type.__name__}."
+                )
+            override_by_type[override_type] = override
+
+        # Replace defaults in place. Remaining overrides are appended.
+        for i, layer in enumerate(layers):
+            if type(layer) in override_by_type:
+                layers[i] = override_by_type.pop(type(layer))
+
+        extras: list[CoreLayer] = []
+        for override_type, override in override_by_type.items():
+            log.info("Adding custom layer to stack: %s", override_type.__name__)
+            extras.append(override)
+
+        # Return a new instance of the class with all layers processed
+        return cls(layers + extras)
 
 
 class PromptVariablesBuilder:
@@ -184,19 +174,27 @@ class PromptVariablesBuilder:
         memories = await memory.get_context()
         result: dict[str, t.Any] = {"persistent_memories": memories}
 
-        tool_names = [t.name for t in self.agent.capabilities.memory_tools]
+        tool_names = [tool.name for tool in memory.tools]
         if tool_names:
             result["memory_tools"] = tool_names
         return result
 
     async def _for_knowledge(self) -> dict[str, t.Any]:
-        tool_names = [t.name for t in self.agent.capabilities.knowledge_tools]
+        tool_names = [
+            tool.name
+            for registry in self.agent.capabilities.knowledge
+            for tool in registry.tools
+        ]
         if not tool_names:
             return {}
         return {"retrieval_tools": tool_names}
 
     async def _for_routines(self) -> dict[str, t.Any]:
-        tool_names = {t.name for t in self.agent.capabilities.routine_tools}
+        routines = self.agent.capabilities.routines
+        if routines is None:
+            return {}
+
+        tool_names = {tool.name for tool in routines.tools}
         result: dict[str, t.Any] = {}
         if "search_routines" in tool_names:
             result["routine_search_tool"] = "search_routines"
@@ -210,8 +208,8 @@ class PromptVariablesBuilder:
     async def _for_priority_tools(self) -> dict[str, t.Any]:
         return {"priority_tools": list(self.agent.capabilities.priority_tools)}
 
-    async def _for_context(self) -> dict[str, t.Any]:
-        context = self.agent.capabilities.context
+    async def _for_logbook(self) -> dict[str, t.Any]:
+        context = self.agent.capabilities.logbook
         if context is None:
             return {}
         summary = await context.get_current_session_summary()
@@ -227,15 +225,15 @@ class PromptVariablesBuilder:
         RoutineLayer: _for_routines,
         SkillsLayer: _for_skills,
         PriorityToolsLayer: _for_priority_tools,
-        ContextLayer: _for_context,
+        ContextLayer: _for_logbook,
     }
 
 
 def build_default_stack(
     overrides: t.Sequence[CoreLayer] | None = None,
-) -> PromptStack:
+) -> LayerContainer:
     """
-    Build the default ``PromptStack`` with any user-provided overrides.
+    Build the default ``LayerContainer`` with any user-provided overrides.
 
     Every layer is validated during stack construction. If a user passes
     a broken override (bad template, contract mismatch), this function
@@ -251,7 +249,7 @@ def build_default_stack(
         overrides: Iterable of custom layer instances.
 
     Returns:
-        A fully validated ``PromptStack``.
+        A fully validated ``LayerContainer``.
 
     Raises:
         StackError: If any layer (default or override) fails validation.
@@ -265,7 +263,7 @@ def build_default_stack(
     layers: list[CoreLayer] = [cls() for cls in DEFAULT_FRAMEWORK_LAYERS]
 
     if not overrides:
-        return PromptStack(layers)
+        return LayerContainer(layers)
 
     override_by_type: dict[type, CoreLayer] = {}
     for override in overrides:
@@ -288,4 +286,4 @@ def build_default_stack(
         log.info("Adding custom layer to stack: %s", override_type.__name__)
         extras.append(override)
 
-    return PromptStack(layers + extras)
+    return LayerContainer(layers + extras)

@@ -75,7 +75,7 @@ class CoreLayer(ComponentBase[BaseModel], ABC):
         self._template_variables: frozenset[str] = self._parse_placeholders(
             self._template_source
         )
-        self._validate_placeholders()
+        self.validate_placeholders()
         self._compiled: Template = self._env.from_string(self._template_source)
 
     # -------- ENVIRONMENT -----------------------------------------------------------
@@ -155,7 +155,7 @@ class CoreLayer(ComponentBase[BaseModel], ABC):
         """Variables that MAY be supplied to render()."""
         return set()
 
-    def _validate_placeholders(self) -> None:
+    def validate_placeholders(self) -> None:
         """
         Verify template variables match the declared contract. Runs once at
         construction — catches typos and schema drift before any render().

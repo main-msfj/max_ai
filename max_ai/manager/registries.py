@@ -21,21 +21,21 @@ import logging
 import typing as t
 
 from ..errors.capabilities import CapabilityError
+from ..loggers import ScopedLogger
 
 logger = logging.getLogger(__name__)
-
+log = ScopedLogger(logger, prefix="[CapabilityRegistry]")
 
 if t.TYPE_CHECKING:
     from ..types.skills import Skill
-    from ..base.tools import CoreTool
-    from ..base.skill import CoreSkillRegistry
-    from ..base.memory import CoreMemoryRegistry
-    from ..base.context import CoreContextRegistry
-    from ..base.routines import CoreRoutineRegistry
-    from ..base.knowledge import CoreKnowledgeRegistry
-
-ToolInput = t.Union["CoreTool", t.Callable[..., t.Any]]
-
+    from ..base import (
+        CoreTool,
+        CoreSkillRegistry,
+        CoreMemoryRegistry,
+        CoreLogBookRegistry,
+        CoreRoutineRegistry,
+        CoreKnowledgeRegistry,
+    )
 
 class CapabilityRegistry:
     """
@@ -61,47 +61,45 @@ class CapabilityRegistry:
 
     def __init__(
         self,
-        memory: "CoreMemoryRegistry | None" = None,
-        routines: "CoreRoutineRegistry | None" = None,
-        skills: "CoreSkillRegistry | None" = None,
-        context: "CoreContextRegistry | None" = None,
+        memory: CoreMemoryRegistry | None = None,
+        routines: CoreRoutineRegistry | None = None,
+        skills: CoreSkillRegistry | None = None,
+        logbook: CoreLogBookRegistry | None = None,
         priority_tools: t.Sequence[str] | None = None,
-        tools: t.Sequence[ToolInput] | None = None,
-        knowledge: "t.Sequence[CoreKnowledgeRegistry] | None" = None,
+        toolset: t.Sequence[CoreTool | t.Callable[..., t.Any]] | None = None,
+        knowledge: t.Sequence[CoreKnowledgeRegistry] | None = None,
     ) -> None:
 
-        self.memory: "CoreMemoryRegistry | None" = memory
-        self.context: "CoreContextRegistry | None" = context
-        self.routines: "CoreRoutineRegistry | None"  = routines
-        self.skills_registry: "CoreSkillRegistry | None" = skills
-        self.tools: list["CoreTool"] = self._normalize_tools(tools or [])
-        self.knowledge: list[CoreKnowledgeRegistry] = list(knowledge or [])
+        self.memory = memory
+        self.logbook = logbook
+        self.routines = routines
+        self.skills_registry = skills
         self.priority_tools: list[str] = list(priority_tools or [])
+        self.toolset: list[CoreTool] = self._normalize_tools(toolset or [])
+        self.knowledge: list[CoreKnowledgeRegistry] = list(knowledge or [])
 
         # Populated by prepare(). Empty until then.
-        self._loaded_skills: list["Skill"] = []
-        self._read_resource_tool: "CoreTool | None" = None
+        self._loaded_skills: list[Skill] = []
+        self._read_resource_tool: CoreTool | None = None
         self._prepared: bool = False
 
-        # Early validation — only covers what's available sync.
+        # Early validation - only covers what's available sync.
         self._validate_priority_tools_exist()
         self._validate_unique_tool_names(self._all_tools_sync())
 
     # -------- NORMALIZATION ------------------------------------------
     @staticmethod
     def _normalize_tools(
-        tools: t.Sequence[ToolInput],
-    ) -> list["CoreTool"]:
-        """Coerce a mixed sequence of "CoreTool" | Callable into "CoreTool" list."""
+        tools: t.Sequence[CoreTool | t.Callable[..., t.Any]],
+    ) -> list[CoreTool]:
+        """Coerce a mixed sequence of CoreTool | Callable into CoreTool list."""
         from ..base.tools import CoreTool
 
-        normalized: list["CoreTool"] = []
+        normalized: list[CoreTool] = []
         for tool in tools:
             if isinstance(tool, CoreTool):
                 normalized.append(tool)
             elif callable(tool):
-                # Defer importing FunctionAsTool to avoid circular imports
-                # at module import time (FunctionAsTool imports base.tools).
                 from ..tools.function_as_tool import FunctionAsTool
 
                 normalized.append(FunctionAsTool(tool))
@@ -152,7 +150,7 @@ class CapabilityRegistry:
             )
 
     @staticmethod
-    def _validate_unique_tool_names(tools: t.Sequence["CoreTool"]) -> None:
+    def _validate_unique_tool_names(tools: t.Sequence[CoreTool]) -> None:
         seen: set[str] = set()
         duplicates: set[str] = set()
         for tool in tools:
@@ -163,31 +161,31 @@ class CapabilityRegistry:
             raise CapabilityError.duplicate_tool_names(duplicates=duplicates)
 
     # -------- TOOL COLLECTION ----------------------------------------
-    def _all_tools_sync(self) -> list["CoreTool"]:
+    def _all_tools_sync(self) -> list[CoreTool]:
         """All tools available before prepare() — explicit + memory + knowledge + routines + context."""
-        merged: list["CoreTool"] = list(self.tools)
-        merged.extend(self.memory_tools)
-        merged.extend(self.knowledge_tools)
-        merged.extend(self.routine_tools)
-        merged.extend(self.context_tools)
+        merged: list[CoreTool] = list(self.toolset)
+        merged.extend(self.memory.tools if self.memory else [])
+        merged.extend(self.logbook.tools if self.logbook else [])
+        merged.extend(self.routines.tools if self.routines else [])
+        merged.extend(k for registry in self.knowledge for k in registry.tools)
         return merged
 
-    def _all_tools(self) -> list["CoreTool"]:
+    def _all_tools(self) -> list[CoreTool]:
         """All tools including skills (only valid post-prepare)."""
         return self._all_tools_sync() + self.skill_tools
 
     @property
-    def all_tools(self) -> list["CoreTool"]:
+    def all_tools(self) -> list[CoreTool]:
         """Complete set of tools exposed to the LLM. Requires prepare()."""
         self._ensure_prepared()
         return self._all_tools()
 
     # -------- LOOKUPS ------------------------------------------------
-    def find_tool(self, name: str) -> "CoreTool | None":
+    def find_tool(self, name: str) -> CoreTool | None:
         """Lookup a tool by name across all sources. Returns None if not found."""
         return next((t for t in self.all_tools if t.name == name), None)
 
-    def get_tool(self, name: str) -> "CoreTool":
+    def get_tool(self, name: str) -> CoreTool:
         """Lookup a tool by name. Raises if not found."""
         tool = self.find_tool(name)
         if tool is None:
@@ -196,40 +194,14 @@ class CapabilityRegistry:
 
     # -------- CAPABILITY-DERIVED TOOLS -------------------------------
     @property
-    def memory_tools(self) -> list["CoreTool"]:
-        if self.memory is None:
-            return []
-        tools = self.memory.as_tools()
-        return list(tools) if tools else []
-
-    @property
-    def knowledge_tools(self) -> list["CoreTool"]:
-        # Walrus narrows ``tool`` to non-None inside the comprehension,
-        # and avoids calling ``as_tool()`` twice per registry.
-        return [tool for k in self.knowledge if (tool := k.as_tool()) is not None]
-
-    @property
-    def routine_tools(self) -> list["CoreTool"]:
-        if self.routines is None:
-            return []
-        return self.routines.as_tools()
-
-    @property
-    def context_tools(self) -> list["CoreTool"]:
-        if self.context is None:
-            return []
-        tools = self.context.as_tools()
-        return list(tools) if tools else []
-
-    @property
-    def skill_tools(self) -> list["CoreTool"]:
+    def skill_tools(self) -> list[CoreTool]:
         """Tools exposed by loaded skills.
 
         Includes both the user-defined tools from each skill's
         ``scripts/`` and the global ``read_skill_resource`` tool
         provided by the registry. Empty before ``prepare()``.
         """
-        tools: list["CoreTool"] = []
+        tools: list[CoreTool] = []
         for skill in self._loaded_skills:
             tools.extend(skill.tools)
         if self._read_resource_tool is not None:
@@ -239,7 +211,7 @@ class CapabilityRegistry:
     # -------- QUERIES ------------------------------------------------
     @property
     def has_tools(self) -> bool:
-        return bool(self.tools)
+        return bool(self.toolset)
 
     @property
     def has_memory(self) -> bool:
@@ -258,11 +230,11 @@ class CapabilityRegistry:
         return self.skills_registry is not None
 
     @property
-    def has_context(self) -> bool:
-        return self.context is not None
+    def has_logbook(self) -> bool:
+        return self.logbook is not None
 
     @property
-    def loaded_skills(self) -> list["Skill"]:
+    def loaded_skills(self) -> list[Skill]:
         """Resolved Skill objects. Empty before prepare()."""
         return list(self._loaded_skills)
 
@@ -270,11 +242,11 @@ class CapabilityRegistry:
         return (
             f"CapabilityRegistry("
             f"memory={self.has_memory}, "
-            f"tools={len(self.tools)}, "
+            f"tools={len(self.toolset)}, "
             f"knowledge={len(self.knowledge)}, "
             f"routines={self.has_routines}, "
             f"skills={len(self._loaded_skills) if self._prepared else '?'}, "
-            f"context={self.has_context}, "
+            f"context={self.has_logbook}, "
             f"priority_tools={len(self.priority_tools)}, "
             f"prepared={self._prepared})"
         )

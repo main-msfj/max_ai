@@ -137,9 +137,15 @@ class CoreKnowledgeRegistry(ComponentBase[BaseModel], ABC):
         The tool is named ``search_{self.name}``, so multiple sources
         in the same agent stay distinguishable.
         """
-        if self.tool_mode == KnowledgeToolMode.NONE:
+        if self.tool_mode == KnowledgeToolMode.NONE: # This doe sno make sense as knowledge must be injeccted other wise it will never be used
             return None
         return self._build_search_tool()
+
+    @property
+    def tools(self) -> list[CoreTool]:
+        """Public capability surface for tool aggregation."""
+        tool = self.as_tool()
+        return [] if tool is None else [tool]
 
     # -------- TOOL FACTORIES -----------------------------------------------------------
     def _build_search_tool(self) -> CoreTool:

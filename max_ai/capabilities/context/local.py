@@ -23,11 +23,11 @@ import typing as t
 from datetime import datetime
 from pathlib import Path
 
-from ...base.context import CoreContextRegistry, ContextToolMode, ContextBlock
+from ...base.context import CoreLogBookRegistry, LogBookToolMode, ContextBlock
 
 
-class LocalContextRegistry(CoreContextRegistry):
-    """Filesystem-backed implementation of ``CoreContextRegistry``.
+class LocalContextRegistry(CoreLogBookRegistry):
+    """Filesystem-backed implementation of ``CoreLogBookRegistry``.
 
     Layout::
 
@@ -66,7 +66,7 @@ class LocalContextRegistry(CoreContextRegistry):
         user_id: str,
         session_id: str,
         base_path: str | Path,
-        tool_mode: ContextToolMode = ContextToolMode.READ_ONLY,
+        tool_mode: LogBookToolMode = LogBookToolMode.READ_ONLY,
     ) -> None:
         super().__init__(
             user_id=user_id, session_id=session_id, tool_mode=tool_mode

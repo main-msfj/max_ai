@@ -24,7 +24,7 @@ from max_ai.types.tools import ToolApprovalMode
 
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://ollama:11434")
-MODEL = "qwen3:4b-thinking-2507-q4_K_M" #"qwen3:4b-instruct-2507-q4_K_M"
+MODEL = "qwen3:4b-instruct-2507-q4_K_M"
 
 
 # -------- HEALTH CHECK -----------------------------------------------------------

@@ -3,7 +3,7 @@ from __future__ import annotations
 import typing as t
 from pydantic import BaseModel, Field
 from ..base.layer import CoreLayer
-from ..validators.stacks import PromptStack
+from ..manager.stacks import LayerContainer
 
 # -------- PROMPT CONTEXT -----------------------------------------------------------
 class PromptCtx(BaseModel):
@@ -20,7 +20,7 @@ class PromptCtx(BaseModel):
 
     model_config = {"arbitrary_types_allowed": True}
 
-    stack: PromptStack = Field(
+    stack: LayerContainer = Field(
         ...,
         description="Validated container of prompt layers (source of truth).",
     )

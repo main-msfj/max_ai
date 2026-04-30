@@ -147,6 +147,11 @@ class CoreRoutineRegistry(ComponentBase[BaseModel], ABC):
             self._build_get_tool(),
         ]
 
+    @property
+    def tools(self) -> list[CoreTool]:
+        """Public capability surface for tool aggregation."""
+        return self.as_tools()
+
     # -------- TOOL FACTORIES -----------------------------------------------------------
     def _build_search_tool(self) -> CoreTool:
         from ..tools import FunctionAsTool

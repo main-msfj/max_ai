@@ -138,6 +138,12 @@ class CoreMemoryRegistry(ComponentBase[BaseModel], ABC):
             self._build_update_tool(),
             self._build_delete_tool(),
         ]
+
+    @property
+    def tools(self) -> list[CoreTool]:
+        """Public capability surface for tool aggregation."""
+        return self.as_tools()
+
     # -------- TOOL FACTORIES -----------------------------------------------------------
     def _build_list_tool(self) -> CoreTool:
         from ..tools import FunctionAsTool
