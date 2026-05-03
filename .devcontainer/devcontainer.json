@@ -36,7 +36,9 @@
                 "charliermarsh.ruff",
                 "njpwerner.autodocstring",
                 "ms-toolsai.jupyter",
-                "github.copilot-chat"
+                "github.copilot-chat",
+                "openai.chatgpt"
+                
             ],
             "settings": {
                 "python.defaultInterpreterPath": "/max_ai/.venv/bin/python",

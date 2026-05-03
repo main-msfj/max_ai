@@ -32,7 +32,7 @@ from abc import ABC, abstractmethod
 from pydantic import BaseModel, SecretStr
 
 from .tools import CoreTool
-from .component_config import ComponentBase
+from .component import ComponentBase
 
 from ..types.stacks import PromptCtx
 from ..core.blocks import CoreMessage

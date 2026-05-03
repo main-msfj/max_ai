@@ -23,7 +23,6 @@ base class handles tool generation.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import typing as t
 from enum import Enum
@@ -31,7 +30,7 @@ from abc import ABC, abstractmethod
 
 from pydantic import BaseModel
 
-from .component_config import ComponentBase
+from .capability import CoreAgentCapabilities
 from .tools import CoreTool
 from ..loggers import ScopedLogger
 from ..tools.function_as_tool import FunctionAsTool
@@ -56,7 +55,7 @@ class LogBookToolMode(str, Enum):
     READ_ONLY = "read_only"
 
 
-class CoreLogBookRegistry(ComponentBase[BaseModel], ABC):
+class CoreLogBookRegistry(CoreAgentCapabilities[BaseModel], ABC):
     """Abstract base class for read-only conversation context.
 
     A registry instance is scoped to a single ``(user_id, session_id)``
@@ -71,42 +70,12 @@ class CoreLogBookRegistry(ComponentBase[BaseModel], ABC):
         session_id: str,
         tool_mode: LogBookToolMode = LogBookToolMode.READ_ONLY,
     ) -> None:
+        super().__init__()
         self.user_id: str = self.require_type(user_id, str, "user_id")
         self.session_id: str = self.require_type(session_id, str, "session_id")
         self.tool_mode: LogBookToolMode = self.require_type(
             tool_mode, LogBookToolMode, "tool_mode"
         )
-        self._connected: bool = False
-        self._connect_lock: asyncio.Lock = asyncio.Lock()
-
-    # -------- LIFECYCLE -----------------------------------------------------------
-    @abstractmethod
-    async def connect(self) -> None: ...
-
-    @abstractmethod
-    async def disconnect(self) -> None: ...
-
-    async def _ensure_connected(self) -> None:
-        if not self._connected:
-            async with self._connect_lock:
-                if not self._connected:
-                    log.info(
-                        msg=(
-                            f"Connecting context registry for "
-                            f"user={self.user_id!r} session={self.session_id!r}"
-                        )
-                    )
-                    await self.connect()
-                    self._connected = True
-
-    async def __aenter__(self) -> t.Self:
-        await self._ensure_connected()
-        return self
-
-    async def __aexit__(self, *exc: t.Any) -> None:
-        if self._connected:
-            await self.disconnect()
-            self._connected = False
 
     # -------- READ FOR PROMPT INJECTION -----------------------------------------------------------
     @abstractmethod

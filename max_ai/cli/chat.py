@@ -35,6 +35,16 @@ from max_ai.types.run_context import RunContext
 from max_ai.types.tools import ToolApprovalMode
 
 
+APP_NAME = "MaxAI"
+APP_BANNER = r"""
+ __  __              _    ___
+|  \/  | __ _ __  __/ \  |_ _|
+| |\/| |/ _` |\ \/ / _ \  | |
+| |  | | (_| | >  < ___ \ | |
+|_|  |_|\__,_|/_/\_\   \_\___|
+"""
+
+
 # ---------------------------------------------------------------------------
 # Logging — sent to a file so chat output stays clean.
 # Tail in another terminal:   tail -f max_ai.log
@@ -168,7 +178,7 @@ class _StreamPrinter:
         if item.is_final or not item.chunk:
             return
         if not self._mid_assistant_line:
-            print("assistant> ", end="", flush=True)
+            print("MaxAI> ", end="", flush=True)
             self._mid_assistant_line = True
         print(item.chunk, end="", flush=True)
 
@@ -240,8 +250,6 @@ def _prompt_approvals(ctx: RunContext) -> bool:
             return False
 
         approved = decision == "y"
-        # Signature guess: apply_approval(tool_call_id, approved=bool).
-        # Adjust if your ToolState uses a different shape.
         ctx.tool_state.apply_approval(record.id, approved=approved)
         print(f"     → {'approved' if approved else 'rejected'}")
 
@@ -318,6 +326,21 @@ async def _stream_once(stream) -> AgentResponse:
 # ---------------------------------------------------------------------------
 # REPL loop.
 # ---------------------------------------------------------------------------
+def _print_banner(agent: Agent) -> None:
+    line = "=" * 64
+    print(line)
+    print(APP_BANNER.strip("\n"))
+    print(f"{APP_NAME} CLI - interactive agent session")
+    print(line)
+    print(f"agent: {agent.name}")
+    print(f"model: {MODEL}")
+    print(f"host:  {OLLAMA_HOST}")
+    print(f"logs:  {LOG_FILE}  (tail -f {LOG_FILE})")
+    print("commands: /exit, /clear")
+    print("Ctrl+D / Ctrl+C also work.")
+    print()
+
+
 async def repl(agent: Agent) -> None:
     # Prepare upfront so config errors surface before the first prompt.
     await agent.prepare()
@@ -326,14 +349,11 @@ async def repl(agent: Agent) -> None:
     # for free: each turn appends to ctx.messages, the agent sees it all.
     ctx = RunContext()
 
-    print(f"max_ai chat — agent: {agent.name}")
-    print(f"logs: {LOG_FILE}  (tail -f {LOG_FILE} in another terminal)")
-    print("commands: /exit, /clear (reset history)")
-    print("Ctrl+D / Ctrl+C also work.\n")
+    _print_banner(agent)
 
     while True:
         try:
-            user_input = input("you> ").strip()
+            user_input = input("You> ").strip()
         except EOFError:
             print()
             break

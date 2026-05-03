@@ -29,7 +29,7 @@
                 ┌────────────────────┼─────────────────────┐
                 ▼                    ▼                     ▼
     ┌───────────────────┐  ┌──────────────────┐  ┌──────────────────────┐
-    │ CapabilityRegistry│  │  LayerContainer     │  │ PromptVariablesBldr  │
+    │ AgentCapabilities│  │  LayerContainer     │  │ PromptVariablesBldr  │
     │  (sync validate)  │  │  (sync validate) │  │   (just stores ref)  │
     └─────────┬─────────┘  └────────┬─────────┘  └──────────────────────┘
               │                     │

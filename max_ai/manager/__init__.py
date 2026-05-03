@@ -1,3 +1,3 @@
-from .registries import CapabilityRegistry
+from .registries import AgentCapabilities
 
-__all__ = ["CapabilityRegistry"]
+__all__ = ["AgentCapabilities"]

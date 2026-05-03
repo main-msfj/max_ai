@@ -21,7 +21,6 @@ The base class handles tool generation.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import typing as t
 from abc import ABC, abstractmethod
@@ -29,7 +28,7 @@ from enum import Enum
 
 from pydantic import BaseModel
 
-from .component_config import ComponentBase
+from .capability import CoreAgentCapabilities
 from .tools import CoreTool
 from ..types.tools import ToolApprovalMode
 from ..core.blocks import RoutineBlocks
@@ -63,42 +62,17 @@ class RoutineToolMode(str, Enum):
     FULL = "full"
 
 
-class CoreRoutineRegistry(ComponentBase[BaseModel], ABC):
+class CoreRoutineRegistry(CoreAgentCapabilities[BaseModel], ABC):
     """Abstract base class for agent routine registries."""
 
     def __init__(
         self,
         tool_mode: RoutineToolMode = RoutineToolMode.FULL,
     ) -> None:
-        self._connected: bool = False
+        super().__init__()
         self.tool_mode: RoutineToolMode = self.require_type(
             tool_mode, RoutineToolMode, "tool_mode"
         )
-        self._connect_lock: asyncio.Lock = asyncio.Lock()
-
-    # -------- LIFECYCLE -----------------------------------------------------------
-    @abstractmethod
-    async def connect(self) -> None: ...
-
-    @abstractmethod
-    async def disconnect(self) -> None: ...
-
-    async def _ensure_connected(self) -> None:
-        if not self._connected:
-            async with self._connect_lock:
-                if not self._connected:
-                    log.info(msg="Connecting routine registry")
-                    await self.connect()
-                    self._connected = True
-
-    async def __aenter__(self) -> t.Self:
-        await self._ensure_connected()
-        return self
-
-    async def __aexit__(self, *exc: t.Any) -> None:
-        if self._connected:
-            await self.disconnect()
-            self._connected = False
 
     # -------- AGENT BOUNDARY -----------------------------------------------------------
     @abstractmethod

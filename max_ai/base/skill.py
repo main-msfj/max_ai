@@ -19,13 +19,12 @@ validation, error messages, and tool wrapping are shared.
 """
 
 import re
-import asyncio
 import typing as t
 from abc import ABC, abstractmethod
 
 from pydantic import BaseModel
 
-from .component_config import ComponentBase
+from .capability import CoreAgentCapabilities
 from ..types.tools import ToolApprovalMode
 from ..tools.function_as_tool import FunctionAsTool
 
@@ -37,7 +36,7 @@ if t.TYPE_CHECKING:
 _VALID_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
-class CoreSkillRegistry(ComponentBase[BaseModel], ABC):
+class CoreSkillRegistry(CoreAgentCapabilities[BaseModel], ABC):
     """Abstract base class for skill registries.
 
     A registry resolves skill names into loaded ``Skill`` objects. The
@@ -47,10 +46,9 @@ class CoreSkillRegistry(ComponentBase[BaseModel], ABC):
     """
 
     def __init__(self, name: str, skills: list[str]) -> None:
+        super().__init__()
         self.name: str = self._validate_name(name)
         self.skills: list[str] = self._validate_skill_names(skills)
-        self._connected: bool = False
-        self._connect_lock: asyncio.Lock = asyncio.Lock()
 
     @staticmethod
     def _validate_skill_names(skills: list[str]) -> list[str]:
@@ -75,29 +73,6 @@ class CoreSkillRegistry(ComponentBase[BaseModel], ABC):
                 "letters, digits, underscores, hyphens."
             )
         return name
-
-    # -------- LIFECYCLE -----------------------------------------------------------
-    @abstractmethod
-    async def connect(self) -> None: ...
-
-    @abstractmethod
-    async def disconnect(self) -> None: ...
-
-    async def _ensure_connected(self) -> None:
-        if not self._connected:
-            async with self._connect_lock:
-                if not self._connected:
-                    await self.connect()
-                    self._connected = True
-
-    async def __aenter__(self) -> t.Self:
-        await self._ensure_connected()
-        return self
-
-    async def __aexit__(self, *exc: t.Any) -> None:
-        if self._connected:
-            await self.disconnect()
-            self._connected = False
 
     # -------- READ OPERATIONS -----------------------------------------------------------
     @abstractmethod
@@ -148,7 +123,7 @@ class CoreSkillRegistry(ComponentBase[BaseModel], ABC):
     def make_read_resource_tool(self, loaded_skills: list["Skill"]) -> "CoreTool":
         """Build the global ``read_skill_resource`` tool.
 
-        Called by ``CapabilityRegistry.prepare()`` once all skills are
+        Called by ``AgentCapabilities.prepare()`` once all skills are
         loaded. The returned tool closes over the catalog of every
         loaded skill, so name/filename validation is local and the
         error messages can list what's actually available.

@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from jsonschema import Draft202012Validator
 
 from ..termination import CancellationToken
-from .component_config import ComponentBase
+from .component import ComponentBase
 from ..types.tools import ToolApprovalMode, CoreToolParameters, CoreToolDefinition
 from ..types.tool_call import ToolCallRecord, ToolResult
 

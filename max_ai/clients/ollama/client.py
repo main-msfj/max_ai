@@ -19,7 +19,7 @@ from ollama import AsyncClient, ChatResponse, ResponseError
 from ._schema import clean_json_schema
 
 from ...loggers import ScopedLogger
-from ...base.component_config import Component
+from ...base.component import Component
 from ...base.clients import CoreChatCompletionClient
 
 from ...types.stacks import PromptCtx
@@ -62,7 +62,7 @@ class OllamaChatCompletionClient(
     structured outputs via JSON-schema constrained decoding.
     """
 
-    component_config_schema = OllamaChatCompletionClientConfig
+    component_schema = OllamaChatCompletionClientConfig
     component_type = "client"
     component_provider_override = "maxai.llm.OllamaChatCompletionClient"
 

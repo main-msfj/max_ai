@@ -5,7 +5,7 @@ import typing as t
 from pathlib import Path
 
 from ..core.models import StackConfig
-from ..base.component_config import Component
+from ..base.component import Component
 
 from ..base.layer import CoreLayer
 
@@ -35,7 +35,7 @@ class SkillsLayer(Component[StackConfig], CoreLayer):
 
     Template Variables:
         loaded_skills (required): List of ``Skill`` objects from
-            ``CapabilityRegistry.loaded_skills``. Each carries
+            ``AgentCapabilities.loaded_skills``. Each carries
             ``block.name``, ``block.description``,
             ``block.instructions``, and ``resources`` (mapping of
             filename → ``ResourceMeta``).
@@ -50,7 +50,7 @@ class SkillsLayer(Component[StackConfig], CoreLayer):
         prompt = layer.render({"loaded_skills": []})
     """
 
-    component_config_schema = StackConfig
+    component_schema = StackConfig
     component_type = "prompts"
     component_provider_override = "maxai.stacks.SkillsLayer"
 

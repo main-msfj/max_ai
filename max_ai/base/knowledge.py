@@ -22,7 +22,6 @@ class handles tool generation.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 import typing as t
@@ -31,7 +30,7 @@ from enum import Enum
 
 from pydantic import BaseModel
 
-from .component_config import ComponentBase
+from .capability import CoreAgentCapabilities
 from .tools import CoreTool
 from ..tools.function_as_tool import FunctionAsTool
 from ..types.tools import ToolApprovalMode
@@ -60,7 +59,7 @@ class KnowledgeToolMode(str, Enum):
     FULL = "full"
 
 
-class CoreKnowledgeRegistry(ComponentBase[BaseModel], ABC):
+class CoreKnowledgeRegistry(CoreAgentCapabilities[BaseModel], ABC):
     """Abstract base class for external knowledge sources."""
 
     def __init__(
@@ -69,6 +68,7 @@ class CoreKnowledgeRegistry(ComponentBase[BaseModel], ABC):
         description: str,
         tool_mode: KnowledgeToolMode = KnowledgeToolMode.FULL,
     ) -> None:
+        super().__init__()
         self.name: str = self._validate_name(name)
         self.description: str = self.require_type(
             description, str, "description"
@@ -76,8 +76,6 @@ class CoreKnowledgeRegistry(ComponentBase[BaseModel], ABC):
         self.tool_mode: KnowledgeToolMode = self.require_type(
             tool_mode, KnowledgeToolMode, "tool_mode"
         )
-        self._connected: bool = False
-        self._connect_lock: asyncio.Lock = asyncio.Lock()
 
     @staticmethod
     def _validate_name(name: str) -> str:
@@ -90,30 +88,6 @@ class CoreKnowledgeRegistry(ComponentBase[BaseModel], ABC):
                 "letters, digits, underscores, hyphens."
             )
         return name
-
-    # -------- LIFECYCLE -----------------------------------------------------------
-    @abstractmethod
-    async def connect(self) -> None: ...
-
-    @abstractmethod
-    async def disconnect(self) -> None: ...
-
-    async def _ensure_connected(self) -> None:
-        if not self._connected:
-            async with self._connect_lock:
-                if not self._connected:
-                    log.info(msg=f"Connecting knowledge source {self.name!r}")
-                    await self.connect()
-                    self._connected = True
-
-    async def __aenter__(self) -> t.Self:
-        await self._ensure_connected()
-        return self
-
-    async def __aexit__(self, *exc: t.Any) -> None:
-        if self._connected:
-            await self.disconnect()
-            self._connected = False
 
     # -------- READ OPERATION -----------------------------------------------------------
     @abstractmethod

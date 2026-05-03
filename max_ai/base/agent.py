@@ -10,7 +10,7 @@ from abc import ABC
 
 from pydantic import BaseModel
 
-from .component_config import ComponentBase
+from .component import ComponentBase
 from .clients import CoreChatCompletionClient
 from .tool_executor import ToolExecutor
 
@@ -28,7 +28,7 @@ from ..types.completions import Usage
 from ..types.run_context import RunContext
 from ..types.stacks import PromptCtx
 from ..termination import CancellationToken
-from ..manager import CapabilityRegistry
+from ..manager import AgentCapabilities
 from ..manager.stacks import PromptVariablesBuilder, build_default_stack
 from ..errors.agent import AgentError
 from ..executor.local import LocalExecutor
@@ -62,7 +62,7 @@ class Agent(ComponentBase[BaseModel], ABC):
 
     Lifecycle:
       1. ``__init__`` — sync. Stores configuration, builds the
-         ``CapabilityRegistry`` (validating tool name uniqueness,
+         ``AgentCapabilities`` (validating tool name uniqueness,
          priority_tools coherence, etc.) and the ``LayerContainer``
          (validating every layer's template against its declared
          contract). Anything broken at this stage raises immediately.
@@ -150,7 +150,7 @@ class Agent(ComponentBase[BaseModel], ABC):
         self.middlewares = list(middlewares or [])
         self.executor = executor or LocalExecutor(self.config.tool_timeout)
 
-        self.capabilities = CapabilityRegistry(
+        self.capabilities = AgentCapabilities(
             memory, routines, skills, logbook, priority_tools, toolset, knowledge
         )
 

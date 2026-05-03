@@ -5,7 +5,7 @@ import typing as t
 from pathlib import Path
 
 from ..core.models import StackConfig
-from ..base.component_config import Component
+from ..base.component import Component
 
 from ..base.layer import CoreLayer
 
@@ -35,7 +35,7 @@ class PriorityToolsLayer(Component[StackConfig], CoreLayer):
         prompt = layer.render({"priority_tools": []})
     """
 
-    component_config_schema = StackConfig
+    component_schema = StackConfig
     component_type = "prompts"
     component_provider_override = "maxai.stacks.PriorityToolsLayer"
 

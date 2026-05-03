@@ -17,7 +17,7 @@ from jinja2 import (
 )
 from pydantic import BaseModel
 
-from .component_config import ComponentBase
+from .component import ComponentBase
 from ..errors.stacks import StackError
 
 

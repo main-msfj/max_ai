@@ -24,7 +24,7 @@ from ..errors.capabilities import CapabilityError
 from ..loggers import ScopedLogger
 
 logger = logging.getLogger(__name__)
-log = ScopedLogger(logger, prefix="[CapabilityRegistry]")
+log = ScopedLogger(logger, prefix="[AgentCapabilities]")
 
 if t.TYPE_CHECKING:
     from ..types.skills import Skill
@@ -37,7 +37,7 @@ if t.TYPE_CHECKING:
         CoreKnowledgeRegistry,
     )
 
-class CapabilityRegistry:
+class AgentCapabilities:
     """
     Central registry of the agent's capabilities.
 
@@ -240,7 +240,7 @@ class CapabilityRegistry:
 
     def __repr__(self) -> str:
         return (
-            f"CapabilityRegistry("
+            f"AgentCapabilities("
             f"memory={self.has_memory}, "
             f"tools={len(self.toolset)}, "
             f"knowledge={len(self.knowledge)}, "

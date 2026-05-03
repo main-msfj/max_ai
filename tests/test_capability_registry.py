@@ -1,5 +1,5 @@
 """
-Smoke tests for CapabilityRegistry.
+Smoke tests for AgentCapabilities.
 
 The registry's job is to validate and unify the agent's runtime
 components. These tests exercise:
@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from max_ai.manager.registry import CapabilityRegistry
+from max_ai.manager.registry import AgentCapabilities
 from max_ai.errors.capabilities import CapabilityError
 
 from max_ai.tools import FunctionAsTool
@@ -102,7 +102,7 @@ def _build_skill_source(tmp_path: Path, skill_name: str = "demo_skill") -> Path:
 # =====================================================================
 def test_empty_registry_constructs():
     """No arguments — the registry is valid and empty."""
-    cr = CapabilityRegistry()
+    cr = AgentCapabilities()
     assert cr.has_memory is False
     assert cr.has_knowledge is False
     assert cr.has_routines is False
@@ -125,7 +125,7 @@ def test_explicit_tools_normalized():
         return x
     raw_callable.__name__ = "echo"
 
-    cr = CapabilityRegistry(tools=[tool, raw_callable])
+    cr = AgentCapabilities(tools=[tool, raw_callable])
     assert len(cr.tools) == 2
     assert {t.name for t in cr.tools} == {"ping", "echo"}
 
@@ -133,14 +133,14 @@ def test_explicit_tools_normalized():
 def test_invalid_tool_entry_rejected():
     """Non-callable, non-CoreTool entries fail loud."""
     with pytest.raises(CapabilityError):
-        CapabilityRegistry(tools=[42])  # type: ignore[list-item]
+        AgentCapabilities(tools=[42])  # type: ignore[list-item]
 
 
 def test_priority_tools_must_reference_real_tool():
     """priority_tools entries that don't match any tool name fail at construction."""
     tool = _make_tool("ping")
     with pytest.raises(CapabilityError):
-        CapabilityRegistry(
+        AgentCapabilities(
             tools=[tool],
             priority_tools=["does_not_exist"],
         )
@@ -149,7 +149,7 @@ def test_priority_tools_must_reference_real_tool():
 def test_priority_tools_accepted_when_present():
     """priority_tools matching a real tool passes."""
     tool = _make_tool("ping")
-    cr = CapabilityRegistry(tools=[tool], priority_tools=["ping"])
+    cr = AgentCapabilities(tools=[tool], priority_tools=["ping"])
     assert cr.priority_tools == ["ping"]
 
 
@@ -158,7 +158,7 @@ def test_duplicate_tool_names_rejected():
     a = _make_tool("ping")
     b = _make_tool("ping")
     with pytest.raises(CapabilityError):
-        CapabilityRegistry(tools=[a, b])
+        AgentCapabilities(tools=[a, b])
 
 
 # =====================================================================
@@ -171,7 +171,7 @@ async def test_memory_contributes_tools(tmp_path: Path):
         base_path=tmp_path,
         tool_mode=MemoryToolMode.FULL,
     )
-    cr = CapabilityRegistry(memory=mem)
+    cr = AgentCapabilities(memory=mem)
     names = {t.name for t in cr.memory_tools}
     # FULL mode exposes list/update/delete.
     assert {"list_memories", "update_memory", "delete_memory"} <= names
@@ -186,7 +186,7 @@ async def test_knowledge_contributes_tools_per_source(tmp_path: Path):
     kb2 = LocalKnowledgeRegistry(
         name="tickets", description="Tickets.", base_path=tmp_path
     )
-    cr = CapabilityRegistry(knowledge=[kb1, kb2])
+    cr = AgentCapabilities(knowledge=[kb1, kb2])
     names = {t.name for t in cr.knowledge_tools}
     assert names == {"search_docs", "search_tickets"}
 
@@ -200,7 +200,7 @@ async def test_routines_contribute_tools(tmp_path: Path):
         routines=["client_followup", "email_reply"],
         tool_mode=RoutineToolMode.FULL,
     )
-    cr = CapabilityRegistry(routines=routines)
+    cr = AgentCapabilities(routines=routines)
     names = {t.name for t in cr.routine_tools}
     assert names == {"search_routines", "get_routine"}
 
@@ -213,7 +213,7 @@ async def test_context_contributes_tools(tmp_path: Path):
         base_path=tmp_path,
         tool_mode=LogBookToolMode.READ_ONLY,
     )
-    cr = CapabilityRegistry(context=ctx)
+    cr = AgentCapabilities(context=ctx)
     names = {t.name for t in cr.context_tools}
     assert names == {"search_context"}
 
@@ -224,7 +224,7 @@ async def test_context_contributes_tools(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_all_tools_requires_prepare(tmp_path: Path):
     """Accessing all_tools before prepare() raises."""
-    cr = CapabilityRegistry(tools=[_make_tool("ping")])
+    cr = AgentCapabilities(tools=[_make_tool("ping")])
     with pytest.raises(CapabilityError):
         _ = cr.all_tools
 
@@ -240,7 +240,7 @@ async def test_prepare_loads_skills_and_adds_tools(tmp_path: Path):
         skills=["demo_skill"],
     )
 
-    cr = CapabilityRegistry(skills=skills)
+    cr = AgentCapabilities(skills=skills)
 
     # Before prepare(): no skill tools yet.
     assert cr.skill_tools == []
@@ -272,7 +272,7 @@ async def test_prepare_is_idempotent(tmp_path: Path):
         source_path=tmp_path,
         skills=["demo_skill"],
     )
-    cr = CapabilityRegistry(skills=skills)
+    cr = AgentCapabilities(skills=skills)
 
     await cr.prepare()
     first_count = len(cr.loaded_skills)
@@ -287,7 +287,7 @@ async def test_prepare_is_idempotent(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_find_and_get_tool(tmp_path: Path):
     tool = _make_tool("ping")
-    cr = CapabilityRegistry(tools=[tool])
+    cr = AgentCapabilities(tools=[tool])
     await cr.prepare()  # required to access all_tools
 
     assert cr.find_tool("ping") is not None
@@ -332,7 +332,7 @@ async def test_full_stack_aggregates_all_tools(tmp_path: Path):
         skills=["demo_skill"],
     )
 
-    cr = CapabilityRegistry(
+    cr = AgentCapabilities(
         memory=mem,
         knowledge=[kb],
         routines=routines,

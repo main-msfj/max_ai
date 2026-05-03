@@ -10,9 +10,9 @@ La propia base de razonamiento reconoce que una instancia compartida de reasonin
 La documentación principal está bastante desfasada con respecto al código actual. El README todavía marca como “faltante” Agent.run, tool execution, middleware y streaming en README.md (line 157), pero esas piezas sí existen. Eso no rompe runtime, pero sí baja mucho la confianza del framework para cualquiera que entra nuevo.
 
 Lo que está bueno
-Tu framework está bastante bien pensado. Lo mejor que vi es la separación de capas: Agent, CapabilityRegistry, LayerContainer, ToolExecutor, Reasoning y Client tienen responsabilidades bastante limpias. Eso no es tan común; muchos frameworks de agentes se vuelven una sola clase gigante muy rápido.
+Tu framework está bastante bien pensado. Lo mejor que vi es la separación de capas: Agent, AgentCapabilities, LayerContainer, ToolExecutor, Reasoning y Client tienen responsabilidades bastante limpias. Eso no es tan común; muchos frameworks de agentes se vuelven una sola clase gigante muy rápido.
 
-También me gustó que diseñaste con lifecycle claro: construir, prepare(), correr. La validación temprana en CapabilityRegistry y LayerContainer es una muy buena decisión porque empuja errores al inicio y no al medio de una conversación. El loop ReAct y el sistema de middleware también muestran una intención madura: observabilidad, aprobación, streaming y recuperación no están “pegados” a mano sino modelados como primitivas.
+También me gustó que diseñaste con lifecycle claro: construir, prepare(), correr. La validación temprana en AgentCapabilities y LayerContainer es una muy buena decisión porque empuja errores al inicio y no al medio de una conversación. El loop ReAct y el sistema de middleware también muestran una intención madura: observabilidad, aprobación, streaming y recuperación no están “pegados” a mano sino modelados como primitivas.
 
 Los tests además cubren bastante más que un prototipo típico. Hay unitarios, integración y smoke tests, y eso le da solidez.
 
