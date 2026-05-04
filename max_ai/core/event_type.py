@@ -233,6 +233,19 @@ class AgentExecutionCompleteEvent(AgentEvent):
     message_count: int = Field(..., description="Number of messages produced")
 
 
+class CompactionEvent(AgentEvent):
+    """Emitted when context compaction changes the active transcript."""
+
+    EVENT_TYPE = "compaction"
+    strategy: str = Field(..., description="Compaction strategy name")
+    old_message_count: int = Field(..., description="Messages moved out of context")
+    recent_message_count: int = Field(..., description="Messages kept in context")
+    old_token_count: int = Field(..., description="Token count moved out of context")
+    recent_token_count: int = Field(..., description="Token count kept in context")
+    total_token_count: int = Field(..., description="Token count before compaction")
+    max_history_tokens: int = Field(..., description="Raw history budget")
+
+
 # -------- -----------------------------------------------------------
 #  Tool Events
 # -------- -----------------------------------------------------------
@@ -361,6 +374,7 @@ OrchestrationEvent = Annotated[
         AgentSelectionEvent,
         AgentExecutionStartEvent,
         AgentExecutionCompleteEvent,
+        CompactionEvent,
     ],
     Discriminator("event_type"),
 ]
@@ -382,6 +396,7 @@ AgentEvents = Annotated[
         ToolApprovalEvent,
         ToolValidationEvent,
         ToolProgressEvent,
+        CompactionEvent,
         MemoryUpdateEvent,
         MemoryRetrievalEvent,
         ErrorEvent,

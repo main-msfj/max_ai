@@ -1,10 +1,5 @@
-import uuid
 import typing as t
-from enum import Enum
-from datetime import datetime, timezone
-from pydantic import BaseModel, Field, ConfigDict, model_validator, SecretStr
-
-from .messages import AssistantMessage
+from pydantic import BaseModel, Field, SecretStr
 
 
 # -------- STACKS -----------------------------------------------------------
@@ -42,7 +37,7 @@ class ModelConfig(BaseModel):
 
     # Capabilities
     supports_vision: bool = Field(default=False)
-    supports_audio: bool = Field(default=False)          
+    supports_audio: bool = Field(default=False)
     supports_function_calling: bool = Field(default=True)
     supports_thinking: bool = Field(default=False)
     thinking_tag: str = Field(default="think")
@@ -71,5 +66,3 @@ class OllamaChatCompletionClientConfig(BaseModel):
     think: bool | None = None
     keep_alive: str | int | None = None
     config: dict[str, t.Any] = Field(default_factory=dict)
-
-

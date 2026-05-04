@@ -19,6 +19,7 @@ from ..core.models import AgentConfig
 from ..base.middleware import CoreMiddleware
 from ..core.messages import CoreMessage, UserMessage
 from ..core.event_type import (
+    CompactionEvent,
     CoreEvent,
     ErrorEvent,
     ModelStreamChunkEvent,
@@ -44,6 +45,7 @@ if t.TYPE_CHECKING:
     from ..manager.stacks import LayerContainer
     from .knowledge import CoreKnowledgeRegistry
     from .reasoning import BaseReasoning
+    from .compaction import CoreCompaction
 
 
 # Single yield type for the streaming engine. The terminal item of every
@@ -87,7 +89,7 @@ class Agent(ComponentBase[BaseModel], ABC):
         self,
         name: str,
         description: str,
-        instructions: str,  # change to lsit
+        instructions: str,
         client: CoreChatCompletionClient,
         memory: CoreMemoryRegistry | None = None,
         skills: CoreSkillRegistry | None = None,
@@ -98,6 +100,7 @@ class Agent(ComponentBase[BaseModel], ABC):
         middlewares: t.Sequence[CoreMiddleware] | None = None,
         framework_layers: t.Sequence[CoreLayer] | None = None,
         reasoning: BaseReasoning | None = None,
+        compaction: CoreCompaction | None = None,
         executor: CoreExecutor | None = None,
         output_format: t.Type[BaseModel] | None = None,
         priority_tools: list[str] | None = None,
@@ -128,6 +131,8 @@ class Agent(ComponentBase[BaseModel], ABC):
             reasoning: Optional user-provided reasoning loop. Defaults
                 to ReActLoop. Config-only at construction; runtime
                 wiring is injected later via ``bind()``.
+            compaction: Optional user-provided context compaction strategy.
+                Defaults to SlidingWindowCompaction.
             executor: Optional user-provided execution strategy. Defaults to
                 ``LocalExecutor``.
             output_format: Pydantic model for structured response.
@@ -146,15 +151,26 @@ class Agent(ComponentBase[BaseModel], ABC):
         self.config = self.require_type(config or AgentConfig(), AgentConfig, "config")
 
         self.reasoning = reasoning
+        if compaction is None:
+            from ..compaction import SlidingWindowCompaction
+
+            compaction = SlidingWindowCompaction()
+        self.compaction = compaction
         self.output_format = output_format
         self.middlewares = list(middlewares or [])
         self.executor = executor or LocalExecutor(self.config.tool_timeout)
+        self.prompt_stack: LayerContainer = build_default_stack(framework_layers)
 
         self.capabilities = AgentCapabilities(
-            memory, routines, skills, logbook, priority_tools, toolset, knowledge
+            memory=memory,
+            routines=routines,
+            skills=skills,
+            logbook=logbook,
+            priority_tools=priority_tools,
+            toolset=toolset,
+            knowledge=knowledge,
         )
 
-        self.prompt_stack: LayerContainer = build_default_stack(framework_layers)
         self._variables_builder: PromptVariablesBuilder = PromptVariablesBuilder(self)
         self._rendered_layers: dict[type[CoreLayer], str] = {}
         self._prepared: bool = False
@@ -224,6 +240,34 @@ class Agent(ComponentBase[BaseModel], ABC):
             stack=self.prompt_stack,
             variables={},
             rendered_layers=self.rendered_layers,
+        )
+
+    async def _apply_compaction(
+        self,
+        ctx: RunContext,
+        prompts: PromptCtx,
+    ) -> CompactionEvent | None:
+        max_context_tokens = getattr(self.client.config, "max_context_window", 0) or 0
+        if max_context_tokens <= 0:
+            return None
+
+        result = await self.compaction.compact(
+            ctx=ctx,
+            prompts=prompts,
+            max_context_tokens=max_context_tokens,
+        )
+        if not result.changed:
+            return None
+
+        return CompactionEvent(
+            source=self.name,
+            strategy=type(self.compaction).__name__,
+            old_message_count=len(result.old_messages),
+            recent_message_count=len(result.recent_messages),
+            old_token_count=result.old_token_count,
+            recent_token_count=result.recent_token_count,
+            total_token_count=result.total_token_count,
+            max_history_tokens=result.max_history_tokens,
         )
 
     def _build_reasoning(
@@ -340,6 +384,9 @@ class Agent(ComponentBase[BaseModel], ABC):
         )
         reasoning = self._build_reasoning(tool_executor)
         prompts = self._build_prompt_ctx()
+        compaction_event = await self._apply_compaction(ctx, prompts)
+        if compaction_event is not None:
+            yield compaction_event
 
         loop_state = reasoning.LOOP_STATE_CLS()
         start_time = time.monotonic()
