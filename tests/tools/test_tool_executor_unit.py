@@ -109,7 +109,6 @@ def make_executor(tools: list[CoreTool], **overrides: t.Any) -> ToolExecutor:
     defaults: dict[str, t.Any] = {
         "tools": tools,
         "agent_name": "test-agent",
-        "waiting_timeout": 30,
         "max_concurrent_tools": 5,
     }
     defaults.update(overrides)

@@ -203,7 +203,7 @@ class PromptVariablesBuilder:
         return result
 
     async def _for_skills(self) -> dict[str, t.Any]:
-        return {"loaded_skills": self.agent.capabilities.loaded_skills}
+        return {"loaded_skills": self.agent.capabilities.loaded_skill_blocks}
 
     async def _for_priority_tools(self) -> dict[str, t.Any]:
         return {"priority_tools": list(self.agent.capabilities.priority_tools)}

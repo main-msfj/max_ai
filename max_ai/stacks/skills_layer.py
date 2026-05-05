@@ -12,39 +12,29 @@ from ..base.layer import CoreLayer
 
 class SkillsLayer(Component[StackConfig], CoreLayer):
     """
-    Prompt layer that renders the instructions and resource catalog of
-    every loaded skill.
+    Prompt layer that renders the lightweight catalog of available
+    skills.
 
     Skills are self-contained packages (instructions + tools + reference
     files) resolved from a ``CoreSkillRegistry`` during
-    ``agent.prepare()``. This layer takes the resulting ``Skill`` objects
-    and turns them into prompt content so the model knows:
-      1. Which skills are active and what each one does.
-      2. Which reference files (resources) are available per skill.
-      3. How to pull a reference file on demand via
-         ``read_skill_resource``.
-
-    The reference files themselves are NOT inlined here — only their
-    filenames and descriptions. The agent loads them on demand through
-    the tool. This keeps the prompt cheap regardless of how much
-    auxiliary content a skill carries.
+    ``agent.prepare()``. This layer receives ``SkillBlock`` entries with
+    only ``name`` and ``description`` populated. Full instructions,
+    references, scripts, and assets stay inside the materialized skill
+    directory and are inspected on demand with ``skill_bash``.
 
     If the loaded-skills list is empty, the layer renders to an empty
     string — it always lives in the stack, but contributes nothing
     when there's nothing to advertise.
 
     Template Variables:
-        loaded_skills (required): List of ``Skill`` objects from
-            ``AgentCapabilities.loaded_skills``. Each carries
-            ``block.name``, ``block.description``,
-            ``block.instructions``, and ``resources`` (mapping of
-            filename → ``ResourceMeta``).
+        loaded_skills (required): List of lightweight ``SkillBlock``
+            objects from ``AgentCapabilities.loaded_skill_blocks``.
 
     Example:
         layer = SkillsLayer()
 
         # With skills loaded
-        prompt = layer.render({"loaded_skills": registry.loaded_skills})
+        prompt = layer.render({"loaded_skills": registry.loaded_skill_blocks})
 
         # No skills — layer disappears from the prompt
         prompt = layer.render({"loaded_skills": []})

@@ -35,7 +35,7 @@ from max_ai.capabilities.memory import LocalMemoryRegistry
 from max_ai.capabilities.context import LocalContextRegistry
 from max_ai.capabilities.knowledge import LocalKnowledgeRegistry
 from max_ai.capabilities.routines import LocalRoutineRegistry
-from max_ai.capabilities.skills.local import LocalSkillRegistry 
+from max_ai.capabilities.skills.local import LocalSkillRegistry
 
 
 # =====================================================================
@@ -164,7 +164,10 @@ def _setup_context_source(tmp_path: Path) -> None:
 # THE TEST
 # =====================================================================
 @pytest.mark.asyncio
-async def test_core_agent_prepares_end_to_end(tmp_path: Path):
+async def test_core_agent_prepares_end_to_end(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Build a Agent with all capabilities, prepare it, validate
     rendered_layers and tools."""
 
@@ -174,6 +177,8 @@ async def test_core_agent_prepares_end_to_end(tmp_path: Path):
     _setup_knowledge_source(tmp_path)
     _setup_memory_source(tmp_path)
     _setup_context_source(tmp_path)
+    monkeypatch.setenv("SKILLS_CACHE_DIR", str(tmp_path / "skills-cache"))
+    monkeypatch.setenv("SESSIONS_DIR", str(tmp_path / "sessions"))
 
     # 2. Build registries.
     memory = LocalMemoryRegistry(user_id="u1", base_path=tmp_path)
@@ -188,8 +193,7 @@ async def test_core_agent_prepares_end_to_end(tmp_path: Path):
         routines=["client_followup"],
     )
     skills = LocalSkillRegistry(
-        name="local_skills",
-        source_path=skill_root,
+        source=skill_root,
         skills=["demo_skill"],
     )
 
@@ -201,7 +205,7 @@ async def test_core_agent_prepares_end_to_end(tmp_path: Path):
         client=StubClient(),
         memory=memory,
         skills=skills,
-        context=context,
+        logbook=context,
         routines=routines,
         knowledge=[knowledge],
     )
@@ -242,6 +246,8 @@ async def test_core_agent_prepares_end_to_end(tmp_path: Path):
     # Skills layer must mention the loaded skill.
     skills_out = rendered[SkillsLayer]
     assert "demo_skill" in skills_out
+    assert "A minimal skill for the smoke test." in skills_out
+    assert "skill_bash" in skills_out
 
     # PriorityTools layer renders empty (no priority tools given).
     assert rendered[PriorityToolsLayer].strip() == ""
@@ -255,8 +261,9 @@ async def test_core_agent_prepares_end_to_end(tmp_path: Path):
     assert "search_routines" in tool_names
     assert "get_routine" in tool_names
     assert "search_context" in tool_names
-    assert "do_thing" in tool_names              
-    assert "read_skill_resource" in tool_names   
+    assert "skill_bash" in tool_names
+    assert "do_thing" not in tool_names
+    assert "read_skill_resource" not in tool_names
 
     # 7. prepare() is idempotent.
     await agent.prepare()  # must not raise

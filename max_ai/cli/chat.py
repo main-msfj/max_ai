@@ -78,6 +78,7 @@ def build_client() -> OllamaChatCompletionClient:
         model=MODEL,
         host=OLLAMA_HOST,
         config=ModelConfig(
+            max_context_window=1000,
             supports_function_calling=True,
             supports_thinking=False,
         ),

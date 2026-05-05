@@ -108,7 +108,7 @@ async def test_tool_call_flow(client):
             "call the tool and report the result to the user."
         ),
         client=client,
-        tools=[_make_weather_tool()],
+        toolset=[_make_weather_tool()],
     )
 
     response = await agent.run(task="What is the weather in Tokyo?")

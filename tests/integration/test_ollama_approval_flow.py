@@ -88,7 +88,7 @@ def _build_agent(client: OllamaChatCompletionClient, tool: FunctionAsTool) -> Ag
             "call the tool and report the result to the user."
         ),
         client=client,
-        tools=[tool],
+        toolset=[tool],
     )
 
 

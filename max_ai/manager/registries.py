@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 log = ScopedLogger(logger, prefix="[AgentCapabilities]")
 
 if t.TYPE_CHECKING:
-    from ..types.skills import Skill
+    from ..core.blocks import SkillBlock
     from ..base import (
         CoreTool,
         CoreSkillRegistry,
@@ -45,9 +45,9 @@ class AgentCapabilities:
       1. ``__init__`` — sync. Normalizes inputs, validates what it can
          see right away (explicit tools, priority_tools, name uniqueness
          across tools/memory/knowledge/routines/context).
-      2. ``prepare()`` — async. Loads skills via their registry and
-         revalidates only the new tools introduced by skills against
-         everything already registered.
+      2. ``prepare()`` — async. Loads the lightweight skill catalog via
+         the skills registry and revalidates registry-provided tools
+         against everything already registered.
 
     The agent must call ``await registry.prepare()`` before running.
 
@@ -79,8 +79,7 @@ class AgentCapabilities:
         self.knowledge: list[CoreKnowledgeRegistry] = list(knowledge or [])
 
         # Populated by prepare(). Empty until then.
-        self._loaded_skills: list[Skill] = []
-        self._read_resource_tool: CoreTool | None = None
+        self._skill_blocks: list[SkillBlock] = []
         self._prepared: bool = False
 
         # Early validation - only covers what's available sync.
@@ -117,15 +116,7 @@ class AgentCapabilities:
             return
 
         if self.skills_registry is not None:
-            loaded = await self.skills_registry.load(self.skills_registry.skills)
-            self._loaded_skills = loaded
-            # Build the global read_skill_resource tool over the loaded
-            # catalog. Only meaningful when at least one skill loaded.
-            if loaded:
-                self._read_resource_tool = self.skills_registry.make_read_resource_tool(
-                    loaded
-                )
-            # Revalidate with skill tools merged in.
+            self._skill_blocks = await self.skills_registry.list_skill_blocks()
             self._validate_unique_tool_names(self._all_tools())
 
         self._prepared = True
@@ -195,18 +186,10 @@ class AgentCapabilities:
     # -------- CAPABILITY-DERIVED TOOLS -------------------------------
     @property
     def skill_tools(self) -> list[CoreTool]:
-        """Tools exposed by loaded skills.
-
-        Includes both the user-defined tools from each skill's
-        ``scripts/`` and the global ``read_skill_resource`` tool
-        provided by the registry. Empty before ``prepare()``.
-        """
-        tools: list[CoreTool] = []
-        for skill in self._loaded_skills:
-            tools.extend(skill.tools)
-        if self._read_resource_tool is not None:
-            tools.append(self._read_resource_tool)
-        return tools
+        """Tools exposed by the skills registry."""
+        if self.skills_registry is None:
+            return []
+        return list(self.skills_registry.tools)
 
     # -------- QUERIES ------------------------------------------------
     @property
@@ -234,9 +217,9 @@ class AgentCapabilities:
         return self.logbook is not None
 
     @property
-    def loaded_skills(self) -> list[Skill]:
-        """Resolved Skill objects. Empty before prepare()."""
-        return list(self._loaded_skills)
+    def loaded_skill_blocks(self) -> list[SkillBlock]:
+        """Lightweight ``SkillBlock`` entries for the prompt layer."""
+        return list(self._skill_blocks)
 
     def __repr__(self) -> str:
         return (
@@ -245,7 +228,7 @@ class AgentCapabilities:
             f"tools={len(self.toolset)}, "
             f"knowledge={len(self.knowledge)}, "
             f"routines={self.has_routines}, "
-            f"skills={len(self._loaded_skills) if self._prepared else '?'}, "
+            f"skills={len(self._skill_blocks) if self._prepared else '?'}, "
             f"context={self.has_logbook}, "
             f"priority_tools={len(self.priority_tools)}, "
             f"prepared={self._prepared})"

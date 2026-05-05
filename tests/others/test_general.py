@@ -43,7 +43,7 @@ async def test_agent_run():
         description="testing agent",
         instructions="you are a agent for testing",
         client=build_client(),
-        tools=[_make_weather_tool()],
+        toolset=[_make_weather_tool()],
         middlewares=[LoggingMiddleware(level="info")],
     )
 

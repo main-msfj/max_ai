@@ -9,7 +9,7 @@ from .component import Component, ComponentBase
 from .compaction import CompactionResult, CoreCompaction
 from .capability import CoreAgentCapabilities
 from .context import CoreLogBookRegistry
-from .skill import CoreSkillRegistry
+from .skills import CoreSkillRegistry
 
 __all__ = [
     "Agent",

@@ -22,8 +22,8 @@
         }
     },
     "initializeCommand": "docker network create llm-vnet 2>/dev/null || true",
-    "postCreateCommand": "uv sync && cd /max_ai/docker && docker compose --env-file .env up -d && docker exec ollama ollama pull gemma4:e2b-it-q4_K_M && docker exec ollama ollama pull llama3.1:8b && docker exec ollama ollama pull qwen3:4b-instruct-2507-q4_K_M && docker exec ollama ollama pull qwen3:4b-thinking-2507-q4_K_M && docker exec ollama ollama pull phi4-mini:3.8b",
-    "postStartCommand": "cd /max_ai/docker && docker compose --env-file .env up -d",
+    "postCreateCommand": "uv sync && cd /max_ai/llm-models && docker compose --env-file .env up -d && docker exec ollama ollama pull gemma4:e2b-it-q4_K_M && docker exec ollama ollama pull llama3.1:8b && docker exec ollama ollama pull qwen3:4b-instruct-2507-q4_K_M && docker exec ollama ollama pull qwen3:4b-thinking-2507-q4_K_M && docker exec ollama ollama pull phi4-mini:3.8b",
+    "postStartCommand": "cd /max_ai/llm-models && docker compose --env-file .env up -d",
     "remoteEnv": { 
         "OLLAMA_BASE_URL": "http://ollama:11434"
     },

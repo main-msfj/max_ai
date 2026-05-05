@@ -1,25 +1,10 @@
 {% if loaded_skills %}
 # Skills
 
-The following skills are active. Follow a skill's instructions when its
-triggering conditions apply to the current task.
+The following skills are available. When a task matches a skill, inspect
+its `SKILL.md` with `skill_bash` before using it.
 
 {% for skill in loaded_skills %}
-## {{ skill.block.name }}
-
-{{ skill.block.description }}
-
-{{ skill.block.instructions }}
-{% if skill.resources %}
-
-### Reference files
-
-Load on demand via `read_skill_resource(skill_name="{{ skill.block.name }}", resource_filename=...)`:
-
-{% for filename, meta in skill.resources.items() %}
-- `{{ filename }}` — {{ meta.description }}
-{% endfor %}
-{% endif %}
-
+- `{{ skill.name }}`: {{ skill.description }}
 {% endfor %}
 {% endif %}

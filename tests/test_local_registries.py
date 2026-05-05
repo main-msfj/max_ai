@@ -30,7 +30,7 @@ from max_ai.capabilities.memory import LocalMemoryRegistry
 from max_ai.capabilities.context import LocalContextRegistry
 from max_ai.capabilities.knowledge import LocalKnowledgeRegistry
 from max_ai.capabilities.routines import LocalRoutineRegistry
-from max_ai.capabilities.skills.local import LocalSkillRegistry 
+from max_ai.capabilities.skills.local import LocalSkillRegistry
 
 
 # =====================================================================
@@ -292,9 +292,15 @@ async def test_local_routine_registry_missing_authorized(tmp_path: Path):
 # SKILL
 # =====================================================================
 @pytest.mark.asyncio
-async def test_local_skill_registry_loads_skill(tmp_path: Path):
-    """Build a minimal skill on disk, load it via the registry."""
-    skill_dir = tmp_path / "demo_skill"
+async def test_local_skill_registry_loads_skill(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Build a minimal skill on disk and expose it via the new registry flow."""
+    source_root = tmp_path / "source"
+    cache_root = tmp_path / "cache"
+    sessions_root = tmp_path / "sessions"
+    monkeypatch.setenv("SKILLS_CACHE_DIR", str(cache_root))
+    monkeypatch.setenv("SESSIONS_DIR", str(sessions_root))
+
+    skill_dir = source_root / "demo_skill"
     (skill_dir / "scripts").mkdir(parents=True)
     (skill_dir / "references").mkdir(parents=True)
 
@@ -330,34 +336,30 @@ async def test_local_skill_registry_loads_skill(tmp_path: Path):
 
     # Construct registry pointing at the parent dir.
     reg = LocalSkillRegistry(
-        name="demo_registry",
-        source_path=tmp_path,
+        source=source_root,
         skills=["demo_skill"],
     )
 
     async with reg:
-        skills = await reg.load(reg.skills)
-        assert len(skills) == 1
-        skill = skills[0]
+        blocks = await reg.list_skill_blocks()
+        assert len(blocks) == 1
+        block = blocks[0]
 
-        # Block contents.
-        assert skill.block.name == "demo_skill"
-        assert skill.block.description == "A minimal skill for testing."
-        assert "When asked to demo" in skill.block.instructions
+        # Prompt block is intentionally lightweight.
+        assert block.name == "demo_skill"
+        assert block.description == "A minimal skill for testing."
 
-        # Tools were discovered and wrapped.
-        assert len(skill.tools) == 1
-        assert skill.tools[0].name == "say_hello"
+        # Skill package was cached and can be materialized into a session.
+        cached_skill = reg._source_cache_dir / "demo_skill"
+        assert (cached_skill / "SKILL.md").is_file()
+        assert (cached_skill / "references" / "notes.md").is_file()
+        assert (cached_skill / "scripts" / "greetings.py").is_file()
 
-        # Resources catalogued.
-        assert "notes.md" in skill.resources
-        assert skill.resources["notes.md"].description == "Some reference notes."
+        session_skills = reg.materialize(user_id="u1", session_id="s1")
+        assert session_skills == sessions_root.resolve() / "s1" / "skills"
+        assert (session_skills / "demo_skill" / "SKILL.md").is_file()
+        assert (session_skills / "demo_skill" / "references" / "notes.md").is_file()
 
-        # Resource path points at tmp staging, not the original source.
-        resource_path = skill.resources["notes.md"].path
-        assert reg._tmp_root is not None
-        assert str(resource_path).startswith(str(reg._tmp_root))
-
-        # Read the resource via the registry.
-        content = await reg._read_resource_impl("demo_skill", skill.resources["notes.md"])
-        assert "Demo notes" in content
+        # The registry exposes one command-style tool for on-demand skill use.
+        tool_names = {tool.name for tool in reg.tools}
+        assert tool_names == {"skill_bash"}

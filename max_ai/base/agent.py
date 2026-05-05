@@ -38,7 +38,7 @@ if t.TYPE_CHECKING:
     from .executor import CoreExecutor
     from ..stacks import CoreLayer
     from .tools import CoreTool
-    from .skill import CoreSkillRegistry
+    from .skills import CoreSkillRegistry
     from .memory import CoreMemoryRegistry
     from .context import CoreLogBookRegistry
     from .routines import CoreRoutineRegistry
@@ -153,8 +153,8 @@ class Agent(ComponentBase[BaseModel], ABC):
         self.reasoning = reasoning
         if compaction is None:
             from ..compaction import SlidingWindowCompaction
-
             compaction = SlidingWindowCompaction()
+            
         self.compaction = compaction
         self.output_format = output_format
         self.middlewares = list(middlewares or [])

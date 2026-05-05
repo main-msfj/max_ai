@@ -89,7 +89,7 @@ def make_agent(client, tools=None, **kwargs) -> Agent:
         description="Agent for resume tests.",
         instructions="Be concise.",
         client=client,
-        tools=tools,
+        toolset=tools,
         **kwargs,
     )
 

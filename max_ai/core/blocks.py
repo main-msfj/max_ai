@@ -68,7 +68,6 @@ class SkillBlock(BaseModel):
 
     name: str = Field(..., description="Skill name")
     description: str = Field(..., description="Skill description")
-    instructions: str = Field(..., description="The full markdown instructions")
 
 
 class ContextBlock(BaseModel):

@@ -14,7 +14,6 @@ parse — the test fails immediately. That's all this suite is for.
 
 from max_ai.core import MemoryBlock
 from max_ai.core.blocks import SkillBlock
-from max_ai.types.skills import Skill, ResourceMeta
 
 from max_ai.stacks.memory_layer import MemoryLayer
 from max_ai.stacks.skills_layer import SkillsLayer
@@ -123,27 +122,15 @@ def test_routine_layer_no_tools():
 
 def test_skills_layer_with_skills():
     layer = SkillsLayer()
-    skill = Skill(
-        block=SkillBlock(
-            name="pr_review",
-            description="Review pull requests.",
-            instructions="Step 1. Read the diff. Step 2. Run tests.",
-        ),
-        tools=[],
-        resources={
-            "checklist.md": ResourceMeta(
-                filename="checklist.md",
-                path="/dev/null",  # path isn't used by the template
-                description="PR review checklist.",
-            ),
-        },
+    skill = SkillBlock(
+        name="pr_review",
+        description="Review pull requests.",
     )
     out = layer.render({"loaded_skills": [skill]})
     assert out
     assert "pr_review" in out
-    assert "Read the diff" in out
-    assert "checklist.md" in out
-    assert "PR review checklist." in out
+    assert "Review pull requests." in out
+    assert "skill_bash" in out
 
 
 def test_skills_layer_empty():
