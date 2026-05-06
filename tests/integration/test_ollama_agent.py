@@ -54,8 +54,6 @@ def client() -> OllamaChatCompletionClient:
         config=ModelConfig(
             supports_function_calling=True,
             supports_thinking=False,
-            thinking_tag="think",
-            thinking_position="start",
         ),
         think=False,
     )

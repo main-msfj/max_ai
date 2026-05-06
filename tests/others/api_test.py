@@ -7,11 +7,10 @@ client = AsyncOpenAI(
 )
 
 async def bench(model, thinking, prompt="What is 15% of 240? Show your reasoning."):
-    suffix = "" if thinking else " /no_think"
     t0 = time.perf_counter()
     r = await client.chat.completions.create(
         model=model,
-        messages=[{"role": "user", "content": prompt + suffix}],
+        messages=[{"role": "user", "content": prompt}],
     )
     dt = time.perf_counter() - t0
     tok = r.usage.completion_tokens
@@ -22,7 +21,7 @@ async def bench(model, thinking, prompt="What is 15% of 240? Show your reasoning
 
 async def main():
     # Warm up
-    await client.chat.completions.create(model="qwen3:1.7b", messages=[{"role":"user","content":"hi /no_think"}], max_tokens=5)
+    await client.chat.completions.create(model="qwen3:1.7b", messages=[{"role":"user","content":"hi"}], max_tokens=5)
     
     await bench("qwen3:1.7b", False)
     await bench("qwen3:1.7b", True)

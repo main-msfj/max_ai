@@ -37,6 +37,7 @@ def make_record(tool_name: str, **overrides: t.Any) -> ToolCallRecord:
 
 
 async def collect(gen) -> list:
+async def collect(gen) -> list:
     return [item async for item in gen]
 
 

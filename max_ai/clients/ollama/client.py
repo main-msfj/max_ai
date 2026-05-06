@@ -79,6 +79,8 @@ class OllamaChatCompletionClient(
         config: ModelConfig | None = None,
         think: bool | None = None,
         keep_alive: str | int | None = None,
+        num_predict: int | None = None,
+        max_tokens: int | None = None,
         **kwargs: t.Any,
     ) -> None:
         """Initialize the Ollama client.
@@ -91,13 +93,16 @@ class OllamaChatCompletionClient(
             api_key: Optional bearer token. Required only for hosted
                 Ollama deployments or auth proxies. ``None`` for local.
             config: Model capabilities (``supports_function_calling``,
-                ``supports_thinking``, ``thinking_tag``, etc.).
+                ``supports_thinking``, ``supports_vision``, etc.).
             think: Override the model's default thinking behavior.
                 ``None`` defers to the model, ``True`` forces it on,
                 ``False`` forces it off.
             keep_alive: Time the model should stay loaded in memory
                 between calls (e.g. ``"5m"``). ``0`` unloads
                 immediately after the request.
+            num_predict: Ollama output-token limit. Passed as
+                ``options.num_predict``.
+            max_tokens: Alias for ``num_predict`` for OpenAI-style call sites.
             **kwargs: Reserved for future provider-specific defaults
                 (e.g. ``temperature``, ``top_p``).
         """
@@ -105,6 +110,12 @@ class OllamaChatCompletionClient(
         self.host: str = self._require_type(host, str, "host")
         self.think: bool | None = think
         self.keep_alive: str | int | None = keep_alive
+        self.generation_options: dict[str, t.Any] = dict(kwargs)
+        output_limit = num_predict if num_predict is not None else max_tokens
+        if output_limit is None and self.config.max_output_tokens:
+            output_limit = self.config.max_output_tokens
+        if output_limit is not None:
+            self.generation_options["num_predict"] = output_limit
 
         headers: dict[str, str] | None = None
         if self.api_key is not None:
@@ -121,6 +132,7 @@ class OllamaChatCompletionClient(
             api_key=self.api_key,
             think=self.think,
             keep_alive=self.keep_alive,
+            options=self.generation_options,
             config=self.config.model_dump(exclude_none=True),
         )
 
@@ -137,6 +149,7 @@ class OllamaChatCompletionClient(
             config=model_config,
             think=config.think,
             keep_alive=config.keep_alive,
+            **config.options,
         )
 
     # -------- TOOL SCHEMA -----------------------------------------------------------
@@ -258,23 +271,14 @@ class OllamaChatCompletionClient(
     def _build_system_content(self, prompts: PromptCtx) -> str:
         """Concatenate non-empty rendered layers with a blank-line separator.
 
-        If the model declares a ``force_no_thinking_marker`` and the
-        caller has disabled thinking via ``supports_thinking=False``, the
-        marker is appended after the rendered layers. This handles models
-        like qwen3-thinking that emit reasoning regardless of the API's
-        ``think`` flag — the marker is the in-prompt instruction the
-        model was fine-tuned to obey.
+        Thinking is not controlled here. If Ollama returns a native
+        ``thinking`` field, the client surfaces it; otherwise content is
+        forwarded as-is.
         """
         chunks: list[str] = []
         for rendered in prompts.rendered_layers.values():
             if rendered and rendered.strip():
                 chunks.append(rendered.strip())
-
-        if (
-            not self.config.supports_thinking
-            and self.config.force_no_thinking_marker
-        ):
-            chunks.append(self.config.force_no_thinking_marker.strip())
 
         return self.SYSTEM_LAYER_SEPARATOR.join(chunks)
 
@@ -488,56 +492,14 @@ class OllamaChatCompletionClient(
         if output_format is not None:
             request["format"] = output_format.model_json_schema()
 
-        if kwargs:
-            request["options"] = kwargs
+        options = {**self.generation_options, **kwargs}
+        max_tokens = options.pop("max_tokens", None)
+        if max_tokens is not None:
+            options["num_predict"] = max_tokens
+
+        if options:
+            request["options"] = options
         return request
-
-
-    def _split_thinking(self, raw: str) -> tuple[str | None, str]:
-        """Split a ``<{thinking_tag}>...</{thinking_tag}>`` block from content.
-
-        Two strategies driven by ``ModelConfig.thinking_position``:
-
-        - ``"start"`` (default): only honour an opening tag at the very
-        start of the content (after stripping leading whitespace).
-        Tags appearing later are part of the assistant's output. This
-        matches qwen3, deepseek-r1, claude extended thinking, and
-        every thinking model we know of today.
-        - ``"anywhere"``: take the first ``<tag>...</tag>`` block found,
-        regardless of position. Reserved for hypothetical models that
-        interleave reasoning with output.
-
-        Returns ``(thinking, content)``. If thinking is disabled, the
-        content does not contain the tag, or the tag is malformed, returns
-        ``(None, raw)``.
-        """
-        if not self.config.supports_thinking:
-            return None, raw
-
-        tag = self.config.thinking_tag
-        open_tag = f"<{tag}>"
-        close_tag = f"</{tag}>"
-
-        if self.config.thinking_position == "start":
-            if not raw.lstrip().startswith(open_tag):
-                return None, raw
-            open_idx = raw.find(open_tag)
-        else:  # "anywhere"
-            open_idx = raw.find(open_tag)
-            if open_idx == -1:
-                return None, raw
-
-        close_idx = raw.find(close_tag, open_idx + len(open_tag))
-        if close_idx == -1:
-            # Opening without closing — treat the tail as thinking, content empty.
-            thinking = raw[open_idx + len(open_tag) :].strip()
-            return (thinking or None), ""
-
-        thinking = raw[open_idx + len(open_tag) : close_idx].strip()
-        before = raw[:open_idx]
-        after = raw[close_idx + len(close_tag) :]
-        content = (before + after).strip()
-        return (thinking or None), content
 
     def _parse_tool_calls(self, raw_tool_calls: t.Sequence[t.Any]) -> list[ToolCall]:
         """Convert Ollama tool calls into ``ToolCall`` instances.
@@ -592,17 +554,11 @@ class OllamaChatCompletionClient(
 
         raw_content: str = response.message.content or ""
 
-        # Ollama (recent versions) returns reasoning in a dedicated
-        # ``thinking`` field on the message when ``think=True`` is set on
-        # the request — content is already clean. Older models or builds
-        # may still embed ``<tag>...</tag>`` inline, so we keep the
-        # in-band parser as a fallback.
+        # Ollama may return reasoning in a dedicated ``thinking`` field.
+        # We do not parse, strip, or enforce provider-specific thinking tags.
         native_thinking = getattr(response.message, "thinking", None)
-        if native_thinking:
-            thinking = native_thinking
-            content = raw_content
-        else:
-            thinking, content = self._split_thinking(raw_content)
+        thinking = native_thinking or None
+        content = raw_content
 
         tool_calls = self._parse_tool_calls(response.message.tool_calls or [])
 
@@ -710,11 +666,9 @@ class OllamaChatCompletionClient(
         - Ollama does not fragment tool calls. A tool call appears in
         exactly one chunk, fully formed. We yield it in a single
         ``tool_call_chunk``.
-        - When ``ModelConfig.supports_thinking`` is True, this method
-        buffers content tokens until the closing thinking tag is seen.
-        Tokens inside the tag stream out via ``thinking``; tokens after
-        the tag stream out via ``content``. This means the consumer
-        sees reasoning live, then output live, with no false starts.
+        - If Ollama emits a native ``thinking`` field, we surface it as
+        ``thinking``. We do not parse provider-specific in-band tags.
+          Content tokens are forwarded as content.
         - Structured output is parsed once at the final chunk by
         validating the accumulated content. Streaming + structured
         output works, but the parsed Pydantic instance is only
@@ -765,26 +719,12 @@ class OllamaChatCompletionClient(
         start_time: float,
     ) -> t.AsyncGenerator[ChatCompletionChunk, None]:
         accumulated_content: list[str] = []
-        thinking_buf = _StreamThinkingBuffer(self.config)
         tool_call_count = 0
         final_response: "ChatResponse | None" = None
 
         async for response in raw_stream:
             if getattr(response, "done", False):
                 final_response = response
-                for thinking_delta, content_delta in thinking_buf.flush():
-                    if thinking_delta:
-                        yield ChatCompletionChunk(
-                            content="",
-                            thinking=thinking_delta,
-                            is_complete=False,
-                        )
-                    if content_delta:
-                        accumulated_content.append(content_delta)
-                        yield ChatCompletionChunk(
-                            content=content_delta,
-                            is_complete=False,
-                        )
                 break
 
             message = getattr(response, "message", None)
@@ -812,8 +752,7 @@ class OllamaChatCompletionClient(
                     # },
                 )
 
-            # Native thinking field — Ollama already split it for us. Emit
-            # straight, no buffer needed.
+            # Native thinking field — Ollama already split it for us.
             native_thinking = getattr(message, "thinking", None)
             if native_thinking:
                 yield ChatCompletionChunk(
@@ -822,37 +761,15 @@ class OllamaChatCompletionClient(
                     is_complete=False,
                 )
 
-            # Content — only run through the thinking buffer if the model
-            # is embedding tags inline. If we already saw native thinking
-            # this turn (or any prior turn), trust the provider and emit
-            # content straight.
             delta_text = getattr(message, "content", "") or ""
             if not delta_text:
                 continue
 
-            if native_thinking is not None or thinking_buf.bypassed:
-                # Provider gave us pre-split content — bypass the buffer
-                # for the rest of the stream.
-                thinking_buf.bypass()
-                accumulated_content.append(delta_text)
-                yield ChatCompletionChunk(
-                    content=delta_text,
-                    is_complete=False,
-                )
-            else:
-                for thinking_delta, content_delta in thinking_buf.feed(delta_text):
-                    if thinking_delta:
-                        yield ChatCompletionChunk(
-                            content="",
-                            thinking=thinking_delta,
-                            is_complete=False,
-                        )
-                    if content_delta:
-                        accumulated_content.append(content_delta)
-                        yield ChatCompletionChunk(
-                            content=content_delta,
-                            is_complete=False,
-                        )
+            accumulated_content.append(delta_text)
+            yield ChatCompletionChunk(
+                content=delta_text,
+                is_complete=False,
+            )
 
         # Final chunk
         structured_output: BaseModel | None = None
@@ -888,161 +805,3 @@ class OllamaChatCompletionClient(
             usage=usage,
             structured_output=structured_output,
         )
-
-
-# -------- STREAMING THINKING BUFFER -----------------------------------------------------------
-class _StreamThinkingBuffer:
-    """Routes streaming tokens into ``thinking`` vs ``content`` deltas.
-
-    The thinking tag arrives one token at a time. We can't classify a
-    token as thinking-vs-content until we know whether we're inside a
-    tag, so we buffer just enough characters to detect the boundary.
-
-    State machine:
-      - ``BEFORE``: have not seen the opening tag yet. Hold tokens
-        until we either see the open tag (transition to INSIDE) or
-        accumulate enough to know an open tag is impossible (flush
-        as content, transition to AFTER).
-      - ``INSIDE``: between open and close tag. Tokens stream out as
-        ``thinking``. Hold a small tail of characters in case the
-        close tag is split across feed calls.
-      - ``AFTER``: closing tag was seen. Tokens stream straight as
-        ``content``.
-
-    For ``thinking_position == "start"`` only: any non-whitespace
-    character before the open tag means thinking is not happening,
-    so we shortcut to AFTER and emit as content.
-
-    For ``thinking_position == "anywhere"``: BEFORE keeps buffering
-    until we either see the tag or hit EOF.
-
-    If thinking is not enabled (``supports_thinking == False``), the
-    buffer is a passthrough: ``feed`` returns ``[(None, delta)]``.
-    """
-
-    _BEFORE = "before"
-    _INSIDE = "inside"
-    _AFTER = "after"
-
-    def __init__(self, config: ModelConfig) -> None:
-        self.config = config
-        self.open_tag = f"<{config.thinking_tag}>"
-        self.close_tag = f"</{config.thinking_tag}>"
-        self.state = self._AFTER if not config.supports_thinking else self._BEFORE
-        self.buffer = ""
-        self.bypassed = False
-
-    def bypass(self) -> None:
-        """Disable in-band tag parsing. Use when the provider emits
-        thinking and content as separate fields (Ollama native mode).
-        """
-        self.bypassed = True
-        self.state = self._AFTER
-        self.buffer = ""
-
-    def feed(self, delta: str) -> list[tuple[str | None, str | None]]:
-        """Feed a streamed token. Yields ``(thinking_delta, content_delta)`` pairs.
-
-        Either field can be None if there is nothing to emit for it
-        in this token. Both can be None on a token that is fully
-        absorbed into the buffer (waiting for more context).
-        """
-        if not delta:
-            return []
-        if self.state == self._AFTER:
-            return [(None, delta)]
-
-        self.buffer += delta
-        return self._drain()
-
-    def flush(self) -> list[tuple[str | None, str | None]]:
-        """Drain remaining buffered content at end of stream."""
-        out: list[tuple[str | None, str | None]] = []
-        if not self.buffer:
-            return out
-
-        if self.state == self._INSIDE:
-            # Stream ended inside the tag — emit as thinking.
-            out.append((self.buffer, None))
-        else:
-            # BEFORE without ever seeing the tag — emit as content.
-            out.append((None, self.buffer))
-        self.buffer = ""
-        return out
-
-    def _drain(self) -> list[tuple[str | None, str | None]]:
-        out: list[tuple[str | None, str | None]] = []
-
-        while True:
-            if self.state == self._BEFORE:
-                emitted = self._drain_before(out)
-            elif self.state == self._INSIDE:
-                emitted = self._drain_inside(out)
-            else:
-                # AFTER: flush remaining buffer as content.
-                if self.buffer:
-                    out.append((None, self.buffer))
-                    self.buffer = ""
-                emitted = False
-
-            if not emitted:
-                break
-
-        return out
-
-    def _drain_before(self, out: list[tuple[str | None, str | None]]) -> bool:
-        """Look for the opening tag. Return True if state advanced."""
-        idx = self.buffer.find(self.open_tag)
-        if idx >= 0:
-            # Anything before the tag is content (only possible in "anywhere"
-            # mode, since "start" rejects pre-tag text below).
-            preamble = self.buffer[:idx]
-            if preamble:
-                out.append((None, preamble))
-            self.buffer = self.buffer[idx + len(self.open_tag) :]
-            self.state = self._INSIDE
-            return True
-
-        # Tag not found yet. Decide whether to keep buffering.
-        if self.config.thinking_position == "start":
-            # If the buffer holds any non-whitespace that can't be a tag prefix,
-            # we know the tag will never come — bail out.
-            stripped = self.buffer.lstrip()
-            if stripped and not self.open_tag.startswith(stripped):
-                out.append((None, self.buffer))
-                self.buffer = ""
-                self.state = self._AFTER
-                return True
-
-        # Could still become a tag — hold all but the safe prefix.
-        # The safe prefix is everything except the last (len(open_tag)-1) chars.
-        keep = max(0, len(self.buffer) - (len(self.open_tag) - 1))
-        if keep > 0 and self.config.thinking_position == "anywhere":
-            # In "anywhere" mode, content before a not-yet-seen tag is still
-            # valid content — emit the safe prefix.
-            out.append((None, self.buffer[:keep]))
-            self.buffer = self.buffer[keep:]
-            return bool(keep)
-
-        return False
-
-    def _drain_inside(self, out: list[tuple[str | None, str | None]]) -> bool:
-        """Look for the closing tag. Return True if state advanced."""
-        idx = self.buffer.find(self.close_tag)
-        if idx >= 0:
-            thinking_part = self.buffer[:idx]
-            if thinking_part:
-                out.append((thinking_part, None))
-            self.buffer = self.buffer[idx + len(self.close_tag) :]
-            self.state = self._AFTER
-            return True
-
-        # Closing tag not found — emit the safe prefix as thinking,
-        # hold the tail in case the tag straddles future tokens.
-        keep = max(0, len(self.buffer) - (len(self.close_tag) - 1))
-        if keep > 0:
-            out.append((self.buffer[:keep], None))
-            self.buffer = self.buffer[keep:]
-            return True
-
-        return False

@@ -1,0 +1,30 @@
+"""Minimal example for serving your own Agent in the Max AI Web UI."""
+
+from max_ai.base.agent import Agent
+from max_ai.clients.ollama import OllamaChatCompletionClient
+from max_ai.core.models import ModelConfig
+from max_ai.ui import server
+
+
+client = OllamaChatCompletionClient(
+    model="qwen3:4b",
+    host="http://ollama:11434",
+    config=ModelConfig(
+        max_context_window=4000,
+        supports_function_calling=True,
+        supports_thinking=True,
+        supports_vision=False,
+    ),
+    think=True,
+    num_predict = 3000
+)
+
+agent = Agent(
+    name="Sara",
+    description="Example Max AI agent.",
+    instructions="You are a helpful assistant. Be concise and useful.",
+    client=client,
+)
+
+if __name__ == "__main__":
+    server(agent, host="0.0.0.0", port=8000)

@@ -183,6 +183,7 @@ class ModelStreamChunkEvent(ModelEvent):
 
     EVENT_TYPE = "model_stream_chunk"
     chunk: str = Field(..., description="Incremental text chunk")
+    thinking: str | None = Field(default=None, description="Incremental reasoning")
     is_final: bool = Field(default=False, description="Whether this is the final chunk")
 
 

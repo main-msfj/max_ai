@@ -40,19 +40,6 @@ class ModelConfig(BaseModel):
     supports_audio: bool = Field(default=False)
     supports_function_calling: bool = Field(default=True)
     supports_thinking: bool = Field(default=False)
-    thinking_tag: str = Field(default="think")
-    thinking_position: t.Literal["start", "anywhere"] = "start"
-    force_no_thinking_marker: str | None = Field(
-        default="/no_think",
-        description=(
-            "Magic phrase appended to the system prompt to forcibly "
-            "stop the model from emitting reasoning, used by models "
-            "that ignore API-level think=False (e.g. '/no_think' for "
-            "qwen3-thinking variants). Only injected when "
-            "supports_thinking is False. Leave None for models that "
-            "respect API flags or never reason."
-        ),
-    )
 
     tokenizer_base: str = "o200k_base"
 
@@ -65,4 +52,5 @@ class OllamaChatCompletionClientConfig(BaseModel):
     api_key: SecretStr | None = None
     think: bool | None = None
     keep_alive: str | int | None = None
+    options: dict[str, t.Any] = Field(default_factory=dict)
     config: dict[str, t.Any] = Field(default_factory=dict)

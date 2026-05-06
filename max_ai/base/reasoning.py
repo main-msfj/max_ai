@@ -408,6 +408,11 @@ class BaseReasoning(ABC):
             final_chunk: ChatCompletionChunk | None = None
 
             try:
+                yield ModelCallEvent(
+                    source=self.name,
+                    model=str(model_metadata.get("model") or "unknown"),
+                    input_messages=ctx.messages,
+                )
                 async for item in self.middleware_chain.execute_stream(
                     action="model_call_stream",
                     ctx=ctx,
@@ -436,6 +441,12 @@ class BaseReasoning(ABC):
 
                         if chunk.thinking:
                             thinking_chunks.append(chunk.thinking)
+                            yield ModelStreamChunkEvent(
+                                source=self.name,
+                                chunk="",
+                                thinking=chunk.thinking,
+                                is_final=False,
+                            )
 
                         if chunk.tool_call_chunk:
                             self._merge_tool_call_chunk(
@@ -472,6 +483,11 @@ class BaseReasoning(ABC):
                         finish_reason="tool_calls" if tool_calls else "stop",
                     )
                     loop_state.record_completion(result)
+                    yield ModelResponseEvent(
+                        source=self.name,
+                        response=assistant_msg.text(),
+                        has_tool_calls=bool(tool_calls),
+                    )
 
                     yield ModelStreamChunkEvent(
                         source=self.name,

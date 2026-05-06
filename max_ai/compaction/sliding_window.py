@@ -35,9 +35,7 @@ class SlidingWindowCompaction(CoreCompaction):
     ) -> CompactionResult:
         del prompts  # Reserved for summary-layer updates in the next phase.
 
-        budget = self.token_strategy.build_budget(
-            max_context_tokens=max_context_tokens
-        )
+        budget = self.token_strategy.build_budget(max_context_tokens=max_context_tokens)
         total_tokens = self.token_strategy.count_messages(ctx.messages)
 
         if total_tokens <= budget.max_history_tokens:

@@ -70,7 +70,7 @@ for _noisy in ("httpcore", "httpx", "urllib3", "asyncio"):
 # Hardcoded config — v1 per the spec. Swap to argparse / config files later.
 # ---------------------------------------------------------------------------
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://ollama:11434")
-MODEL = "qwen3:4b-instruct-2507-q4_K_M"
+MODEL = "qwen3.5:4b-q4_K_M"
 
 
 def build_client() -> OllamaChatCompletionClient:
@@ -82,7 +82,7 @@ def build_client() -> OllamaChatCompletionClient:
             supports_function_calling=True,
             supports_thinking=False,
         ),
-        think=False,
+        think=True,
     )
 
 

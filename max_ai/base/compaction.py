@@ -41,8 +41,8 @@ class CoreCompaction(BaseModel, ABC):
     async def compact(
         self,
         *,
-        ctx: "RunContext",
-        prompts: "PromptCtx",
+        ctx: RunContext,
+        prompts: PromptCtx,
         max_context_tokens: int,
     ) -> CompactionResult:
         """Apply compaction to the provided runtime context."""

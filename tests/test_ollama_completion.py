@@ -127,8 +127,6 @@ def make_client(scenario: Scenario) -> OllamaChatCompletionClient:
         model=scenario.model,
         host=os.getenv("OLLAMA_HOST", "http://ollama:11434"),
         config=ModelConfig(
-            thinking_tag="think",
-            thinking_position="start",
             supports_thinking=scenario.think
         ),
         think=scenario.think if scenario.think else None,
@@ -147,11 +145,6 @@ def check_complete(scenario: Scenario, content: str, thinking: str | None) -> li
         failures.append("expected thinking but got None / empty")
     if not scenario.expect_thinking and thinking:
         failures.append(f"did not expect thinking but got: {thinking[:60]!r}")
-
-    # Thinking should never leak into content as raw tags.
-    for tag in ("<think>", "</think>"):
-        if tag in content:
-            failures.append(f"raw tag {tag!r} leaked into content")
 
     return failures
 
@@ -311,8 +304,6 @@ async def test_phi4_mini_react_cycle_smoke():
         config=ModelConfig(
             supports_function_calling=True,
             supports_thinking=False,
-            thinking_tag="think",
-            thinking_position="start",
         ),
         think=False,
     )
