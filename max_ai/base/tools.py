@@ -11,10 +11,16 @@ from abc import ABC, abstractmethod
 from pydantic import BaseModel
 from jsonschema import Draft202012Validator
 
+from ..errors.tools import DockerToolReferenceError
 from ..termination import CancellationToken
 from .component import ComponentBase
-from ..types.tools import ToolApprovalMode, CoreToolParameters, CoreToolDefinition
 from ..types.tool_call import ToolCallRecord, ToolResult
+from ..types.tools import (
+    ToolApprovalMode,
+    CoreToolParameters,
+    CoreToolDefinition,
+    DockerToolRef,
+)
 
 
 class ToolContext:
@@ -72,6 +78,12 @@ class CoreTool(ComponentBase[BaseModel], ABC):
     def parameters(self) -> dict[str, t.Any]:
         """JSON schema for tool inputs."""
         ...
+
+    def docker_ref(self) -> DockerToolRef:
+        raise DockerToolReferenceError(
+            self.name,
+            "it does not provide a DockerToolRef",
+        )
 
     # -------- ABSTRACT -----------------------------------------------------------
     @abstractmethod

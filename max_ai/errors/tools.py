@@ -23,3 +23,12 @@ class BaseToolDuplicateError(Exception):
 
     def __init__(self, names: t.Set[str]):
         super().__init__(f"Duplicate tool names: {', '.join(names)}")
+
+
+class DockerToolReferenceError(TypeError):
+    """Raised when a tool cannot be referenced for Docker execution."""
+
+    def __init__(self, tool_name: str, reason: str):
+        super().__init__(
+            f"Tool {tool_name!r} cannot run in Docker because {reason}."
+        )

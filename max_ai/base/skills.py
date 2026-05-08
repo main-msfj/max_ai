@@ -10,8 +10,8 @@ blob storage container, or anywhere else. A registry knows how to:
   3. Materialize them into a per-session directory that the agent's
      sandbox can mount read-only.
 
-Two filesystem locations matter, both controlled by environment
-variables (infrastructure concern, not per-instance config):
+Two filesystem locations matter. They default under the shared server
+workspace and can be overridden with environment variables:
 
   SKILLS_CACHE_DIR   shared cache, persistent across sessions
   SESSIONS_DIR       root for ephemeral per-user session dirs
@@ -39,6 +39,7 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel
 
+# from ..config import get_sessions_dir, get_skills_cache_dir
 from .capability import CoreAgentCapabilities
 from .tools import ToolContext
 from ..core.blocks import SkillBlock
@@ -103,25 +104,13 @@ class CoreSkillRegistry(CoreAgentCapabilities[BaseModel], ABC):
 
     @staticmethod
     def _resolve_cache_root() -> Path:
-        raw = os.environ.get("SKILLS_CACHE_DIR")
-        if not raw:
-            raise RuntimeError(
-                "SKILLS_CACHE_DIR is not set. Define it in your environment "
-                "(e.g. /var/skills-cache in production, a local path in dev)."
-            )
-        path = Path(raw).expanduser().resolve()
+        path = get_skills_cache_dir()
         path.mkdir(parents=True, exist_ok=True)
         return path
 
     @staticmethod
     def _resolve_sessions_root() -> Path:
-        raw = os.environ.get("SESSIONS_DIR")
-        if not raw:
-            raise RuntimeError(
-                "SESSIONS_DIR is not set. Define it in your environment "
-                "(e.g. /tmp/sessions in production, a local path in dev)."
-            )
-        path = Path(raw).expanduser().resolve()
+        path = get_sessions_dir()
         path.mkdir(parents=True, exist_ok=True)
         return path
 

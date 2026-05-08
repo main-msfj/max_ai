@@ -4,6 +4,7 @@ Component configuration System
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import warnings
 import typing as t
@@ -204,6 +205,39 @@ class ComponentBase(t.Generic[ConfigT]):
                 f"{field} must be {expected.__name__}, got {type(value).__name__}"
             )
         return value
+
+
+class CoreLifecycleComponent(ComponentBase[ConfigT]):
+    """Serializable component with an async connection lifecycle."""
+
+    def __init__(self) -> None:
+        self._connected: bool = False
+        self._connect_lock: asyncio.Lock = asyncio.Lock()
+
+    async def connect(self) -> None:
+        """Open backend resources needed by this component."""
+        return None
+
+    async def disconnect(self) -> None:
+        """Close backend resources opened by connect()."""
+        return None
+
+    async def _ensure_connected(self) -> None:
+        """Connect once, safely, even under concurrent calls."""
+        if not self._connected:
+            async with self._connect_lock:
+                if not self._connected:
+                    await self.connect()
+                    self._connected = True
+
+    async def __aenter__(self) -> t.Self:
+        await self._ensure_connected()
+        return self
+
+    async def __aexit__(self, *exc: t.Any) -> None:
+        if self._connected:
+            await self.disconnect()
+            self._connected = False
 
 
 class Component(t.Generic[ConfigT]):

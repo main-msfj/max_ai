@@ -153,7 +153,7 @@ class OllamaChatCompletionClient(
         )
 
     # -------- TOOL SCHEMA -----------------------------------------------------------
-    def build_tool_schema(self, tools: list["CoreTool"]) -> list[dict[str, t.Any]]:
+    def build_tool_schema(self, tools: list[CoreTool]) -> list[dict[str, t.Any]]:
         """Convert ``CoreTool`` instances to Ollama's tool schema.
 
         Ollama accepts the OpenAI-compatible function-call envelope::
@@ -184,7 +184,7 @@ class OllamaChatCompletionClient(
             return []
         return [self._tool_to_ollama_schema(tool) for tool in tools]
 
-    def _tool_to_ollama_schema(self, tool: "CoreTool") -> dict[str, t.Any]:
+    def _tool_to_ollama_schema(self, tool: CoreTool) -> dict[str, t.Any]:
         return {
             "type": "function",
             "function": {

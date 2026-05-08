@@ -13,11 +13,11 @@ from pydantic import ConfigDict, create_model, TypeAdapter, ValidationError
 
 
 from ..loggers import ScopedLogger
-from ..errors.tools import ToolRetry
+from ..errors.tools import DockerToolReferenceError, ToolRetry
 from ..termination import CancellationToken
 from ..base.tools import CoreTool, ToolContext
 from ..types.tool_call import ToolCallRecord, ToolResult
-from ..types.tools import ToolApprovalMode, CoreToolParameters
+from ..types.tools import ToolApprovalMode, CoreToolParameters, DockerToolRef
 
 
 # -------- LOGGER -----------------------------------------------------------
@@ -77,6 +77,48 @@ class FunctionAsTool(CoreTool):
     @property
     def parameters(self) -> dict[str, t.Any]:
         return self._parameters_schema
+
+    def docker_ref(self) -> DockerToolRef:
+        """Build the importable Docker reference for this function tool."""
+        module = self.func.__module__
+        qualname = self.func.__qualname__
+        name = self.func.__name__
+
+        if name == "<lambda>":
+            raise DockerToolReferenceError(
+                self.name,
+                "lambda functions do not have an importable reference",
+            )
+
+        if "<locals>" in qualname:
+            raise DockerToolReferenceError(
+                self.name,
+                "nested or local functions do not have an importable reference",
+            )
+
+        if module == "__main__":
+            raise DockerToolReferenceError(
+                self.name,
+                "functions defined in __main__ are not importable by the Docker worker",
+            )
+
+        return DockerToolRef(
+            kind="function",
+            module=module,
+            qualname=qualname,
+            options={
+                "name": self.name,
+                "description": self.description,
+                "version": self.version,
+                "approval_mode": (
+                    self.approval_mode.value
+                    if isinstance(self.approval_mode, ToolApprovalMode)
+                    else self.approval_mode
+                ),
+                "timeout_seconds": self.timeout_seconds,
+                "max_retries": self.max_retries,
+            },
+        )
 
     def validate_parameters(self, tool_request: ToolCallRecord) -> CoreToolParameters:
         """Validate parameters using the dynamic Pydantic model.

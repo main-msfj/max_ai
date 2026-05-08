@@ -21,11 +21,10 @@ import asyncio
 
 from pydantic import ValidationError
 
+from ..base.executor import CoreExecutor
 from ..base.tools import CoreTool, ToolContext
 from ..termination import CancellationToken
 from ..types.tool_call import ToolCallRecord, ToolResult
-
-from ..base.executor import CoreExecutor
 
 
 class LocalExecutor(CoreExecutor):
@@ -43,6 +42,7 @@ class LocalExecutor(CoreExecutor):
         tool_context: ToolContext,
         cancellation_token: CancellationToken | None = None,
     ) -> ToolResult:
+        await self._ensure_connected()
         timeout = tool.timeout_seconds or self.default_timeout
 
         try:

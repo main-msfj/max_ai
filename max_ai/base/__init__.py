@@ -5,7 +5,7 @@ from .memory import CoreMemoryRegistry
 from .knowledge import CoreKnowledgeRegistry
 from .routines import CoreRoutineRegistry
 from .middleware import CoreMiddleware
-from .component import Component, ComponentBase
+from .component import Component, ComponentBase, CoreLifecycleComponent
 from .compaction import CompactionResult, CoreCompaction
 from .capability import CoreAgentCapabilities
 from .context import CoreLogBookRegistry
@@ -16,6 +16,7 @@ __all__ = [
     "CoreLayer",
     "Component",
     "ComponentBase",
+    "CoreLifecycleComponent",
     "CompactionResult",
     "CoreCompaction",
     "CoreAgentCapabilities",

@@ -6,8 +6,9 @@ from pathlib import Path
 
 import pytest
 
+from max_ai.base.executor import CoreExecutor
 from max_ai.base.tools import CoreTool, ToolContext
-from max_ai.executor.docker import DockerExecutor
+from max_ai.executor.docker.docker import DockerExecutor
 from max_ai.termination import CancellationToken
 from max_ai.types.tool_call import ToolCallRecord, ToolResult
 from max_ai.types.tools import ToolApprovalMode
@@ -39,6 +40,17 @@ class CommandTool(CoreTool):
         raise AssertionError("DockerExecutor should not call tool.execute directly")
 
 
+class LayoutExecutor(CoreExecutor):
+    async def run(
+        self,
+        tool: CoreTool,
+        record: ToolCallRecord,
+        tool_context: ToolContext,
+        cancellation_token: CancellationToken | None = None,
+    ) -> ToolResult:
+        return ToolResult.success_result(record.id, {})
+
+
 class FakeProcess:
     def __init__(
         self,
@@ -67,6 +79,18 @@ def make_context(session_id: str = "session_x") -> ToolContext:
     return ToolContext(run_id="run_1", session_id=session_id)
 
 
+def test_core_executor_ensures_server_workspace_layout(tmp_path: Path) -> None:
+    executor = LayoutExecutor(server_workspace=tmp_path)
+
+    assert executor.server_workspace == tmp_path.resolve()
+    assert executor.tmp_dir.is_dir()
+    assert executor.sessions_dir.is_dir()
+    assert executor.var_dir.is_dir()
+    assert executor.skills_cache_dir.is_dir()
+    assert executor.workspace_dir.is_dir()
+    assert executor.tools_dir.is_dir()
+
+
 def test_docker_command_uses_default_server_workspace(tmp_path: Path) -> None:
     executor = DockerExecutor(server_workspace=tmp_path)
 
@@ -80,20 +104,18 @@ def test_docker_command_uses_default_server_workspace(tmp_path: Path) -> None:
     assert ["maxai-sandbox:py311", "/bin/bash", "-lc", "echo hi"] == command[-4:]
 
 
-def test_container_env_uses_configurable_paths(tmp_path: Path) -> None:
+def test_container_env_uses_standard_workspace_paths(tmp_path: Path) -> None:
     executor = DockerExecutor(
         server_workspace=tmp_path,
         container_workspace="/runtime",
-        sessions_subdir="sessions",
-        skills_cache_subdir="cache/skills",
     )
 
     env = executor._container_env(make_context("abc"))
 
     assert env["SERVER_WORKSPACE"] == "/runtime"
-    assert env["SESSIONS_DIR"] == "/runtime/sessions"
-    assert env["SKILLS_CACHE_DIR"] == "/runtime/cache/skills"
-    assert env["SKILLS_DIR"] == "/runtime/sessions/abc/skills"
+    assert env["SESSIONS_DIR"] == "/runtime/tmp/session"
+    assert env["SKILLS_CACHE_DIR"] == "/runtime/var/skills-cache"
+    assert env["SKILLS_DIR"] == "/runtime/tmp/session/abc/skills"
     assert env["RUN_ID"] == "run_1"
     assert env["SESSION_ID"] == "abc"
 
@@ -101,12 +123,6 @@ def test_container_env_uses_configurable_paths(tmp_path: Path) -> None:
 def test_invalid_container_paths_are_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         DockerExecutor(server_workspace=tmp_path, container_workspace="/")
-
-    with pytest.raises(ValueError):
-        DockerExecutor(server_workspace=tmp_path, sessions_subdir="../sessions")
-
-    with pytest.raises(ValueError):
-        DockerExecutor(server_workspace=tmp_path, skills_cache_subdir="")
 
 
 @pytest.mark.asyncio
