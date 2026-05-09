@@ -4,6 +4,7 @@ import argparse
 import os
 import xml.sax.saxutils as xml
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -44,6 +45,19 @@ def _slide_xml(title: str, body: str) -> str:
         "</a:r></a:p></p:txBody></p:sp>"
         "</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>"
     )
+
+
+@dataclass
+class Slide:
+    title: str
+    body: str
+
+
+def _split_slide(value: str) -> Slide:
+    if "::" not in value:
+        return Slide(value.strip(), "")
+    title, body = value.split("::", 1)
+    return Slide(title.strip(), body.strip())
 
 
 def _presentation_xml(slide_count: int) -> str:
@@ -98,10 +112,10 @@ def _content_types(slide_count: int) -> str:
     )
 
 
-def _write_pptx(path: Path, title: str, audience: str, slides: list[str]) -> None:
-    slide_titles = [title] + slides
+def _write_pptx(path: Path, title: str, subtitle: str, slides: list[Slide]) -> None:
+    slide_count = 1 + len(slides)
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as pptx:
-        pptx.writestr("[Content_Types].xml", _content_types(len(slide_titles)))
+        pptx.writestr("[Content_Types].xml", _content_types(slide_count))
         pptx.writestr(
             "_rels/.rels",
             '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
@@ -110,32 +124,38 @@ def _write_pptx(path: Path, title: str, audience: str, slides: list[str]) -> Non
             'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
             'Target="ppt/presentation.xml"/></Relationships>',
         )
-        pptx.writestr("ppt/presentation.xml", _presentation_xml(len(slide_titles)))
-        pptx.writestr("ppt/_rels/presentation.xml.rels", _presentation_rels(len(slide_titles)))
+        pptx.writestr("ppt/presentation.xml", _presentation_xml(slide_count))
+        pptx.writestr("ppt/_rels/presentation.xml.rels", _presentation_rels(slide_count))
         pptx.writestr(
             "ppt/slides/slide1.xml",
-            _slide_xml(title, f"Audience: {audience}"),
+            _slide_xml(title, subtitle),
         )
         for index, slide in enumerate(slides, start=2):
             pptx.writestr(
                 f"ppt/slides/slide{index}.xml",
-                _slide_xml(slide, "Main point | Supporting detail | Speaker note"),
+                _slide_xml(slide.title, slide.body),
             )
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Create a PowerPoint PPTX deck.")
+    parser = argparse.ArgumentParser(description="Create a general PowerPoint PPTX deck.")
     parser.add_argument("--title", required=True)
-    parser.add_argument("--audience", default="General audience")
+    parser.add_argument("--subtitle", default="")
     parser.add_argument("--slide", action="append", default=[])
     parser.add_argument("--output", default="")
     args = parser.parse_args()
 
-    slides = args.slide or ["Context", "Recommendation", "Next steps"]
+    slides = [_split_slide(item) for item in args.slide if item.strip()]
+    if not slides:
+        slides = [
+            Slide("Overview", "Summarize the topic and why it matters."),
+            Slide("Key Points", "Add the most important details for this audience."),
+            Slide("Next Steps", "Close with the action, question, or takeaway."),
+        ]
     output_name = _filename(args.output or args.title.lower().replace(" ", "-"))
     output_path = _workspace_dir() / output_name
 
-    _write_pptx(output_path, args.title, args.audience, slides)
+    _write_pptx(output_path, args.title, args.subtitle, slides)
     print(str(output_path))
 
 

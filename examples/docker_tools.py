@@ -1,7 +1,7 @@
 from max_ai.tools import tool
 
 
-@tool
+@tool(name="extract_action", description="Extract partical action item from shote meeting notes")
 def extract_action_items(notes: str) -> list[dict[str, str]]:
     """Extract practical action items from short meeting notes."""
     items: list[dict[str, str]] = []

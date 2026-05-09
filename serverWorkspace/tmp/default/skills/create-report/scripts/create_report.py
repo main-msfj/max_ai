@@ -4,6 +4,7 @@ import argparse
 import os
 import xml.sax.saxutils as xml
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -32,29 +33,52 @@ def _paragraph(text: str, style: str | None = None) -> str:
     )
 
 
-def _document_xml(
-    title: str,
-    audience: str,
-    findings: list[str],
-    recommendations: list[str],
-) -> str:
-    paragraphs = [
-        _paragraph(title, "Title"),
-        _paragraph(f"Audience: {audience}"),
-        _paragraph("Executive Summary", "Heading1"),
-        _paragraph(f"This report summarizes {title} for {audience}."),
-        _paragraph("Key Findings", "Heading1"),
-    ]
-    paragraphs.extend(_paragraph(f"- {finding}") for finding in findings)
-    paragraphs.append(_paragraph("Recommendations", "Heading1"))
-    paragraphs.extend(_paragraph(f"- {item}") for item in recommendations)
-    paragraphs.extend(
-        [
-            _paragraph("Next Steps", "Heading1"),
-            _paragraph("- Review this report with the owner."),
-            _paragraph("- Update open questions before sharing externally."),
-        ]
-    )
+@dataclass
+class Block:
+    kind: str
+    heading: str
+    text: str
+
+
+class AppendBlock(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        blocks = getattr(namespace, "blocks", None)
+        if blocks is None:
+            blocks = []
+            setattr(namespace, "blocks", blocks)
+        value = values.strip()
+        if not value:
+            return
+        if option_string == "--paragraph":
+            blocks.append(Block("paragraph", "", value))
+            return
+        heading, text = _split_pair(
+            value,
+            "Highlights" if option_string == "--bullet" else "Details",
+        )
+        if text:
+            blocks.append(Block("bullet" if option_string == "--bullet" else "section", heading, text))
+
+
+def _split_pair(value: str, default_heading: str = "") -> tuple[str, str]:
+    if "::" not in value:
+        return default_heading, value.strip()
+    heading, text = value.split("::", 1)
+    return heading.strip() or default_heading, text.strip()
+
+
+def _document_xml(title: str, blocks: list[Block]) -> str:
+    paragraphs = [_paragraph(title, "Title")]
+    current_heading = ""
+    for block in blocks:
+        if block.kind == "paragraph":
+            paragraphs.append(_paragraph(block.text))
+            continue
+        if block.heading and block.heading != current_heading:
+            paragraphs.append(_paragraph(block.heading, "Heading1"))
+            current_heading = block.heading
+        prefix = "- " if block.kind == "bullet" else ""
+        paragraphs.append(_paragraph(f"{prefix}{block.text}"))
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
@@ -78,13 +102,7 @@ def _styles_xml() -> str:
     )
 
 
-def _write_docx(
-    path: Path,
-    title: str,
-    audience: str,
-    findings: list[str],
-    recommendations: list[str],
-) -> None:
+def _write_docx(path: Path, title: str, blocks: list[Block]) -> None:
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as docx:
         docx.writestr(
             "[Content_Types].xml",
@@ -116,26 +134,28 @@ def _write_docx(
         )
         docx.writestr(
             "word/document.xml",
-            _document_xml(title, audience, findings, recommendations),
+            _document_xml(title, blocks),
         )
         docx.writestr("word/styles.xml", _styles_xml())
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Create a Word DOCX report.")
+    parser = argparse.ArgumentParser(description="Create a general Word DOCX document.")
     parser.add_argument("--title", required=True)
-    parser.add_argument("--audience", default="General audience")
-    parser.add_argument("--finding", action="append", default=[])
-    parser.add_argument("--recommendation", action="append", default=[])
+    parser.add_argument("--paragraph", action=AppendBlock, default=[])
+    parser.add_argument("--section", action=AppendBlock)
+    parser.add_argument("--bullet", action=AppendBlock)
     parser.add_argument("--output", default="")
     args = parser.parse_args()
 
-    findings = args.finding or ["No findings were provided."]
-    recommendations = args.recommendation or ["No recommendations were provided."]
+    blocks: list[Block] = getattr(args, "blocks", [])
+    if not blocks:
+        blocks.append(Block("paragraph", "", f"{args.title}"))
+
     output_name = _filename(args.output or args.title.lower().replace(" ", "-"))
     output_path = _workspace_dir() / output_name
 
-    _write_docx(output_path, args.title, args.audience, findings, recommendations)
+    _write_docx(output_path, args.title, blocks)
     print(str(output_path))
 
 

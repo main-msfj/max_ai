@@ -800,12 +800,20 @@ const VISIBLE_EVENT_TYPES = new Set([
 function renderEvents() {
   const panel = $("#eventsPanel");
   const badge = $("#eventsBadge");
+  const toggle = $("#eventsToggle");
+  const scroll = $("#eventsScroll");
   const visible = state.events.filter((e) => VISIBLE_EVENT_TYPES.has(e.type));
   panel.classList.toggle("open", state.showEvents);
+  if (toggle) {
+    toggle.classList.toggle("is-on", state.showEvents);
+    toggle.setAttribute("aria-pressed", state.showEvents ? "true" : "false");
+  }
   if (visible.length > 0) { badge.style.display = ""; badge.textContent = visible.length; }
   else { badge.style.display = "none"; }
-  if (!state.showEvents) return;
-  const scroll = $("#eventsScroll");
+  if (!state.showEvents) {
+    if (scroll) scroll.innerHTML = "";
+    return;
+  }
   if (visible.length === 0) { scroll.innerHTML = '<div class="events-empty">No events yet.</div>'; return; }
   scroll.innerHTML = visible.map((p, i) => {
     const label = p.type === "agent_event"
@@ -912,11 +920,15 @@ async function refreshWorkspaceFiles() {
 }
 
 function syncToolActivity(packet) {
+  if (packet.type === "agent_complete" || packet.type === "run_complete" || packet.type === "error") {
+    state.activeTools = {};
+    return;
+  }
   if (packet.type !== "agent_event" || !packet.event) return;
   const event = packet.event;
   if (event.event_type === "tool_call" && event.tool_call_id)
     state.activeTools[event.tool_call_id] = { tool_name: event.tool_name || "tool", parameters: event.parameters || {} };
-  if (event.event_type === "tool_call_response" && event.tool_call_id)
+  if ((event.event_type === "tool_call_response" || event.event_type === "tool_result") && event.tool_call_id)
     delete state.activeTools[event.tool_call_id];
 }
 
