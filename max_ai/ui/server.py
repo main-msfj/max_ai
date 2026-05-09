@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from max_ai.base.agent import Agent
+from max_ai.config import setting
 from max_ai.core.event_type import (
     CompactionEvent,
     CoreEvent,
@@ -40,7 +41,6 @@ from max_ai.types.tool_call import ToolCallRecord
 
 
 STATIC_DIR = Path(__file__).parent / "static"
-DEFAULT_WORKSPACE_ROOT = Path("server_workspace/workspace")
 WORKSPACE_EXCLUDES = {
     ".git",
     ".pytest_cache",
@@ -139,23 +139,25 @@ def create_app(
 
     @app.get("/api/workspace")
     async def workspace() -> dict[str, t.Any]:
+        root = _active_workspace_root(app)
         return {
-            "root": str(app.state.workspace_root),
-            "files": _workspace_files(app.state.workspace_root),
+            "root": str(root),
+            "files": _workspace_files(root),
         }
 
     @app.get("/api/workspace/files")
     async def workspace_files() -> list[dict[str, t.Any]]:
-        return _workspace_files(app.state.workspace_root)
+        return _workspace_files(_active_workspace_root(app))
 
     @app.get("/api/workspace/file")
     async def workspace_file(path: str = Query(min_length=1)) -> dict[str, t.Any]:
-        file_path = _safe_workspace_path(app.state.workspace_root, path)
+        root = _active_workspace_root(app)
+        file_path = _safe_workspace_path(root, path)
         stat = file_path.stat()
         kind = _file_kind(file_path)
         payload: dict[str, t.Any] = {
             "name": file_path.name,
-            "path": _workspace_relpath(app.state.workspace_root, file_path),
+            "path": _workspace_relpath(root, file_path),
             "size": stat.st_size,
             "kind": kind,
             "mime": mimetypes.guess_type(file_path.name)[0],
@@ -166,7 +168,7 @@ def create_app(
 
     @app.get("/api/workspace/raw")
     async def workspace_raw(path: str = Query(min_length=1)) -> FileResponse:
-        return FileResponse(_safe_workspace_path(app.state.workspace_root, path))
+        return FileResponse(_safe_workspace_path(_active_workspace_root(app), path))
 
     @app.post("/api/clear")
     async def clear(agent_name: str | None = None) -> dict[str, str]:
@@ -612,8 +614,20 @@ def _get_session(app: FastAPI, session_id: str) -> dict[str, t.Any]:
 
 
 def _resolve_workspace_root(workspace_root: str | Path | None) -> Path:
-    root = Path(workspace_root) if workspace_root is not None else DEFAULT_WORKSPACE_ROOT
+    root = (
+        Path(workspace_root)
+        if workspace_root is not None
+        else setting.get_or_create_server_tmp_dir()
+    )
     return root.expanduser().resolve()
+
+
+def _active_workspace_root(app: FastAPI, agent_name: str | None = None) -> Path:
+    selected_agent = _select_agent_name(app, agent_name)
+    ctx: RunContext = app.state.contexts[selected_agent]
+    user_workspace = app.state.workspace_root / ctx.user_id / "workspace"
+    user_workspace.mkdir(parents=True, exist_ok=True)
+    return user_workspace.resolve()
 
 
 def _select_agent_name(app: FastAPI, requested: str | None) -> str:
@@ -629,7 +643,7 @@ def _info_payload(app: FastAPI) -> dict[str, t.Any]:
     active = app.state.agents[active_name]
     payload = _agent_info(active)
     payload["active_agent"] = active_name
-    payload["workspace_root"] = str(app.state.workspace_root)
+    payload["workspace_root"] = str(_active_workspace_root(app, active_name))
     payload["agents"] = [
         _agent_summary(name, agent, default_selected=name == active_name)
         for name, agent in app.state.agents.items()

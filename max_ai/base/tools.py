@@ -26,16 +26,18 @@ from ..types.tools import (
 class ToolContext:
     """Runtime context available to tools."""
 
-    __slots__ = ("session_id", "run_id", "retry_count", "deps")
+    __slots__ = ("user_id", "session_id", "run_id", "retry_count", "deps")
 
     def __init__(
         self,
         run_id: str,
-        session_id: str,
+        session_id: str = "",
+        user_id: str = "default",
         retry_count: int = 0,
         deps: dict[str, t.Any] | None = None,
     ):
         self.run_id = run_id
+        self.user_id = user_id
         self.session_id = session_id
         self.retry_count = retry_count
         self.deps = deps or {}

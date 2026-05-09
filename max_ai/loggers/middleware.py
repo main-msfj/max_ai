@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 import logging
 import typing as t
 
-from ..base.middleware import CoreMiddleware
+if t.TYPE_CHECKING:
+    from ..base.middleware import CoreMiddleware
 
 
 class MiddlewareLogger:

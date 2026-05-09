@@ -46,6 +46,14 @@ class LocalSkillRegistry(CoreSkillRegistry):
         super().__init__(source=source, skills=skills)
         self._source_path: Path = self._resolve_source_path(self.source)
 
+    async def connect(self) -> None:
+        """Refresh local skills from source before validating cache."""
+        for skill_name in self.skills:
+            cache_path = self._registry_cache_dir / skill_name
+            if cache_path.exists():
+                shutil.rmtree(cache_path)
+        await super().connect()
+
     @staticmethod
     def _resolve_source_path(source: str) -> Path:
         path = Path(source).expanduser().resolve()
@@ -84,6 +92,9 @@ class LocalSkillRegistry(CoreSkillRegistry):
                 f"Skill {skill_name!r} at {skill_src} is not a directory."
             )
 
-        # copytree expects the destination to NOT exist; the base
-        # class guarantees this.
+        # Local sources are developer-controlled and should reflect edits
+        # immediately. Refresh the cache entry instead of treating cache as
+        # authoritative forever.
+        if target_dir.exists():
+            shutil.rmtree(target_dir)
         shutil.copytree(skill_src, target_dir)

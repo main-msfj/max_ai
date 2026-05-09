@@ -312,6 +312,7 @@ class ToolExecutor:
         # the full RunContext — it only gets what tools legitimately need.
         tool_ctx = ToolContext(
             run_id=ctx.run_id,
+            user_id=ctx.user_id,
             session_id=ctx.session_id or "",
         )
 

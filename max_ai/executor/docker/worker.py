@@ -9,6 +9,7 @@ ToolResult JSON response.
 from __future__ import annotations
 
 import asyncio
+import base64
 import importlib
 import json
 import os
@@ -49,6 +50,85 @@ def _materialize_tool_sources(payload: dict[str, t.Any]) -> None:
 
     if sources and str(source_dir) not in sys.path:
         sys.path.insert(0, str(source_dir))
+
+
+def _payload_bytes(payload: object) -> bytes | None:
+    if isinstance(payload, str):
+        return payload.encode("utf-8")
+    if not isinstance(payload, dict):
+        return None
+    encoding = payload.get("encoding")
+    content = payload.get("content")
+    if not isinstance(content, str):
+        return None
+    if encoding == "text":
+        return content.encode("utf-8")
+    if encoding == "base64":
+        try:
+            return base64.b64decode(content.encode("ascii"), validate=True)
+        except Exception:
+            return None
+    return None
+
+
+def _file_payload(path: Path) -> dict[str, str]:
+    data = path.read_bytes()
+    try:
+        return {"encoding": "text", "content": data.decode("utf-8")}
+    except UnicodeDecodeError:
+        return {
+            "encoding": "base64",
+            "content": base64.b64encode(data).decode("ascii"),
+        }
+
+
+def _materialize_runtime_files(payload: dict[str, t.Any]) -> None:
+    files = payload.get("runtime_files") or {}
+    if not isinstance(files, dict):
+        return
+
+    context_payload = payload.get("context") or {}
+    user_id = context_payload.get("user_id", "default")
+    if not isinstance(user_id, str):
+        user_id = "default"
+
+    root = Path("/sandbox") / "tmp" / user_id
+    for relative_path, file_payload in files.items():
+        if not isinstance(relative_path, str):
+            continue
+        target = (root / relative_path).resolve()
+        try:
+            target.relative_to(root.resolve())
+        except ValueError:
+            continue
+        data = _payload_bytes(file_payload)
+        if data is None:
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+
+
+def _collect_workspace_files(context: ToolContext) -> dict[str, dict[str, str]]:
+    workspace_dir = Path(
+        os.environ.get(
+            "WORKSPACE_DIR",
+            f"/sandbox/tmp/{context.user_id}/workspace",
+        )
+    )
+    if not workspace_dir.exists():
+        return {}
+
+    files: dict[str, dict[str, str]] = {}
+    root = workspace_dir.resolve()
+    for path in root.rglob("*"):
+        if not path.is_file() or "__pycache__" in path.parts:
+            continue
+        try:
+            relative_path = path.resolve().relative_to(root).as_posix()
+        except ValueError:
+            continue
+        files[relative_path] = _file_payload(path)
+    return files
 
 
 def _resolve_ref(module_name: str, qualname: str) -> t.Any:
@@ -104,6 +184,7 @@ def _build_context(payload: dict[str, t.Any]) -> ToolContext:
 
     return ToolContext(
         run_id=context_payload["run_id"],
+        user_id=context_payload.get("user_id", "default"),
         session_id=context_payload["session_id"],
         retry_count=context_payload.get("retry_count", 0),
         deps=context_payload.get("deps") or {},
@@ -115,6 +196,7 @@ async def _run_invocation(payload: dict[str, t.Any]) -> ToolResult:
     tool_ref = DockerToolRef.model_validate(payload["tool_ref"])
 
     _materialize_tool_sources(payload)
+    _materialize_runtime_files(payload)
     tool = _build_tool(tool_ref)
     context = _build_context(payload)
 
@@ -129,6 +211,7 @@ async def _run_invocation(payload: dict[str, t.Any]) -> ToolResult:
         "executor": result.metadata.get("executor", "docker"),
         "tool_module": result.metadata.get("tool_module", tool_ref.module),
         "tool_qualname": result.metadata.get("tool_qualname", tool_ref.qualname),
+        "workspace_files": _collect_workspace_files(context),
     }
     return result.model_copy(update={"metadata": metadata})
 

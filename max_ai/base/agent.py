@@ -375,6 +375,7 @@ class Agent(ComponentBase[BaseModel], ABC):
         await self.prepare()
 
         ctx = self._normalize_run_context(task, run_context)
+        self.capabilities.materialize_runtime(ctx.user_id)
         tool_executor = ToolExecutor(
             tools=self.capabilities.all_tools,
             middlewares=self.middlewares,

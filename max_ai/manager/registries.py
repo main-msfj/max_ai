@@ -77,6 +77,7 @@ class AgentCapabilities:
         self.priority_tools: list[str] = list(priority_tools or [])
         self.toolset: list[CoreTool] = self._normalize_tools(toolset or [])
         self.knowledge: list[CoreKnowledgeRegistry] = list(knowledge or [])
+        self.runtime_tools: list[CoreTool] = self._build_runtime_tools()
 
         # Populated by prepare(). Empty until then.
         self._skill_blocks: list[SkillBlock] = []
@@ -106,6 +107,13 @@ class AgentCapabilities:
                 raise CapabilityError.invalid_tool_entry(tool)
         return normalized
 
+    @staticmethod
+    def _build_runtime_tools() -> list[CoreTool]:
+        """Tools every agent gets for runtime workspace management."""
+        from ..tools.workspace import WorkspaceTool
+
+        return [WorkspaceTool()]
+
     # -------- PREPARE ------------------------------------------------
     async def prepare(self) -> None:
         """Resolve async capabilities and revalidate.
@@ -120,6 +128,11 @@ class AgentCapabilities:
             self._validate_unique_tool_names(self._all_tools())
 
         self._prepared = True
+
+    def materialize_runtime(self, user_id: str) -> None:
+        """Materialize per-user runtime assets for registered capabilities."""
+        if self.skills_registry is not None:
+            self.skills_registry.materialize(user_id=user_id)
 
     def _ensure_prepared(self) -> None:
         if not self._prepared:
@@ -154,7 +167,8 @@ class AgentCapabilities:
     # -------- TOOL COLLECTION ----------------------------------------
     def _all_tools_sync(self) -> list[CoreTool]:
         """All tools available before prepare() — explicit + memory + knowledge + routines + context."""
-        merged: list[CoreTool] = list(self.toolset)
+        merged: list[CoreTool] = list(self.runtime_tools)
+        merged.extend(self.toolset)
         merged.extend(self.memory.tools if self.memory else [])
         merged.extend(self.logbook.tools if self.logbook else [])
         merged.extend(self.routines.tools if self.routines else [])

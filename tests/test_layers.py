@@ -131,6 +131,7 @@ def test_skills_layer_with_skills():
     assert "pr_review" in out
     assert "Review pull requests." in out
     assert "skill_bash" in out
+    assert "search_skills" in out
 
 
 def test_skills_layer_empty():

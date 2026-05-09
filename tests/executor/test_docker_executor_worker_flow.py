@@ -12,7 +12,6 @@ def test_docker_executor_builds_worker_payload(tmp_path: Path) -> None:
     tool_source = tmp_path / "docker_tools.py"
     tool_source.write_text("def add(a: int, b: int) -> int:\n    return a + b\n")
     executor = DockerExecutor(
-        user_id="user_1",
         tool_source=tool_source,
         server_workspace=tmp_path / "server",
     )
@@ -22,6 +21,7 @@ def test_docker_executor_builds_worker_payload(tmp_path: Path) -> None:
     )
     context = ToolContext(
         run_id="run_1",
+        user_id="user_1",
         session_id="session_1",
         retry_count=1,
         deps={"x": "y"},
@@ -41,6 +41,7 @@ def test_docker_executor_builds_worker_payload(tmp_path: Path) -> None:
     assert payload["record"]["parameters"] == {"a": 2, "b": 3}
     assert payload["context"] == {
         "run_id": "run_1",
+        "user_id": "user_1",
         "session_id": "session_1",
         "retry_count": 1,
         "deps": {"x": "y"},
@@ -56,17 +57,19 @@ def test_docker_executor_command_runs_worker_with_container_paths(tmp_path: Path
     tool_source.write_text("def add(a: int, b: int) -> int:\n    return a + b\n")
 
     executor = DockerExecutor(
-        user_id="user_1",
         tool_source=tool_source,
         server_workspace=server_workspace,
     )
 
-    command = executor._docker_command()
+    context = ToolContext(run_id="run_1", user_id="user_1")
+    command = executor._docker_command(context)
 
     assert command[:4] == ["docker", "run", "--rm", "-i"]
     assert f"{server_workspace.resolve()}:/sandbox" in command
     assert f"{tool_source.resolve()}:/sandbox/docker_tools.py:ro" not in command
     assert "MAX_AI_TOOL_SOURCE_DIR=/sandbox/tmp/user_1/tools" in command
+    assert "SKILLS_DIR=/sandbox/tmp/user_1/skills" in command
+    assert "WORKSPACE_DIR=/sandbox/tmp/user_1/workspace" in command
     assert command[-5:] == [
         "python",
         "-m",
@@ -97,12 +100,11 @@ def test_docker_executor_syncs_file_tool_source_to_workspace(tmp_path: Path) -> 
     tool_source = tmp_path / "docker_tools.py"
     tool_source.write_text("VALUE = 42\n", encoding="utf-8")
     executor = DockerExecutor(
-        user_id="user_1",
         tool_source=tool_source,
         server_workspace=server_workspace,
     )
 
-    executor._sync_tool_source()
+    executor._sync_tool_source("user_1")
 
     copied = server_workspace / "tmp" / "user_1" / "tools" / "docker_tools.py"
     assert copied.read_text(encoding="utf-8") == "VALUE = 42\n"

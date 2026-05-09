@@ -151,8 +151,10 @@ async def test_tool_not_found_emits_failure():
     assert items[1].tool_result is not None
     assert items[1].tool_result.success is False
 
-    # Record should not be consumed (never reached EXECUTING).
-    assert not record.is_consumed
+    # Early failures are terminal so they do not remain actionable forever.
+    assert record.is_consumed
+    assert record.result is not None
+    assert record.result.success is False
 
 
 # -------- AUTO-APPROVED HAPPY PATH -----------------------------------------------------------
@@ -265,8 +267,9 @@ async def test_ask_approved_rejected_yields_failure_without_running():
     assert items[2].tool_result.success is False
 
     assert not tool.execute_called
-    assert record.is_rejected
-    assert not record.is_consumed
+    assert record.is_consumed
+    assert record.result is not None
+    assert record.result.success is False
 
 
 # -------- VALIDATION -----------------------------------------------------------
@@ -290,7 +293,9 @@ async def test_validation_failure_yields_failure_without_running():
     assert "missing required field 'q'" in (items[1].error or "")
 
     assert not tool.execute_called
-    assert not record.is_consumed
+    assert record.is_consumed
+    assert record.result is not None
+    assert record.result.success is False
 
 
 # -------- TOOL EXCEPTIONS -----------------------------------------------------------

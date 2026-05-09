@@ -7,18 +7,18 @@ blob storage container, or anywhere else. A registry knows how to:
 
   1. Resolve which skills exist in its source.
   2. Download them to a shared on-disk cache (idempotent).
-  3. Materialize them into a per-session directory that the agent's
+  3. Materialize them into a per-user directory that the agent's
      sandbox can mount read-only.
 
 Two filesystem locations matter. They default under the shared server
 workspace and can be overridden with environment variables:
 
   SKILLS_CACHE_DIR   shared cache, persistent across sessions
-  SESSIONS_DIR       root for ephemeral per-user session dirs
+  SERVER_DIR/tmp     root for ephemeral per-user runtime dirs
 
-Skills are cached under ``{SKILLS_CACHE_DIR}/{source_key}/{skill}/``
-to prevent collisions between registries pointing at different
-sources but using the same skill name.
+Skills are cached under ``serverWorkspace/var/skills-cache/{registry_key}/{skill}/``
+where ``registry_key`` is derived from the child registry class name.
+Runtime copies live under ``serverWorkspace/tmp/{user_id}/skills/{skill}/``.
 
 Validation is eager: instantiating a registry verifies that every
 declared skill is reachable from its source and lands correctly in
@@ -39,13 +39,14 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel
 
-# from ..config import get_sessions_dir, get_skills_cache_dir
-from .capability import CoreAgentCapabilities
-from .tools import ToolContext
+from ..config import setting
+from .tools import CoreTool
 from ..core.blocks import SkillBlock
+from .capability import CoreAgentCapabilities
+from ..tools.skills import SearchSkillsTool, SkillBashTool
 
 if t.TYPE_CHECKING:
-    from .tools import CoreTool
+    pass
 
 
 _VALID_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -70,8 +71,8 @@ class CoreSkillRegistry(CoreAgentCapabilities[BaseModel], ABC):
         self.skills: list[str] = self._validate_skill_names(skills)
 
         self._cache_root: Path = self._resolve_cache_root()
-        self._sessions_root: Path = self._resolve_sessions_root()
-        self._source_cache_dir: Path = self._cache_root / self._source_key()
+        self._runtime_root: Path = self._resolve_runtime_root()
+        self._registry_cache_dir: Path = self._cache_root / self._registry_key()
 
     # -------- VALIDATION ---------------------------------------------------------------
 
@@ -104,25 +105,32 @@ class CoreSkillRegistry(CoreAgentCapabilities[BaseModel], ABC):
 
     @staticmethod
     def _resolve_cache_root() -> Path:
-        path = get_skills_cache_dir()
-        path.mkdir(parents=True, exist_ok=True)
-        return path
+        override = os.environ.get("SKILLS_CACHE_DIR")
+        if override:
+            path = Path(override).expanduser().resolve()
+            path.mkdir(parents=True, exist_ok=True)
+            return path
+        return setting.get_or_create_skill_cache_dir()
 
     @staticmethod
-    def _resolve_sessions_root() -> Path:
-        path = get_sessions_dir()
-        path.mkdir(parents=True, exist_ok=True)
-        return path
+    def _resolve_runtime_root() -> Path:
+        server_dir = os.environ.get("SERVER_DIR")
+        if server_dir:
+            path = Path(server_dir).expanduser().resolve() / "tmp"
+            path.mkdir(parents=True, exist_ok=True)
+            return path
+        return setting.get_or_create_server_tmp_dir()
 
-    def _source_key(self) -> str:
-        """Stable, filesystem-safe key derived from ``source``.
+    def _registry_key(self) -> str:
+        """Stable, filesystem-safe key derived from the child registry class.
 
-        Used as a subdirectory under the cache root so that multiple
-        registries pointing at different sources don't collide on
-        skill names.
+        Groups cache entries by backend type (LocalSkillRegistry,
+        GitSkillRegistry, etc.).
         """
-        # Replace anything that isn't safe in a path with an underscore.
-        return re.sub(r"[^A-Za-z0-9_.-]+", "_", self.source).strip("_") or "default"
+        return (
+            re.sub(r"[^A-Za-z0-9_.-]+", "_", type(self).__name__).strip("_")
+            or "SkillRegistry"
+        )
 
     # -------- LIFECYCLE ----------------------------------------------------------------
 
@@ -133,10 +141,10 @@ class CoreSkillRegistry(CoreAgentCapabilities[BaseModel], ABC):
         Failure here means the registry cannot serve any session, so
         we raise loudly rather than defer the error to materialize().
         """
-        self._source_cache_dir.mkdir(parents=True, exist_ok=True)
+        self._registry_cache_dir.mkdir(parents=True, exist_ok=True)
 
         for skill_name in self.skills:
-            cache_path = self._source_cache_dir / skill_name
+            cache_path = self._registry_cache_dir / skill_name
             if not cache_path.exists():
                 await self._download_if_not_exist(skill_name, cache_path)
 
@@ -171,7 +179,7 @@ class CoreSkillRegistry(CoreAgentCapabilities[BaseModel], ABC):
 
         blocks: list[SkillBlock] = []
         for skill_name in self.skills:
-            skill_md = self._source_cache_dir / skill_name / "SKILL.md"
+            skill_md = self._registry_cache_dir / skill_name / "SKILL.md"
             meta = self._read_skill_frontmatter(skill_md)
 
             name = meta.get("name") or skill_name
@@ -226,7 +234,7 @@ class CoreSkillRegistry(CoreAgentCapabilities[BaseModel], ABC):
         """
         ...
 
-    # -------- SESSION MATERIALIZATION --------------------------------------------------
+    # -------- USER MATERIALIZATION --------------------------------------------------
 
     def materialize(
         self,
@@ -234,39 +242,29 @@ class CoreSkillRegistry(CoreAgentCapabilities[BaseModel], ABC):
         session_id: str | None = None,
         skills: list[str] | None = None,
     ) -> Path:
-        """Copy a subset of cached skills into a per-user session dir.
+        """Copy a subset of cached skills into a per-user runtime dir.
 
         The returned path is meant to be bind-mounted read-only into
-        the user's sandbox at ``/mnt/skills``.
+        the user's sandbox and exposed as ``$SKILLS_DIR``.
 
         Args:
             user_id: Identifier of the user whose session is being set
                 up. Must be filesystem-safe.
-            session_id: Optional session identifier. When provided,
-                skills are materialized under ``{SESSIONS_DIR}/{session_id}``
-                so tools can resolve them from ``ToolContext.session_id``.
-                If omitted, ``user_id`` is used for backwards compatibility.
+            session_id: Ignored. Kept temporarily for backwards compatibility
+                while runtime layout moves from session scoped to user scoped.
             skills: Optional subset of ``self.skills`` to expose to
                 this user. Defaults to all of them. Useful for
                 multi-tenant setups where each user only sees their
                 own skills.
 
         Returns:
-            Absolute path to the session's skills directory.
+            Absolute path to the user's skills directory.
         """
         if not isinstance(user_id, str) or not _VALID_NAME_RE.match(user_id):
             raise ValueError(
                 f"Invalid user_id {user_id!r}. Allowed characters: "
                 "letters, digits, underscores, hyphens."
             )
-        if session_id is not None and (
-            not isinstance(session_id, str) or not _VALID_NAME_RE.match(session_id)
-        ):
-            raise ValueError(
-                f"Invalid session_id {session_id!r}. Allowed characters: "
-                "letters, digits, underscores, hyphens."
-            )
-
         wanted = skills if skills is not None else self.skills
         unknown = [s for s in wanted if s not in self.skills]
         if unknown:
@@ -275,111 +273,61 @@ class CoreSkillRegistry(CoreAgentCapabilities[BaseModel], ABC):
                 f"Available: {self.skills}"
             )
 
-        session_key = session_id or user_id
-        session_dir = self._sessions_root / session_key / "skills"
-        session_dir.mkdir(parents=True, exist_ok=True)
+        user_skills_dir = self._user_skills_dir(user_id)
+        user_skills_dir.mkdir(parents=True, exist_ok=True)
 
         for skill_name in wanted:
-            src = self._source_cache_dir / skill_name
-            dst = session_dir / skill_name
+            src = self._registry_cache_dir / skill_name
+            dst = user_skills_dir / skill_name
             if dst.exists():
-                continue  # already materialized for this session
+                shutil.rmtree(dst)
             shutil.copytree(src, dst)
 
-        return session_dir
+        return user_skills_dir
 
-    def _session_skills_dir(self, session_id: str) -> Path:
-        if not isinstance(session_id, str) or not _VALID_NAME_RE.match(session_id):
+    def _user_skills_dir(self, user_id: str) -> Path:
+        if not isinstance(user_id, str) or not _VALID_NAME_RE.match(user_id):
             raise ValueError(
-                f"Invalid session_id {session_id!r}. Allowed characters: "
+                f"Invalid user_id {user_id!r}. Allowed characters: "
                 "letters, digits, underscores, hyphens."
             )
-        return self._sessions_root / session_id / "skills"
+        return self._runtime_root / user_id / "skills"
 
     def make_skill_bash_tool(self) -> "CoreTool":
-        """Build the session-scoped ``skill_bash`` tool.
+        """Build the user-scoped ``skill_bash`` tool.
 
         The tool is intentionally owned by the skill registry: agents
         without a ``CoreSkillRegistry`` never receive it. It exposes the
-        current session's materialized skills directory via ``$SKILLS_DIR``
+        current user's materialized skills directory via ``$SKILLS_DIR``
         and runs commands from that directory so the model can inspect
         ``SKILL.md`` files, references, scripts, and other packaged assets.
         """
-        from ..tools.function_as_tool import FunctionAsTool
-        from ..types.tools import ToolApprovalMode
+        return SkillBashTool()
 
-        registry = self
+    def make_search_skills_tool(self) -> "CoreTool":
+        """Build the searchable skill catalog tool."""
+        return SearchSkillsTool(self._skill_entries())
 
-        async def skill_bash(
-            tool_context: ToolContext,
-            command: str,
-            timeout_seconds: int | None = None,
-        ) -> dict[str, t.Any]:
-            """Execute a shell command against the current session's skills.
-
-            Use this to inspect and run materialized skills. The skills
-            directory is available as ``$SKILLS_DIR``; commands also run
-            with that directory as their working directory.
-            """
-            skills_dir = registry._session_skills_dir(tool_context.session_id)
-            if not skills_dir.is_dir():
-                raise FileNotFoundError(
-                    f"Session skills directory does not exist: {skills_dir}. "
-                    "Materialize the skill registry for this session before "
-                    "calling skill_bash."
-                )
-
-            timeout = timeout_seconds or 120
-            if timeout <= 0:
-                raise ValueError("timeout_seconds must be greater than zero.")
-
-            env = os.environ.copy()
-            env["SKILLS_DIR"] = str(skills_dir)
-
-            proc = await asyncio.create_subprocess_shell(
-                command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=skills_dir,
-                env=env,
+    def _skill_entries(self) -> list[dict[str, str]]:
+        entries: list[dict[str, str]] = []
+        for skill_name in self.skills:
+            skill_md = self._registry_cache_dir / skill_name / "SKILL.md"
+            meta = self._read_skill_frontmatter(skill_md) if skill_md.is_file() else {}
+            name = meta.get("name") or skill_name
+            description = meta.get("description") or ""
+            entries.append(
+                {
+                    "name": str(name),
+                    "description": str(description),
+                    "path": f"{skill_name}/SKILL.md",
+                }
             )
-
-            try:
-                stdout_b, stderr_b = await asyncio.wait_for(
-                    proc.communicate(),
-                    timeout=timeout,
-                )
-            except asyncio.TimeoutError:
-                if proc.returncode is None:
-                    proc.kill()
-                    await proc.communicate()
-                raise TimeoutError(
-                    f"skill_bash command exceeded timeout of {timeout} seconds."
-                ) from None
-
-            return {
-                "exit_code": proc.returncode,
-                "stdout": stdout_b.decode(errors="replace"),
-                "stderr": stderr_b.decode(errors="replace"),
-            }
-
-        return FunctionAsTool(
-            func=skill_bash,
-            name="skill_bash",
-            description=(
-                "Execute a shell command in the current session's skills "
-                "directory. The directory is available as $SKILLS_DIR. Use "
-                "this to read SKILL.md files, inspect references/assets, and "
-                "run skill scripts."
-            ),
-            approval_mode=ToolApprovalMode.AUTO_APPROVED,
-            timeout_seconds=120,
-        )
+        return entries
 
     @property
     def tools(self) -> list["CoreTool"]:
         """Tools exposed by the skill registry."""
-        return [self.make_skill_bash_tool()]
+        return [self.make_search_skills_tool(), self.make_skill_bash_tool()]
 
     def cleanup(self, user_id: str) -> None:
         """Remove a user's session directory entirely.
@@ -391,6 +339,6 @@ class CoreSkillRegistry(CoreAgentCapabilities[BaseModel], ABC):
         if not isinstance(user_id, str) or not _VALID_NAME_RE.match(user_id):
             raise ValueError(f"Invalid user_id {user_id!r}.")
 
-        user_root = self._sessions_root / user_id
+        user_root = self._runtime_root / user_id
         if user_root.exists():
             shutil.rmtree(user_root, ignore_errors=True)

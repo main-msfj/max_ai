@@ -115,6 +115,7 @@ def test_actionable_excludes_consumed():
     assert record in state.actionable_calls
 
     result = ToolResult.success_result(tool_call_id=record.id, result="ok")
+    record.start_execution()
     state.consume(record.id, result)
     assert record not in state.actionable_calls
     assert record in state.consumed_calls
@@ -169,6 +170,7 @@ def test_consume_approved_record():
     state.apply_approval(record.id, approved=True)
 
     result = ToolResult.success_result(tool_call_id=record.id, result=42)
+    record.start_execution()
     returned = state.consume(record.id, result)
 
     assert returned is record
@@ -200,6 +202,7 @@ def test_consume_already_consumed_raises():
     state.add(record)
     record.auto_approve()
     result = ToolResult.success_result(tool_call_id=record.id, result=None)
+    record.start_execution()
     state.consume(record.id, result)
     with pytest.raises(ValueError, match="already consumed"):
         state.consume(record.id, result)
@@ -219,6 +222,7 @@ def test_get_result_after_consumed():
     state.add(record)
     record.auto_approve()
     result = ToolResult.success_result(tool_call_id=record.id, result="x")
+    record.start_execution()
     state.consume(record.id, result)
     assert state.get_result(record.id) == result
 
@@ -289,6 +293,7 @@ def test_full_lifecycle_round_trip():
     consumed = make_record("search_docs", parameters={"q": "abc"})
     state.add(consumed)
     consumed.auto_approve()
+    consumed.start_execution()
     state.consume(
         consumed.id,
         ToolResult.success_result(tool_call_id=consumed.id, result=["doc1"]),

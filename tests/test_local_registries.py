@@ -296,9 +296,9 @@ async def test_local_skill_registry_loads_skill(tmp_path: Path, monkeypatch: pyt
     """Build a minimal skill on disk and expose it via the new registry flow."""
     source_root = tmp_path / "source"
     cache_root = tmp_path / "cache"
-    sessions_root = tmp_path / "sessions"
+    server_root = tmp_path / "server"
     monkeypatch.setenv("SKILLS_CACHE_DIR", str(cache_root))
-    monkeypatch.setenv("SESSIONS_DIR", str(sessions_root))
+    monkeypatch.setenv("SERVER_DIR", str(server_root))
 
     skill_dir = source_root / "demo_skill"
     (skill_dir / "scripts").mkdir(parents=True)
@@ -349,17 +349,17 @@ async def test_local_skill_registry_loads_skill(tmp_path: Path, monkeypatch: pyt
         assert block.name == "demo_skill"
         assert block.description == "A minimal skill for testing."
 
-        # Skill package was cached and can be materialized into a session.
-        cached_skill = reg._source_cache_dir / "demo_skill"
+        # Skill package was cached and can be materialized for a user.
+        cached_skill = reg._registry_cache_dir / "demo_skill"
         assert (cached_skill / "SKILL.md").is_file()
         assert (cached_skill / "references" / "notes.md").is_file()
         assert (cached_skill / "scripts" / "greetings.py").is_file()
 
         session_skills = reg.materialize(user_id="u1", session_id="s1")
-        assert session_skills == sessions_root.resolve() / "s1" / "skills"
+        assert session_skills == server_root.resolve() / "tmp" / "u1" / "skills"
         assert (session_skills / "demo_skill" / "SKILL.md").is_file()
         assert (session_skills / "demo_skill" / "references" / "notes.md").is_file()
 
-        # The registry exposes one command-style tool for on-demand skill use.
+        # The registry exposes discovery + command-style tools for skills.
         tool_names = {tool.name for tool in reg.tools}
-        assert tool_names == {"skill_bash"}
+        assert tool_names == {"search_skills", "skill_bash"}

@@ -14,7 +14,7 @@ def tool(
     *,
     name: str | None = None,
     description: str | None = None,
-    approval_mode: ToolApprovalMode = ToolApprovalMode.AUTO_APPROVED,
+    approval_mode: str | ToolApprovalMode = ToolApprovalMode.AUTO_APPROVED,
 ) -> t.Callable[[t.Callable[..., t.Any]], FunctionAsTool]: ...
 
 
@@ -24,7 +24,7 @@ def tool(
     *,
     name: str | None = None,
     description: str | None = None,
-    approval_mode: ToolApprovalMode = ToolApprovalMode.AUTO_APPROVED,
+    approval_mode: str | ToolApprovalMode = ToolApprovalMode.AUTO_APPROVED,
 ) -> FunctionAsTool: ...
 
 
@@ -33,7 +33,7 @@ def tool(
     *,
     name: str | None = None,
     description: str | None = None,
-    approval_mode: ToolApprovalMode = ToolApprovalMode.AUTO_APPROVED,
+    approval_mode: str | ToolApprovalMode = ToolApprovalMode.AUTO_APPROVED,
 ) -> FunctionAsTool | t.Callable[[t.Callable[..., t.Any]], FunctionAsTool]:
     """Wrap a function as a FunctionAsTool.
 

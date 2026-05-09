@@ -37,7 +37,6 @@ def make_record(tool_name: str, **overrides: t.Any) -> ToolCallRecord:
 
 
 async def collect(gen) -> list:
-async def collect(gen) -> list:
     return [item async for item in gen]
 
 
@@ -116,8 +115,10 @@ async def test_validation_fails_when_required_param_missing():
     assert isinstance(msg, ToolMessage)
     assert msg.success is False
 
-    # Tool wasn't called → record never consumed.
-    assert not record.is_consumed
+    # Validation failures are terminal so the record does not leak.
+    assert record.is_consumed
+    assert record.result is not None
+    assert record.result.success is False
 
 
 @pytest.mark.asyncio
