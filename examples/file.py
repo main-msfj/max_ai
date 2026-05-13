@@ -39,13 +39,13 @@ TOOLSET = [
 
 def build_client() -> OllamaChatCompletionClient:
     return OllamaChatCompletionClient(
-        model="qwen3:4b",
+        model="gemma4:e2b-it-q4_K_M",
         host="http://ollama:11434",
         config=ModelConfig(
             max_context_window=15000,
             supports_function_calling=True,
             supports_thinking=True,
-            supports_vision=False,
+            supports_vision=True,
         ),
         think=True,
         num_predict=10000,

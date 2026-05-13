@@ -513,6 +513,7 @@ def _event_payload(event: CoreEvent) -> dict[str, t.Any]:
             "event_type": event.event_type,
             "text": event.response,
             "has_tool_calls": event.has_tool_calls,
+            "usage": jsonable_encoder(event.usage),
         }
 
     if isinstance(event, ToolCallEvent):
@@ -617,7 +618,7 @@ def _resolve_workspace_root(workspace_root: str | Path | None) -> Path:
     root = (
         Path(workspace_root)
         if workspace_root is not None
-        else setting.get_or_create_server_tmp_dir()
+        else setting.root_dir / "tmp"
     )
     return root.expanduser().resolve()
 
@@ -625,7 +626,7 @@ def _resolve_workspace_root(workspace_root: str | Path | None) -> Path:
 def _active_workspace_root(app: FastAPI, agent_name: str | None = None) -> Path:
     selected_agent = _select_agent_name(app, agent_name)
     ctx: RunContext = app.state.contexts[selected_agent]
-    user_workspace = app.state.workspace_root / ctx.user_id / "workspace"
+    user_workspace = app.state.workspace_root / ctx.user_id / "artifacts"
     user_workspace.mkdir(parents=True, exist_ok=True)
     return user_workspace.resolve()
 

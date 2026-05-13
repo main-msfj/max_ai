@@ -17,7 +17,7 @@ from ..types.tool_call import ToolCallRecord, ToolResult
 
 
 logger = logging.getLogger(__name__)
-log = ScopedLogger(logger, scope="ToolState")
+log = ScopedLogger(logger, scope=["ToolState"])
 
 
 # -------- -----------------------------------------------------------

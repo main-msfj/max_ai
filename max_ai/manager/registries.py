@@ -6,7 +6,7 @@ the agent is used.
 Responsibilities:
   - Coerce heterogeneous inputs to their canonical types.
   - Validate internal coherence (e.g. priority_tools reference real tools).
-  - Resolve async capabilities (skills) via ``prepare()``.
+  - Resolve async capability metadata (skills) via ``prepare()``.
   - Provide type-safe lookup APIs for the agent at runtime.
 
 Out of scope:
@@ -37,6 +37,7 @@ if t.TYPE_CHECKING:
         CoreKnowledgeRegistry,
     )
 
+
 class AgentCapabilities:
     """
     Central registry of the agent's capabilities.
@@ -45,9 +46,9 @@ class AgentCapabilities:
       1. ``__init__`` — sync. Normalizes inputs, validates what it can
          see right away (explicit tools, priority_tools, name uniqueness
          across tools/memory/knowledge/routines/context).
-      2. ``prepare()`` — async. Loads the lightweight skill catalog via
-         the skills registry and revalidates registry-provided tools
-         against everything already registered.
+      2. ``prepare()`` — async. Loads lightweight skill metadata via
+         the skills registry. Skill registries do not expose tools;
+         skill execution is handled by a separate runtime tool.
 
     The agent must call ``await registry.prepare()`` before running.
 
@@ -77,7 +78,9 @@ class AgentCapabilities:
         self.priority_tools: list[str] = list(priority_tools or [])
         self.toolset: list[CoreTool] = self._normalize_tools(toolset or [])
         self.knowledge: list[CoreKnowledgeRegistry] = list(knowledge or [])
-        self.runtime_tools: list[CoreTool] = self._build_runtime_tools()
+        self.runtime_tools: list[CoreTool] = self._build_runtime_tools(
+            include_bash=self.skills_registry is not None
+        )
 
         # Populated by prepare(). Empty until then.
         self._skill_blocks: list[SkillBlock] = []
@@ -108,11 +111,16 @@ class AgentCapabilities:
         return normalized
 
     @staticmethod
-    def _build_runtime_tools() -> list[CoreTool]:
+    def _build_runtime_tools(*, include_bash: bool = False) -> list[CoreTool]:
         """Tools every agent gets for runtime workspace management."""
         from ..tools.workspace import WorkspaceTool
 
-        return [WorkspaceTool()]
+        tools: list[CoreTool] = [WorkspaceTool()]
+        if include_bash:
+            from ..tools.bash import BashTool
+
+            tools.append(BashTool())
+        return tools
 
     # -------- PREPARE ------------------------------------------------
     async def prepare(self) -> None:
@@ -124,15 +132,14 @@ class AgentCapabilities:
             return
 
         if self.skills_registry is not None:
-            self._skill_blocks = await self.skills_registry.list_skill_blocks()
-            self._validate_unique_tool_names(self._all_tools())
+            self._skill_blocks = await self.skills_registry.get_skills()
 
         self._prepared = True
 
-    def materialize_runtime(self, user_id: str) -> None:
+    def materialize_runtime(self, directory: "WorkspaceDirectory") -> None:
         """Materialize per-user runtime assets for registered capabilities."""
         if self.skills_registry is not None:
-            self.skills_registry.materialize(user_id=user_id)
+            self.skills_registry.materialize(directory)
 
     def _ensure_prepared(self) -> None:
         if not self._prepared:
@@ -176,8 +183,8 @@ class AgentCapabilities:
         return merged
 
     def _all_tools(self) -> list[CoreTool]:
-        """All tools including skills (only valid post-prepare)."""
-        return self._all_tools_sync() + self.skill_tools
+        """All tools exposed to the LLM."""
+        return self._all_tools_sync()
 
     @property
     def all_tools(self) -> list[CoreTool]:
@@ -196,14 +203,6 @@ class AgentCapabilities:
         if tool is None:
             raise KeyError(f"Tool not found: {name}")
         return tool
-
-    # -------- CAPABILITY-DERIVED TOOLS -------------------------------
-    @property
-    def skill_tools(self) -> list[CoreTool]:
-        """Tools exposed by the skills registry."""
-        if self.skills_registry is None:
-            return []
-        return list(self.skills_registry.tools)
 
     # -------- QUERIES ------------------------------------------------
     @property

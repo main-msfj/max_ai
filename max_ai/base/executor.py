@@ -24,14 +24,11 @@ Contract:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from pathlib import Path
 
 from pydantic import BaseModel
-
-from ..config import setting
 from .component import CoreLifecycleComponent
-from ..base.tools import CoreTool, ToolContext
 from ..termination import CancellationToken
+from ..base.tools import CoreTool, ToolContext
 from ..types.tool_call import ToolCallRecord, ToolResult
 
 
@@ -42,11 +39,7 @@ class CoreExecutor(CoreLifecycleComponent[BaseModel], ABC):
     asyncio, Docker container, MCP server, remote service, etc.
     """
 
-    def __init__(
-        self,
-        default_timeout: int = 300,
-        server_workspace: str | Path | None = None,
-    ) -> None:
+    def __init__(self, default_timeout: int = 300) -> None:
         """Initialize the executor.
 
         Args:
@@ -54,16 +47,9 @@ class CoreExecutor(CoreLifecycleComponent[BaseModel], ABC):
                 does not declare its own ``timeout_seconds``. Each
                 strategy can ship a different default — local can be
                 tight, container-based strategies usually need more.
-            server_workspace: Host runtime workspace root. Defaults to
-                ``SERVER_DIR`` or ``./serverWorkspace``.
         """
         super().__init__()
         self.default_timeout = default_timeout
-        self.server_workspace = (
-            Path(server_workspace).expanduser().resolve()
-            if server_workspace is not None
-            else setting.create_workspace()
-        )
 
     @abstractmethod
     async def run(

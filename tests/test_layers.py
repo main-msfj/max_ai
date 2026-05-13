@@ -130,8 +130,8 @@ def test_skills_layer_with_skills():
     assert out
     assert "pr_review" in out
     assert "Review pull requests." in out
-    assert "skill_bash" in out
-    assert "search_skills" in out
+    assert "skill_bash" not in out
+    assert "search_skills" not in out
 
 
 def test_skills_layer_empty():

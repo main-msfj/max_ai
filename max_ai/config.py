@@ -15,46 +15,16 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Global Settings"""
+    """Global Settings for Max AI Framework"""
 
     model_config = SettingsConfigDict(env_file=".env")
+    root_dir: Path = Field(default=Path.cwd())
+    tool_dir: str = Field(default="tmp/{user_id}/tools")
+    skill_dir: str = Field(default="tmp/{user_id}/skills")
+    artifacts_dir: str = Field(default="tmp/{user_id}/artifacts")
+    sandbox: str = Field(default="MaxWorkspace", description="Base Name for Directory")
+    files: list[str] = Field(default=[".json", ".pdf", ".docx", ".xlsl", ".pptx"])
 
-    server_dir: str = Field(default="serverWorkspace", validation_alias="SERVER_DIR")
-    sandbox_name: str = Field(default="/sandbox")
-    dockerfile_name: str = Field(default="Dockerfile.worker")
 
-    def get_or_create_server_tmp_dir(self) -> Path:
-        path = Path(self.server_dir) / "tmp"
-        path = path.expanduser().resolve()
-        path.mkdir(parents=True, exist_ok=True)
-        return path
-
-    def get_or_create_skill_cache_dir(self) -> Path:
-        path = Path(self.server_dir) / "var" / "skills-cache"
-        path = path.expanduser().resolve()
-        path.mkdir(parents=True, exist_ok=True)
-        return path
-
-    def get_or_create_docker_worker_dir(self) -> Path:
-        path = Path(self.server_dir) / "var" / "docker-cache"
-        path = path.expanduser().resolve()
-        path.mkdir(parents=True, exist_ok=True)
-        return path
-
-    def check_docker_and_uv(self) -> None:
-        docker_dir = self.get_or_create_docker_worker_dir()
-
-        for filename in ["pyproject.toml", self.dockerfile_name]:
-            file_path = docker_dir / filename
-            if not file_path.is_file():
-                raise ValueError(f"{file_path} must exist")
-
-    def create_workspace(self) -> Path:
-        """Create and Validate Workspace"""
-        self.get_or_create_server_tmp_dir()
-        self.get_or_create_skill_cache_dir()
-        self.check_docker_and_uv()
-        return Path(self.server_dir).expanduser().resolve()
-    
 
 setting = Settings()

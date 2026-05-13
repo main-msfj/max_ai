@@ -4,6 +4,7 @@ from pathlib import Path
 
 from max_ai.base.tools import ToolContext
 from max_ai.executor.docker import DockerExecutor
+from max_ai.executor.docker import worker
 from max_ai.types.tool_call import ToolCallRecord
 from max_ai.types.tools import DockerToolRef
 
@@ -44,7 +45,13 @@ def test_docker_executor_builds_worker_payload(tmp_path: Path) -> None:
         "user_id": "user_1",
         "session_id": "session_1",
         "retry_count": 1,
-        "deps": {"x": "y"},
+        "deps": {
+            "x": "y",
+            "runtime_root": "/sandbox",
+            "tools_dir": "/sandbox/tools",
+            "skills_dir": "/sandbox/skills",
+            "artifacts_dir": "/sandbox/artifacts",
+        },
     }
     assert payload["tool_sources"] == {
         "docker_tools.py": "def add(a: int, b: int) -> int:\n    return a + b\n"
@@ -63,20 +70,27 @@ def test_docker_executor_command_runs_worker_with_container_paths(tmp_path: Path
 
     context = ToolContext(run_id="run_1", user_id="user_1")
     command = executor._docker_command(context)
+    env = executor._compose_env(context)
 
-    assert command[:4] == ["docker", "run", "--rm", "-i"]
-    assert f"{server_workspace.resolve()}:/sandbox" in command
+    assert command[:2] == ["docker", "compose"]
+    assert "-f" in command
+    assert "-p" in command
     assert f"{tool_source.resolve()}:/sandbox/docker_tools.py:ro" not in command
-    assert "MAX_AI_TOOL_SOURCE_DIR=/sandbox/tmp/user_1/tools" in command
-    assert "SKILLS_DIR=/sandbox/tmp/user_1/skills" in command
-    assert "WORKSPACE_DIR=/sandbox/tmp/user_1/workspace" in command
-    assert command[-5:] == [
+    assert command[-8:] == [
+        "exec",
+        "-T",
+        "runtime",
         "python",
         "-m",
         "max_ai.executor.docker.worker",
         "-",
         "-",
     ]
+    assert env["MAXAI_HOST_RUNTIME_DIR"] == str(
+        server_workspace.resolve() / "tmp" / "user_1"
+    )
+    assert env["MAXAI_CONTAINER_WORKSPACE"] == "/sandbox"
+    assert "MAXAI_SOURCE_DIR" not in env
 
 
 def test_docker_executor_parses_last_tool_result_from_stdout() -> None:
@@ -108,3 +122,21 @@ def test_docker_executor_syncs_file_tool_source_to_workspace(tmp_path: Path) -> 
 
     copied = server_workspace / "tmp" / "user_1" / "tools" / "docker_tools.py"
     assert copied.read_text(encoding="utf-8") == "VALUE = 42\n"
+
+
+def test_worker_falls_back_to_builtin_bash_when_module_is_missing(monkeypatch) -> None:
+    def missing_ref(module_name: str, qualname: str):
+        raise ModuleNotFoundError("No module named 'max_ai.tools.bash'")
+
+    monkeypatch.setattr(worker, "_resolve_ref", missing_ref)
+    tool_ref = DockerToolRef(
+        kind="class",
+        module="max_ai.tools.bash",
+        qualname="BashTool",
+        config={"timeout_seconds": 10, "max_output_chars": 1000},
+    )
+
+    tool = worker._build_tool(tool_ref)
+
+    assert tool.name == "bash"
+    assert tool.timeout_seconds == 10

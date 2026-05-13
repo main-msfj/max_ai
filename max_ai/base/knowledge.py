@@ -38,7 +38,7 @@ from ..core import KnowledgeBlock
 from ..loggers import ScopedLogger
 
 logger = logging.getLogger(__name__)
-log = ScopedLogger(logger, scope="CoreKnowledgeRegistry")
+log = ScopedLogger(logger, scope=["CoreKnowledgeRegistry"])
 
 
 # Valid tool names for most providers: letters, digits, underscores, hyphens.

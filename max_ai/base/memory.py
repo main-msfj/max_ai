@@ -32,7 +32,7 @@ from ..loggers import ScopedLogger
 from ..types.tools import ToolApprovalMode
 
 logger = logging.getLogger(__name__)
-log = ScopedLogger(logger, scope="CoreMemoryRegistry")
+log = ScopedLogger(logger, scope=["CoreMemoryRegistry"])
 
 
 class MemoryToolMode(str, Enum):

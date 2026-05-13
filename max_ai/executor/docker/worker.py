@@ -13,6 +13,7 @@ import base64
 import importlib
 import json
 import os
+import shutil
 import sys
 import typing as t
 from pathlib import Path
@@ -87,12 +88,7 @@ def _materialize_runtime_files(payload: dict[str, t.Any]) -> None:
     if not isinstance(files, dict):
         return
 
-    context_payload = payload.get("context") or {}
-    user_id = context_payload.get("user_id", "default")
-    if not isinstance(user_id, str):
-        user_id = "default"
-
-    root = Path("/sandbox") / "tmp" / user_id
+    root = Path(os.environ.get("RUNTIME_DIR", "/sandbox"))
     for relative_path, file_payload in files.items():
         if not isinstance(relative_path, str):
             continue
@@ -108,18 +104,66 @@ def _materialize_runtime_files(payload: dict[str, t.Any]) -> None:
         target.write_bytes(data)
 
 
+def _normalize_runtime_layout(payload: dict[str, t.Any]) -> None:
+    """Flatten accidental ``tmp/{user_id}`` nesting inside the container.
+
+    The host workspace may be ``server/tmp/{user_id}``, but Docker mounts that
+    directory as the runtime root. Inside the container the contract is:
+
+        /sandbox/tools
+        /sandbox/skills
+        /sandbox/artifacts
+
+    Older containers or fallback code can create ``/sandbox/tmp/{user_id}``.
+    Merge that layout back into the runtime root before the tool runs.
+    """
+    runtime_root = Path(os.environ.get("RUNTIME_DIR", "/sandbox")).resolve()
+    context_payload = payload.get("context") or {}
+    user_id = context_payload.get("user_id") or "default"
+    nested_root = (runtime_root / "tmp" / str(user_id)).resolve()
+
+    try:
+        nested_root.relative_to(runtime_root)
+    except ValueError:
+        return
+
+    if not nested_root.exists():
+        return
+
+    for name in ("tools", "skills", "artifacts"):
+        source = nested_root / name
+        target = runtime_root / name
+        if not source.exists():
+            continue
+        target.mkdir(parents=True, exist_ok=True)
+        for child in source.iterdir():
+            destination = target / child.name
+            if destination.exists():
+                if child.is_dir() and destination.is_dir():
+                    shutil.copytree(child, destination, dirs_exist_ok=True)
+                elif child.is_file():
+                    shutil.copy2(child, destination)
+            else:
+                shutil.move(str(child), str(destination))
+
+    try:
+        shutil.rmtree(runtime_root / "tmp")
+    except OSError:
+        pass
+
+
 def _collect_workspace_files(context: ToolContext) -> dict[str, dict[str, str]]:
-    workspace_dir = Path(
+    artifacts_dir = Path(
         os.environ.get(
-            "WORKSPACE_DIR",
-            f"/sandbox/tmp/{context.user_id}/workspace",
+            "ARTIFACTS_DIR",
+            os.environ.get("WORKSPACE_DIR", "/sandbox/artifacts"),
         )
     )
-    if not workspace_dir.exists():
+    if not artifacts_dir.exists():
         return {}
 
     files: dict[str, dict[str, str]] = {}
-    root = workspace_dir.resolve()
+    root = artifacts_dir.resolve()
     for path in root.rglob("*"):
         if not path.is_file() or "__pycache__" in path.parts:
             continue
@@ -141,8 +185,125 @@ def _resolve_ref(module_name: str, qualname: str) -> t.Any:
     return obj
 
 
+class _WorkerBashTool(CoreTool):
+    """Fallback bash implementation for sandbox images without BashTool."""
+
+    def __init__(
+        self,
+        timeout_seconds: float = 120,
+        max_output_chars: int = 20000,
+        approval_mode: str = "ask_approved",
+    ) -> None:
+        super().__init__(
+            name="bash",
+            description="Run a shell command from the runtime root.",
+            approval_mode=approval_mode,
+            timeout_seconds=timeout_seconds,
+        )
+        self.max_output_chars = max_output_chars
+
+    @property
+    def parameters(self) -> dict[str, t.Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string"},
+                "timeout_seconds": {"type": ["integer", "null"], "minimum": 1},
+            },
+            "required": ["command"],
+            "additionalProperties": False,
+        }
+
+    async def execute(
+        self,
+        tool_request: ToolCallRecord,
+        tool_context: ToolContext | None = None,
+        cancellation_token: t.Any = None,
+    ) -> ToolResult:
+        validation = self.validate_parameters(tool_request)
+        if not validation.is_tool_valid:
+            return ToolResult.invalid_parameters(
+                tool_request.id,
+                validation.msg_error or "Invalid bash parameters.",
+            )
+
+        runtime_root = Path(os.environ.get("RUNTIME_DIR", "/sandbox")).resolve()
+        tools_dir = Path(os.environ.get("TOOLS_DIR", runtime_root / "tools")).resolve()
+        skills_dir = Path(os.environ.get("SKILLS_DIR", runtime_root / "skills")).resolve()
+        artifacts_dir = Path(
+            os.environ.get("ARTIFACTS_DIR", os.environ.get("WORKSPACE_DIR", runtime_root / "artifacts"))
+        ).resolve()
+        for path in (runtime_root, tools_dir, skills_dir, artifacts_dir):
+            path.mkdir(parents=True, exist_ok=True)
+
+        command = t.cast(str, tool_request.parameters["command"])
+        timeout = tool_request.parameters.get("timeout_seconds") or self.timeout_seconds
+        env = os.environ.copy()
+        env.update(
+            {
+                "RUNTIME_DIR": str(runtime_root),
+                "TOOLS_DIR": str(tools_dir),
+                "SKILLS_DIR": str(skills_dir),
+                "ARTIFACTS_DIR": str(artifacts_dir),
+                "WORKSPACE_DIR": str(artifacts_dir),
+            }
+        )
+
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=runtime_root,
+                env=env,
+            )
+            task = asyncio.create_task(proc.communicate())
+            stdout_b, stderr_b = await asyncio.wait_for(task, timeout=float(timeout))
+            stdout = stdout_b.decode(errors="replace")
+            stderr = stderr_b.decode(errors="replace")
+            stdout, stdout_truncated = self._truncate(stdout)
+            stderr, stderr_truncated = self._truncate(stderr)
+            return ToolResult.success_result(
+                tool_request.id,
+                {
+                    "exit_code": proc.returncode,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "cwd": str(runtime_root),
+                    "command": command,
+                    "stdout_truncated": stdout_truncated,
+                    "stderr_truncated": stderr_truncated,
+                },
+                metadata={"name": self.name},
+            )
+        except asyncio.TimeoutError:
+            if "proc" in locals() and proc.returncode is None:
+                proc.kill()
+                await proc.communicate()
+            return ToolResult.timeout(tool_request.id, timeout_seconds=float(timeout))
+
+    def _truncate(self, value: str) -> tuple[str, bool]:
+        if len(value) <= self.max_output_chars:
+            return value, False
+        return value[: self.max_output_chars] + "\n[output truncated]", True
+
+
+def _build_worker_bash_tool(tool_ref: DockerToolRef) -> CoreTool | None:
+    if tool_ref.kind != "class":
+        return None
+    if tool_ref.module != "max_ai.tools.bash" or tool_ref.qualname != "BashTool":
+        return None
+    return _WorkerBashTool(**tool_ref.config)
+
+
 def _build_tool(tool_ref: DockerToolRef) -> CoreTool:
-    obj = _resolve_ref(tool_ref.module, tool_ref.qualname)
+    try:
+        obj = _resolve_ref(tool_ref.module, tool_ref.qualname)
+    except ModuleNotFoundError:
+        fallback = _build_worker_bash_tool(tool_ref)
+        if fallback is not None:
+            return fallback
+        raise
 
     if tool_ref.kind == "function":
         if isinstance(obj, FunctionAsTool):
@@ -197,6 +358,7 @@ async def _run_invocation(payload: dict[str, t.Any]) -> ToolResult:
 
     _materialize_tool_sources(payload)
     _materialize_runtime_files(payload)
+    _normalize_runtime_layout(payload)
     tool = _build_tool(tool_ref)
     context = _build_context(payload)
 

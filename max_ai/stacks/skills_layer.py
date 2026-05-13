@@ -15,12 +15,12 @@ class SkillsLayer(Component[StackConfig], CoreLayer):
     Prompt layer that renders the lightweight catalog of available
     skills.
 
-    Skills are self-contained packages (instructions + tools + reference
+    Skills are self-contained packages (instructions, scripts, reference
     files) resolved from a ``CoreSkillRegistry`` during
     ``agent.prepare()``. This layer receives ``SkillBlock`` entries with
     only ``name`` and ``description`` populated. Full instructions,
     references, scripts, and assets stay inside the materialized skill
-    directory and are inspected on demand with ``skill_bash``.
+    directory and are handled by the skill runtime.
 
     If the loaded-skills list is empty, the layer renders to an empty
     string — it always lives in the stack, but contributes nothing

@@ -13,6 +13,7 @@ from pydantic import BaseModel, Discriminator, Field, ConfigDict
 
 from .messages import CoreMessage
 from ..types.tool_call import ToolResult
+from ..types.completions import Usage
 
 
 # -------- -----------------------------------------------------------
@@ -176,6 +177,7 @@ class ModelResponseEvent(ModelEvent):
     EVENT_TYPE = "model_response"
     response: str = Field(..., description="The model's response")
     has_tool_calls: bool = Field(default=False)
+    usage: Usage | None = Field(default=None, description="Token usage statistics")
 
 
 class ModelStreamChunkEvent(ModelEvent):

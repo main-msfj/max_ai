@@ -38,6 +38,7 @@ from max_ai.capabilities.context import LocalContextRegistry
 from max_ai.capabilities.knowledge import LocalKnowledgeRegistry
 from max_ai.capabilities.routines import LocalRoutineRegistry
 from max_ai.capabilities.skills.local import LocalSkillRegistry
+from max_ai.capabilities.workspace import LocalWorkSpaceRegistry
 
 
 # =====================================================================
@@ -198,6 +199,7 @@ async def test_core_agent_prepares_end_to_end(
         source=skill_root,
         skills=["demo_skill"],
     )
+    workspace = LocalWorkSpaceRegistry(root=tmp_path / "server")
 
     # 3. Build the agent.
     agent = _DummyAgent(
@@ -210,6 +212,7 @@ async def test_core_agent_prepares_end_to_end(
         logbook=context,
         routines=routines,
         knowledge=[knowledge],
+        workspace=workspace,
     )
 
     # Sanity: not yet prepared.
@@ -249,8 +252,8 @@ async def test_core_agent_prepares_end_to_end(
     skills_out = rendered[SkillsLayer]
     assert "demo_skill" in skills_out
     assert "A minimal skill for the smoke test." in skills_out
-    assert "search_skills" in skills_out
-    assert "skill_bash" in skills_out
+    assert "search_skills" not in skills_out
+    assert "skill_bash" not in skills_out
 
     # PriorityTools layer renders empty (no priority tools given).
     assert rendered[PriorityToolsLayer].strip() == ""
@@ -265,8 +268,9 @@ async def test_core_agent_prepares_end_to_end(
     assert "get_routine" in tool_names
     assert "search_context" in tool_names
     assert "workspace" in tool_names
-    assert "search_skills" in tool_names
-    assert "skill_bash" in tool_names
+    assert "bash" in tool_names
+    assert "search_skills" not in tool_names
+    assert "skill_bash" not in tool_names
     assert "do_thing" not in tool_names
     assert "read_skill_resource" not in tool_names
 
@@ -274,7 +278,7 @@ async def test_core_agent_prepares_end_to_end(
     await agent.prepare()  # must not raise
     assert agent.is_prepared is True
 
-    # 8. Run startup materializes skills for the current user.
+    # 8. Run startup creates the workspace layout, then materializes skills.
     ctx = RunContext(user_id="u1")
     async for item in agent.run_stream_events("hello", run_context=ctx):
         if isinstance(item, AgentResponse):

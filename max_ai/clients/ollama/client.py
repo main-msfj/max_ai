@@ -47,7 +47,7 @@ if t.TYPE_CHECKING:
     from ...base.tools import CoreTool
 
 logger = logging.getLogger(__name__)
-log = ScopedLogger(logger, scope="OllamaChatCompletionClient")
+log = ScopedLogger(logger, scope=["OllamaChatCompletionClient"])
 
 
 class OllamaChatCompletionClient(

@@ -1,9 +1,7 @@
 {% if loaded_skills %}
 # Skills
 
-The following skills are available. Use `search_skills` to choose the
-relevant skill for the task, then inspect its `SKILL.md` with
-`skill_bash` before using it.
+The following skills are available. Use them when one matches the task.
 
 {% for skill in loaded_skills %}
 - `{{ skill.name }}`: {{ skill.description }}

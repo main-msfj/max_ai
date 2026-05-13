@@ -43,7 +43,7 @@ LayerT = t.TypeVar("LayerT", bound=CoreLayer)
 CollectorFn = Callable[["PromptVariablesBuilder"], Awaitable[dict[str, t.Any]]]
 
 logger = logging.getLogger(__name__)
-log = ScopedLogger(logger, scope="[LayerContainer")
+log = ScopedLogger(logger, scope="[LayerContainer]")
 
 
 class LayerContainer:

@@ -1,4 +1,4 @@
-from .tools import CoreTool, ToolContext
+from .tools import CoreRuntimeTool, CoreTool, ToolContext
 from .agent import Agent
 from .layer import CoreLayer
 from .memory import CoreMemoryRegistry
@@ -22,10 +22,11 @@ __all__ = [
     "CoreAgentCapabilities",
     "CoreMiddleware",
     "CoreTool",
+    "CoreRuntimeTool",
     "CoreMemoryRegistry",
     "CoreKnowledgeRegistry",
     "CoreRoutineRegistry",
     "CoreLogBookRegistry",
     "ToolContext",
-    "CoreSkillRegistry"
+    "CoreSkillRegistry",
 ]

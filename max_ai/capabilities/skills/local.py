@@ -67,16 +67,10 @@ class LocalSkillRegistry(CoreSkillRegistry):
             )
         return path
 
-    async def _download_if_not_exist(
+    async def _download_skill(
         self, skill_name: str, target_dir: Path
     ) -> None:
-        """Copy ``{source}/{skill_name}/`` into the cache.
-
-        Called by the base class only when ``target_dir`` does not
-        exist yet. The base class verifies the result afterwards
-        (directory present, SKILL.md present), so this method can
-        focus on the copy itself.
-        """
+        """Copy ``{source}/{skill_name}/`` into the target directory."""
         skill_src = self._source_path / skill_name
 
         if not skill_src.exists():

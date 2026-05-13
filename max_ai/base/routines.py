@@ -38,7 +38,7 @@ if t.TYPE_CHECKING:
     from ..types.routines import RoutineSummary
 
 logger = logging.getLogger(__name__)
-log = ScopedLogger(logger, scope="CoreRoutineRegistryRegistry")
+log = ScopedLogger(logger, scope=["CoreRoutineRegistryRegistry"])
 
 
 class RoutineToolMode(str, Enum):

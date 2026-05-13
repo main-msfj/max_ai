@@ -67,7 +67,7 @@ if t.TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
-log = ScopedLogger(logger, scope="ReasoningLoop")
+log = ScopedLogger(logger, scope=["ReasoningLoop"])
 
 
 # Kinds of ClientError that warrant a retry with exponential backoff.
@@ -313,6 +313,7 @@ class BaseReasoning(ABC):
                             source=self.name,
                             response=response_text,
                             has_tool_calls=bool(msg.tool_calls),
+                            usage=item.usage,
                         )
                     else:
                         yield item
@@ -487,6 +488,7 @@ class BaseReasoning(ABC):
                         source=self.name,
                         response=assistant_msg.text(),
                         has_tool_calls=bool(tool_calls),
+                        usage=usage,
                     )
 
                     yield ModelStreamChunkEvent(

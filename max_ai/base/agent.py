@@ -11,28 +11,35 @@ from abc import ABC
 from pydantic import BaseModel
 
 from .component import ComponentBase
-from .clients import CoreChatCompletionClient
+from .compaction import CoreCompaction
 from .tool_executor import ToolExecutor
+from .workspace import WorkSpaceRegistry
+from .clients import CoreChatCompletionClient
+
 
 from ..loggers import ScopedLogger
 from ..core.models import AgentConfig
 from ..base.middleware import CoreMiddleware
-from ..core.messages import CoreMessage, UserMessage
+from ..core.messages import CoreMessage, UserMessage, Message
 from ..core.event_type import (
     CompactionEvent,
     CoreEvent,
     ErrorEvent,
     ModelStreamChunkEvent,
 )
-from ..types.agent_response import AgentResponse
-from ..types.completions import Usage
-from ..types.run_context import RunContext
+
 from ..types.stacks import PromptCtx
-from ..termination import CancellationToken
-from ..manager import AgentCapabilities
-from ..manager.stacks import PromptVariablesBuilder, build_default_stack
 from ..errors.agent import AgentError
+from ..types.completions import Usage
+from ..reasoning.react import ReActLoop
+from ..manager import AgentCapabilities
 from ..executor.local import LocalExecutor
+from ..types.run_context import RunContext
+from ..termination import CancellationToken
+from ..compaction import SlidingWindowCompaction
+from ..types.agent_response import AgentResponse
+from ..capabilities.workspace import LocalWorkSpaceRegistry
+from ..manager.stacks import PromptVariablesBuilder, build_default_stack
 
 if t.TYPE_CHECKING:
     from .executor import CoreExecutor
@@ -102,6 +109,7 @@ class Agent(ComponentBase[BaseModel], ABC):
         reasoning: BaseReasoning | None = None,
         compaction: CoreCompaction | None = None,
         executor: CoreExecutor | None = None,
+        workspace: WorkSpaceRegistry | None = None,
         output_format: t.Type[BaseModel] | None = None,
         priority_tools: list[str] | None = None,
         config: AgentConfig | None = None,
@@ -135,6 +143,8 @@ class Agent(ComponentBase[BaseModel], ABC):
                 Defaults to SlidingWindowCompaction.
             executor: Optional user-provided execution strategy. Defaults to
                 ``LocalExecutor``.
+            workspace Optional User-provided Workspace Resgistry. Default to
+                ``LocalWorkspace``.
             output_format: Pydantic model for structured response.
                 Forwarded to the client on every LLM call.
             priority_tools: Tool names the agent should strongly prefer
@@ -149,16 +159,13 @@ class Agent(ComponentBase[BaseModel], ABC):
         self.instructions = self.require_type(instructions, str, "instructions")
         self.client = self.require_type(client, CoreChatCompletionClient, "client")
         self.config = self.require_type(config or AgentConfig(), AgentConfig, "config")
+        self.compaction = self._build_compaction(compaction)
+        self.workspace = self._build_workspace(workspace)
+        self.executor = self._build_executor(executor)
 
         self.reasoning = reasoning
-        if compaction is None:
-            from ..compaction import SlidingWindowCompaction
-            compaction = SlidingWindowCompaction()
-            
-        self.compaction = compaction
         self.output_format = output_format
         self.middlewares = list(middlewares or [])
-        self.executor = executor or LocalExecutor(self.config.tool_timeout)
         self.prompt_stack: LayerContainer = build_default_stack(framework_layers)
 
         self.capabilities = AgentCapabilities(
@@ -273,7 +280,7 @@ class Agent(ComponentBase[BaseModel], ABC):
     def _build_reasoning(
         self,
         tool_executor: ToolExecutor,
-    ) -> "BaseReasoning":
+    ) -> BaseReasoning:
         """Resolve config-time reasoning into a runtime-bound instance.
 
         Accepts None (default ReActLoop) or a user-provided BaseReasoning
@@ -281,8 +288,6 @@ class Agent(ComponentBase[BaseModel], ABC):
         """
         reasoning = self.reasoning
         if reasoning is None:
-            from ..reasoning.react import ReActLoop
-
             reasoning = ReActLoop(
                 max_loop_iterations=self.config.max_loop_iterations,
                 max_connection_retries=self.config.max_connection_retries,
@@ -294,6 +299,27 @@ class Agent(ComponentBase[BaseModel], ABC):
             tool_executor=tool_executor,
             middleware_chain=tool_executor.mw_chain,
         )
+
+    def _build_compaction(self, compaction: CoreCompaction | None) -> CoreCompaction:
+        """Resolve Compaction Strategy"""
+        if compaction is not None:
+            return compaction
+        return SlidingWindowCompaction()
+
+    def _build_workspace(
+        self, workspace: WorkSpaceRegistry | None
+    ) -> WorkSpaceRegistry:
+        """Resolve WorkSpace"""
+        if workspace is not None:
+            return workspace
+        return LocalWorkSpaceRegistry()
+
+    def _build_executor(self, executor: CoreExecutor | None) -> CoreExecutor:
+        """Resolve executor."""
+        if executor is not None:
+            return executor
+
+        return LocalExecutor(default_timeout=self.config.tool_timeout)
 
     def _build_response(
         self,
@@ -375,13 +401,20 @@ class Agent(ComponentBase[BaseModel], ABC):
         await self.prepare()
 
         ctx = self._normalize_run_context(task, run_context)
-        self.capabilities.materialize_runtime(ctx.user_id)
+        directory = self.workspace.materialize(ctx.user_id)
+        self.capabilities.materialize_runtime(directory)
         tool_executor = ToolExecutor(
             tools=self.capabilities.all_tools,
             middlewares=self.middlewares,
             agent_name=self.name,
-            executor=self.executor,
+            runtime_executor=self.executor,
             max_concurrent_tools=self.config.tool_call_concurrency,
+            runtime_deps={
+                "runtime_root": str(directory.root),
+                "tools_dir": str(directory.tool_dir),
+                "skills_dir": str(directory.skill_dir),
+                "artifacts_dir": str(directory.artifacts_dir),
+            },
         )
         reasoning = self._build_reasoning(tool_executor)
         prompts = self._build_prompt_ctx()

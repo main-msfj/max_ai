@@ -136,6 +136,7 @@ def test_capability_sources_contribute_tools(tmp_path: Path):
     names = {tool.name for tool in cr._all_tools_sync()}
 
     assert "workspace" in names
+    assert "bash" not in names
     assert {"list_memories", "update_memory", "delete_memory"} <= names
     assert "search_context" in names
     assert "search_docs" in names
@@ -150,7 +151,7 @@ async def test_all_tools_requires_prepare():
 
 
 @pytest.mark.asyncio
-async def test_prepare_loads_skills_and_adds_tools(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+async def test_prepare_loads_skill_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("SKILLS_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setenv("SERVER_DIR", str(tmp_path / "server"))
     _build_skill_source(tmp_path, "demo_skill")
@@ -161,8 +162,10 @@ async def test_prepare_loads_skills_and_adds_tools(tmp_path: Path, monkeypatch: 
     assert cr.loaded_skill_blocks == []
     await cr.prepare()
 
-    assert {tool.name for tool in cr.skill_tools} == {"search_skills", "skill_bash"}
-    assert {"workspace", "search_skills", "skill_bash"} <= {tool.name for tool in cr.all_tools}
+    assert "workspace" in {tool.name for tool in cr.all_tools}
+    assert "bash" in {tool.name for tool in cr.all_tools}
+    assert "search_skills" not in {tool.name for tool in cr.all_tools}
+    assert "skill_bash" not in {tool.name for tool in cr.all_tools}
     assert len(cr.loaded_skill_blocks) == 1
     assert cr.loaded_skill_blocks[0].name == "demo_skill"
 
@@ -187,6 +190,7 @@ async def test_find_and_get_tool():
 
     assert cr.find_tool("ping") is not None
     assert cr.find_tool("workspace") is not None
+    assert cr.find_tool("bash") is None
     assert cr.find_tool("nope") is None
     assert cr.get_tool("ping").name == "ping"
     with pytest.raises(KeyError):
@@ -220,9 +224,11 @@ async def test_full_stack_aggregates_all_tools(tmp_path: Path, monkeypatch: pyte
     names = {tool.name for tool in cr.all_tools}
 
     assert "workspace" in names
+    assert "bash" in names
     assert "ping" in names
     assert {"list_memories", "update_memory", "delete_memory"} <= names
     assert "search_docs" in names
     assert {"search_routines", "get_routine"} <= names
     assert "search_context" in names
-    assert {"search_skills", "skill_bash"} <= names
+    assert "search_skills" not in names
+    assert "skill_bash" not in names

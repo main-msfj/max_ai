@@ -1,4 +1,3 @@
-import typing as t
 
 
 class MemoryError(Exception):

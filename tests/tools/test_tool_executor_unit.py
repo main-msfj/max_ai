@@ -17,7 +17,8 @@ import typing as t
 import pytest
 
 from max_ai.base.tool_executor import ToolExecutor
-from max_ai.base.tools import CoreTool, ToolContext
+from max_ai.base.executor import CoreExecutor
+from max_ai.base.tools import CoreRuntimeTool, CoreTool, ToolContext
 from max_ai.core.event_type import (
     ToolApprovalEvent,
     ToolCallEvent,
@@ -98,6 +99,46 @@ class MockTool(CoreTool):
         )
 
 
+class MockRuntimeTool(CoreRuntimeTool):
+    """Runtime tool used to verify executor routing."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            name="runtime_mock",
+            description="Runtime mock",
+            approval_mode=ToolApprovalMode.AUTO_APPROVED,
+        )
+
+    @property
+    def parameters(self) -> dict[str, t.Any]:
+        return {"type": "object", "properties": {}, "additionalProperties": True}
+
+    async def execute(
+        self,
+        tool_request: ToolCallRecord,
+        tool_context: ToolContext | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> ToolResult:
+        return ToolResult.success_result(tool_request.id, "runtime")
+
+
+class RecordingExecutor(CoreExecutor):
+    def __init__(self, label: str) -> None:
+        super().__init__()
+        self.label = label
+        self.calls: list[str] = []
+
+    async def run(
+        self,
+        tool: CoreTool,
+        record: ToolCallRecord,
+        tool_context: ToolContext,
+        cancellation_token: CancellationToken | None = None,
+    ) -> ToolResult:
+        self.calls.append(tool.name)
+        return ToolResult.success_result(record.id, self.label)
+
+
 # -------- HELPERS -----------------------------------------------------------
 def make_record(tool_name: str = "mock", **overrides: t.Any) -> ToolCallRecord:
     base: dict[str, t.Any] = {"tool_name": tool_name, "parameters": {}}
@@ -121,6 +162,50 @@ def make_ctx() -> RunContext:
 
 async def collect(gen) -> list[t.Any]:
     return [item async for item in gen]
+
+
+@pytest.mark.asyncio
+async def test_runtime_tools_use_runtime_executor():
+    local_executor = RecordingExecutor("local")
+    runtime_executor = RecordingExecutor("runtime")
+    tool = MockRuntimeTool()
+    executor = make_executor(
+        tools=[tool],
+        executor=local_executor,
+        runtime_executor=runtime_executor,
+    )
+    record = make_record("runtime_mock")
+    ctx = make_ctx()
+    ctx.tool_state.add(record)
+
+    await collect(executor.execute_tool_call(ctx, [record]))
+
+    assert local_executor.calls == []
+    assert runtime_executor.calls == ["runtime_mock"]
+    assert record.result is not None
+    assert record.result.result == "runtime"
+
+
+@pytest.mark.asyncio
+async def test_normal_tools_use_local_executor_even_when_runtime_exists():
+    local_executor = RecordingExecutor("local")
+    runtime_executor = RecordingExecutor("runtime")
+    tool = MockTool(returns="tool")
+    executor = make_executor(
+        tools=[tool],
+        executor=local_executor,
+        runtime_executor=runtime_executor,
+    )
+    record = make_record("mock")
+    ctx = make_ctx()
+    ctx.tool_state.add(record)
+
+    await collect(executor.execute_tool_call(ctx, [record]))
+
+    assert local_executor.calls == ["mock"]
+    assert runtime_executor.calls == []
+    assert record.result is not None
+    assert record.result.result == "local"
 
 
 # -------- EMPTY INPUT -----------------------------------------------------------

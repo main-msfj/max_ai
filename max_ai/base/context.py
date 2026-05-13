@@ -38,7 +38,7 @@ from ..types.tools import ToolApprovalMode
 from ..core.blocks import ContextBlock
 
 logger = logging.getLogger(__name__)
-log = ScopedLogger(logger, scope="CoreLogBookRegistry")
+log = ScopedLogger(logger, scope=["CoreLogBookRegistry"])
 
 
 class LogBookToolMode(str, Enum):

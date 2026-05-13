@@ -69,7 +69,7 @@ class LoggingMiddleware(CoreMiddleware):
         self.log_streaming = log_streaming
 
         base = logger or logging.getLogger("max_ai.middleware.logging")
-        self._log = ScopedLogger(base, scope="LoggingMiddleware")
+        self._log = ScopedLogger(base, scope=["LoggingMiddleware"])
 
     @property
     def _is_debug(self) -> bool:

@@ -1,0 +1,14 @@
+services:
+  runtime:
+    image: ${MAXAI_RUNTIME_IMAGE:-maxai-sandbox:py311}
+    working_dir: ${MAXAI_CONTAINER_WORKSPACE:-/sandbox}
+    command: ["tail", "-f", "/dev/null"]
+    volumes:
+      - ${MAXAI_HOST_RUNTIME_DIR}:${MAXAI_CONTAINER_WORKSPACE:-/sandbox}
+    environment:
+      RUNTIME_DIR: ${MAXAI_CONTAINER_WORKSPACE:-/sandbox}
+      MAX_AI_TOOL_SOURCE_DIR: ${MAXAI_CONTAINER_WORKSPACE:-/sandbox}/tools
+      TOOLS_DIR: ${MAXAI_CONTAINER_WORKSPACE:-/sandbox}/tools
+      SKILLS_DIR: ${MAXAI_CONTAINER_WORKSPACE:-/sandbox}/skills
+      ARTIFACTS_DIR: ${MAXAI_CONTAINER_WORKSPACE:-/sandbox}/artifacts
+      WORKSPACE_DIR: ${MAXAI_CONTAINER_WORKSPACE:-/sandbox}/artifacts

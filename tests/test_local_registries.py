@@ -31,6 +31,7 @@ from max_ai.capabilities.context import LocalContextRegistry
 from max_ai.capabilities.knowledge import LocalKnowledgeRegistry
 from max_ai.capabilities.routines import LocalRoutineRegistry
 from max_ai.capabilities.skills.local import LocalSkillRegistry
+from max_ai.types.workspace import WorkspaceDirectory
 
 
 # =====================================================================
@@ -341,7 +342,7 @@ async def test_local_skill_registry_loads_skill(tmp_path: Path, monkeypatch: pyt
     )
 
     async with reg:
-        blocks = await reg.list_skill_blocks()
+        blocks = await reg.get_skills()
         assert len(blocks) == 1
         block = blocks[0]
 
@@ -355,11 +356,13 @@ async def test_local_skill_registry_loads_skill(tmp_path: Path, monkeypatch: pyt
         assert (cached_skill / "references" / "notes.md").is_file()
         assert (cached_skill / "scripts" / "greetings.py").is_file()
 
-        session_skills = reg.materialize(user_id="u1", session_id="s1")
-        assert session_skills == server_root.resolve() / "tmp" / "u1" / "skills"
+        directory = WorkspaceDirectory(
+            root=server_root.resolve() / "tmp" / "u1",
+            tool_dir=server_root.resolve() / "tmp" / "u1" / "tools",
+            skill_dir=server_root.resolve() / "tmp" / "u1" / "skills",
+            artifacts_dir=server_root.resolve() / "tmp" / "u1" / "artifacts",
+        )
+        session_skills = reg.materialize(directory)
+        assert session_skills == directory.skill_dir
         assert (session_skills / "demo_skill" / "SKILL.md").is_file()
         assert (session_skills / "demo_skill" / "references" / "notes.md").is_file()
-
-        # The registry exposes discovery + command-style tools for skills.
-        tool_names = {tool.name for tool in reg.tools}
-        assert tool_names == {"search_skills", "skill_bash"}

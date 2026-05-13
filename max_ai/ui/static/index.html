@@ -1,202 +1,151 @@
 <!doctype html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Max AI</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content" />
+  <meta name="color-scheme" content="dark light" />
+  <title>MaxAI</title>
+
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-
   <link rel="stylesheet" href="/static/styles.css" />
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github-dark.min.css" />
-
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
   <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/highlight.min.js"></script>
 
-  <!-- bootstrap marked BEFORE the module loads -->
   <script>
+    // Configuración de Markdown segura y ligera
     (function setupMarked() {
       if (typeof marked === "undefined") {
         console.error("[markdown] marked failed to load");
         return;
       }
-
       const escHtml = (s) => String(s)
         .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 
-      // marked v12 renderer — uses POSITIONAL args (not object destructuring)
       marked.use({
         gfm: true,
-        breaks: false,
+        breaks: true,
         renderer: {
           code(code, infostring) {
-            // Some marked versions pass an object instead. Normalize.
             if (typeof code === "object" && code !== null) {
-              infostring = code.lang;
-              code = code.text;
+              infostring = code.lang; code = code.text;
             }
             const lang = (infostring || "").match(/\S*/)[0];
-            const validLang = lang && typeof hljs !== "undefined" && hljs.getLanguage(lang) ? lang : null;
-            let highlighted;
-            try {
-              highlighted = validLang
-                ? hljs.highlight(code, { language: validLang }).value
-                : (typeof hljs !== "undefined" ? hljs.highlightAuto(code).value : escHtml(code));
-            } catch (e) {
-              highlighted = escHtml(code);
-            }
-            const langAttr = validLang ? ` data-lang="${validLang}"` : ' data-lang=""';
-            const langClass = validLang ? ` language-${validLang}` : "";
-            return `<pre class="code-block"${langAttr}><code class="hljs${langClass}">${highlighted}</code></pre>`;
+            const langAttr = lang ? ` data-lang="${lang}"` : ' data-lang="text"';
+            return `<pre class="code-block"${langAttr}><code class="hljs">${escHtml(code)}</code></pre>`;
           },
           codespan(code) {
-            // Object form fallback
             if (typeof code === "object" && code !== null) code = code.text;
-            return `<code class="inline-code">${code}</code>`;
-          },
-          table(header, body) {
-            // marked v12 may pass either (header, body) strings OR a token object
-            if (typeof header === "object" && header !== null && Array.isArray(header.header)) {
-              const token = header;
-              const headerCells = token.header.map((h) => `<th>${h.text || ""}</th>`).join("");
-              const rows = token.rows
-                .map((row) => `<tr>${row.map((cell) => `<td>${cell.text || ""}</td>`).join("")}</tr>`)
-                .join("");
-              return `<div class="table-wrap"><table class="md-table"><thead><tr>${headerCells}</tr></thead><tbody>${rows}</tbody></table></div>`;
-            }
-            return `<div class="table-wrap"><table class="md-table"><thead>${header}</thead><tbody>${body}</tbody></table></div>`;
-          },
-        },
+            return `<code class="inline-code">${escHtml(code)}</code>`;
+          }
+        }
       });
       window.__markedReady = true;
-      console.log("[markdown] marked v12 ready");
     })();
   </script>
 </head>
+
 <body>
   <div id="app" class="app">
-    <aside id="workspacePanel" class="workspace-panel open">
-      <div class="workspace-panel-top">
-        <button id="newChatBtn" class="new-chat-btn workspace-new-chat" type="button">
-          <svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          New chat
-        </button>
+
+    <!-- Icon rail -->
+    <nav class="rail" aria-label="Primary navigation">
+      <button id="newChatBtn" class="rail-btn btn-primary-action" type="button" aria-label="New chat" title="New chat">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-linecap="round"
+          stroke-linejoin="round">
+          <path d="M12 5v14M5 12h14" />
+        </svg>
+      </button>
+      <button id="workspaceToggle" class="rail-btn active" type="button" aria-label="Toggle artifacts"
+        title="Artifacts">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round">
+          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+        </svg>
+      </button>
+      <button id="eventsToggle" class="rail-btn" type="button" aria-label="Toggle events" title="Observability Traces">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+        </svg>
+      </button>
+      <div class="rail-spacer"></div>
+      <button id="themeToggle" class="rail-btn" type="button" aria-label="Toggle theme" title="Toggle theme"></button>
+    </nav>
+
+    <!-- Artifacts Panel -->
+    <aside id="workspacePanel" class="workspace-panel open" aria-label="Artifacts">
+      <div class="panel-header">
+        <h3>Artifacts</h3>
+        <span style="font-size: 11px; color: var(--text-muted);" id="workspaceMeta">0 files</span>
       </div>
-      <div class="workspace-panel-header">
-        <div>
-          <h3>Workspace</h3>
-          <div id="workspacePanelMeta" class="workspace-panel-meta">0 files</div>
-        </div>
-        <div class="workspace-panel-actions">
-          <button id="workspaceRefreshBtn" class="workspace-refresh-btn" type="button">Refresh</button>
-          <button id="workspaceClose" class="workspace-close" type="button">&times;</button>
-        </div>
-      </div>
-      <div id="workspaceSidebarFiles" class="workspace-sidebar-files">
-        <div class="workspace-file-empty">No files yet</div>
-      </div>
+      <div id="workspaceSidebarFiles" class="workspace-sidebar-files" role="list"></div>
     </aside>
 
-    <div class="main main-full">
-      <div id="errorBar" class="error-bar" style="display:none"></div>
-
+    <!-- Main Chat Area -->
+    <main class="main" role="main" aria-label="Chat">
       <header class="topbar">
-        <div class="topbar-left">
-          <label class="agent-picker">
-            <span class="picker-label">Agent</span>
-            <div class="agent-dd" id="agentDropdown"></div>
-          </label>
-        </div>
-        <div class="topbar-right">
-          <button id="workspaceToggle" class="events-toggle topbar-btn">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16M4 12h16M4 19h16"/></svg>
-            Workspace
-          </button>
-          <button id="themeToggle" class="events-toggle topbar-btn"></button>
-          <button id="eventsToggle" class="events-toggle event-switch topbar-btn" type="button" aria-pressed="false">
-            <span class="switch-track"><span class="switch-thumb"></span></span>
-            <span>Events</span>
-            <span id="eventsBadge" class="badge" style="display:none">0</span>
+        <div class="agent-picker">
+          <span class="picker-label">Agent</span>
+          <button type="button" class="agent-dd-trigger" id="agentPickerBtn">
+            <span id="activeAgentLabel">Loading...</span>
           </button>
         </div>
+        <div id="statusArea" class="status-indicator"></div>
       </header>
 
-      <div id="chatScroll" class="chat-scroll">
+      <section id="chatScroll" class="chat-scroll" aria-live="polite">
         <div id="emptyState" class="empty-state">
           <div class="empty-inner">
-            <h2>Max AI</h2>
-            <p>Send a message to get started.<br>Use <code>@skill-name</code> only when you want to call a specific skill.</p>
+            <h2>MaxAI</h2>
+            <p>Ready to assist. Send a message to start.</p>
           </div>
         </div>
-        <div id="messagesContainer" style="display:none"></div>
-      </div>
+        <div id="messagesContainer" style="display:none;"></div>
+      </section>
 
-      <div class="input-area">
-        <form id="chatForm" class="input-card">
-          <div class="input-wrap">
-            <textarea id="chatInput" placeholder="Message…" rows="1"></textarea>
-            <div id="skillDropdown" class="skill-dropdown" style="display:none"></div>
-          </div>
+      <footer class="input-area">
+        <form id="chatForm" class="input-card" autocomplete="off">
+          <textarea id="chatInput" placeholder="Message agent..." rows="1"></textarea>
           <div class="input-bottom">
-            <div class="input-bottom-left">
-              <button type="button" id="contextToggle" class="context-toggle" title="Context & tools">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
-              </button>
-              <button type="button" id="imageUploadBtn" class="context-toggle" title="Upload image">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
-              </button>
-              <input id="imageInput" type="file" accept="image/*" multiple hidden />
-              <div id="attachmentTray" class="attachment-tray" style="display:none"></div>
-              <div id="toolRunStatus" class="tool-run-status" style="display:none"></div>
-              <div id="contextPopover" class="context-popover" style="display:none">
-                <div class="context-popover-section">
-                  <div class="context-popover-row">
-                    <span class="context-popover-label">Context</span>
-                    <span id="tokenMeta" class="context-popover-value">0 / -</span>
-                  </div>
-                  <div class="token-meter-track">
-                    <div id="tokenFill" class="token-meter-fill"></div>
-                  </div>
-                </div>
-                <div class="context-popover-section">
-                  <span class="context-popover-label">Tools</span>
-                  <div id="popoverTools" class="popover-tools"></div>
-                </div>
-              </div>
-            </div>
-            <button type="submit" id="sendBtn" class="send-btn" disabled>
-              <svg viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            <button type="submit" id="sendBtn" class="send-btn" disabled aria-label="Send message">
+              <svg viewBox="0 0 24 24">
+                <line x1="22" y1="2" x2="11" y2="13" />
+                <polygon points="22 2 15 22 11 13 2 9 22 2" />
+              </svg>
             </button>
           </div>
         </form>
-      </div>
-    </div>
+      </footer>
+    </main>
 
-    <div id="workspaceModal" class="workspace-modal" style="display:none">
-      <div class="workspace-modal-dialog">
-        <div class="workspace-modal-header">
-          <div class="workspace-modal-title">File Preview</div>
-          <button id="workspaceModalClose" class="workspace-modal-close" type="button">&times;</button>
+    <!-- Events / Traces Panel (Logfire Style) -->
+    <aside id="eventsPanel" class="events-panel" aria-label="Logfire Traces">
+      <div class="lf-header">
+        <h3>Traces</h3>
+        <div class="lf-actions">
+          <button id="lfClear" class="lf-btn" title="Clear traces">Clear</button>
+          <button id="eventsClose" class="lf-btn" title="Close panel">&times;</button>
         </div>
-        <div id="workspaceModalBody" class="workspace-modal-body">
-          <div class="workspace-preview-empty">Select a file to preview it here.</div>
-        </div>
       </div>
-    </div>
-
-    <aside id="eventsPanel" class="events-panel">
-      <div class="events-panel-header">
-        <h3>Events</h3>
-        <button id="eventsClose" class="events-close">&times;</button>
-      </div>
-      <div id="eventsScroll" class="events-scroll">
-        <div class="events-empty">No events yet.</div>
-      </div>
+      <div id="eventsScroll" class="lf-scroll"></div>
     </aside>
-  </div>
 
+    <!-- Artifact Preview Modal -->
+    <div id="workspaceModal" class="modal-overlay">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <h3 style="font-size: 14px; font-weight: 600;" id="modalTitle">File Preview</h3>
+          <button id="workspaceModalClose" class="modal-close">&times;</button>
+        </div>
+        <div id="workspaceModalBody" class="modal-body"></div>
+      </div>
+    </div>
+
+  </div>
   <script src="/static/app.js" type="module"></script>
 </body>
+
 </html>

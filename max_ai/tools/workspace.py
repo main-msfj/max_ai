@@ -1,4 +1,4 @@
-"""Tools for reading and editing the user's runtime workspace."""
+"""Tool for reading and editing generated artifacts."""
 
 from __future__ import annotations
 
@@ -17,15 +17,15 @@ _VALID_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 class WorkspaceTool(CoreTool):
-    """Read and edit files under ``tmp/<user_id>/workspace``."""
+    """Read and edit files under ``tmp/<user_id>/artifacts``."""
 
     def __init__(self, timeout_seconds: float = 60) -> None:
         super().__init__(
             name="workspace",
             description=(
                 "List, read, write, and delete files in the current user's "
-                "workspace directory. Use this for documents and outputs "
-                "created by skills."
+                "artifacts directory. Use this for documents and outputs "
+                "created for the user."
             ),
             approval_mode=ToolApprovalMode.AUTO_APPROVED,
             timeout_seconds=timeout_seconds,
@@ -39,11 +39,11 @@ class WorkspaceTool(CoreTool):
                 "action": {
                     "type": "string",
                     "enum": ["list", "read", "write", "delete"],
-                    "description": "Workspace operation to perform.",
+                    "description": "Artifacts operation to perform.",
                 },
                 "path": {
                     "type": ["string", "null"],
-                    "description": "Relative file or directory path inside the workspace.",
+                    "description": "Relative file or directory path inside artifacts.",
                 },
                 "content": {
                     "type": ["string", "null"],
@@ -85,16 +85,16 @@ class WorkspaceTool(CoreTool):
             )
 
         try:
-            workspace = self._workspace_dir_for(tool_context.user_id)
-            workspace.mkdir(parents=True, exist_ok=True)
+            artifacts = self._artifacts_dir_for(tool_context)
+            artifacts.mkdir(parents=True, exist_ok=True)
             action = tool_request.parameters["action"]
 
             if action == "list":
                 rel = tool_request.parameters.get("path") or "."
-                target = self._resolve_inside(workspace, rel)
+                target = self._resolve_inside(artifacts, rel)
                 return ToolResult.success_result(
                     tool_request.id,
-                    self._list(target, workspace),
+                    self._list(target, artifacts),
                     metadata={"name": self.name},
                 )
 
@@ -104,18 +104,18 @@ class WorkspaceTool(CoreTool):
                     tool_request.id,
                     "path is required for read, write, and delete actions.",
                 )
-            target = self._resolve_inside(workspace, path)
+            target = self._resolve_inside(artifacts, path)
 
             if action == "read":
                 if not target.is_file():
                     return ToolResult.execution_error(
                         tool_request.id,
-                        f"Workspace file does not exist: {path}",
+                        f"Artifacts file does not exist: {path}",
                     )
                 return ToolResult.success_result(
                     tool_request.id,
                     {
-                        "path": self._relative(target, workspace),
+                        "path": self._relative(target, artifacts),
                         "content": target.read_text(encoding="utf-8"),
                     },
                     metadata={"name": self.name},
@@ -132,14 +132,14 @@ class WorkspaceTool(CoreTool):
                 if target.exists() and not overwrite:
                     return ToolResult.execution_error(
                         tool_request.id,
-                        f"Workspace file already exists: {path}",
+                        f"Artifacts file already exists: {path}",
                     )
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(content, encoding="utf-8")
                 return ToolResult.success_result(
                     tool_request.id,
                     {
-                        "path": self._relative(target, workspace),
+                        "path": self._relative(target, artifacts),
                         "bytes": len(content.encode("utf-8")),
                     },
                     metadata={"name": self.name},
@@ -149,7 +149,7 @@ class WorkspaceTool(CoreTool):
                 if not target.exists():
                     return ToolResult.success_result(
                         tool_request.id,
-                        {"path": self._relative(target, workspace), "deleted": False},
+                        {"path": self._relative(target, artifacts), "deleted": False},
                         metadata={"name": self.name},
                     )
                 if target.is_dir():
@@ -160,7 +160,7 @@ class WorkspaceTool(CoreTool):
                 target.unlink()
                 return ToolResult.success_result(
                     tool_request.id,
-                    {"path": self._relative(target, workspace), "deleted": True},
+                    {"path": self._relative(target, artifacts), "deleted": True},
                     metadata={"name": self.name},
                 )
 
@@ -172,42 +172,58 @@ class WorkspaceTool(CoreTool):
         except Exception as e:
             return ToolResult.execution_error(tool_request.id, str(e))
 
+    @classmethod
+    def _artifacts_dir_for(cls, tool_context: ToolContext) -> Path:
+        deps = tool_context.deps or {}
+        value = (
+            deps.get("artifacts_dir")
+            or os.environ.get("ARTIFACTS_DIR")
+            or os.environ.get("WORKSPACE_DIR")
+        )
+        if value is not None:
+            if not isinstance(value, (str, Path)):
+                raise TypeError("artifacts_dir must be a string or Path.")
+            return Path(value).expanduser().resolve()
+        user_id = cls._safe_user_id(tool_context.user_id)
+        return (setting.root_dir / "tmp" / user_id / "artifacts").resolve()
+
     @staticmethod
-    def _workspace_dir_for(user_id: str) -> Path:
-        env_dir = os.environ.get("WORKSPACE_DIR")
-        if env_dir:
-            return Path(env_dir).expanduser().resolve()
+    def _safe_user_id(user_id: str) -> str:
         if not isinstance(user_id, str) or not _VALID_NAME_RE.match(user_id):
             raise ValueError(
                 f"Invalid user_id {user_id!r}. Allowed characters: "
                 "letters, digits, underscores, hyphens."
             )
-        return setting.get_or_create_server_tmp_dir() / user_id / "workspace"
+        return user_id
 
     @staticmethod
-    def _resolve_inside(root: Path, relative_path: str) -> Path:
+    def _resolve_inside(root: Path, relative_path: str | Path) -> Path:
         target = (root / relative_path).expanduser().resolve()
         root_resolved = root.resolve()
         try:
             target.relative_to(root_resolved)
         except ValueError:
-            raise ValueError("path must stay inside the workspace directory.") from None
+            raise ValueError("path must stay inside the artifacts directory.") from None
         return target
 
     @staticmethod
     def _relative(path: Path, root: Path) -> str:
         return path.resolve().relative_to(root.resolve()).as_posix()
 
-    def _list(self, target: Path, workspace: Path) -> dict[str, t.Any]:
+    def _list(self, target: Path, artifacts: Path) -> dict[str, t.Any]:
         if not target.exists():
-            return {"path": self._relative(target, workspace), "exists": False, "items": []}
+            return {
+                "path": self._relative(target, artifacts),
+                "exists": False,
+                "items": [],
+            }
         if target.is_file():
             return {
-                "path": self._relative(target, workspace),
+                "path": self._relative(target, artifacts),
                 "exists": True,
                 "items": [
                     {
-                        "path": self._relative(target, workspace),
+                        "path": self._relative(target, artifacts),
                         "type": "file",
                         "bytes": target.stat().st_size,
                     }
@@ -217,13 +233,13 @@ class WorkspaceTool(CoreTool):
         for child in sorted(target.iterdir(), key=lambda p: p.name):
             items.append(
                 {
-                    "path": self._relative(child, workspace),
+                    "path": self._relative(child, artifacts),
                     "type": "directory" if child.is_dir() else "file",
                     "bytes": None if child.is_dir() else child.stat().st_size,
                 }
             )
         return {
-            "path": self._relative(target, workspace) if target != workspace else ".",
+            "path": self._relative(target, artifacts) if target != artifacts else ".",
             "exists": True,
             "items": items,
         }

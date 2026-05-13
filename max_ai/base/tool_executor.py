@@ -42,10 +42,8 @@ import typing as t
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 
-from pydantic import ValidationError
-
 from .executor import CoreExecutor
-from ..base.tools import CoreTool, ToolContext
+from ..base.tools import CoreRuntimeTool, CoreTool, ToolContext
 from ..base.middleware import CoreMiddleware
 from ..middleware.chain import MiddlewareChain
 from ..executor.local import LocalExecutor
@@ -67,7 +65,7 @@ from ..core.event_type import (
 
 
 logger = logging.getLogger(__name__)
-log = ScopedLogger(logger, scope="ToolExecutor")
+log = ScopedLogger(logger, scope=["ToolExecutor"])
 
 
 # What the executor yields back to the caller.
@@ -103,6 +101,8 @@ class ToolExecutor:
         agent_name: str = "unknown",
         max_concurrent_tools: int = 5,
         executor: CoreExecutor | None = None,
+        runtime_executor: CoreExecutor | None = None,
+        runtime_deps: dict[str, t.Any] | None = None,
     ) -> None:
         """Initialize the executor.
 
@@ -113,16 +113,18 @@ class ToolExecutor:
             agent_name: Used for logging and as the ``source`` field
                 of emitted events and ``ToolMessage`` instances.
             max_concurrent_tools: Bound on parallel tool execution.
-            executor: Strategy that actually runs the tool. Defaults
-                to ``LocalExecutor``. Choosing a different strategy
-                (Docker, MCP, etc.) changes where every tool of this
-                agent runs — the choice is per-agent, not per-tool.
+            executor: Strategy for normal local tools. Defaults to
+                ``LocalExecutor``.
+            runtime_executor: Strategy for ``CoreRuntimeTool`` instances
+                such as bash. Defaults to ``executor``.
         """
         self.tools: dict[str, CoreTool] = {t.name: t for t in (tools or [])}
         self.mw_chain = MiddlewareChain(middlewares=middlewares or [])
         self.agent_name = agent_name
         self.max_concurrent_tools = max_concurrent_tools
         self.executor: CoreExecutor = executor or LocalExecutor()
+        self.runtime_executor: CoreExecutor = runtime_executor or self.executor
+        self.runtime_deps = dict(runtime_deps or {})
 
     # -------- PUBLIC ENTRY POINT -----------------------------------------------------------
     async def execute_tool_call(
@@ -314,10 +316,12 @@ class ToolExecutor:
             run_id=ctx.run_id,
             user_id=ctx.user_id,
             session_id=ctx.session_id or "",
+            deps=dict(self.runtime_deps),
         )
 
         async def func(rec: ToolCallRecord) -> ToolResult:
-            return await self.executor.run(tool, rec, tool_ctx, cancellation_token)
+            executor = self._executor_for(tool)
+            return await executor.run(tool, rec, tool_ctx, cancellation_token)
 
         result: ToolResult | None = None
         try:
@@ -349,6 +353,11 @@ class ToolExecutor:
 
         async for item in self._consume_and_yield(record, result):
             yield item
+
+    def _executor_for(self, tool: CoreTool) -> CoreExecutor:
+        if isinstance(tool, CoreRuntimeTool):
+            return self.runtime_executor
+        return self.executor
 
     # async def _invoke_tool(
     #     self,

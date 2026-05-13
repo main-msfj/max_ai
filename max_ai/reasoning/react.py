@@ -47,7 +47,7 @@ if t.TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
-log = ScopedLogger(logger, scope="ReActLoop")
+log = ScopedLogger(logger, scope=["ReActLoop"])
 
 
 # -------- LOOP STATE -----------------------------------------------------------

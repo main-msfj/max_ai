@@ -35,7 +35,7 @@ from .core import RunContextStore, validate_run_id
 
 
 logger = logging.getLogger(__name__)
-log = ScopedLogger(logger, scope="FileSystemRunContextStore")
+log = ScopedLogger(logger, scope=["FileSystemRunContextStore"])
 
 
 class FileSystemRunContextStore(RunContextStore):

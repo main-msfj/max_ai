@@ -87,6 +87,7 @@ class CoreTool(ComponentBase[BaseModel], ABC):
             "it does not provide a DockerToolRef",
         )
 
+
     # -------- ABSTRACT -----------------------------------------------------------
     @abstractmethod
     async def execute(
@@ -176,3 +177,12 @@ class CoreTool(ComponentBase[BaseModel], ABC):
             f"version='{self.version}' "
             f"description='{self.description}'>"
         )
+
+
+class CoreRuntimeTool(CoreTool, ABC):
+    """Marker base for tools that must run in an isolated runtime.
+
+    Normal ``CoreTool`` instances are safe to execute in the agent process
+    by default. Runtime tools need a filesystem/runtime environment such as
+    Docker, Firecracker, or another sandbox.
+    """

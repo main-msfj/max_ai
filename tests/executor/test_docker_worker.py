@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from max_ai.executor.docker.worker import _main_async
+from max_ai.executor.docker.worker import _main_async, _normalize_runtime_layout
 from max_ai.types.tool_call import ToolResult
 
 
@@ -125,3 +125,28 @@ async def test_worker_reports_missing_input_path(tmp_path: Path) -> None:
     result = ToolResult.model_validate_json(output_path.read_text(encoding="utf-8"))
     assert result.success is False
     assert "FileNotFoundError" in (result.error or "")
+
+
+def test_worker_flattens_nested_tmp_user_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_root = tmp_path / "sandbox"
+    nested_skill = runtime_root / "tmp" / "default" / "skills" / "create-report"
+    nested_artifact = runtime_root / "tmp" / "default" / "artifacts"
+    nested_tool = runtime_root / "tmp" / "default" / "tools"
+    nested_skill.mkdir(parents=True)
+    nested_artifact.mkdir(parents=True)
+    nested_tool.mkdir(parents=True)
+    (nested_skill / "SKILL.md").write_text("# Report\n", encoding="utf-8")
+    (nested_artifact / "draft.md").write_text("draft", encoding="utf-8")
+    (nested_tool / "helper.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+    monkeypatch.setenv("RUNTIME_DIR", str(runtime_root))
+
+    _normalize_runtime_layout({"context": {"user_id": "default"}})
+
+    assert (runtime_root / "skills" / "create-report" / "SKILL.md").is_file()
+    assert (runtime_root / "artifacts" / "draft.md").is_file()
+    assert (runtime_root / "tools" / "helper.py").is_file()
+    assert not (runtime_root / "tmp").exists()
