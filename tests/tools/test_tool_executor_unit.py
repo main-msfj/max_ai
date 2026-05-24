@@ -128,6 +128,9 @@ class RecordingExecutor(CoreExecutor):
         self.label = label
         self.calls: list[str] = []
 
+    async def bind_to_workspace(self, workspace_registry_root: str | Path) -> None:
+        self.workspace_root = Path(workspace_registry_root)
+
     async def run(
         self,
         tool: CoreTool,
@@ -226,15 +229,17 @@ async def test_tool_not_found_emits_failure():
 
     items = await collect(executor.execute_tool_call(ctx, [record]))
 
-    # Expect: ToolMessage(error) + ToolCallResponseEvent(failure)
-    assert len(items) == 2
-    assert isinstance(items[0], ToolMessage)
-    assert items[0].success is False
-    assert "not found" in (items[0].error or "").lower()
+    # Expect: ToolCallEvent + ToolMessage(error) + ToolCallResponseEvent(failure)
+    assert len(items) == 3
+    assert isinstance(items[0], ToolCallEvent)
+    assert items[0].tool_name == "missing_tool"
+    assert isinstance(items[1], ToolMessage)
+    assert items[1].success is False
+    assert "not found" in (items[1].error or "").lower()
 
-    assert isinstance(items[1], ToolCallResponseEvent)
-    assert items[1].tool_result is not None
-    assert items[1].tool_result.success is False
+    assert isinstance(items[2], ToolCallResponseEvent)
+    assert items[2].tool_result is not None
+    assert items[2].tool_result.success is False
 
     # Early failures are terminal so they do not remain actionable forever.
     assert record.is_consumed
@@ -339,22 +344,79 @@ async def test_ask_approved_rejected_yields_failure_without_running():
 
     items = await collect(executor.execute_tool_call(ctx, [record]))
 
-    # ToolCallEvent + ToolMessage(error) + ToolCallResponseEvent(failure)
-    assert len(items) == 3
-    assert isinstance(items[0], ToolCallEvent)
+    # Rejected approvals must not emit ToolCallEvent because the tool is
+    # never about to run.
+    assert len(items) == 2
+    assert isinstance(items[0], ToolMessage)
+    assert items[0].success is False
+    assert "user said no" in (items[0].error or "")
 
-    assert isinstance(items[1], ToolMessage)
-    assert items[1].success is False
-    assert "user said no" in (items[1].error or "")
-
-    assert isinstance(items[2], ToolCallResponseEvent)
-    assert items[2].tool_result is not None
-    assert items[2].tool_result.success is False
+    assert isinstance(items[1], ToolCallResponseEvent)
+    assert items[1].tool_result is not None
+    assert items[1].tool_result.success is False
 
     assert not tool.execute_called
     assert record.is_consumed
     assert record.result is not None
     assert record.result.success is False
+
+
+@pytest.mark.asyncio
+async def test_mixed_approved_and_rejected_only_runs_approved_tool():
+    approved_tool = MockTool(
+        name="approved_tool",
+        approval_mode=ToolApprovalMode.ASK_APPROVED,
+        returns="ran",
+    )
+    rejected_tool = MockTool(
+        name="rejected_tool",
+        approval_mode=ToolApprovalMode.ASK_APPROVED,
+        returns="should not run",
+    )
+    executor = make_executor(tools=[approved_tool, rejected_tool])
+    approved = make_record("approved_tool")
+    rejected = make_record("rejected_tool")
+    approved.approve(reason="ok")
+    rejected.reject(reason="no")
+    ctx = make_ctx()
+    ctx.tool_state.add(approved)
+    ctx.tool_state.add(rejected)
+
+    items = await collect(executor.execute_tool_call(ctx, [approved, rejected]))
+
+    call_events = [item for item in items if isinstance(item, ToolCallEvent)]
+    assert [event.tool_name for event in call_events] == ["approved_tool"]
+    assert approved_tool.execute_called
+    assert not rejected_tool.execute_called
+    assert approved.is_consumed
+    assert rejected.is_consumed
+
+
+@pytest.mark.asyncio
+async def test_skill_name_tool_call_returns_retriable_failure_without_unknown_tool():
+    executor = make_executor(
+        tools=[],
+        runtime_deps={"skill_names": ["create-ppt"]},
+    )
+    record = make_record("create-ppt")
+    record.auto_approve()
+    ctx = make_ctx()
+    ctx.tool_state.add(record)
+
+    items = await collect(executor.execute_tool_call(ctx, [record]))
+
+    assert not any(isinstance(item, ToolCallEvent) for item in items)
+    assert len(items) == 2
+    assert isinstance(items[0], ToolMessage)
+    assert items[0].success is False
+    assert "read_skill create-ppt" in (items[0].error or "")
+    assert "not found" not in (items[0].error or "")
+
+    assert isinstance(items[1], ToolCallResponseEvent)
+    assert items[1].tool_result is not None
+    assert items[1].tool_result.success is False
+    assert "read_skill create-ppt" in (items[1].tool_result.error or "")
+    assert record.is_consumed
 
 
 # -------- VALIDATION -----------------------------------------------------------

@@ -2,16 +2,21 @@
     "name": "max_ai",
     "build": {
         "dockerfile": "Dockerfile",
-        "context": ".."
+        "context": "."
     },
     "workspaceFolder": "/max_ai",
     "workspaceMount": "source=${localWorkspaceFolder},target=/max_ai,type=bind,consistency=cached",
     "runArgs": [
-        "--name", "max_ai_devcontainer",
-        "--network", "llm-vnet",
-        "--gpus", "all"
+        "--name",
+        "max_ai_devcontainer",
+        "--network",
+        "llm-vnet",
+        "--gpus",
+        "all"
     ],
-    "hostRequirements": { "gpu": "optional" },
+    "hostRequirements": {
+        "gpu": "optional"
+    },
     "mounts": [
         "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
     ],
@@ -24,7 +29,7 @@
     "initializeCommand": "docker network create llm-vnet 2>/dev/null || true",
     "postCreateCommand": "uv sync && cd /max_ai/llm-models && docker compose --env-file .env up -d && docker exec ollama ollama pull gemma4:e2b-it-q4_K_M && docker exec ollama ollama pull llama3.1:8b && docker exec ollama ollama pull qwen3:4b-instruct-2507-q4_K_M && docker exec ollama ollama pull qwen3:4b-thinking-2507-q4_K_M && docker exec ollama ollama pull phi4-mini:3.8b",
     "postStartCommand": "cd /max_ai/llm-models && docker compose --env-file .env up -d",
-    "remoteEnv": { 
+    "remoteEnv": {
         "OLLAMA_BASE_URL": "http://ollama:11434"
     },
     "customizations": {
@@ -38,17 +43,25 @@
                 "ms-toolsai.jupyter",
                 "github.copilot-chat",
                 "openai.chatgpt"
-                
             ],
             "settings": {
                 "python.defaultInterpreterPath": "/max_ai/.venv/bin/python",
                 "python.terminal.activateEnvironment": true,
                 "terminal.integrated.defaultProfile.linux": "bash",
                 "terminal.integrated.profiles.linux": {
-                    "bash": { "path": "bash", "icon": "terminal-bash" }
+                    "bash": {
+                        "path": "bash",
+                        "icon": "terminal-bash"
+                    }
                 },
                 "editor.inlineSuggest.enabled": true,
-                "python.analysis.typeCheckingMode": "strict"
+                "python.analysis.typeCheckingMode": "strict",
+                "python.formatting.provider": "black",
+                "python.linting.enabled": true,
+                "python.linting.ruffEnabled": true,
+                "python.linting.ruffArgs": [
+                    "--fix"
+                ]
             }
         }
     }

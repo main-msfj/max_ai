@@ -127,12 +127,7 @@ def test_capability_sources_contribute_tools(tmp_path: Path):
         routines=["client_followup", "email_reply"],
     )
 
-    cr = AgentCapabilities(
-        memory=memory,
-        logbook=logbook,
-        knowledge=[knowledge],
-        routines=routines,
-    )
+    cr = AgentCapabilities(capabilities=[memory, logbook, knowledge, routines])
     names = {tool.name for tool in cr._all_tools_sync()}
 
     assert "workspace" in names
@@ -157,7 +152,7 @@ async def test_prepare_loads_skill_metadata(tmp_path: Path, monkeypatch: pytest.
     _build_skill_source(tmp_path, "demo_skill")
 
     skills = LocalSkillRegistry(source=tmp_path, skills=["demo_skill"])
-    cr = AgentCapabilities(skills=skills)
+    cr = AgentCapabilities(capabilities=[skills])
 
     assert cr.loaded_skill_blocks == []
     await cr.prepare()
@@ -175,7 +170,9 @@ async def test_prepare_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyP
     monkeypatch.setenv("SKILLS_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setenv("SERVER_DIR", str(tmp_path / "server"))
     _build_skill_source(tmp_path, "demo_skill")
-    cr = AgentCapabilities(skills=LocalSkillRegistry(source=tmp_path, skills=["demo_skill"]))
+    cr = AgentCapabilities(
+        capabilities=[LocalSkillRegistry(source=tmp_path, skills=["demo_skill"])]
+    )
 
     await cr.prepare()
     first_count = len(cr.loaded_skill_blocks)
@@ -208,14 +205,16 @@ async def test_full_stack_aggregates_all_tools(tmp_path: Path, monkeypatch: pyte
     _build_skill_source(skills_root, "demo_skill")
 
     cr = AgentCapabilities(
-        memory=LocalMemoryRegistry(user_id="u1", base_path=tmp_path),
-        knowledge=[LocalKnowledgeRegistry(name="docs", description="Docs.", base_path=tmp_path)],
-        routines=LocalRoutineRegistry(
+        capabilities=[
+            LocalMemoryRegistry(user_id="u1", base_path=tmp_path),
+            LocalKnowledgeRegistry(name="docs", description="Docs.", base_path=tmp_path),
+            LocalRoutineRegistry(
             source_path=routines_root,
             routines=["client_followup", "email_reply"],
-        ),
-        logbook=LocalContextRegistry(user_id="u1", session_id="s1", base_path=tmp_path),
-        skills=LocalSkillRegistry(source=skills_root, skills=["demo_skill"]),
+            ),
+            LocalContextRegistry(user_id="u1", session_id="s1", base_path=tmp_path),
+            LocalSkillRegistry(source=skills_root, skills=["demo_skill"]),
+        ],
         toolset=[_make_tool("ping")],
         priority_tools=["ping"],
     )

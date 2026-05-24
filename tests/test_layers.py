@@ -130,7 +130,12 @@ def test_skills_layer_with_skills():
     assert out
     assert "pr_review" in out
     assert "Review pull requests." in out
-    assert "skill_bash" not in out
+    assert "Call the `bash` tool to inspect" in out
+    assert "The `bash` tool is the ONLY way to engage a skill" in out
+    assert "Never call a capability id as a tool" in out
+    assert "`pr_review`" not in out
+    assert "$SKILLS_DIR" not in out
+    assert "SKILL.md" not in out
     assert "search_skills" not in out
 
 

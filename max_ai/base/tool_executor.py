@@ -185,7 +185,33 @@ class ToolExecutor:
             _log.warning("Skipping already-consumed record")
             return
 
-        # 3. Resolve the tool.
+        # 3. A rejected approval must never look like a real execution.
+        # It still becomes a ToolMessage so the LLM can explain that the
+        # requested action was not performed.
+        if record.is_rejected:
+            async for item in self._yield_failure(
+                record,
+                error=record.approval_reason or "User declined approval",
+            ):
+                yield item
+            return
+
+        if self._is_skill_name_call(record):
+            async for item in self._yield_skill_name_misuse(record):
+                yield item
+            return
+
+        # 3. Observability: the model attempted a tool call. Emit this
+        # before resolution so missing-tool failures still have a visible
+        # call event in traces/UI.
+        yield ToolCallEvent(
+            source=self.agent_name,
+            tool_name=record.tool_name,
+            parameters=record.parameters,
+            tool_call_id=record.id,
+        )
+
+        # 4. Resolve the tool.
         resolution = self._resolve_tool(record)
         if resolution.tool is None:
             _log.error("Tool not found in registry", err=resolution.error_msg)
@@ -196,15 +222,18 @@ class ToolExecutor:
             return
         tool = resolution.tool
 
-        # 4. Observability: tool call begins.
-        yield ToolCallEvent(
-            source=self.agent_name,
-            tool_name=record.tool_name,
-            parameters=record.parameters,
-            tool_call_id=record.id,
-        )
+        # 5. Validate parameters against the tool's JSON schema before
+        # asking for approval. Invalid or policy-blocked calls should not
+        # create an approval prompt.
+        validation = tool.validate_parameters(record)
+        if not validation.is_tool_valid:
+            err = f"Parameter validation failed: {validation.msg_error}"
+            _log.error(err)
+            async for item in self._yield_failure(record, error=err):
+                yield item
+            return
 
-        # 5. Evaluate approval.
+        # 6. Evaluate approval.
         decision = self._evaluate_approval(tool, record)
         if decision.pending_event is not None:
             yield decision.pending_event
@@ -213,15 +242,6 @@ class ToolExecutor:
             async for item in self._yield_failure(
                 record, error=decision.rejection_msg or "Rejected"
             ):
-                yield item
-            return
-
-        # 6. Validate parameters against the tool's JSON schema.
-        validation = tool.validate_parameters(record)
-        if not validation.is_tool_valid:
-            err = f"Parameter validation failed: {validation.msg_error}"
-            _log.error(err)
-            async for item in self._yield_failure(record, error=err):
                 yield item
             return
 
@@ -251,6 +271,10 @@ class ToolExecutor:
             tool=None,
             error_msg=f"Tool '{record.tool_name}' not found in tool registry.",
         )
+
+    def _is_skill_name_call(self, record: ToolCallRecord) -> bool:
+        skill_names = self.runtime_deps.get("skill_names") or []
+        return isinstance(skill_names, list) and record.tool_name in skill_names
 
     # -------- APPROVAL EVALUATION -----------------------------------------------------------
     def _evaluate_approval(
@@ -475,6 +499,35 @@ class ToolExecutor:
             tool_call_id=record.id,
             tool_name=record.tool_name,
             error=error,
+            source=self.agent_name,
+        )
+        yield ToolCallResponseEvent(
+            source=self.agent_name,
+            tool_call_id=record.id,
+            tool_result=result,
+        )
+
+    async def _yield_skill_name_misuse(
+        self,
+        record: ToolCallRecord,
+    ) -> AsyncGenerator[ToolExecutorYield, None]:
+        """Handle a model calling a skill capability id as a tool."""
+        message = (
+            "This skill capability was not executed. Retry by calling the bash "
+            f"tool with command: read_skill {record.tool_name}. Do not mention "
+            "this retry instruction to the user."
+        )
+        result = ToolResult.execution_error(
+            record.id,
+            message,
+        )
+        if not record.is_consumed:
+            record.force_consume(result)
+
+        yield ToolMessage.error_message(
+            tool_call_id=record.id,
+            tool_name=record.tool_name,
+            error=message,
             source=self.agent_name,
         )
         yield ToolCallResponseEvent(

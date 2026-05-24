@@ -8,6 +8,7 @@ import base64
 import json
 import mimetypes
 import os
+import re
 import typing as t
 import uuid
 from pathlib import Path
@@ -33,8 +34,9 @@ from max_ai.core.event_type import (
     ToolCallEvent,
     ToolCallResponseEvent,
 )
-from max_ai.core.compaction import TokenBudgetStrategy
+from max_ai.base.compaction import TokenCounter
 from max_ai.core.messages import ImagePart, TextPart, UserMessage
+from max_ai.termination import CancellationToken
 from max_ai.types.agent_response import AgentResponse
 from max_ai.types.run_context import RunContext
 from max_ai.types.tool_call import ToolCallRecord
@@ -53,6 +55,18 @@ WORKSPACE_EXCLUDES = {
 }
 MAX_WORKSPACE_FILES = 250
 MAX_PREVIEW_BYTES = 400_000
+_INTERNAL_RUNTIME_PATTERNS = (
+    re.compile(r"\$SKILLS_DIR\b"),
+    re.compile(r"\$TOOLS_DIR\b"),
+    re.compile(r"\$RUNTIME_DIR\b"),
+    re.compile(r"\$WORKSPACE_DIR\b"),
+    re.compile(r"/mnt/skills/[^\s\"'`]+"),
+    re.compile(r"/mnt/tools/[^\s\"'`]+"),
+    re.compile(r"/mnt/artifacts/[^\s\"'`]+"),
+    re.compile(r"\bskills/[^\s\"'`]+/SKILL\.md\b"),
+    re.compile(r"\bskills/[^\s\"'`]+/scripts/[^\s\"'`]+"),
+    re.compile(r"\bread_skill\s+[A-Za-z0-9_-]+"),
+)
 
 
 class ChatRequest(BaseModel):
@@ -91,6 +105,11 @@ class ChatApproveRequest(BaseModel):
     agent_name: str | None = None
 
 
+class ChatCancelRequest(BaseModel):
+    session_id: str
+    agent_name: str | None = None
+
+
 AgentInput = Agent | t.Sequence[Agent] | t.Mapping[str, Agent]
 
 
@@ -98,6 +117,8 @@ def create_app(
     agents: AgentInput,
     *,
     workspace_root: str | Path | None = None,
+    user_id: str | None = None,
+    session_id: str | None = None,
 ) -> FastAPI:
     """Create a FastAPI app that renders and drives the given agent(s)."""
 
@@ -105,9 +126,14 @@ def create_app(
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     app.state.agents = _normalize_agents(agents)
     app.state.agent_name = next(iter(app.state.agents))
-    app.state.contexts = {
-        name: RunContext() for name in app.state.agents
-    }
+    app.state.default_user_id = user_id or f"user_{uuid.uuid4().hex}"
+    app.state.default_session_id = session_id
+    initial_session_id = session_id or uuid.uuid4().hex
+    app.state.contexts = _session_contexts(
+        app.state.agents,
+        user_id=app.state.default_user_id,
+        session_id=initial_session_id,
+    )
     app.state.sessions = {}
     app.state.workspace_root = _resolve_workspace_root(workspace_root)
     app.state.workspace_root.mkdir(parents=True, exist_ok=True)
@@ -135,7 +161,21 @@ def create_app(
 
     @app.post("/api/sessions")
     async def create_session() -> dict[str, t.Any]:
+        for agent in app.state.agents.values():
+            await agent.prepare()
         return _create_session(app)
+
+    @app.get("/api/chat/context")
+    async def chat_context(
+        session_id: str = Query(min_length=1),
+        agent_name: str | None = None,
+    ) -> dict[str, t.Any]:
+        selected = _select_agent_name(app, agent_name)
+        session = _get_session(app, session_id)
+        ctx = session["contexts"][selected]
+        agent = app.state.agents[selected]
+        await agent.prepare()
+        return _context_usage(ctx, agent)
 
     @app.get("/api/workspace")
     async def workspace() -> dict[str, t.Any]:
@@ -173,7 +213,10 @@ def create_app(
     @app.post("/api/clear")
     async def clear(agent_name: str | None = None) -> dict[str, str]:
         agent_name = _select_agent_name(app, agent_name)
-        app.state.contexts[agent_name] = RunContext()
+        app.state.contexts[agent_name] = RunContext(
+            user_id=agent_name,
+            session_id=agent_name,
+        )
         return {"status": "ok"}
 
     @app.post("/api/chat")
@@ -200,7 +243,13 @@ def create_app(
                 agent_name=agent_name,
                 images=req.images,
             )
-            async for payload in _run_turn_for_context(app, chat_req, agent_name, ctx):
+            async for payload in _run_turn_for_context(
+                app,
+                chat_req,
+                agent_name,
+                ctx,
+                session=session,
+            ):
                 yield _sse(payload)
 
         return StreamingResponse(stream(), media_type="text/event-stream")
@@ -221,10 +270,26 @@ def create_app(
             app.state.agent_name = agent_name
             session = _get_session(app, req.session_id)
             ctx = session["contexts"][agent_name]
-            async for payload in _resume_turn_for_context(app, req.decisions, agent_name, ctx):
+            async for payload in _resume_turn_for_context(
+                app,
+                req.decisions,
+                agent_name,
+                ctx,
+                session=session,
+            ):
                 yield _sse(payload)
 
         return StreamingResponse(stream(), media_type="text/event-stream")
+
+    @app.post("/api/chat/cancel")
+    async def chat_cancel(req: ChatCancelRequest) -> dict[str, str]:
+        agent_name = _select_agent_name(app, req.agent_name)
+        session = _get_session(app, req.session_id)
+        token = session.get("active_tokens", {}).get(agent_name)
+        if token is None:
+            return {"status": "idle"}
+        token.cancel()
+        return {"status": "cancelling"}
 
     return app
 
@@ -236,6 +301,8 @@ def serve(
     port: int = 8000,
     reload: bool = False,
     workspace_root: str | Path | None = None,
+    user_id: str | None = None,
+    session_id: str | None = None,
 ) -> None:
     """Run the Web UI for ``agents``.
 
@@ -254,7 +321,12 @@ def serve(
         ) from exc
 
     uvicorn.run(
-        create_app(agents, workspace_root=workspace_root),
+        create_app(
+            agents,
+            workspace_root=workspace_root,
+            user_id=user_id,
+            session_id=session_id,
+        ),
         host=host,
         port=port,
         reload=reload,
@@ -278,6 +350,7 @@ async def _run_turn_for_context(
     ctx: RunContext,
     *,
     legacy: bool = False,
+    session: dict[str, t.Any] | None = None,
 ) -> t.AsyncIterator[dict[str, t.Any]]:
     lock: asyncio.Lock = app.state.turn_lock
     if lock.locked():
@@ -287,10 +360,14 @@ async def _run_turn_for_context(
     async with lock:
         agent: Agent = app.state.agents[agent_name]
         yield {"type": "status", "status": "running"}
+        cancellation_token = CancellationToken()
+        if session is not None:
+            session.setdefault("active_tokens", {})[agent_name] = cancellation_token
         try:
             stream = agent.run_stream_events(
                 task=_chat_task(req),
                 run_context=ctx,
+                cancellation_token=cancellation_token,
                 stream_tokens=True,
             )
             if legacy:
@@ -301,12 +378,17 @@ async def _run_turn_for_context(
             else:
                 async for payload in _stream_ui_events(stream, agent_name, agent):
                     yield payload
+        except asyncio.CancelledError:
+            yield {"type": "cancelled", "message": "Turn cancelled."}
         except Exception as exc:  # noqa: BLE001
             yield {
                 "type": "error",
                 "message": str(exc),
                 "error_type": type(exc).__name__,
             }
+        finally:
+            if session is not None:
+                session.get("active_tokens", {}).pop(agent_name, None)
 
 
 async def _resume_turn(
@@ -332,6 +414,7 @@ async def _resume_turn_for_context(
     ctx: RunContext,
     *,
     legacy: bool = False,
+    session: dict[str, t.Any] | None = None,
 ) -> t.AsyncIterator[dict[str, t.Any]]:
     lock: asyncio.Lock = app.state.turn_lock
     if lock.locked():
@@ -340,6 +423,9 @@ async def _resume_turn_for_context(
 
     async with lock:
         agent: Agent = app.state.agents[agent_name]
+        cancellation_token = CancellationToken()
+        if session is not None:
+            session.setdefault("active_tokens", {})[agent_name] = cancellation_token
         try:
             for decision in decisions:
                 ctx.tool_state.apply_approval(
@@ -348,8 +434,35 @@ async def _resume_turn_for_context(
                     reason=decision.reason,
                 )
 
+            pending_approvals = [
+                _approval_record(record) for record in ctx.tool_state.pending_approvals
+            ]
+            if pending_approvals:
+                yield {
+                    "type": "status",
+                    "status": "waiting_for_approval",
+                    "message": f"{len(pending_approvals)} tool approval(s) still pending.",
+                }
+                yield {
+                    "type": "session_state",
+                    "agent_name": agent_name,
+                    "messages": _serialize_messages(ctx.messages),
+                    "pending_approvals": pending_approvals,
+                    "context_usage": _context_usage(ctx, agent),
+                }
+                yield {
+                    "type": "approval_required",
+                    "agent_name": agent_name,
+                    "pending_approvals": pending_approvals,
+                }
+                return
+
             yield {"type": "status", "status": "resuming"}
-            stream = agent.resume_stream_events(run_context=ctx, stream_tokens=True)
+            stream = agent.resume_stream_events(
+                run_context=ctx,
+                cancellation_token=cancellation_token,
+                stream_tokens=True,
+            )
             if legacy:
                 async for payload in _stream_agent_events(stream):
                     if payload.get("type") == "done" and payload.get("context") is not None:
@@ -358,12 +471,17 @@ async def _resume_turn_for_context(
             else:
                 async for payload in _stream_ui_events(stream, agent_name, agent):
                     yield payload
+        except asyncio.CancelledError:
+            yield {"type": "cancelled", "message": "Turn cancelled."}
         except Exception as exc:  # noqa: BLE001
             yield {
                 "type": "error",
                 "message": str(exc),
                 "error_type": type(exc).__name__,
             }
+        finally:
+            if session is not None:
+                session.get("active_tokens", {}).pop(agent_name, None)
 
 
 async def _stream_agent_events(
@@ -490,13 +608,18 @@ def _event_payload(event: CoreEvent) -> dict[str, t.Any]:
     if isinstance(event, CompactionEvent):
         return {
             "type": "compaction",
+            "event_type": event.event_type,
+            "phase": event.phase,
             "strategy": event.strategy,
+            "changed": event.changed,
             "old_message_count": event.old_message_count,
             "recent_message_count": event.recent_message_count,
             "old_token_count": event.old_token_count,
             "recent_token_count": event.recent_token_count,
             "total_token_count": event.total_token_count,
-            "max_history_tokens": event.max_history_tokens,
+            "live_message_threshold_tokens": event.live_message_threshold_tokens,
+            "live_message_budget_tokens": event.live_message_budget_tokens,
+            "summary": event.summary,
         }
 
     if isinstance(event, ModelStreamChunkEvent):
@@ -517,11 +640,14 @@ def _event_payload(event: CoreEvent) -> dict[str, t.Any]:
         }
 
     if isinstance(event, ToolCallEvent):
+        parameters = jsonable_encoder(event.parameters)
+        if event.tool_name == "bash":
+            parameters = {"command": "[sandbox command hidden]"}
         return {
             "type": "tool_call",
             "tool_call_id": event.tool_call_id,
             "tool_name": event.tool_name,
-            "parameters": jsonable_encoder(event.parameters),
+            "parameters": parameters,
         }
 
     if isinstance(event, ToolCallResponseEvent):
@@ -530,8 +656,12 @@ def _event_payload(event: CoreEvent) -> dict[str, t.Any]:
             "type": "tool_result",
             "tool_call_id": event.tool_call_id,
             "success": result.success if result else False,
-            "result": jsonable_encoder(result.result) if result else None,
-            "error": result.error if result else "Tool produced no result.",
+            "result": _redact_internal_runtime_details(
+                jsonable_encoder(result.result) if result else None
+            ),
+            "error": _redact_internal_runtime_details(
+                result.error if result else "Tool produced no result."
+            ),
         }
 
     if isinstance(event, ToolApprovalEvent):
@@ -564,10 +694,34 @@ def _approval_record(record: ToolCallRecord) -> dict[str, t.Any]:
     return {
         "tool_call_id": record.id,
         "tool_name": record.tool_name,
-        "parameters": jsonable_encoder(record.parameters),
+        "parameters": (
+            {"command": "[sandbox command hidden]"}
+            if record.tool_name == "bash"
+            else jsonable_encoder(record.parameters)
+        ),
         "reason": record.approval_reason,
         "status": getattr(record.status, "value", str(record.status)),
     }
+
+
+def _redact_internal_runtime_details(value: t.Any) -> t.Any:
+    if isinstance(value, str):
+        redacted = value
+        for pattern in _INTERNAL_RUNTIME_PATTERNS:
+            redacted = pattern.sub("[internal runtime path]", redacted)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_internal_runtime_details(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: (
+                "[sandbox command hidden]"
+                if key == "command"
+                else _redact_internal_runtime_details(item)
+            )
+            for key, item in value.items()
+        }
+    return value
 
 
 def _normalize_agents(agents: AgentInput) -> dict[str, Agent]:
@@ -590,14 +744,32 @@ def _normalize_agents(agents: AgentInput) -> dict[str, Agent]:
     return normalized
 
 
-def _create_session(app: FastAPI) -> dict[str, t.Any]:
-    session_id = uuid.uuid4().hex
-    contexts = {
-        name: RunContext(session_id=session_id) for name in app.state.agents
+
+
+def _session_contexts(
+    agents: cabc.Mapping[str, Agent],
+    *,
+    user_id: str,
+    session_id: str,
+) -> dict[str, RunContext]:
+    return {
+        name: RunContext(user_id=user_id, session_id=session_id)
+        for name in agents
     }
-    app.state.sessions[session_id] = {"contexts": contexts}
+
+def _create_session(app: FastAPI) -> dict[str, t.Any]:
+    session_id = app.state.default_session_id or uuid.uuid4().hex
+    user_id = app.state.default_user_id
+    contexts = _session_contexts(
+        app.state.agents,
+        user_id=user_id,
+        session_id=session_id,
+    )
+    app.state.sessions[session_id] = {"contexts": contexts, "active_tokens": {}}
+    app.state.contexts = contexts
     return {
         "session_id": session_id,
+        "user_id": user_id,
         "messages": [],
         "pending_approvals": [],
         "context_usage": _context_usage(
@@ -668,6 +840,7 @@ def _agent_summary(
         "model": getattr(client, "model", "unknown"),
         "model_name": getattr(client, "model", "unknown"),
         "context_window": getattr(config, "max_context_window", None),
+        "supports_vision": bool(getattr(config, "supports_vision", False)),
         "prepared": agent.is_prepared,
         "default_selected": default_selected,
         "invocation_hint": f"@{name}",
@@ -722,7 +895,7 @@ def _serialize_messages(messages: t.Sequence[t.Any]) -> list[dict[str, t.Any]]:
 
 def _serialize_message(message: t.Any) -> dict[str, t.Any]:
     if hasattr(message, "model_dump"):
-        data = message.model_dump(mode="json")
+        data = message.model_dump(mode="python")
     elif isinstance(message, dict):
         data = dict(message)
     else:
@@ -730,12 +903,30 @@ def _serialize_message(message: t.Any) -> dict[str, t.Any]:
 
     content = data.get("content", "")
     if isinstance(content, list):
-        text_parts = [
-            part.get("text", "")
-            for part in content
-            if isinstance(part, dict) and part.get("type") == "text"
-        ]
+        text_parts: list[str] = []
+        images: list[dict[str, str]] = []
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "text":
+                text_parts.append(part.get("text", ""))
+            elif part.get("type") == "image" and part.get("data") is not None:
+                raw_data = part.get("data")
+                if isinstance(raw_data, str):
+                    data_base64 = raw_data
+                else:
+                    data_base64 = base64.b64encode(raw_data).decode("utf-8")
+                mime_type = part.get("mime_type") or "image/png"
+                images.append(
+                    {
+                        "mime_type": mime_type,
+                        "data_base64": data_base64,
+                        "data_url": f"data:{mime_type};base64,{data_base64}",
+                    }
+                )
         data["content"] = "".join(text_parts)
+        if images:
+            data["images"] = images
     return data
 
 
@@ -746,15 +937,68 @@ def _last_assistant_message(ctx: RunContext) -> dict[str, t.Any] | None:
     return None
 
 
-def _context_usage(ctx: RunContext, agent: Agent) -> dict[str, int | None]:
+def _client_max_tokens(client: t.Any) -> int:
+    options = getattr(client, "generation_options", None)
+    if isinstance(options, dict) and options.get("max_tokens") is not None:
+        return int(options["max_tokens"])
+
+    config = getattr(client, "config", None)
+    max_output = getattr(config, "max_output_tokens", 0) or 0
+    if max_output:
+        return int(max_output)
+
+    return setting.compaction_min_output_tokens
+
+
+def _context_usage(ctx: RunContext, agent: Agent) -> dict[str, t.Any]:
     client = getattr(agent, "client", None)
     config = getattr(client, "config", None)
     tokenizer_base = getattr(config, "tokenizer_base", "o200k_base")
-    counter = TokenBudgetStrategy(tokenizer_base=tokenizer_base)
-    used = counter.count_messages(ctx.messages)
+    counter = TokenCounter(tokenizer_base=tokenizer_base)
+    live_tokens = counter.count_messages(ctx.messages)
+    max_context = getattr(config, "max_context_window", None) or None
+    prompt_tokens = 0
+    prompt_layers: list[dict[str, t.Any]] = []
+    if getattr(agent, "is_prepared", False):
+        try:
+            prompt_tokens = agent.prompt_tokens
+            prompt_layers = [
+                {
+                    "name": name,
+                    "tokens": usage.tokens,
+                    "chars": usage.chars,
+                }
+                for name, usage in agent.rendered_layer_usage.items()
+            ]
+        except Exception:  # noqa: BLE001 - telemetry should not break chat
+            prompt_tokens = 0
+            prompt_layers = []
+
+    summary = ctx.runtime_state.shared_state.get("compaction_summary")
+    summary_tokens = counter.count_serialized(summary) if summary else 0
+    reserved_output = _client_max_tokens(client)
+    safety_margin = int(max_context * setting.compaction_safety_margin_ratio) if max_context else 0
+    used = prompt_tokens + summary_tokens + live_tokens + reserved_output + safety_margin
+
     return {
         "used": used,
-        "max": getattr(config, "max_context_window", None) or None,
+        "max": max_context,
+        "live_message_tokens": live_tokens,
+        "prompt_tokens": prompt_tokens,
+        "summary_tokens": summary_tokens,
+        "reserved_output_tokens": reserved_output,
+        "safety_margin_tokens": safety_margin,
+        "prompt_budget_tokens": setting.compaction_prompt_budget_tokens,
+        "summary_budget_tokens": setting.compaction_summary_budget_tokens,
+        "live_message_threshold_tokens": (
+            int(max_context * setting.compaction_live_message_threshold)
+            if max_context
+            else None
+        ),
+        "live_message_budget_tokens": setting.compaction_live_message_budget_tokens,
+        "message_count": len(ctx.messages),
+        "summary": summary,
+        "prompt_layers": prompt_layers,
     }
 
 

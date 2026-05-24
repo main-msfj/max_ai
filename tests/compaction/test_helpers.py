@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from max_ai.core.compaction import (
-    TokenBudgetStrategy,
+from max_ai.core.compaction import CompactionOutput
+from max_ai.base.compaction import (
+    TokenCounter,
     group_atomic_messages,
     split_recent_messages,
 )
@@ -31,29 +32,26 @@ def assistant(content: str, *, tokens: int = 1) -> AssistantMessage:
     return AssistantMessage(source="agent", content=content, token_count=tokens)
 
 
-def test_token_budget_strategy_builds_expected_32k_budget():
-    strategy = TokenBudgetStrategy()
 
-    budget = strategy.build_budget(max_context_tokens=32_000)
+def test_compaction_output_defaults_to_empty_sections():
+    output = CompactionOutput(summary="Working on compaction")
 
-    assert budget.max_context_tokens == 32_000
-    assert budget.max_input_tokens == 12_800
-    assert budget.reserved_output_tokens == 9_600
-    assert budget.safety_margin_tokens == 9_600
-    assert budget.max_summary_tokens == 1_000
-    assert budget.max_history_tokens == 1_000
-    assert budget.prompt_budget_tokens == 10_800
-
+    assert output.summary == "Working on compaction"
+    assert output.objective == []
+    assert output.pending == []
+    assert output.successfully_done == []
+    assert output.decisions == []
+    assert output.important_context == []
 
 def test_count_message_prefers_existing_token_count():
-    strategy = TokenBudgetStrategy()
+    strategy = TokenCounter()
     message = user("this text should not be counted", tokens=123)
 
     assert strategy.count_message(message) == 123
 
 
 def test_count_message_counts_tool_call_as_serialized_payload():
-    strategy = TokenBudgetStrategy()
+    strategy = TokenCounter()
     tool_call = ToolCall(
         id="call_1",
         tool_name="search",
@@ -70,7 +68,7 @@ def test_count_message_counts_tool_call_as_serialized_payload():
 
 
 def test_count_message_sanitizes_multimodal_bytes():
-    strategy = TokenBudgetStrategy()
+    strategy = TokenCounter()
     message = UserMessage(
         source="user",
         content=[
@@ -127,7 +125,7 @@ def test_split_recent_messages_uses_newest_groups_within_token_budget():
 
     old_messages, recent_messages = split_recent_messages(
         groups,
-        max_history_tokens=5,
+        max_tokens=5,
     )
 
     assert [message.text() for message in old_messages] == ["old 1", "old 2"]
@@ -148,7 +146,7 @@ def test_split_recent_messages_keeps_last_group_even_when_it_exceeds_budget():
 
     old_messages, recent_messages = split_recent_messages(
         groups,
-        max_history_tokens=10,
+        max_tokens=10,
     )
 
     assert [message.text() for message in old_messages] == ["old"]
@@ -180,7 +178,7 @@ def test_split_recent_messages_does_not_split_tool_group():
 
     old_messages, recent_messages = split_recent_messages(
         groups,
-        max_history_tokens=4,
+        max_tokens=4,
     )
 
     assert old_messages == [groups[0].messages[0]]

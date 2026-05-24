@@ -9,7 +9,7 @@ from max_ai.base.agent import Agent
 from max_ai.base.clients import CoreChatCompletionClient
 from max_ai.base.tools import CoreTool, ToolContext
 from max_ai.core.messages import AssistantMessage, ToolCall, UserMessage
-from max_ai.core.event_type import CoreEvent
+from max_ai.core.event_type import CoreEvent, ToolCallEvent, ToolCallResponseEvent
 from max_ai.core.models import ModelConfig
 from max_ai.types.agent_response import AgentResponse
 from max_ai.types.completions import ChatCompletionResult, Usage
@@ -175,6 +175,68 @@ async def test_resume_with_rejected_decision():
     assert tool.executions == []  # tool MUST not have run
     # The LLM saw the rejection and produced its closing reply.
     assert final.final_text == "all done"
+
+
+@pytest.mark.asyncio
+async def test_resume_with_mixed_approval_decisions_only_runs_approved_tool():
+    """A turn with multiple pending tools resumes only the approved calls."""
+    weather_tool = FakeApprovalTool(name="get_weather")
+    link_tool = FakeApprovalTool(name="check_link")
+    weather_call = ToolCall(
+        id="call_weather",
+        tool_name="get_weather",
+        parameters={"city": "Tokyo"},
+    )
+    link_call = ToolCall(
+        id="call_link",
+        tool_name="check_link",
+        parameters={"url": "https://example.com"},
+    )
+    client = FakeChatClient(results=[
+        make_result(
+            tool_calls=[weather_call, link_call],
+            finish_reason="tool_calls",
+        ),
+        make_result(content="weather checked; link skipped"),
+    ])
+    agent = make_agent(client, tools=[weather_tool, link_tool])
+
+    response = await agent.run(task="check weather and link")
+
+    assert response.finish_reason == "approval_needed"
+    assert len(response.pending_approvals) == 2
+    response.context.tool_state.apply_approval(
+        "call_weather",
+        approved=True,
+        reason="ok",
+    )
+    response.context.tool_state.apply_approval(
+        "call_link",
+        approved=False,
+        reason="not this link",
+    )
+
+    items = [
+        item async for item in agent.resume_stream_events(run_context=response.context)
+    ]
+
+    final = items[-1]
+    assert isinstance(final, AgentResponse)
+    assert final.finish_reason == "stop"
+    assert final.final_text == "weather checked; link skipped"
+    assert weather_tool.executions == [{"city": "Tokyo"}]
+    assert link_tool.executions == []
+
+    tool_call_events = [item for item in items if isinstance(item, ToolCallEvent)]
+    assert [event.tool_name for event in tool_call_events] == ["get_weather"]
+
+    tool_results = [item for item in items if isinstance(item, ToolCallResponseEvent)]
+    assert len(tool_results) == 2
+    result_by_id = {event.tool_call_id: event.tool_result for event in tool_results}
+    assert result_by_id["call_weather"] is not None
+    assert result_by_id["call_weather"].success is True
+    assert result_by_id["call_link"] is not None
+    assert result_by_id["call_link"].success is False
 
 
 # -------- STALE -----------------------------------------------------------

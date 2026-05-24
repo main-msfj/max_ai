@@ -11,16 +11,18 @@ from abc import ABC
 from pydantic import BaseModel
 
 from .component import ComponentBase
-from .compaction import CoreCompaction
+from .compaction import CompactionResult, CoreCompaction
 from .tool_executor import ToolExecutor
 from .workspace import WorkSpaceRegistry
 from .clients import CoreChatCompletionClient
+from .capability import CoreAgentCapabilities
 
 
 from ..loggers import ScopedLogger
 from ..core.models import AgentConfig
+from ..config import setting
 from ..base.middleware import CoreMiddleware
-from ..core.messages import CoreMessage, UserMessage, Message
+from ..core.messages import CoreMessage, UserMessage
 from ..core.event_type import (
     CompactionEvent,
     CoreEvent,
@@ -28,36 +30,36 @@ from ..core.event_type import (
     ModelStreamChunkEvent,
 )
 
-from ..types.stacks import PromptCtx
+from ..types.stacks import PromptCtx, PromptLayerUsage
 from ..errors.agent import AgentError
 from ..types.completions import Usage
 from ..reasoning.react import ReActLoop
-from ..manager import AgentCapabilities
 from ..executor.local import LocalExecutor
 from ..types.run_context import RunContext
 from ..termination import CancellationToken
+from ..workspace.system import LocalWorkSpace
 from ..compaction import SlidingWindowCompaction
+from .compaction import TokenCounter
 from ..types.agent_response import AgentResponse
-from ..capabilities.workspace import LocalWorkSpaceRegistry
+from ..manager.capabilities import AgentCapabilities
 from ..manager.stacks import PromptVariablesBuilder, build_default_stack
 
 if t.TYPE_CHECKING:
-    from .executor import CoreExecutor
-    from ..stacks import CoreLayer
     from .tools import CoreTool
+    from ..stacks import CoreLayer
+    from .executor import CoreExecutor
+    from .reasoning import BaseReasoning
     from .skills import CoreSkillRegistry
+    from .compaction import CompactionResult, CoreCompaction
     from .memory import CoreMemoryRegistry
     from .context import CoreLogBookRegistry
     from .routines import CoreRoutineRegistry
     from ..manager.stacks import LayerContainer
     from .knowledge import CoreKnowledgeRegistry
-    from .reasoning import BaseReasoning
-    from .compaction import CoreCompaction
 
-
-# Single yield type for the streaming engine. The terminal item of every
-# run_stream_events call is an AgentResponse; everything before is a CoreEvent.
 RunYield = t.Union[CoreEvent, AgentResponse]
+ConfigT = t.TypeVar("ConfigT", bound=BaseModel)
+CapabilitiesT: t.TypeAlias = CoreAgentCapabilities[BaseModel]
 
 
 # -------- LOGGER -----------------------------------------------------------
@@ -71,7 +73,7 @@ class Agent(ComponentBase[BaseModel], ABC):
 
     Lifecycle:
       1. ``__init__`` — sync. Stores configuration, builds the
-         ``AgentCapabilities`` (validating tool name uniqueness,
+         ``Agentregistries`` (validating tool name uniqueness,
          priority_tools coherence, etc.) and the ``LayerContainer``
          (validating every layer's template against its declared
          contract). Anything broken at this stage raises immediately.
@@ -98,18 +100,18 @@ class Agent(ComponentBase[BaseModel], ABC):
         description: str,
         instructions: str,
         client: CoreChatCompletionClient,
+        toolset: t.Sequence[CoreTool | t.Callable[..., t.Any]] | None = None,
         memory: CoreMemoryRegistry | None = None,
         skills: CoreSkillRegistry | None = None,
         logbook: CoreLogBookRegistry | None = None,
         routines: CoreRoutineRegistry | None = None,
-        toolset: t.Sequence[CoreTool] | None = None,
         knowledge: t.Sequence[CoreKnowledgeRegistry] | None = None,
+        workspace: WorkSpaceRegistry | None = None,
         middlewares: t.Sequence[CoreMiddleware] | None = None,
         framework_layers: t.Sequence[CoreLayer] | None = None,
+        executor: CoreExecutor | None = None,
         reasoning: BaseReasoning | None = None,
         compaction: CoreCompaction | None = None,
-        executor: CoreExecutor | None = None,
-        workspace: WorkSpaceRegistry | None = None,
         output_format: t.Type[BaseModel] | None = None,
         priority_tools: list[str] | None = None,
         config: AgentConfig | None = None,
@@ -159,38 +161,60 @@ class Agent(ComponentBase[BaseModel], ABC):
         self.instructions = self.require_type(instructions, str, "instructions")
         self.client = self.require_type(client, CoreChatCompletionClient, "client")
         self.config = self.require_type(config or AgentConfig(), AgentConfig, "config")
-        self.compaction = self._build_compaction(compaction)
-        self.workspace = self._build_workspace(workspace)
-        self.executor = self._build_executor(executor)
 
+        raw_capabs = self._collect_capabilities(locals().values())
+        self.capabilities = self.build_registries(raw_capabs, priority_tools, toolset)
+
+        self.registries = self.capabilities
+
+        self.executor = self.validate_executor_object(executor)
+        self.workspace = self.validate_workspace_object(workspace)
         self.reasoning = reasoning
+        self.compaction = self.validate_compaction_object(compaction)
         self.output_format = output_format
         self.middlewares = list(middlewares or [])
         self.prompt_stack: LayerContainer = build_default_stack(framework_layers)
-
-        self.capabilities = AgentCapabilities(
-            memory=memory,
-            routines=routines,
-            skills=skills,
-            logbook=logbook,
-            priority_tools=priority_tools,
-            toolset=toolset,
-            knowledge=knowledge,
-        )
-
         self._variables_builder: PromptVariablesBuilder = PromptVariablesBuilder(self)
-        self._rendered_layers: dict[type[CoreLayer], str] = {}
+        self._token_counter = TokenCounter()
         self._prepared: bool = False
+        self._rendered_layers: dict[type[CoreLayer], str] = {}
+        self._rendered_layer_usage: dict[str, PromptLayerUsage] = {}
+        self._prompt_tokens: int = 0
 
     # -------- LIFECYCLE -----------------------------------------------------------
+    def build_registries(
+        self,
+        capabilities: t.Sequence[CapabilitiesT] | None = None,
+        priority_tools: t.Sequence[str] | None = None,
+        toolset: t.Sequence[CoreTool | t.Callable[..., t.Any]] | None = None,
+    ) -> AgentCapabilities:
+        return AgentCapabilities(
+            capabilities=capabilities,
+            priority_tools=priority_tools,
+            toolset=toolset,
+        )
+
+    @classmethod
+    def _collect_capabilities(cls, values: t.Iterable[t.Any]) -> list[CapabilitiesT]:
+        """Collect capability objects without naming each concrete type."""
+        collected: list[CapabilitiesT] = []
+        for value in values:
+            if value is None:
+                continue
+            if isinstance(value, CoreAgentCapabilities):
+                collected.append(value)
+            elif isinstance(value, (list, tuple, set, frozenset)):
+                collected.extend(cls._collect_capabilities(value))
+        return collected
+
     async def prepare(self) -> None:
-        """Hydrate async capabilities and render the prompt stack.
+        """Hydrate async registries and render the prompt stack.
 
         Must be awaited once before any ``run*`` call (the engine does
         this automatically). Idempotent — calling twice is a no-op.
 
         Steps:
-          1. Resolve async capabilities (loads skills, builds the
+          1. Resolve async registries (loads skills, builds the
              ``read_skill_resource`` tool, revalidates tool names with
              skill tools merged in).
           2. For each layer in the prompt stack, ask the variables
@@ -202,20 +226,42 @@ class Agent(ComponentBase[BaseModel], ABC):
         if self._prepared:
             return
 
-        await self.capabilities.prepare()
+        await self.registries.prepare()
 
         for layer in self.prompt_stack:
-            variables = await self._variables_builder.collect(type(layer))
-            try:
-                rendered = layer.render(variables)
-            except Exception as e:
-                raise AgentError.layer_render_failed(
-                    layer_name=type(layer).__name__,
-                    error=e,
-                ) from e
-            self._rendered_layers[type(layer)] = rendered
+            await self._render_prompt_layer(layer)
 
+        self._recalculate_prompt_tokens()
         self._prepared = True
+
+    async def _render_prompt_layer(self, layer: "CoreLayer") -> None:
+        variables = await self._variables_builder.collect(type(layer))
+        try:
+            rendered = layer.render(variables)
+        except Exception as e:
+            raise AgentError.layer_render_failed(
+                layer_name=type(layer).__name__,
+                error=e,
+            ) from e
+        self._rendered_layers[type(layer)] = rendered
+        usage = PromptLayerUsage(
+            layer_name=type(layer).__name__,
+            chars=len(rendered),
+            tokens=self._token_counter.count_text(rendered),
+        )
+        self._rendered_layer_usage[usage.layer_name] = usage
+
+    def _recalculate_prompt_tokens(self) -> None:
+        self._prompt_tokens = sum(
+            usage.tokens for usage in self._rendered_layer_usage.values()
+        )
+
+    async def _refresh_dynamic_prompt_layers(self) -> None:
+        dynamic_layer_names = {"MemoryLayer", "ContextLayer"}
+        for layer in self.prompt_stack:
+            if type(layer).__name__ in dynamic_layer_names:
+                await self._render_prompt_layer(layer)
+        self._recalculate_prompt_tokens()
 
     def _ensure_prepared(self) -> None:
         if not self._prepared:
@@ -247,6 +293,34 @@ class Agent(ComponentBase[BaseModel], ABC):
             stack=self.prompt_stack,
             variables={},
             rendered_layers=self.rendered_layers,
+            layer_usage=self.rendered_layer_usage,
+            prompt_tokens=self.prompt_tokens,
+        )
+
+    def _compaction_event(
+        self,
+        *,
+        phase: t.Literal["start", "end"],
+        max_context_tokens: int,
+        result: CompactionResult | None = None,
+        total_token_count: int = 0,
+    ) -> CompactionEvent:
+        result_changed = bool(result and result.changed)
+        return CompactionEvent(
+            source=self.name,
+            phase=phase,
+            strategy=type(self.compaction).__name__,
+            changed=result_changed,
+            old_message_count=len(result.old_messages) if result else 0,
+            recent_message_count=len(result.recent_messages) if result else 0,
+            old_token_count=result.old_token_count if result else 0,
+            recent_token_count=result.recent_token_count if result else 0,
+            total_token_count=result.total_token_count if result else total_token_count,
+            live_message_threshold_tokens=int(
+                max_context_tokens * setting.compaction_live_message_threshold
+            ),
+            live_message_budget_tokens=setting.compaction_live_message_budget_tokens,
+            summary=result.summary if result else None,
         )
 
     async def _apply_compaction(
@@ -262,19 +336,13 @@ class Agent(ComponentBase[BaseModel], ABC):
             ctx=ctx,
             prompts=prompts,
             max_context_tokens=max_context_tokens,
+            client=self.client,
         )
-        if not result.changed:
-            return None
 
-        return CompactionEvent(
-            source=self.name,
-            strategy=type(self.compaction).__name__,
-            old_message_count=len(result.old_messages),
-            recent_message_count=len(result.recent_messages),
-            old_token_count=result.old_token_count,
-            recent_token_count=result.recent_token_count,
-            total_token_count=result.total_token_count,
-            max_history_tokens=result.max_history_tokens,
+        return self._compaction_event(
+            phase="end",
+            max_context_tokens=max_context_tokens,
+            result=result,
         )
 
     def _build_reasoning(
@@ -300,26 +368,35 @@ class Agent(ComponentBase[BaseModel], ABC):
             middleware_chain=tool_executor.mw_chain,
         )
 
-    def _build_compaction(self, compaction: CoreCompaction | None) -> CoreCompaction:
+    def validate_compaction_object(
+        self, compaction: CoreCompaction | None
+    ) -> CoreCompaction:
         """Resolve Compaction Strategy"""
         if compaction is not None:
             return compaction
         return SlidingWindowCompaction()
 
-    def _build_workspace(
+    def validate_workspace_object(
         self, workspace: WorkSpaceRegistry | None
     ) -> WorkSpaceRegistry:
         """Resolve WorkSpace"""
         if workspace is not None:
             return workspace
-        return LocalWorkSpaceRegistry()
+        return LocalWorkSpace()
 
-    def _build_executor(self, executor: CoreExecutor | None) -> CoreExecutor:
+    def validate_executor_object(self, executor: CoreExecutor | None) -> CoreExecutor:
         """Resolve executor."""
         if executor is not None:
             return executor
 
         return LocalExecutor(default_timeout=self.config.tool_timeout)
+
+    def _validate_runtime_safety(self) -> None:
+        """Validate runtime combinations that can affect the host machine."""
+        if self.registries.requires_sandbox_executor and isinstance(
+            self.executor, LocalExecutor
+        ):
+            raise AgentError.unsafe_local_executor_for_skills(self.name)
 
     def _build_response(
         self,
@@ -399,27 +476,57 @@ class Agent(ComponentBase[BaseModel], ABC):
                 is NOT yielded — the consumer cleans up.
         """
         await self.prepare()
+        await self._refresh_dynamic_prompt_layers()
+        self._validate_runtime_safety()
 
         ctx = self._normalize_run_context(task, run_context)
-        directory = self.workspace.materialize(ctx.user_id)
-        self.capabilities.materialize_runtime(directory)
-        tool_executor = ToolExecutor(
-            tools=self.capabilities.all_tools,
-            middlewares=self.middlewares,
-            agent_name=self.name,
-            runtime_executor=self.executor,
-            max_concurrent_tools=self.config.tool_call_concurrency,
-            runtime_deps={
+        deps: dict[str, t.Any] = {}
+
+        if self.registries.requires_workspace:
+            await self.executor.bind_to_workspace(self.workspace.base_root)
+            directory = self.workspace.materialize(ctx.user_id)
+            self.registries.materialize_runtime(directory)
+            deps = {
                 "runtime_root": str(directory.root),
                 "tools_dir": str(directory.tool_dir),
                 "skills_dir": str(directory.skill_dir),
                 "artifacts_dir": str(directory.artifacts_dir),
-            },
+            }
+        if self.registries.has_skills:
+            deps["skill_names"] = [
+                skill.name for skill in self.registries.loaded_skill_blocks
+            ]
+
+        # Build Tool Executore
+        tool_executor = ToolExecutor(
+            tools=self.registries.all_tools,
+            middlewares=self.middlewares,
+            agent_name=self.name,
+            runtime_executor=self.executor,
+            max_concurrent_tools=self.config.tool_call_concurrency,
+            runtime_deps=deps,
         )
-        reasoning = self._build_reasoning(tool_executor)
+
+        # Inject Prompts and Reasoning Loop
         prompts = self._build_prompt_ctx()
+        reasoning = self._build_reasoning(tool_executor)
+        max_context_tokens = getattr(self.client.config, "max_context_window", 0) or 0
+        live_message_tokens = self._token_counter.count_messages(ctx.messages)
+        live_message_threshold_tokens = int(
+            max_context_tokens * setting.compaction_live_message_threshold
+        ) if max_context_tokens > 0 else 0
+        compaction_started = (
+            max_context_tokens > 0
+            and live_message_tokens > live_message_threshold_tokens
+        )
+        if compaction_started:
+            yield self._compaction_event(
+                phase="start",
+                max_context_tokens=max_context_tokens,
+                total_token_count=live_message_tokens,
+            )
         compaction_event = await self._apply_compaction(ctx, prompts)
-        if compaction_event is not None:
+        if compaction_event is not None and (compaction_started or compaction_event.changed):
             yield compaction_event
 
         loop_state = reasoning.LOOP_STATE_CLS()
@@ -702,6 +809,18 @@ class Agent(ComponentBase[BaseModel], ABC):
         return dict(self._rendered_layers)
 
     @property
+    def rendered_layer_usage(self) -> dict[str, PromptLayerUsage]:
+        """Token and size stats for rendered prompt layers."""
+        self._ensure_prepared()
+        return dict(self._rendered_layer_usage)
+
+    @property
+    def prompt_tokens(self) -> int:
+        """Total token count for all rendered prompt layers."""
+        self._ensure_prepared()
+        return self._prompt_tokens
+
+    @property
     def is_prepared(self) -> bool:
         return self._prepared
 
@@ -710,5 +829,5 @@ class Agent(ComponentBase[BaseModel], ABC):
             f"{type(self).__name__}("
             f"name={self.name!r}, "
             f"prepared={self._prepared}, "
-            f"capabilities={self.capabilities!r})"
+            f"registries={self.registries!r})"
         )

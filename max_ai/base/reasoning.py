@@ -42,6 +42,7 @@ from ..base.clients import CoreChatCompletionClient
 from ..base.tools import CoreTool
 
 from ..core.messages import AssistantMessage
+from .compaction import TokenCounter
 from ..core.event_type import (
     CoreEvent,
     ErrorEvent,
@@ -234,6 +235,25 @@ class BaseReasoning(ABC):
         """
         return list(self.tool_executor.tools.values())
 
+    def _input_messages_with_token_counts(
+        self, messages: t.Sequence["CoreMessage"]
+    ) -> list["CoreMessage"]:
+        """Return model input messages with per-message token counts attached."""
+        counter = TokenCounter(
+            tokenizer_base=self.client.config.tokenizer_base,
+        )
+        counted: list["CoreMessage"] = []
+        for message in messages:
+            if message.token_count > 0:
+                counted.append(message)
+                continue
+            counted.append(
+                message.model_copy(
+                    update={"token_count": counter.count_message(message)}
+                )
+            )
+        return counted
+
     # -------- NON-STREAMING LLM CALL -----------------------------------------------------------
     async def _call_llm(
         self,
@@ -288,7 +308,7 @@ class BaseReasoning(ABC):
         yield ModelCallEvent(
             source=self.name,
             model=str(model_metadata.get("model") or "unknown"),
-            input_messages=ctx.messages,
+            input_messages=self._input_messages_with_token_counts(ctx.messages),
         )
 
         backoff = 1.0
@@ -412,7 +432,7 @@ class BaseReasoning(ABC):
                 yield ModelCallEvent(
                     source=self.name,
                     model=str(model_metadata.get("model") or "unknown"),
-                    input_messages=ctx.messages,
+                    input_messages=self._input_messages_with_token_counts(ctx.messages),
                 )
                 async for item in self.middleware_chain.execute_stream(
                     action="model_call_stream",

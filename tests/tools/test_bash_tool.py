@@ -67,3 +67,49 @@ async def test_bash_tool_returns_nonzero_exit_code_as_output(tmp_path: Path) -> 
     assert result.success is True
     assert result.result["exit_code"] != 0
     assert "missing-file" in result.result["stderr"]
+
+
+@pytest.mark.asyncio
+async def test_bash_tool_read_skill_alias_reads_skill_instructions(tmp_path: Path) -> None:
+    root = tmp_path / "tmp" / "u1"
+    skill_dir = root / "skills" / "create-ppt"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("private skill instructions\n", encoding="utf-8")
+
+    tool = BashTool(approval_mode=ToolApprovalMode.AUTO_APPROVED)
+    record = ToolCallRecord(
+        tool_name="bash",
+        parameters={"command": "read_skill create-ppt"},
+    )
+    context = ToolContext(
+        run_id="run_1",
+        user_id="u1",
+        deps={"runtime_root": str(root)},
+    )
+
+    result = await tool.execute(record, context)
+
+    assert result.success is True
+    assert result.result["exit_code"] == 0
+    assert "private skill instructions" in result.result["stdout"]
+
+
+@pytest.mark.asyncio
+async def test_bash_tool_blocks_destructive_shell_commands(tmp_path: Path) -> None:
+    root = tmp_path / "tmp" / "u1"
+    tool = BashTool(approval_mode=ToolApprovalMode.AUTO_APPROVED)
+    record = ToolCallRecord(
+        tool_name="bash",
+        parameters={"command": "rm -f /etc/passwd"},
+    )
+    context = ToolContext(
+        run_id="run_1",
+        user_id="u1",
+        deps={"runtime_root": str(root)},
+    )
+
+    result = await tool.execute(record, context)
+
+    assert result.success is False
+    assert result.error is not None
+    assert "I am unable to do that action" in result.error

@@ -21,7 +21,7 @@ import pytest
 from max_ai.base.clients import CoreChatCompletionClient
 from max_ai.base.agent import Agent
 from max_ai.core.models import ModelConfig
-from max_ai.types.agent_response import AgentResponse
+from max_ai.errors.agent import AgentError
 from max_ai.types.completions import Usage
 from max_ai.types.run_context import RunContext
 
@@ -38,7 +38,7 @@ from max_ai.capabilities.context import LocalContextRegistry
 from max_ai.capabilities.knowledge import LocalKnowledgeRegistry
 from max_ai.capabilities.routines import LocalRoutineRegistry
 from max_ai.capabilities.skills.local import LocalSkillRegistry
-from max_ai.capabilities.workspace import LocalWorkSpaceRegistry
+from max_ai.capabilities.workspace import WorkspaceLocal
 
 
 # =====================================================================
@@ -199,7 +199,7 @@ async def test_core_agent_prepares_end_to_end(
         source=skill_root,
         skills=["demo_skill"],
     )
-    workspace = LocalWorkSpaceRegistry(root=tmp_path / "server")
+    workspace = WorkspaceLocal(root=tmp_path / "server")
 
     # 3. Build the agent.
     agent = _DummyAgent(
@@ -253,7 +253,11 @@ async def test_core_agent_prepares_end_to_end(
     assert "demo_skill" in skills_out
     assert "A minimal skill for the smoke test." in skills_out
     assert "search_skills" not in skills_out
-    assert "skill_bash" not in skills_out
+    assert "Call the `bash` tool to inspect" in skills_out
+    assert "The `bash` tool is the ONLY way to engage a skill" in skills_out
+    assert "`demo_skill`" not in skills_out
+    assert "$SKILLS_DIR" not in skills_out
+    assert "SKILL.md" not in skills_out
 
     # PriorityTools layer renders empty (no priority tools given).
     assert rendered[PriorityToolsLayer].strip() == ""
@@ -278,11 +282,8 @@ async def test_core_agent_prepares_end_to_end(
     await agent.prepare()  # must not raise
     assert agent.is_prepared is True
 
-    # 8. Run startup creates the workspace layout, then materializes skills.
+    # 8. Skills cannot run on LocalExecutor because they require a sandbox.
     ctx = RunContext(user_id="u1")
-    async for item in agent.run_stream_events("hello", run_context=ctx):
-        if isinstance(item, AgentResponse):
-            break
-
-    materialized_skill = tmp_path / "server" / "tmp" / "u1" / "skills" / "demo_skill"
-    assert (materialized_skill / "SKILL.md").is_file()
+    with pytest.raises(AgentError, match="skills cannot run with LocalExecutor"):
+        async for _ in agent.run_stream_events("hello", run_context=ctx):
+            pass

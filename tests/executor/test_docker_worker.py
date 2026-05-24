@@ -132,9 +132,9 @@ def test_worker_flattens_nested_tmp_user_runtime(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime_root = tmp_path / "sandbox"
-    nested_skill = runtime_root / "tmp" / "default" / "skills" / "create-report"
-    nested_artifact = runtime_root / "tmp" / "default" / "artifacts"
-    nested_tool = runtime_root / "tmp" / "default" / "tools"
+    nested_skill = runtime_root / "tmp" / "session_1" / "skills" / "create-report"
+    nested_artifact = runtime_root / "tmp" / "session_1" / "artifacts"
+    nested_tool = runtime_root / "tmp" / "session_1" / "tools"
     nested_skill.mkdir(parents=True)
     nested_artifact.mkdir(parents=True)
     nested_tool.mkdir(parents=True)
@@ -144,7 +144,7 @@ def test_worker_flattens_nested_tmp_user_runtime(
 
     monkeypatch.setenv("RUNTIME_DIR", str(runtime_root))
 
-    _normalize_runtime_layout({"context": {"user_id": "default"}})
+    _normalize_runtime_layout({"context": {"session_id": "session_1"}})
 
     assert (runtime_root / "skills" / "create-report" / "SKILL.md").is_file()
     assert (runtime_root / "artifacts" / "draft.md").is_file()

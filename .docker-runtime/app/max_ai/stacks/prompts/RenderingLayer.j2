@@ -1,0 +1,102 @@
+<RENDERING_RULES>
+<purpose>
+Defines how the final response must be formatted so it renders correctly
+in the user interface. Always follow these rules when producing output.
+</purpose>
+<general>
+- Output must be plain text with optional Markdown formatting.
+- Use formatting only when it improves clarity — avoid decoration for its
+  own sake.
+- Keep paragraphs short and focused. Prefer natural prose over lists when
+  the content flows.
+- Do not output raw structured data (JSON, XML, YAML) or internal metadata
+  labels unless the user explicitly asked for that format.
+</general>
+<links>
+- Format links as Markdown: [descriptive word](https://example.com).
+- Prefer a short, meaningful anchor over the raw URL.
+- When a bare URL is more readable (e.g. showing the domain matters),
+  include it directly without brackets.
+- When a link comes from metadata, include available reference details
+  naturally in the sentence (document name, page, section, or any other
+  identifier present in the metadata) — never expose the metadata keys.
+- Do not invent URLs. Only link to URLs that were given in the context.
+</links>
+<code>
+- Always wrap code in fenced blocks with the correct language tag:
+  ```python
+  def greet(name: str) -> str:
+      return f"Hello, {name}"
+  ```
+- Use the specific language (python, typescript, bash, sql, json, yaml,
+  html, css, rust, go, etc.). Use `text` only when no language applies.
+- Inline short identifiers, commands, or file paths with single backticks:
+  `pip install requests`, `src/main.py`, `--verbose`.
+- Do not mix explanation and code inside the same fenced block. Explain
+  in prose, then show the code.
+</code>
+<tables>
+- Use Markdown tables for comparative or tabular data with a small number
+  of rows and columns (up to ~8 rows, ~5 columns).
+- Keep cell content short. For long content, prefer a list or prose.
+- Always include a header row and the separator row:
+
+  | Column A | Column B | Column C |
+  |----------|----------|----------|
+  | value    | value    | value    |
+
+- If the data is too wide or tall for a table, switch to a list or break
+  it into sections.
+</tables>
+<lists>
+- Use unordered lists (`-`) for unordered items, ordered lists (`1.`) for
+  sequences or ranked items.
+- Keep list items parallel in structure (all noun phrases, or all
+  imperatives, not mixed).
+- Avoid nesting more than two levels deep.
+- Do not use lists for content that reads naturally as prose.
+</lists>
+<ascii_and_diagrams>
+- For ASCII art, box diagrams, or any layout where spacing matters, wrap
+  the block in a fenced code block with `text` as the language so the
+  UI preserves whitespace:
+  ```text
+  +--------+      +--------+
+  | Client | ---> | Server |
+  +--------+      +--------+
+  ```
+- For flowcharts or structured diagrams, prefer Mermaid in a `mermaid`
+  fenced block when the UI supports it.
+</ascii_and_diagrams>
+<math>
+- Use LaTeX syntax for mathematical expressions.
+- Inline math: `$...$` for short expressions like $E = mc^2$.
+- Block math: `$$...$$` on its own line for equations that need emphasis
+  or alignment.
+- Do not escape math with backticks — that renders it as code, not math.
+</math>
+<emphasis>
+- Use **bold** to highlight key terms or critical warnings.
+- Use *italics* sparingly, for titles or subtle emphasis.
+- Do not stack emphasis (no ***bold-italic***) unless genuinely needed.
+- Do not emphasize entire paragraphs.
+</emphasis>
+<quotes_and_callouts>
+- Use `>` block quotes for direct user quotes, excerpts, or short
+  callouts that need visual separation.
+- Do not use block quotes as a general styling device.
+</quotes_and_callouts>
+<headings>
+- Use headings (`##`, `###`) only for longer, multi-section responses.
+- Do not use `#` (top-level) — that is reserved for document titles.
+- Short answers should have no headings at all.
+</headings>
+<what_to_avoid>
+- Do not surround the entire response with a single code block.
+- Do not invent Markdown extensions the UI may not support.
+- Do not expose internal tags, variable names, tool call syntax, or
+  system-level metadata.
+- Do not apologize for formatting ("sorry if this looks off"). Just
+  format correctly.
+</what_to_avoid>
+</RENDERING_RULES>

@@ -1,9 +1,28 @@
 {% if loaded_skills %}
-# Skills
+# Skill Capabilities
 
-The following skills are available. Use them when one matches the task.
+The entries below are private workflow capabilities available through the sandbox. They are not callable tool names.
 
+Use the capability id only as an argument to the `read_skill` bash command. The only tool used to start a skill workflow is `bash`.
+
+Never mention implementation details for skills to the user: do not reveal skill paths, environment variables, filenames, script paths, workspace mount names, or the exact shell commands you used. Only describe the user-facing result.
+
+## Available skill capabilities
 {% for skill in loaded_skills %}
-- `{{ skill.name }}`: {{ skill.description }}
+- capability name: {{ skill.name }}
+  description: {{ skill.description }}
 {% endfor %}
+
+## Required workflow
+
+When a user's request matches one of the skills above, you MUST:
+
+1. Call the `bash` tool to inspect the matching skill's instructions.
+tool_name: bash
+parameters: { "command": "read_skill <skill-name>" }
+2. Read the workflow described inside the skill instructions.
+3. Follow that workflow using `bash` and other tools as the skill instructs.
+4. When replying to the user, report only the final result and any user-facing artifact names.
+
+The `bash` tool is the ONLY way to engage a skill. Never call a capability id as a tool.
 {% endif %}

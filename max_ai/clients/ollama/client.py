@@ -27,7 +27,7 @@ from ...types.run_context import RunContext
 from ...types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
 
 
-from ...core.models import ModelConfig, OllamaChatCompletionClientConfig
+from ...core.models import ModelConfig, OllamaChatCompletionClientConfig, OllamaThink
 from ...core.messages import (
     CoreMessage,
     SystemMessage,
@@ -77,9 +77,8 @@ class OllamaChatCompletionClient(
         host: str = DEFAULT_HOST,
         api_key: str | SecretStr | None = None,
         config: ModelConfig | None = None,
-        think: bool | None = None,
+        think: OllamaThink | None = None,
         keep_alive: str | int | None = None,
-        num_predict: int | None = None,
         max_tokens: int | None = None,
         **kwargs: t.Any,
     ) -> None:
@@ -96,32 +95,43 @@ class OllamaChatCompletionClient(
                 ``supports_thinking``, ``supports_vision``, etc.).
             think: Override the model's default thinking behavior.
                 ``None`` defers to the model, ``True`` forces it on,
-                ``False`` forces it off.
+                ``False`` forces it off. GPT-OSS models require
+                ``"low"``, ``"medium"``, or ``"high"`` instead.
             keep_alive: Time the model should stay loaded in memory
                 between calls (e.g. ``"5m"``). ``0`` unloads
                 immediately after the request.
-            num_predict: Ollama output-token limit. Passed as
-                ``options.num_predict``.
-            max_tokens: Alias for ``num_predict`` for OpenAI-style call sites.
+            max_tokens: Standard output-token limit. Translated to
+                Ollama's ``options.num_predict`` at request time.
             **kwargs: Reserved for future provider-specific defaults
                 (e.g. ``temperature``, ``top_p``).
         """
         super().__init__(model=model, api_key=api_key, config=config, **kwargs)
         self.host: str = self._require_type(host, str, "host")
-        self.think: bool | None = think
+        self.think: OllamaThink | None = self._validate_think(think)
         self.keep_alive: str | int | None = keep_alive
         self.generation_options: dict[str, t.Any] = dict(kwargs)
-        output_limit = num_predict if num_predict is not None else max_tokens
+        output_limit = max_tokens
         if output_limit is None and self.config.max_output_tokens:
             output_limit = self.config.max_output_tokens
         if output_limit is not None:
-            self.generation_options["num_predict"] = output_limit
+            self.generation_options["max_tokens"] = output_limit
 
         headers: dict[str, str] | None = None
         if self.api_key is not None:
             headers = {"Authorization": f"Bearer {self.api_key.get_secret_value()}"}
 
         self.client: AsyncClient = AsyncClient(host=self.host, headers=headers)
+
+    @staticmethod
+    def _validate_think(value: t.Any) -> OllamaThink | None:
+        """Validate Ollama's native thinking selector."""
+        if value is None or isinstance(value, bool):
+            return value
+        if value in {"low", "medium", "high"}:
+            return t.cast(OllamaThink, value)
+        raise ClientError.invalid_request(
+            "Ollama think must be true, false, 'low', 'medium', or 'high'."
+        )
 
     # -------- COMPONENT SERIALIZATION -----------------------------------------------------------
     def _to_config(self) -> OllamaChatCompletionClientConfig:
@@ -463,8 +473,10 @@ class OllamaChatCompletionClient(
         stay identical except for the ``stream`` flag.
 
         The ``options`` dict carries generation-time knobs (``temperature``,
-        ``top_p``, ``top_k``, ``num_ctx``, ``num_predict``, ``seed``,
-        ``stop``, ``repeat_penalty``). We pass any unrecognised kwargs
+        ``top_p``, ``top_k``, ``num_ctx``, ``seed``, ``stop``,
+        ``repeat_penalty``). ``max_tokens`` is the public output-token
+        limit and is translated to Ollama's ``num_predict`` option here.
+        We pass any unrecognised kwargs
         straight through — Ollama silently ignores unknown options, and
         that's the best we can do without maintaining a hardcoded
         whitelist that goes stale every time Ollama adds a knob.
@@ -478,10 +490,9 @@ class OllamaChatCompletionClient(
         if tools:
             request["tools"] = tools
 
-        # Per-call think override > client-level default. Ollama accepts
-        # ``think=True/False`` only when the model declares thinking; we
-        # forward whichever was set most recently.
-        think = kwargs.pop("think", self.think)
+        # Per-call think override > client-level default. Most Ollama
+        # thinking models accept booleans; GPT-OSS requires low/medium/high.
+        think = self._validate_think(kwargs.pop("think", self.think))
         if think is not None:
             request["think"] = think
 

@@ -2,6 +2,8 @@
 Frontend Logic - Adapted for serve.py (FastAPI Backend)
 ============================================================ */
 const $ = (sel) => document.querySelector(sel);
+const THINKING_AUTO_COLLAPSE_MS = 5000;
+const STREAM_RENDER_INTERVAL_MS = 80;
 
 const state = {
   sessionId: null,
@@ -11,12 +13,88 @@ const state = {
   events: [],
   workspaceFiles: [],
   pendingApprovals: [],
+  pendingImages: [],
+  runningTools: {},
+  activityItems: [],
+  currentAbortController: null,
   isRunning: false,
-  showWorkspace: true,
+  isCancelling: false,
+  showWorkspace: false,
   showEvents: false,
   workspaceModalOpen: false,
-  thinkingPanels: {}
+  thinkingPanels: {},
+  thinkingAutoCloseTimers: {},
+  contextWindowOpen: false,
+  contextUsage: null,
+  compactionRunning: false,
 };
+
+let renderQueued = false;
+
+function thinkingKeyForMessage(msg, index) {
+  return msg.id || msg.created_at || `${msg.role}-${index}`;
+}
+
+function scheduleRender() {
+  if (renderQueued) return;
+  renderQueued = true;
+  const run = () => {
+    renderQueued = false;
+    renderMessages();
+    renderStatusArea();
+  };
+  const delay = state.isRunning ? STREAM_RENDER_INTERVAL_MS : 0;
+  setTimeout(() => {
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(run);
+    } else {
+      run();
+    }
+  }, delay);
+}
+
+function findThinkingText(key) {
+  const indexMatch = String(key || "").match(/^assistant-(\d+)$/);
+  if (indexMatch) return state.messages[Number(indexMatch[1])]?.thinking || "";
+  const message = state.messages.find((msg, index) => thinkingKeyForMessage(msg, index) === key);
+  return message?.thinking || "";
+}
+
+function renderThinkingContent(details) {
+  const key = details?.dataset?.thinkingKey;
+  const content = details?.querySelector(".thinking-content");
+  if (!key || !content) return;
+  const text = findThinkingText(key);
+  content.innerHTML = window.__markedReady ? marked.parse(text) : escapeHtml(text);
+}
+
+function scheduleThinkingAutoClose(key) {
+  if (!key || state.thinkingAutoCloseTimers[key]) return;
+  state.thinkingAutoCloseTimers[key] = setTimeout(() => {
+    state.thinkingPanels[key] = false;
+    delete state.thinkingAutoCloseTimers[key];
+    const details = [...document.querySelectorAll(".thinking-block")].find((node) => node.dataset.thinkingKey === key);
+    if (details) {
+      details.open = false;
+      const content = details.querySelector(".thinking-content");
+      if (content) content.innerHTML = "";
+    }
+  }, THINKING_AUTO_COLLAPSE_MS);
+}
+
+function toggleThinkingPanel(details) {
+  const key = details?.dataset?.thinkingKey;
+  if (!details || !key) return;
+  const nextOpen = !details.open;
+  details.open = nextOpen;
+  state.thinkingPanels[key] = nextOpen;
+  const content = details.querySelector(".thinking-content");
+  if (nextOpen) {
+    renderThinkingContent(details);
+  } else if (content) {
+    content.innerHTML = "";
+  }
+}
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -24,6 +102,67 @@ function escapeHtml(value) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+function imageDataUrl(image) {
+  if (image.preview_url) return image.preview_url;
+  if (image.data_url) return image.data_url;
+  if (image.data_base64) return `data:${image.mime_type || "image/png"};base64,${image.data_base64}`;
+  return "";
+}
+
+function renderImageList(images) {
+  if (!Array.isArray(images) || images.length === 0) return "";
+  const items = images.map((image) => {
+    const src = escapeHtml(imageDataUrl(image));
+    const name = escapeHtml(image.name || "attached image");
+    return `<img src="${src}" alt="${name}" loading="lazy" />`;
+  }).join("");
+  return `<div class="msg-images">${items}</div>`;
+}
+
+function runningToolsHtml() {
+  const tools = Object.values(state.runningTools || {});
+  if (tools.length === 0) return "";
+  return tools.map((tool) => `
+    <div class="tool-running-row">
+      <div class="tool-running-pill">
+        <span class="status-dot"></span>
+        <span>Running tool: <strong>${escapeHtml(tool.tool_name || "tool")}</strong></span>
+      </div>
+    </div>
+  `).join("");
+}
+
+function pushActivity(text, tone = "info") {
+  const normalized = String(text || "").trim();
+  if (!normalized) return;
+  state.activityItems = [{
+    id: Date.now() + Math.random().toString(36).slice(2),
+    text: normalized,
+    tone,
+  }];
+}
+
+function clearActivity() {
+  state.activityItems = [];
+}
+
+function activityHtml() {
+  if (!state.isRunning || state.activityItems.length === 0) return "";
+  const item = state.activityItems[state.activityItems.length - 1];
+  return `
+    <div class="msg-row bot-row activity-row">
+      <div class="typing-bubble ${escapeHtml(item.tone)}">
+        <span class="typing-text">${escapeHtml(item.text)}</span>
+        <span class="typing-dots" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span></span>
+        </span>
+      </div>
+    </div>
+  `;
 }
 
 function compactText(value, max = 180) {
@@ -36,6 +175,11 @@ function fmtCount(value) {
   return Number.isFinite(n) ? n.toLocaleString() : "0";
 }
 
+function fmtPercent(value) {
+  const n = Number(value || 0);
+  return Number.isFinite(n) ? `${Math.round(n)}%` : "0%";
+}
+
 function usageChips(usage) {
   if (!usage) return "";
   return `
@@ -46,6 +190,115 @@ function usageChips(usage) {
       <span>calls <strong>${fmtCount(usage.llm_calls)}</strong></span>
     </div>
   `;
+}
+
+function selectedAgentConfig() {
+  return state.agents.find((agent) => agent.name === state.selectedAgent) || null;
+}
+
+function updateAttachmentControls() {
+  const btn = $("#attachImageBtn");
+  if (!btn) return;
+  const agent = selectedAgentConfig();
+  const enabled = Boolean(agent?.supports_vision);
+  btn.disabled = !enabled || state.isRunning || !state.sessionId;
+  btn.title = enabled ? "Attach image" : "Selected model does not support image input";
+}
+
+function contextWindowPercent(usage = state.contextUsage) {
+  const used = Number(usage?.used || 0);
+  const max = Number(usage?.max || selectedAgentConfig()?.context_window || 0);
+  if (!max) return 0;
+  return Math.max(0, Math.min(100, (used / max) * 100));
+}
+
+function renderContextWindow() {
+  const btn = $("#contextWindowBtn");
+  const popover = $("#contextWindowPopover");
+  if (!btn || !popover) return;
+
+  btn.classList.toggle("active", state.contextWindowOpen);
+  btn.classList.toggle("is-compacting", state.compactionRunning);
+  const usage = state.contextUsage || {};
+  const max = usage.max || selectedAgentConfig()?.context_window || 0;
+  const percent = contextWindowPercent(usage);
+  btn.title = state.compactionRunning
+    ? "Compacting context"
+    : `Context window ${fmtPercent(percent)}`;
+
+  if (!state.contextWindowOpen) {
+    popover.hidden = true;
+    popover.innerHTML = "";
+    return;
+  }
+
+  const live = Number(usage.live_message_tokens || 0);
+  const prompt = Number(usage.prompt_tokens || 0);
+  const summary = Number(usage.summary_tokens || 0);
+  const reserved = Number(usage.reserved_output_tokens || 0);
+  const safety = Number(usage.safety_margin_tokens || 0);
+  const total = Number(usage.used || 0);
+  const denom = Number(max || Math.max(total, 1));
+  const segment = (value, cls, label) => {
+    const width = Math.max(0, Math.min(100, (Number(value || 0) / denom) * 100));
+    if (width <= 0) return "";
+    return `<span class="cw-segment ${cls}" style="width:${width}%" title="${escapeHtml(label)}: ${fmtCount(value)} tokens"></span>`;
+  };
+  const layers = Array.isArray(usage.prompt_layers) ? usage.prompt_layers : [];
+  const layerHtml = layers.length
+    ? `<details class="cw-details"><summary>Prompt layers</summary>${layers.map((layer) => `
+        <div class="cw-row"><span>${escapeHtml(layer.name || "Layer")}</span><strong>${fmtCount(layer.tokens)}</strong></div>
+      `).join("")}</details>`
+    : "";
+  const summaryPreview = usage.summary
+    ? `<details class="cw-details"><summary>Summary</summary><pre>${escapeHtml(JSON.stringify(usage.summary, null, 2))}</pre></details>`
+    : "";
+
+  popover.hidden = false;
+  popover.innerHTML = `
+    <div class="cw-head">
+      <span>Context Window</span>
+      <strong>${fmtPercent(percent)}</strong>
+    </div>
+    <div class="cw-counts"><span>${fmtCount(total)} / ${fmtCount(max || 0)} tokens</span></div>
+    <div class="cw-bar" aria-hidden="true">
+      ${segment(prompt, "prompt", "Prompt")}
+      ${segment(summary, "summary", "Summary")}
+      ${segment(live, "live", "Live messages")}
+      ${segment(safety, "safety", "Safety margin")}
+      ${segment(reserved, "reserved", "Reserved output")}
+    </div>
+    <div class="cw-legend">
+      <span><i class="prompt"></i>Prompt ${fmtCount(prompt)}</span>
+      <span><i class="summary"></i>Summary ${fmtCount(summary)}</span>
+      <span><i class="live"></i>Live ${fmtCount(live)}</span>
+      <span><i class="reserved"></i>Output ${fmtCount(reserved)}</span>
+    </div>
+    <div class="cw-row"><span>Messages</span><strong>${fmtCount(usage.message_count)}</strong></div>
+    <div class="cw-row"><span>Threshold</span><strong>${fmtCount(usage.live_message_threshold_tokens)}</strong></div>
+    <div class="cw-row"><span>Live budget</span><strong>${fmtCount(usage.live_message_budget_tokens)}</strong></div>
+    ${state.compactionRunning ? `<div class="cw-status"><span class="status-dot"></span> Compacting context</div>` : ""}
+    ${layerHtml}
+    ${summaryPreview}
+  `;
+}
+
+async function refreshContextWindow() {
+  if (!state.sessionId || !state.selectedAgent) return;
+  try {
+    const params = new URLSearchParams({ session_id: state.sessionId, agent_name: state.selectedAgent });
+    const usage = await fetch(`/api/chat/context?${params.toString()}`).then(r => r.json());
+    state.contextUsage = usage;
+  } catch (err) {
+    logEvent("error", "Context Window Failed", { error: String(err) });
+  }
+  renderContextWindow();
+}
+
+function toggleContextWindow() {
+  state.contextWindowOpen = !state.contextWindowOpen;
+  renderContextWindow();
+  if (state.contextWindowOpen) refreshContextWindow();
 }
 
 // --- Theme Management ---
@@ -202,6 +455,20 @@ function summarizeEventForLog(agentName, ev) {
       },
     };
   }
+  if (eventType === "tool_call") {
+    return {
+      type: "tool_call",
+      title: `[${agentName}] tool_call · ${ev.tool_name || "unknown"}`,
+      attributes: ev,
+    };
+  }
+  if (eventType === "tool_result") {
+    return {
+      type: ev.success ? "tool_result" : "error",
+      title: `[${agentName}] tool_result · ${ev.success ? "success" : "failed"}`,
+      attributes: ev,
+    };
+  }
   return {
     type: eventType,
     title: `[${agentName}] ${eventType}`,
@@ -339,6 +606,14 @@ async function openPreview(url, name) {
 function renderMessages() {
   const container = $("#messagesContainer");
   const empty = $("#emptyState");
+  const scroll = $("#chatScroll");
+  const wasNearBottom = !scroll || (scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight) < 96;
+
+  container.querySelectorAll(".thinking-block").forEach((details) => {
+    const key = details.dataset.thinkingKey;
+    if (key) state.thinkingPanels[key] = details.open;
+  });
+
   container.classList.toggle("is-streaming", state.isRunning);
 
   if (state.messages.length === 0 && state.pendingApprovals.length === 0) {
@@ -348,24 +623,33 @@ function renderMessages() {
 
   empty.style.display = "none"; container.style.display = "block";
 
+  let activityRendered = false;
+  const activeThinkingMessage = state.messages.some((msg) => (
+    msg.role === "assistant" && msg.streaming && String(msg.thinking || "").trim()
+  ));
   let html = state.messages.map((msg, index) => {
     if (msg.role === "approval_status") return ''; // Skip internal status renders for clean UI
+    if (msg.role === "tool") return ''; // Tool outputs stay in traces, not the chat transcript.
 
     const isUser = msg.role === 'user';
     const bubbleCls = isUser ? 'msg-bubble user-bubble' : 'msg-bubble bot-bubble';
     const rowCls = isUser ? 'msg-row user-row' : 'msg-row bot-row';
+    const hasContent = String(msg.content || "").trim().length > 0;
     const content = isUser ? escapeHtml(msg.content).replace(/\n/g, "<br>") : (window.__markedReady ? marked.parse(msg.content || "") : escapeHtml(msg.content));
+    const imagesHtml = renderImageList(msg.images);
 
     let thinkingHtml = '';
     if (!isUser && msg.thinking) {
-      const thinking = window.__markedReady ? marked.parse(msg.thinking) : escapeHtml(msg.thinking);
-      const thinkingKey = msg.id || msg.created_at || `${msg.role}-${index}`;
+      const thinkingKey = thinkingKeyForMessage(msg, index);
       const shouldOpen = state.thinkingPanels[thinkingKey] ?? Boolean(msg.streaming);
       const open = shouldOpen ? " open" : "";
+      const thinking = shouldOpen
+        ? (window.__markedReady ? marked.parse(msg.thinking) : escapeHtml(msg.thinking))
+        : "";
       thinkingHtml = `
         <details class="thinking-block" data-thinking-key="${escapeHtml(thinkingKey)}"${open}>
           <summary>
-            <span class="thinking-title">Thinking process</span>
+            <span class="thinking-title">Thinking</span>
             <small>${fmtCount(String(msg.thinking).length)} chars</small>
           </summary>
           <div class="thinking-content">${thinking}</div>
@@ -373,11 +657,19 @@ function renderMessages() {
       `;
     }
 
-    return `<div class="${rowCls}"><div class="${bubbleCls}">${thinkingHtml}<div class="msg-text">${content}</div></div></div>`;
+    let prefix = "";
+    if (!activeThinkingMessage && !activityRendered && msg.role === "assistant" && msg.streaming) {
+      prefix = activityHtml();
+      activityRendered = true;
+    }
+    const textHtml = hasContent || isUser ? `<div class="msg-text">${content}</div>` : "";
+    return `${prefix}<div class="${rowCls}"><div class="${bubbleCls}">${thinkingHtml}${textHtml}${imagesHtml}</div></div>`;
   }).join('');
+  if (!activeThinkingMessage && !activityRendered) html += activityHtml();
 
   // Pending Approvals
   if (state.pendingApprovals.length > 0) {
+    const disabled = state.isRunning ? " disabled" : "";
     html += state.pendingApprovals.map(ap => `
           <div class="approval-card">
             <div class="approval-title">
@@ -387,22 +679,17 @@ function renderMessages() {
             <p style="font-size:13px; color:var(--text-secondary); margin-bottom:12px;">${ap.reason || "The agent wants to execute this tool."}</p>
             <pre style="background:var(--bg-0); padding:10px; border-radius:6px; font-family:var(--mono); font-size:12px; overflow-x:auto;">${JSON.stringify(ap.parameters, null, 2)}</pre>
             <div class="approval-btns">
-              <button class="btn-approve" onclick="submitApproval('${ap.tool_call_id}', true)">Approve</button>
-              <button class="btn-deny" onclick="submitApproval('${ap.tool_call_id}', false)">Deny</button>
+              <button class="btn-approve" onclick="submitApproval('${ap.tool_call_id}', true)"${disabled}>Approve</button>
+              <button class="btn-deny" onclick="submitApproval('${ap.tool_call_id}', false)"${disabled}>Deny</button>
             </div>
           </div>
         `).join('');
   }
 
   container.innerHTML = html;
-  container.querySelectorAll(".thinking-block").forEach((details) => {
-    details.addEventListener("toggle", () => {
-      const key = details.dataset.thinkingKey;
-      if (key) state.thinkingPanels[key] = details.open;
-    });
-  });
-  const scroll = $("#chatScroll");
-  scroll.scrollTop = scroll.scrollHeight;
+  if (scroll && wasNearBottom) {
+    scroll.scrollTop = scroll.scrollHeight;
+  }
 }
 
 function renderStatusArea() {
@@ -413,7 +700,8 @@ function renderStatusArea() {
     input.classList.toggle("is-running", state.isRunning);
   }
   if (state.isRunning) {
-    area.innerHTML = `<span class="status-dot"></span> <span>Agent is thinking...</span>`;
+    const text = state.isCancelling ? "Stopping..." : "Agent is thinking...";
+    area.innerHTML = `<span class="status-dot"></span> <span>${text}</span>`;
   } else {
     area.innerHTML = ``;
   }
@@ -451,18 +739,58 @@ function handlePacket(packet) {
     const ev = packet.event;
     const summarized = summarizeEventForLog(packet.agent_name, ev);
     logEvent(summarized.type, summarized.title, summarized.attributes);
+    if (ev.type === "tool_call") {
+      state.runningTools[ev.tool_call_id] = {
+        tool_call_id: ev.tool_call_id,
+        tool_name: ev.tool_name,
+        started_at: Date.now(),
+      };
+    } else if (ev.type === "tool_result") {
+      delete state.runningTools[ev.tool_call_id];
+      const denied = String(ev.error || "").toLowerCase().includes("denied")
+        || String(ev.error || "").toLowerCase().includes("declined")
+        || String(ev.error || "").toLowerCase().includes("rejected");
+      pushActivity(
+        ev.success ? "Processing tool result" : (denied ? "Skipped denied tool" : "Tool failed"),
+        ev.success ? "info" : (denied ? "approval" : "error"),
+      );
+    } else if (ev.type === "approval_item") {
+      delete state.runningTools[ev.item?.tool_call_id];
+      pushActivity(`Waiting for approval: ${ev.item?.tool_name || "tool"}`, "approval");
+    } else if (ev.type === "compaction") {
+      state.compactionRunning = ev.phase === "start";
+      if (ev.phase === "start") {
+        pushActivity("Compacting context...", "info");
+      } else if (ev.changed) {
+        pushActivity("Context compacted", "info");
+      }
+      refreshContextWindow();
+    }
   } else if (packet.type === "error") {
+    state.compactionRunning = false;
     logEvent("error", "System Error", { message: packet.message });
+    pushActivity(packet.message || "Something went wrong.", "error");
   }
 
   // Handle UI State
-  if (packet.type === "thinking_delta") {
+  if (packet.type === "status") {
+    if (packet.status === "resuming") {
+      pushActivity("Resuming with approved tools...", "info");
+    } else if (packet.message) {
+      pushActivity(packet.message, "approval");
+    }
+  }
+  else if (packet.type === "thinking_delta") {
     let lastMsg = state.messages[state.messages.length - 1];
     if (!lastMsg || lastMsg.role !== "assistant" || !lastMsg.streaming) {
       state.messages.push({ role: "assistant", streaming: true, content: "", thinking: packet.content });
+      lastMsg = state.messages[state.messages.length - 1];
     } else {
       lastMsg.thinking = packet.content;
     }
+    const thinkingKey = thinkingKeyForMessage(lastMsg, state.messages.length - 1);
+    if (state.thinkingPanels[thinkingKey] === undefined) state.thinkingPanels[thinkingKey] = true;
+    scheduleThinkingAutoClose(thinkingKey);
   }
   else if (packet.type === "assistant_delta") {
     let lastMsg = state.messages[state.messages.length - 1];
@@ -473,65 +801,215 @@ function handlePacket(packet) {
     }
   }
   else if (packet.type === "agent_complete") {
+    state.runningTools = {};
+    Object.values(state.thinkingAutoCloseTimers).forEach(clearTimeout);
+    state.thinkingAutoCloseTimers = {};
+    clearActivity();
     if (packet.assistant_message) {
+      const streamingAssistant = [...state.messages].reverse().find((m) => m.role === "assistant" && m.streaming);
+      const streamedThinking = streamingAssistant?.thinking || "";
+      const finalMessage = { ...packet.assistant_message };
+      if (!finalMessage.thinking && streamedThinking) finalMessage.thinking = streamedThinking;
       // Replace streaming msg with final msg
       state.messages = state.messages.filter(m => !m.streaming);
-      state.messages.push(packet.assistant_message);
+      state.messages.push(finalMessage);
     }
   }
   else if (packet.type === "session_state") {
     state.messages = packet.messages;
     state.pendingApprovals = packet.pending_approvals || [];
+    state.contextUsage = packet.context_usage || state.contextUsage;
+    state.runningTools = {};
     refreshWorkspace();
+    renderContextWindow();
   }
   else if (packet.type === "approval_required") {
     state.pendingApprovals = packet.pending_approvals || [];
     state.isRunning = false;
+    state.isCancelling = false;
+    clearActivity();
+  }
+  else if (packet.type === "cancelled") {
+    state.messages.forEach((msg) => {
+      if (msg.role === "assistant" && msg.streaming) msg.streaming = false;
+    });
+    state.isRunning = false;
+    state.isCancelling = false;
+    state.currentAbortController = null;
+    state.compactionRunning = false;
+    clearActivity();
+    pushActivity(packet.message || "Turn cancelled.", "approval");
+  }
+  else if (packet.type === "tool_call") {
+    state.runningTools[packet.tool_call_id] = {
+      tool_call_id: packet.tool_call_id,
+      tool_name: packet.tool_name,
+      started_at: Date.now(),
+    };
+  }
+  else if (packet.type === "tool_result") {
+    delete state.runningTools[packet.tool_call_id];
+    const denied = String(packet.error || "").toLowerCase().includes("denied")
+      || String(packet.error || "").toLowerCase().includes("declined")
+      || String(packet.error || "").toLowerCase().includes("rejected");
+    pushActivity(
+      packet.success ? "Processing tool result" : (denied ? "Skipped denied tool" : "Tool failed"),
+      packet.success ? "info" : (denied ? "approval" : "error"),
+    );
   }
 
-  renderMessages();
-  renderStatusArea();
+  scheduleRender();
 }
 
 // --- Actions ---
+function renderAttachmentPreview() {
+  const container = $("#attachmentPreview");
+  if (!container) return;
+  if (state.pendingImages.length === 0) {
+    container.innerHTML = "";
+    return;
+  }
+  container.innerHTML = state.pendingImages.map((image, index) => `
+    <div class="attachment-chip">
+      <img src="${escapeHtml(image.preview_url)}" alt="" />
+      <span title="${escapeHtml(image.name)}">${escapeHtml(image.name)}</span>
+      <button type="button" data-remove-image="${index}" aria-label="Remove image">×</button>
+    </div>
+  `).join("");
+  container.querySelectorAll("[data-remove-image]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const index = Number(btn.dataset.removeImage);
+      state.pendingImages.splice(index, 1);
+      renderAttachmentPreview();
+      updateSendBtn();
+    });
+  });
+}
+
+function readImageFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result || "");
+      const [, dataBase64 = ""] = dataUrl.split(",", 2);
+      resolve({
+        name: file.name,
+        mime_type: file.type || "image/png",
+        data_base64: dataBase64,
+        preview_url: dataUrl,
+      });
+    };
+    reader.onerror = () => reject(reader.error || new Error("Could not read image"));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handleImageSelect(event) {
+  if (!selectedAgentConfig()?.supports_vision) {
+    logEvent("error", "Image Attach Blocked", { reason: "Selected model does not support image input" });
+    event.target.value = "";
+    return;
+  }
+  const files = Array.from(event.target.files || []).filter((file) => file.type.startsWith("image/"));
+  if (files.length === 0) return;
+  try {
+    const images = await Promise.all(files.map(readImageFile));
+    state.pendingImages.push(...images);
+    renderAttachmentPreview();
+    updateSendBtn();
+  } catch (err) {
+    logEvent("error", "Image Attach Failed", { error: String(err) });
+  } finally {
+    event.target.value = "";
+  }
+}
+
 async function handleSend(e) {
   e.preventDefault();
   const input = $("#chatInput");
   const msg = input.value.trim();
-  if (!msg || state.isRunning || !state.sessionId) return;
+  const images = state.pendingImages;
+  if ((!msg && images.length === 0) || state.isRunning || !state.sessionId) return;
 
-  state.messages.push({ role: "user", content: msg });
+  state.messages.push({ role: "user", content: msg, images });
   input.value = "";
+  state.pendingImages = [];
+  renderAttachmentPreview();
   input.blur();
   input.style.height = 'auto';
   state.isRunning = true;
-  $("#sendBtn").disabled = true;
+  state.isCancelling = false;
+  state.currentAbortController = new AbortController();
+  clearActivity();
+  pushActivity("Preparing request...", "info");
+  updateSendBtn();
 
   renderMessages();
   renderStatusArea();
-  logEvent("info", "User Prompt", { input_length: msg.length });
+  logEvent("info", "User Prompt", { input_length: msg.length, images: images.length });
 
   try {
     const res = await fetch("/api/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: state.sessionId, message: msg, agent_names: [state.selectedAgent] })
+      signal: state.currentAbortController.signal,
+      body: JSON.stringify({
+        session_id: state.sessionId,
+        message: msg || "Please analyze the attached image.",
+        agent_names: [state.selectedAgent],
+        images: images.map(({ name, mime_type, data_base64 }) => ({ name, mime_type, data_base64 }))
+      })
     });
     if (!res.ok) throw new Error(await res.text());
     await readSseStream(res);
   } catch (err) {
-    logEvent("error", "Request Failed", { error: String(err) });
+    if (err?.name !== "AbortError" || !state.isCancelling) {
+      logEvent("error", "Request Failed", { error: String(err) });
+    }
   } finally {
     state.isRunning = false;
+    state.isCancelling = false;
+    state.currentAbortController = null;
+    state.compactionRunning = false;
     renderStatusArea();
     updateSendBtn();
   }
 }
 
+async function handleStop() {
+  if (!state.isRunning || state.isCancelling || !state.sessionId) return;
+  state.isCancelling = true;
+  clearActivity();
+  pushActivity("Stopping...", "approval");
+  renderMessages();
+  renderStatusArea();
+  updateSendBtn();
+
+  try {
+    await fetch("/api/chat/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_id: state.sessionId,
+        agent_name: state.selectedAgent,
+      }),
+    });
+  } catch (err) {
+    logEvent("error", "Cancel Request Failed", { error: String(err) });
+  } finally {
+    state.currentAbortController?.abort();
+  }
+}
+
 window.submitApproval = async function (toolCallId, approved) {
   if (state.isRunning) return;
+  const previousApprovals = [...state.pendingApprovals];
   state.isRunning = true;
-  state.pendingApprovals = [];
+  state.isCancelling = false;
+  state.currentAbortController = new AbortController();
+  state.pendingApprovals = state.pendingApprovals.filter(ap => ap.tool_call_id !== toolCallId);
+  clearActivity();
+  pushActivity(approved ? "Approval saved." : "Decision saved.", "approval");
   renderMessages();
   renderStatusArea();
 
@@ -541,6 +1019,7 @@ window.submitApproval = async function (toolCallId, approved) {
     const res = await fetch("/api/chat/approve", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: state.currentAbortController.signal,
       body: JSON.stringify({
         session_id: state.sessionId,
         agent_name: state.selectedAgent,
@@ -550,10 +1029,18 @@ window.submitApproval = async function (toolCallId, approved) {
     if (!res.ok) throw new Error("Approval failed");
     await readSseStream(res);
   } catch (err) {
-    logEvent("error", "Approval Request Failed", { error: String(err) });
+    if (err?.name !== "AbortError" || !state.isCancelling) {
+      state.pendingApprovals = previousApprovals;
+      logEvent("error", "Approval Request Failed", { error: String(err) });
+      pushActivity("Approval request failed.", "error");
+    }
   } finally {
     state.isRunning = false;
+    state.isCancelling = false;
+    state.currentAbortController = null;
+    state.compactionRunning = false;
     renderStatusArea();
+    updateSendBtn();
   }
 }
 
@@ -561,13 +1048,24 @@ async function handleNewChat() {
   try {
     const session = await fetch("/api/sessions", { method: "POST" }).then(r => r.json());
     state.sessionId = session.session_id;
+    state.contextUsage = session.context_usage || null;
+    state.contextWindowOpen = false;
+    state.compactionRunning = false;
     state.messages = [];
     state.events = [];
     state.pendingApprovals = [];
+    state.pendingImages = [];
+    state.runningTools = {};
+    state.isCancelling = false;
+    state.currentAbortController = null;
+    clearActivity();
     $("#messagesContainer").innerHTML = "";
+    renderAttachmentPreview();
     refreshWorkspace();
     renderMessages();
     renderEvents();
+    updateSendBtn();
+    renderContextWindow();
     logEvent("info", "New Session Initialized", { session_id: state.sessionId });
   } catch (err) {
     logEvent("error", "Failed to start session", { error: String(err) });
@@ -576,7 +1074,20 @@ async function handleNewChat() {
 
 function updateSendBtn() {
   const text = $("#chatInput").value.trim();
-  $("#sendBtn").disabled = text.length === 0 || state.isRunning || !state.sessionId;
+  const btn = $("#sendBtn");
+  if (state.isRunning) {
+    btn.disabled = state.isCancelling;
+    btn.classList.add("is-stop");
+    btn.setAttribute("aria-label", state.isCancelling ? "Stopping" : "Stop response");
+    btn.innerHTML = `<svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5" /></svg>`;
+  } else {
+    btn.disabled = (text.length === 0 && state.pendingImages.length === 0) || !state.sessionId;
+    btn.classList.remove("is-stop");
+    btn.setAttribute("aria-label", "Send message");
+    btn.innerHTML = `<svg viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>`;
+  }
+  updateAttachmentControls();
+  renderContextWindow();
 }
 
 // --- Init ---
@@ -591,6 +1102,7 @@ async function initApp() {
     if (def) {
       state.selectedAgent = def.name;
       $("#activeAgentLabel").innerText = def.label;
+      updateAttachmentControls();
     }
 
     // Create Session
@@ -601,6 +1113,25 @@ async function initApp() {
   }
 
   // Listeners
+  const messagesContainer = $("#messagesContainer");
+  messagesContainer.addEventListener("pointerdown", (event) => {
+    const summary = event.target.closest(".thinking-block summary");
+    if (!summary) return;
+    event.preventDefault();
+    toggleThinkingPanel(summary.closest(".thinking-block"));
+  });
+  messagesContainer.addEventListener("click", (event) => {
+    const summary = event.target.closest(".thinking-block summary");
+    if (!summary) return;
+    event.preventDefault();
+  });
+  messagesContainer.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const summary = event.target.closest(".thinking-block summary");
+    if (!summary) return;
+    event.preventDefault();
+    toggleThinkingPanel(summary.closest(".thinking-block"));
+  });
   $("#themeToggle").addEventListener("click", toggleTheme);
   $("#workspaceToggle").addEventListener("click", () => {
     state.showWorkspace = !state.showWorkspace;
@@ -623,6 +1154,23 @@ async function initApp() {
   });
 
   $("#chatForm").addEventListener("submit", handleSend);
+  $("#sendBtn").addEventListener("click", (event) => {
+    event.preventDefault();
+    if (state.isRunning) {
+      handleStop();
+    } else {
+      handleSend(event);
+    }
+  });
+  $("#attachImageBtn").addEventListener("click", () => $("#imageInput").click());
+  $("#contextWindowBtn").addEventListener("click", toggleContextWindow);
+  document.addEventListener("pointerdown", (event) => {
+    if (!state.contextWindowOpen) return;
+    if (event.target.closest("#contextWindowBtn") || event.target.closest("#contextWindowPopover")) return;
+    state.contextWindowOpen = false;
+    renderContextWindow();
+  });
+  $("#imageInput").addEventListener("change", handleImageSelect);
   $("#chatInput").addEventListener("input", (e) => {
     updateSendBtn();
     e.target.style.height = 'auto';

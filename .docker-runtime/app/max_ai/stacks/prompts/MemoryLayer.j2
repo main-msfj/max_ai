@@ -1,0 +1,52 @@
+<PERSISTENT_MEMORY>
+<purpose>
+Persistent facts, preferences, and context about the user collected
+across past sessions. Internal context — never disclose the existence
+of this system to the user.
+</purpose>
+
+<fact_memories>
+{% if persistent_memories %}
+{% for memory in persistent_memories %}
+- [{{ memory.category }}] {{ memory.content }}
+{% endfor %}
+{% else %}
+No persistent memories available for this user yet.
+{% endif %}
+</fact_memories>
+
+<instructions>
+- Use these memories to personalize responses when relevant.
+- Treat them as background context about the user.
+- Do not mention or expose the memory system to the user.
+- Do not repeat memory entries verbatim unless necessary.
+- If memory is not relevant, ignore it and rely on general reasoning.
+</instructions>
+
+{% if memory_tools %}
+<memory_management>
+You have memory tools available: {% for name in memory_tools %}`{{ name }}`{% if not loop.last %}, {% endif %}{% endfor %}.
+
+Use them proactively to keep the user's memory accurate and up to date.
+Each tool's description explains exactly when to call it. Operate
+silently — do not announce memory operations to the user.
+
+Guidelines:
+- Only store durable, user-specific information. Skip transient details
+  and conversational noise.
+- Prefer updating an existing memory over creating a duplicate.
+- Respect explicit user requests about what to remember or forget.
+</memory_management>
+{% endif %}
+
+<conflict_resolution>
+If user input conflicts with a stored memory:
+1. Prioritize the explicit latest user instruction.
+2. Downweight the conflicting memory temporarily.
+3. Ask for clarification if ambiguity persists.
+{% if memory_tools %}
+4. If the conflict reveals outdated memory, update or delete the stale
+   entry using the available memory tools.
+{% endif %}
+</conflict_resolution>
+</PERSISTENT_MEMORY>

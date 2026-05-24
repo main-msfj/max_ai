@@ -1,40 +1,72 @@
 from __future__ import annotations
 
-import pytest
-
+import time
 from pathlib import Path
+
+import pytest
 
 from max_ai.base.executor import CoreExecutor
 from max_ai.base.tools import CoreTool, ToolContext
-from max_ai.executor.docker.docker import DockerExecutor, _ComposeSession
-from max_ai.tools import BashTool
-from max_ai.termination import CancellationToken
+from max_ai.executor.docker.docker import DockerExecutor, _BashSession
 from max_ai.types.tool_call import ToolCallRecord, ToolResult
 from max_ai.types.tools import ToolApprovalMode
 
 
 class LayoutExecutor(CoreExecutor):
+    async def bind_to_workspace(self, workspace_registry_root: str | Path) -> None:
+        self.workspace_root = Path(workspace_registry_root)
+
     async def run(
         self,
         tool: CoreTool,
         record: ToolCallRecord,
         tool_context: ToolContext,
-        cancellation_token: CancellationToken | None = None,
+        cancellation_token=None,
     ) -> ToolResult:
         return ToolResult.success_result(record.id, {})
+
+
+class LayoutExecutorTool(CoreTool):
+    def __init__(self) -> None:
+        super().__init__(
+            name="layout",
+            description="Layout test tool",
+            approval_mode=ToolApprovalMode.AUTO_APPROVED,
+        )
+
+    @property
+    def parameters(self) -> dict:
+        return {"type": "object", "properties": {}, "additionalProperties": True}
+
+    async def execute(
+        self,
+        tool_request: ToolCallRecord,
+        tool_context=None,
+        cancellation_token=None,
+    ) -> ToolResult:
+        return ToolResult.success_result(tool_request.id, {})
 
 
 class TrackingDockerExecutor(DockerExecutor):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self.down_projects: list[str] = []
-        self.compose_projects: list[str] = []
+        self.removed: list[str] = []
 
-    async def _compose_down_project(self, project_name: str, env: dict[str, str]) -> None:
-        self.down_projects.append(project_name)
+    async def _remove_container(self, name: str) -> None:
+        self.removed.append(name)
 
-    async def _list_compose_projects(self, env: dict[str, str]) -> list[str]:
-        return list(self.compose_projects)
+    async def _container_exists(self, name: str) -> bool:
+        return name not in self.removed
+
+
+def _repo_fixture(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    package = repo / "max_ai"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (repo / "pyproject.toml").write_text("[project]\nname='maxai'\n", encoding="utf-8")
+    (repo / "README.md").write_text("readme\n", encoding="utf-8")
+    return repo
 
 
 def test_core_executor_stores_default_timeout() -> None:
@@ -42,89 +74,79 @@ def test_core_executor_stores_default_timeout() -> None:
     assert executor.default_timeout == 42
 
 
-def test_docker_command_uses_worker_and_user_paths(tmp_path: Path) -> None:
-    executor = DockerExecutor(server_workspace=tmp_path)
-    context = ToolContext(run_id="run_1", user_id="u1")
+@pytest.mark.asyncio
+async def test_bind_to_workspace_sets_workspace_root(tmp_path: Path) -> None:
+    executor = DockerExecutor(repo_root=_repo_fixture(tmp_path))
 
-    command = executor._docker_command(context)
-    env = executor._compose_env(context)
+    await executor.bind_to_workspace(tmp_path / "workspace")
 
-    assert command[:2] == ["docker", "compose"]
-    assert "-f" in command
-    assert "-p" in command
-    assert command[-8:] == [
-        "exec",
-        "-T",
-        "runtime",
-        "python",
-        "-m",
-        "max_ai.executor.docker.worker",
-        "-",
-        "-",
-    ]
-    assert env["MAXAI_RUNTIME_IMAGE"] == "maxai-sandbox:py311"
-    assert env["MAXAI_HOST_RUNTIME_DIR"] == str(tmp_path.resolve() / "tmp" / "u1")
-    assert env["MAXAI_CONTAINER_WORKSPACE"] == "/sandbox"
-    assert "MAXAI_SOURCE_DIR" not in env
+    assert executor.workspace_root == (tmp_path / "workspace").resolve()
 
 
-def test_bash_command_executes_directly_in_sandbox(tmp_path: Path) -> None:
-    executor = DockerExecutor(server_workspace=tmp_path)
-    context = ToolContext(run_id="run_1", user_id="u1")
+def test_host_runtime_uses_workspace_root_and_user_id(tmp_path: Path) -> None:
+    executor = DockerExecutor(repo_root=_repo_fixture(tmp_path))
+    executor.workspace_root = tmp_path / "workspace"
 
-    command = executor._bash_command(context, "ls skills/")
-
-    assert command[-6:] == ["exec", "-T", "runtime", "bash", "-lc", "ls skills/"]
+    assert executor._host_runtime("u1") == (tmp_path / "workspace" / "u1").resolve()
 
 
-def test_compose_mounts_only_runtime_sandbox() -> None:
-    compose = (
-        Path("max_ai")
-        / "executor"
-        / "docker"
-        / "docker-compose.yml"
-    ).read_text(encoding="utf-8")
+def test_ensure_runtime_layout_creates_user_dirs(tmp_path: Path) -> None:
+    executor = DockerExecutor(repo_root=_repo_fixture(tmp_path))
+    host_runtime = tmp_path / "workspace" / "u1"
 
-    assert "${MAXAI_HOST_RUNTIME_DIR}:${MAXAI_CONTAINER_WORKSPACE:-/sandbox}" in compose
-    assert "maxai-src" not in compose
-    assert "PYTHONPATH" not in compose
+    executor._ensure_runtime_layout(host_runtime)
+
+    assert (host_runtime / "tools").is_dir()
+    assert (host_runtime / "skills").is_dir()
+    assert (host_runtime / "artifacts").is_dir()
 
 
-def test_docker_build_uses_local_sandbox_dockerfile(tmp_path: Path) -> None:
-    executor = DockerExecutor(server_workspace=tmp_path)
+def test_docker_run_once_command_uses_worker_and_mounts(tmp_path: Path) -> None:
+    repo = _repo_fixture(tmp_path)
+    workspace = tmp_path / "workspace"
+    executor = DockerExecutor(repo_root=repo)
+    executor.workspace_root = workspace
+    host_runtime = workspace / "u1"
 
-    assert executor._dockerfile_path().name == "Dockerfile.sandbox"
-    assert executor._dockerfile_path().parent.name == "docker"
+    command = executor._docker_run_once_command(host_runtime)
 
-
-def test_compose_up_force_recreates_runtime(tmp_path: Path) -> None:
-    executor = DockerExecutor(server_workspace=tmp_path)
-    context = ToolContext(run_id="run_1", user_id="u1")
-    command = executor._compose_up_command(context)
-
-    assert command[-4:] == ["up", "-d", "--force-recreate", "runtime"]
-
-
-def test_get_or_create_tmp_dir_creates_user_layout(tmp_path: Path) -> None:
-    executor = DockerExecutor(server_workspace=tmp_path)
-    root = executor.get_or_create_tmp_dir("u1")
-
-    assert root == tmp_path.resolve() / "tmp" / "u1"
-    assert (root / "skills").is_dir()
-    assert (root / "artifacts").is_dir()
-    assert (root / "tools").is_dir()
+    assert command[:5] == ["docker", "run", "--rm", "-i", "--network"]
+    assert f"{host_runtime}:/mnt" in command
+    assert f"{workspace / '.docker-runtime' / 'app'}:/app:ro" in command
+    assert "PYTHONPATH=/app" in command
+    assert "MAX_AI_TOOL_SOURCE_DIR=/app/tools" in command
+    assert command[-5:] == ["python", "-m", "max_ai.executor.docker.worker", "-", "-"]
 
 
-def test_sync_tool_source_to_user_workspace(tmp_path: Path) -> None:
-    tool_source = tmp_path / "docker_tools.py"
-    tool_source.write_text("VALUE = 42\n", encoding="utf-8")
-    server_workspace = tmp_path / "server"
-    executor = DockerExecutor(tool_source=tool_source, server_workspace=server_workspace)
+def test_prepare_app_mount_stages_package_metadata_and_tool_files(tmp_path: Path) -> None:
+    repo = _repo_fixture(tmp_path)
+    tool_file = tmp_path / "docker_tools.py"
+    tool_file.write_text("VALUE = 42\n", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    executor = DockerExecutor(repo_root=repo, tool_files=[tool_file])
+    executor.workspace_root = workspace
 
-    executor._sync_tool_source("u1")
+    app_mount = executor._prepare_app_mount()
 
-    copied = server_workspace.resolve() / "tmp" / "u1" / "tools" / "docker_tools.py"
-    assert copied.read_text(encoding="utf-8") == "VALUE = 42\n"
+    assert app_mount == workspace / ".docker-runtime" / "app"
+    assert (app_mount / "pyproject.toml").is_file()
+    assert (app_mount / "README.md").is_file()
+    assert (app_mount / "max_ai" / "__init__.py").is_file()
+    assert (app_mount / "tools" / "docker_tools.py").read_text(encoding="utf-8") == "VALUE = 42\n"
+
+
+def test_prepare_app_mount_accepts_single_tool_file_path(tmp_path: Path) -> None:
+    repo = _repo_fixture(tmp_path)
+    tool_file = tmp_path / "docker_tools.py"
+    tool_file.write_text("VALUE = 42\n", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    executor = DockerExecutor(repo_root=repo, tool_files=str(tool_file))
+    executor.workspace_root = workspace
+
+    app_mount = executor._prepare_app_mount()
+
+    assert executor.tool_files == [tool_file.resolve()]
+    assert (app_mount / "tools" / "docker_tools.py").is_file()
 
 
 def test_tool_result_from_stdout_uses_last_json_line() -> None:
@@ -143,119 +165,44 @@ def test_tool_result_from_stdout_uses_last_json_line() -> None:
     assert result.result == 5
 
 
-def test_bash_tool_keeps_compose_alive(tmp_path: Path) -> None:
-    executor = DockerExecutor(server_workspace=tmp_path)
+def test_bash_container_name_is_stable_and_prefixed(tmp_path: Path) -> None:
+    executor = DockerExecutor(repo_root=_repo_fixture(tmp_path))
+    context = ToolContext(run_id="Run 1", session_id="Session 1", user_id="u1")
 
-    assert executor._keeps_compose_alive(
-        BashTool(approval_mode=ToolApprovalMode.AUTO_APPROVED)
-    )
-    assert not executor._keeps_compose_alive(LayoutExecutorTool())
+    assert executor._bash_container_name(context) == "maxai-bash-session-1"
 
 
-def test_remember_persistent_session_only_for_bash(tmp_path: Path) -> None:
-    executor = DockerExecutor(server_workspace=tmp_path)
-    context = ToolContext(run_id="run_1", user_id="u1")
-    env = executor._compose_env(context)
+def test_docker_executor_expands_read_skill_alias_to_container_path(tmp_path: Path) -> None:
+    executor = DockerExecutor(repo_root=_repo_fixture(tmp_path))
 
-    executor._remember_persistent_session_if_needed(LayoutExecutorTool(), context, env)
-    assert executor._compose_sessions == {}
+    command = executor._expand_internal_bash_command("read_skill create-ppt")
 
-    executor._remember_persistent_session_if_needed(
-        BashTool(approval_mode=ToolApprovalMode.AUTO_APPROVED),
-        context,
-        env,
-    )
-    assert set(executor._compose_sessions) == {"maxai_run_1"}
+    assert command == "cat '/mnt/skills/create-ppt/SKILL.md'"
 
 
 @pytest.mark.asyncio
-async def test_prune_expired_bash_sessions(tmp_path: Path) -> None:
-    executor = TrackingDockerExecutor(server_workspace=tmp_path, bash_ttl_seconds=0)
-    context = ToolContext(run_id="run_1", user_id="u1")
-    env = executor._compose_env(context)
-    executor._remember_persistent_session_if_needed(
-        BashTool(approval_mode=ToolApprovalMode.AUTO_APPROVED),
-        context,
-        env,
+async def test_prune_expired_bash_sessions_removes_expired_containers(tmp_path: Path) -> None:
+    executor = TrackingDockerExecutor(repo_root=_repo_fixture(tmp_path), bash_ttl_seconds=0)
+    executor._bash_sessions["run_1"] = _BashSession(
+        name="maxai-bash-run-1",
+        last_used_at=time.monotonic() - 10,
     )
 
-    await executor._prune_expired_sessions()
+    await executor._prune_expired_bash_sessions()
 
-    assert executor._compose_sessions == {}
-    assert executor.down_projects == ["maxai_run_1"]
+    assert executor._bash_sessions == {}
+    assert executor.removed == ["maxai-bash-run-1"]
 
 
 @pytest.mark.asyncio
-async def test_disconnect_closes_kept_alive_sessions(tmp_path: Path) -> None:
-    executor = TrackingDockerExecutor(server_workspace=tmp_path)
-    context = ToolContext(run_id="run_1", user_id="u1")
-    env = executor._compose_env(context)
-    executor._remember_persistent_session_if_needed(
-        BashTool(approval_mode=ToolApprovalMode.AUTO_APPROVED),
-        context,
-        env,
+async def test_disconnect_closes_kept_alive_bash_sessions(tmp_path: Path) -> None:
+    executor = TrackingDockerExecutor(repo_root=_repo_fixture(tmp_path))
+    executor._bash_sessions["run_1"] = _BashSession(
+        name="maxai-bash-run-1",
+        last_used_at=time.monotonic(),
     )
 
     await executor.disconnect()
 
-    assert executor._compose_sessions == {}
-    assert executor.down_projects == ["maxai_run_1"]
-
-
-@pytest.mark.asyncio
-async def test_prune_orphaned_compose_projects_skips_current_and_tracked(
-    tmp_path: Path,
-) -> None:
-    executor = TrackingDockerExecutor(server_workspace=tmp_path)
-    context = ToolContext(run_id="run_2", user_id="u1")
-    env = executor._compose_env(context)
-    executor.compose_projects = [
-        "maxai_old",
-        "maxai_run_1",
-        "maxai_run_2",
-        "other_project",
-    ]
-    executor._compose_sessions["maxai_run_1"] = _ComposeSession(
-        env=env,
-        last_used_at=0,
-    )
-
-    await executor._prune_orphaned_projects(context, env)
-
-    assert executor.down_projects == ["maxai_old"]
-
-
-@pytest.mark.asyncio
-async def test_prune_orphaned_compose_projects_can_be_disabled(tmp_path: Path) -> None:
-    executor = TrackingDockerExecutor(
-        server_workspace=tmp_path,
-        cleanup_orphaned_projects=False,
-    )
-    context = ToolContext(run_id="run_1", user_id="u1")
-    env = executor._compose_env(context)
-    executor.compose_projects = ["maxai_old"]
-
-    await executor._prune_orphaned_projects(context, env)
-
-    assert executor.down_projects == []
-
-
-class LayoutExecutorTool(CoreTool):
-    def __init__(self) -> None:
-        super().__init__(
-            name="layout",
-            description="Layout test tool",
-            approval_mode=ToolApprovalMode.AUTO_APPROVED,
-        )
-
-    @property
-    def parameters(self) -> dict:
-        return {"type": "object", "properties": {}, "additionalProperties": True}
-
-    async def execute(
-        self,
-        tool_request: ToolCallRecord,
-        tool_context: ToolContext | None = None,
-        cancellation_token: CancellationToken | None = None,
-    ) -> ToolResult:
-        return ToolResult.success_result(tool_request.id, {})
+    assert executor._bash_sessions == {}
+    assert executor.removed == ["maxai-bash-run-1"]

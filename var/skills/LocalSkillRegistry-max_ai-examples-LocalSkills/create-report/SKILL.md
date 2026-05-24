@@ -12,8 +12,8 @@ Use this skill when the user asks for a report, brief, memo, article, analysis d
 1. Infer the document purpose, audience, tone, structure, and level of detail from the request.
 2. Choose the format that best fits the task: narrative paragraphs, concise sections, bullets, recommendations, references, appendix notes, or any mix.
 3. If key details are missing, make reasonable assumptions and include them naturally only when helpful.
-4. Run the script from this skill with `skill_bash`.
-5. Save the output as a `.docx` file in `$WORKSPACE_DIR`.
+4. Run the script from this skill with `bash`.
+5. Save the output as a `.docx` file in the user workspace.
 
 ## Content Model
 
@@ -26,7 +26,7 @@ Use this skill when the user asks for a report, brief, memo, article, analysis d
 ## Script
 
 ```bash
-python create-report/scripts/create_report.py \
+python "skills/create-report/scripts/create_report.py" \
   --title "Q2 Launch Readiness" \
   --paragraph "This brief summarizes launch readiness across product, support, and go-to-market workstreams." \
   --section "Current State::Beta users respond well to onboarding, but support volume remains above the target threshold." \

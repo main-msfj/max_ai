@@ -120,6 +120,9 @@ async def test_model_call_event_emitted_before_response():
     assert ModelResponseEvent in types
     assert types.index(ModelCallEvent) < types.index(ModelResponseEvent)
 
+    model_call = next(e for e in events if isinstance(e, ModelCallEvent))
+    assert all(message.token_count > 0 for message in model_call.input_messages)
+
     # Sanity: iteration event opens the turn, complete event closes it.
     assert types.index(ReasoningIterationEvent) < types.index(ModelCallEvent)
     assert ReasoningCompleteEvent in types

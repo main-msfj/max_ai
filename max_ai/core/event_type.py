@@ -237,16 +237,28 @@ class AgentExecutionCompleteEvent(AgentEvent):
 
 
 class CompactionEvent(AgentEvent):
-    """Emitted when context compaction changes the active transcript."""
+    """Emitted when context compaction starts or finishes."""
 
     EVENT_TYPE = "compaction"
+    phase: t.Literal["start", "end"] = Field(
+        ..., description="Whether compaction is starting or finished"
+    )
     strategy: str = Field(..., description="Compaction strategy name")
-    old_message_count: int = Field(..., description="Messages moved out of context")
-    recent_message_count: int = Field(..., description="Messages kept in context")
-    old_token_count: int = Field(..., description="Token count moved out of context")
-    recent_token_count: int = Field(..., description="Token count kept in context")
-    total_token_count: int = Field(..., description="Token count before compaction")
-    max_history_tokens: int = Field(..., description="Raw history budget")
+    changed: bool = Field(
+        default=False, description="Whether compaction changed the active transcript"
+    )
+    old_message_count: int = Field(default=0, description="Messages moved out of context")
+    recent_message_count: int = Field(default=0, description="Messages kept in context")
+    old_token_count: int = Field(default=0, description="Token count moved out of context")
+    recent_token_count: int = Field(default=0, description="Token count kept in context")
+    total_token_count: int = Field(default=0, description="Token count before compaction")
+    live_message_threshold_tokens: int = Field(
+        default=0, description="Live message token count that triggered compaction"
+    )
+    live_message_budget_tokens: int = Field(
+        default=0, description="Raw live message budget kept after compaction"
+    )
+    summary: str | None = Field(default=None, description="Updated structured summary payload")
 
 
 # -------- -----------------------------------------------------------
