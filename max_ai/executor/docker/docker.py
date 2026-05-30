@@ -1,7 +1,15 @@
-"""Docker executor for sandboxed tool execution.
+"""Docker executor for sandboxed skill execution.
 
-This executor intentionally avoids Docker Compose. It uses the Docker CLI
-directly so the runtime boundary stays easy to reason about:
+This executor runs ONLY runtime tools — i.e. ``bash`` — inside a Docker
+container. Ordinary tools (FunctionAsTool / ``@tool`` wrappers,
+WorkspaceTool, knowledge tools, …) are developer-authored and run
+in-process; the ``RoutingExecutor`` keeps them local and sends only
+``CoreRuntimeTool`` instances here. The variable, model-driven surface
+that actually needs isolation is the skill scripts the LLM chooses to
+run through ``bash``.
+
+It uses the Docker CLI directly (no Compose) so the runtime boundary
+stays easy to reason about:
 
 Host workspace:
     <workspace_root>/<user_id>/tools
@@ -15,15 +23,20 @@ Container workspace:
 
 Docker never needs to know the user id. The executor resolves the host
 runtime directory for the user, then bind-mounts that directory as /mnt.
+Because the bind mount is shared with the host, files the container
+writes under /mnt/artifacts are immediately visible to the local
+WorkspaceTool — no copy-back round trip is needed.
+
+Bash runs in a short-lived persistent container so a skill can issue
+several commands against the same runtime state; idle bash containers
+are removed after ``bash_ttl_seconds``.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import re
-import shutil
 import time
 import typing as t
 from dataclasses import dataclass
@@ -34,9 +47,15 @@ from ...base.executor import CoreExecutor
 from ...base.tools import CoreTool, ToolContext
 from ...termination import CancellationToken
 from ...types.tool_call import ToolCallRecord, ToolResult
+from ...core.primitives import FailureReason
 
 
+# Strict form: exactly `read_skill <name>` with no extra arguments.
 _READ_SKILL_RE = re.compile(r"^\s*read_skill\s+([A-Za-z0-9_-]+)\s*$")
+# Loose detector: the command intends to be a read_skill invocation even
+# if it's malformed (extra args, quotes, chaining). Used to return a
+# helpful error instead of a raw "command not found".
+_READ_SKILL_PREFIX_RE = re.compile(r"^\s*read_skill\b")
 
 
 @dataclass
@@ -48,12 +67,12 @@ class _BashSession:
 
 
 class DockerExecutor(CoreExecutor):
-    """Run tools inside Docker with a small, explicit runtime contract.
+    """Run runtime tools (bash) inside Docker with an explicit contract.
 
-    Non-bash tools run in one-shot containers and are removed as soon as the
-    tool finishes. Bash runs in a short-lived container so skills can issue
-    several commands against the same runtime state; idle bash containers are
-    removed after ``bash_ttl_seconds``.
+    Bash runs in a short-lived container so skills can issue several
+    commands against the same runtime state; idle bash containers are
+    removed after ``bash_ttl_seconds``. No other tool type is accepted —
+    ordinary tools run locally via the ``RoutingExecutor``.
     """
 
     CONTAINER_WORKSPACE = setting.mtn_folder
@@ -67,7 +86,6 @@ class DockerExecutor(CoreExecutor):
         docker_bin: str = "docker",
         repo_root: str | Path | None = None,
         dockerfile: str | Path | None = None,
-        tool_files: str | Path | t.Sequence[str | Path] | None = None,
     ) -> None:
         super().__init__(default_timeout=default_timeout)
         self.image = image
@@ -84,10 +102,9 @@ class DockerExecutor(CoreExecutor):
             if dockerfile is not None
             else Path(__file__).with_name("Dockerfile.sandbox")
         )
-        self.tool_files = self._normalize_tool_files(tool_files)
         self.workspace_root: Path | None = None
-        self.app_stage_dir: Path | None = None
         self._bash_sessions: dict[str, _BashSession] = {}
+        self._bash_cleanup_tasks: dict[str, asyncio.Task[None]] = {}
 
     async def bind_to_workspace(self, workspace_registry_root: str | Path) -> None:
         """Bind the host workspace root used to resolve user runtimes."""
@@ -111,10 +128,12 @@ class DockerExecutor(CoreExecutor):
         tool_context: ToolContext,
         cancellation_token: CancellationToken | None = None,
     ) -> ToolResult:
-        """Execute one tool call inside Docker and always return ToolResult."""
-        timeout = tool.timeout_seconds or self.default_timeout
-        proc: asyncio.subprocess.Process | None = None
+        """Execute one runtime tool call inside Docker.
 
+        Only ``bash`` (``CoreRuntimeTool``) is supported. Anything else
+        reaching this executor is a routing error and is returned as a
+        failed result rather than executed.
+        """
         try:
             await self._ensure_connected()
             await self._prune_expired_bash_sessions()
@@ -130,44 +149,17 @@ class DockerExecutor(CoreExecutor):
                     cancellation_token=cancellation_token,
                 )
 
-            payload = json.dumps(
-                self._invocation_payload(tool, record, tool_context),
-                ensure_ascii=True,
+            # Ordinary tools run locally via the RoutingExecutor; nothing
+            # else should be dispatched here. Surface as a clear failure.
+            return ToolResult.execution_error(
+                record.id,
+                (
+                    f"DockerExecutor only runs runtime tools (bash); received "
+                    f"{tool.name!r}. Ordinary tools run locally."
+                ),
             )
-            proc = await asyncio.create_subprocess_exec(
-                *self._docker_run_once_command(host_runtime),
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=os.environ.copy(),
-            )
-
-            task = asyncio.create_task(proc.communicate(payload.encode("utf-8")))
-            if cancellation_token is not None:
-                cancellation_token.link_future(task)
-
-            stdout_b, stderr_b = await asyncio.wait_for(task, timeout=float(timeout))
-            stdout = stdout_b.decode(errors="replace")
-            stderr = stderr_b.decode(errors="replace")
-
-            result = self._tool_result_from_stdout(stdout)
-            if result is not None:
-                return result
-
-            detail = stderr.strip() or stdout.strip()
-            msg = "Docker worker completed without returning a ToolResult."
-            if detail:
-                msg = f"{msg} {detail}"
-            return ToolResult.execution_error(record.id, msg)
-
-        except asyncio.TimeoutError:
-            if proc is not None:
-                await self._kill_process(proc)
-            return ToolResult.timeout(record.id, timeout_seconds=float(timeout))
 
         except asyncio.CancelledError:
-            if proc is not None:
-                await self._kill_process(proc)
             return ToolResult.cancelled_during_execution(record.id)
 
         except Exception as exc:
@@ -231,10 +223,6 @@ class DockerExecutor(CoreExecutor):
         runtime_root = self.CONTAINER_WORKSPACE
         return [
             "-e",
-            "PYTHONPATH=/app",
-            "-e",
-            "MAX_AI_TOOL_SOURCE_DIR=/app/tools",
-            "-e",
             f"RUNTIME_DIR={runtime_root}",
             "-e",
             f"TOOLS_DIR={self._container_path(setting.tool_dir)}",
@@ -247,143 +235,48 @@ class DockerExecutor(CoreExecutor):
         ]
 
     def _docker_mount_args(self, host_runtime: Path) -> list[str]:
-        app_mount = self._prepare_app_mount()
+        """Mount the user's host runtime as /mnt.
+
+        When Max AI itself runs inside a devcontainer, paths such as
+        ``/max_ai/user123`` are container paths. The Docker daemon sees
+        the host path behind that bind mount instead, so translate before
+        handing the source to ``docker run``.
+        """
+        source = self._docker_visible_path(host_runtime)
         return [
             "-v",
-            f"{host_runtime}:{self.CONTAINER_WORKSPACE}",
-            "-v",
-            f"{app_mount}:/app:ro",
+            f"{source}:{self.CONTAINER_WORKSPACE}",
         ]
 
-    def _prepare_app_mount(self) -> Path:
-        """Stage only the files needed to import/install max_ai in Docker."""
-        stage_root = self._app_stage_root()
-        stage_root.mkdir(parents=True, exist_ok=True)
+    def _docker_visible_path(self, path: Path) -> Path:
+        """Return the path Docker daemon can see for a local path."""
+        resolved = path.expanduser().resolve()
+        best_mount: tuple[Path, Path] | None = None
 
-        pyproject = self.repo_root / "pyproject.toml"
-        if not pyproject.is_file():
-            raise RuntimeError(f"pyproject.toml not found at {pyproject}.")
-        shutil.copy2(pyproject, stage_root / "pyproject.toml")
+        try:
+            lines = Path("/proc/self/mountinfo").read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return resolved
 
-        readme = self.repo_root / "README.md"
-        if readme.is_file():
-            shutil.copy2(readme, stage_root / "README.md")
-        else:
-            (stage_root / "README.md").write_text(
-                "MaxAI runtime package.\n",
-                encoding="utf-8",
-            )
-
-        lockfile = self.repo_root / "uv.lock"
-        if lockfile.is_file():
-            shutil.copy2(lockfile, stage_root / "uv.lock")
-
-        package_source = self.repo_root / "max_ai"
-        if not package_source.is_dir():
-            raise RuntimeError(f"max_ai package not found at {package_source}.")
-
-        package_target = stage_root / "max_ai"
-        if package_target.exists():
-            shutil.rmtree(package_target)
-        shutil.copytree(
-            package_source,
-            package_target,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
-        )
-        self._stage_tool_files(stage_root / "tools")
-
-        self.app_stage_dir = stage_root
-        return stage_root
-
-    def _stage_tool_files(self, target_root: Path) -> None:
-        """Copy user-provided tool files into /app/tools for worker imports."""
-        if target_root.exists():
-            shutil.rmtree(target_root)
-        target_root.mkdir(parents=True, exist_ok=True)
-
-        for source in self.tool_files:
-            if not source.exists():
-                raise RuntimeError(f"tool file source does not exist: {source}")
-            if source.is_file():
-                shutil.copy2(source, target_root / source.name)
+        for line in lines:
+            if " - " not in line:
                 continue
-            if not source.is_dir():
-                raise RuntimeError(f"tool file source must be a file or directory: {source}")
-            for child in source.iterdir():
-                destination = target_root / child.name
-                if child.is_dir():
-                    shutil.copytree(
-                        child,
-                        destination,
-                        dirs_exist_ok=True,
-                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
-                    )
-                else:
-                    shutil.copy2(child, destination)
+            before, _sep, after = line.partition(" - ")
+            fields = before.split()
+            if len(fields) < 5:
+                continue
+            mount_root = Path(fields[3].replace("\\040", " "))
+            mount_point = Path(fields[4].replace("\\040", " "))
+            try:
+                rel = resolved.relative_to(mount_point)
+            except ValueError:
+                continue
+            if best_mount is None or len(mount_point.parts) > len(best_mount[0].parts):
+                best_mount = (mount_point, mount_root / rel)
 
-    @staticmethod
-    def _normalize_tool_files(
-        tool_files: str | Path | t.Sequence[str | Path] | None,
-    ) -> list[Path]:
-        if tool_files is None:
-            return []
-        if isinstance(tool_files, str | Path):
-            tool_files = [tool_files]
-        return [Path(path).expanduser().resolve() for path in tool_files]
-
-    def _app_stage_root(self) -> Path:
-        root = self.workspace_root or setting.root_dir
-        return (root / ".docker-runtime" / "app").expanduser().resolve()
-
-    def _docker_run_once_command(self, host_runtime: Path) -> list[str]:
-        return [
-            self.docker_bin,
-            "run",
-            "--rm",
-            "-i",
-            "--network",
-            "none",
-            "--workdir",
-            self.CONTAINER_WORKSPACE,
-            *self._docker_mount_args(host_runtime),
-            *self._docker_env_args(),
-            self.image,
-            "python",
-            "-m",
-            "max_ai.executor.docker.worker",
-            "-",
-            "-",
-        ]
-
-    def _invocation_payload(
-        self,
-        tool: CoreTool,
-        record: ToolCallRecord,
-        tool_context: ToolContext,
-    ) -> dict[str, object]:
-        return {
-            "tool_ref": tool.docker_ref().model_dump(mode="json"),
-            "record": record.model_dump(mode="json"),
-            "context": {
-                "run_id": tool_context.run_id,
-                "user_id": tool_context.user_id,
-                "session_id": tool_context.session_id,
-                "retry_count": tool_context.retry_count,
-                "deps": self._container_context_deps(tool_context.deps),
-            },
-        }
-
-    def _container_context_deps(self, deps: dict[str, t.Any]) -> dict[str, t.Any]:
-        container_deps = dict(deps)
-        container_deps.update(
-            {
-                "runtime_root": self.CONTAINER_WORKSPACE,
-                "tools_dir": self._container_path(setting.tool_dir),
-                "skills_dir": self._container_path(setting.skill_dir),
-                "artifacts_dir": self._container_path(setting.artifacts_dir),
-            }
-        )
-        return container_deps
+        if best_mount is None:
+            return resolved
+        return best_mount[1]
 
     async def _run_bash_direct(
         self,
@@ -403,7 +296,15 @@ class DockerExecutor(CoreExecutor):
         shell_command = record.parameters.get("command")
         if not isinstance(shell_command, str) or not shell_command.strip():
             return ToolResult.invalid_parameters(record.id, "command cannot be empty.")
-        shell_command = self._expand_internal_bash_command(shell_command)
+
+        shell_command, expand_error = self._expand_internal_bash_command(
+            shell_command, host_runtime
+        )
+        if expand_error is not None:
+            # Malformed read_skill invocation or unknown skill name —
+            # return the catalog/usage so the model self-corrects instead
+            # of getting a raw shell failure or inventing a path.
+            return ToolResult.invalid_parameters(record.id, expand_error)
 
         timeout = record.parameters.get("timeout_seconds") or tool.timeout_seconds
         container_name = await self._get_or_create_bash_container(
@@ -439,28 +340,44 @@ class DockerExecutor(CoreExecutor):
         session_key = self._bash_session_key(tool_context)
         if session_key in self._bash_sessions:
             self._bash_sessions[session_key].last_used_at = time.monotonic()
+            self._schedule_bash_session_cleanup(session_key)
 
         max_output_chars = int(getattr(tool, "max_output_chars", 20000))
-        stdout, stdout_truncated = self._truncate_text(
+        stdout, stdout_truncated, stdout_chars = self._truncate_text(
             stdout_b.decode(errors="replace"),
             max_output_chars,
         )
-        stderr, stderr_truncated = self._truncate_text(
+        stderr, stderr_truncated, stderr_chars = self._truncate_text(
             stderr_b.decode(errors="replace"),
             max_output_chars,
         )
+        payload = {
+            "exit_code": proc.returncode,
+            "stdout": stdout,
+            "stderr": stderr,
+            "cwd": self.CONTAINER_WORKSPACE,
+            "command": shell_command,
+            "stdout_truncated": stdout_truncated,
+            "stderr_truncated": stderr_truncated,
+            "stdout_original_chars": stdout_chars,
+            "stderr_original_chars": stderr_chars,
+        }
+        metadata = {"name": tool.name, "executor": "docker"}
+        if proc.returncode != 0:
+            detail = stderr.strip() or stdout.strip() or "Bash command failed."
+            return ToolResult(
+                success=False,
+                error=f"Bash command failed with exit code {proc.returncode}: {detail}",
+                result=payload,
+                failure_reason=FailureReason.EXECUTION_ERROR,
+                tool_call_id=record.id,
+                metadata=metadata,
+            )
+
         return ToolResult.success_result(
             record.id,
-            {
-                "exit_code": proc.returncode,
-                "stdout": stdout,
-                "stderr": stderr,
-                "cwd": self.CONTAINER_WORKSPACE,
-                "command": shell_command,
-                "stdout_truncated": stdout_truncated,
-                "stderr_truncated": stderr_truncated,
-            },
-            metadata={"name": tool.name, "executor": "docker"},
+            payload,
+            metadata=metadata,
         )
 
     async def _get_or_create_bash_container(
@@ -507,6 +424,7 @@ class DockerExecutor(CoreExecutor):
             name=name,
             last_used_at=time.monotonic(),
         )
+        self._schedule_bash_session_cleanup(key)
         return name
 
     async def _prune_expired_bash_sessions(self) -> None:
@@ -521,14 +439,43 @@ class DockerExecutor(CoreExecutor):
         ]
         for key in expired:
             session = self._bash_sessions.pop(key, None)
+            task = self._bash_cleanup_tasks.pop(key, None)
+            if task is not None:
+                task.cancel()
             if session is not None:
                 await self._remove_container(session.name)
 
     async def _close_all_bash_sessions(self) -> None:
+        for task in self._bash_cleanup_tasks.values():
+            task.cancel()
+        self._bash_cleanup_tasks.clear()
         sessions = list(self._bash_sessions.values())
         self._bash_sessions.clear()
         for session in sessions:
             await self._remove_container(session.name)
+
+    def _schedule_bash_session_cleanup(self, key: str) -> None:
+        previous = self._bash_cleanup_tasks.pop(key, None)
+        if previous is not None:
+            previous.cancel()
+        self._bash_cleanup_tasks[key] = asyncio.create_task(
+            self._cleanup_bash_session_after_ttl(key)
+        )
+
+    async def _cleanup_bash_session_after_ttl(self, key: str) -> None:
+        try:
+            await asyncio.sleep(self.bash_ttl_seconds)
+            session = self._bash_sessions.get(key)
+            if session is None:
+                return
+            if time.monotonic() - session.last_used_at < self.bash_ttl_seconds:
+                self._schedule_bash_session_cleanup(key)
+                return
+            self._bash_sessions.pop(key, None)
+            self._bash_cleanup_tasks.pop(key, None)
+            await self._remove_container(session.name)
+        except asyncio.CancelledError:
+            return
 
     async def _container_exists(self, name: str) -> bool:
         proc = await asyncio.create_subprocess_exec(
@@ -560,18 +507,6 @@ class DockerExecutor(CoreExecutor):
         await proc.communicate()
 
     @staticmethod
-    def _tool_result_from_stdout(stdout: str) -> ToolResult | None:
-        for line in reversed(stdout.splitlines()):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                return ToolResult.model_validate_json(line)
-            except Exception:
-                continue
-        return None
-
-    @staticmethod
     def _clean_user_id(user_id: str) -> str:
         if not re.fullmatch(r"[A-Za-z0-9_.-]+", user_id):
             raise ValueError(
@@ -590,17 +525,65 @@ class DockerExecutor(CoreExecutor):
     def _container_path(self, name: str) -> str:
         return f"{self.CONTAINER_WORKSPACE.rstrip('/')}/{name.strip('/')}"
 
-    def _expand_internal_bash_command(self, command: str) -> str:
+    def _expand_internal_bash_command(
+        self, command: str, host_runtime: Path
+    ) -> tuple[str, str | None]:
+        """Expand ``read_skill <name>`` into a cat of that skill's SKILL.md.
+
+        Returns ``(command_to_run, error_message)``. Mirrors
+        ``BashTool``: a malformed invocation or an unknown skill name
+        returns an actionable error (listing the available skills)
+        instead of letting the shell fail or the model invent a path.
+
+        The skill is checked on the *host* runtime (which is bind-mounted
+        as ``/mnt``), while the resulting ``cat`` targets the *container*
+        path.
+        """
+        if not _READ_SKILL_PREFIX_RE.match(command):
+            return command, None
+
         match = _READ_SKILL_RE.match(command)
         if match is None:
-            return command
+            return command, (
+                "read_skill takes exactly one skill name and no extra arguments. "
+                "Usage: read_skill <skill-name>. To run scripts or chain commands, "
+                "issue them as a separate bash call after loading the skill."
+            )
+
         skill_name = match.group(1)
-        skill_file = f"{self._container_path(setting.skill_dir)}/{skill_name}/SKILL.md"
-        return f"cat {skill_file!r}"
+        host_skills = host_runtime / setting.skill_dir
+        if not (host_skills / skill_name / "SKILL.md").is_file():
+            available = (
+                sorted(p.name for p in host_skills.iterdir() if p.is_dir())
+                if host_skills.is_dir()
+                else []
+            )
+            return command, (
+                f"Skill {skill_name!r} not found. "
+                f"Available skills: {available or 'none'}. "
+                "Use one of the available skill names exactly as listed; "
+                "do not invent skill names or paths."
+            )
+
+        skill_file = (
+            f"{self._container_path(setting.skill_dir)}/{skill_name}/SKILL.md"
+        )
+        preface = (
+            "Skill instructions loaded only. No user file has been created yet. "
+            "Next, run the script shown below with bash and then verify the output file.\n\n"
+        )
+        return f"printf %s {preface!r}; cat {skill_file!r}", None
 
     @staticmethod
-    def _truncate_text(value: str, max_chars: int) -> tuple[str, bool]:
-        if len(value) <= max_chars:
-            return value, False
+    def _truncate_text(value: str, max_chars: int) -> tuple[str, bool, int]:
+        """Truncate to ``max_chars``, reporting the original length.
+
+        Returns ``(text, was_truncated, original_chars)`` so the model
+        knows how much output it did not see and does not reason over a
+        partial result as if it were complete.
+        """
+        original = len(value)
+        if original <= max_chars:
+            return value, False, original
         keep = max(max_chars, 0)
-        return value[:keep] + "\n[output truncated]", True
+        return value[:keep] + "\n[output truncated]", True, original

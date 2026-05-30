@@ -36,6 +36,24 @@ class CompactionOutput(BaseModel):
     )
 
 
+class MemoryFactUpdate(BaseModel):
+    """Memory fact to create or update after compaction."""
+
+    key: str = Field(..., description="Stable memory key to create or update.")
+    category: str = Field(..., description="Memory category.")
+    content: str = Field(..., description="Updated durable memory content.")
+    reason: str | None = Field(default=None, description="Why this update is justified.")
+
+
+class MemoryMaintenanceOutput(BaseModel):
+    """Structured memory maintenance produced during compaction."""
+
+    updates: list[MemoryFactUpdate] = Field(
+        default_factory=list,
+        description="Memory facts that should be created or overwritten.",
+    )
+
+
 class CompactionResult(BaseModel):
     """Result of applying a compaction strategy to a run context."""
 
@@ -64,6 +82,8 @@ class MessageGroup(BaseModel):
 
 __all__ = [
     "CompactionOutput",
+    "MemoryFactUpdate",
+    "MemoryMaintenanceOutput",
     "CompactionResult",
     "MessageGroup",
 ]

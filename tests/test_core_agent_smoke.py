@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from max_ai.base.clients import CoreChatCompletionClient
+from max_ai.executor.local import LocalExecutor
 from max_ai.base.agent import Agent
 from max_ai.core.models import ModelConfig
 from max_ai.errors.agent import AgentError
@@ -145,7 +146,7 @@ def _setup_memory_source(tmp_path: Path) -> None:
         "user_identity": {
             "category": "user_identity",
             "content": "Software engineer in Buenos Aires.",
-            "last_updated": "2026-04-25T10:00:00+00:00",
+            "last_updated": "2026-05-25T10:00:00+00:00",
         },
     }))
 
@@ -253,9 +254,9 @@ async def test_core_agent_prepares_end_to_end(
     assert "demo_skill" in skills_out
     assert "A minimal skill for the smoke test." in skills_out
     assert "search_skills" not in skills_out
-    assert "Call the `bash` tool to inspect" in skills_out
-    assert "The `bash` tool is the ONLY way to engage a skill" in skills_out
-    assert "`demo_skill`" not in skills_out
+    assert "Run `bash` with the command `read_skill <skill-name>`" in skills_out
+    assert "`bash` is the ONLY way to engage a skill" in skills_out
+    assert "`demo_skill`" in skills_out
     assert "$SKILLS_DIR" not in skills_out
     assert "SKILL.md" not in skills_out
 
@@ -282,8 +283,17 @@ async def test_core_agent_prepares_end_to_end(
     await agent.prepare()  # must not raise
     assert agent.is_prepared is True
 
-    # 8. Skills cannot run on LocalExecutor because they require a sandbox.
+    # 8. A caller can still force an unsafe LocalExecutor; runtime validation rejects it.
+    unsafe_agent = _DummyAgent(
+        name="unsafe_agent",
+        description="Agent with an intentionally unsafe executor.",
+        instructions="Be helpful and accurate.",
+        client=StubClient(),
+        skills=LocalSkillRegistry(source=skill_root, skills=["demo_skill"]),
+        workspace=workspace,
+        executor=LocalExecutor(),
+    )
     ctx = RunContext(user_id="u1")
     with pytest.raises(AgentError, match="skills cannot run with LocalExecutor"):
-        async for _ in agent.run_stream_events("hello", run_context=ctx):
+        async for _ in unsafe_agent.run_stream_events("hello", run_context=ctx):
             pass

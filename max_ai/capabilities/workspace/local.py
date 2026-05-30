@@ -4,11 +4,19 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from pydantic import BaseModel
 
 from ...base.workspace import WorkSpaceRegistry
 
 
+class WorkspaceLocalConfig(BaseModel):
+    root: str | None = None
+    tag: str = "local"
+
 class WorkspaceLocal(WorkSpaceRegistry):
+    component_schema = WorkspaceLocalConfig
+    component_type = "workspace"
+
     """Workspace registry backed by the local filesystem.
 
     Owns the per-user runtime layout under the configured server root:
@@ -24,6 +32,13 @@ class WorkspaceLocal(WorkSpaceRegistry):
 
     def __init__(self, root: str | Path | None = None, tag: str = "local") -> None:
         super().__init__(tag=tag, root=root)
+
+    def _to_config(self) -> WorkspaceLocalConfig:
+        return WorkspaceLocalConfig(root=str(self.base_root), tag=self.tag)
+
+    @classmethod
+    def _from_config(cls, config: WorkspaceLocalConfig) -> "WorkspaceLocal":
+        return cls(root=config.root, tag=config.tag)
 
     def save_or_upload(self, user_id: str, file_path: str | Path) -> str:
         """Copy a local file into the user's artifacts and return its relative path."""

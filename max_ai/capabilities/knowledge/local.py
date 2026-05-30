@@ -23,12 +23,22 @@ from __future__ import annotations
 import json
 import random
 from pathlib import Path
+from pydantic import BaseModel
 
 from ...base.knowledge import CoreKnowledgeRegistry, KnowledgeToolMode
 from ...core import KnowledgeBlock
 
 
+class LocalKnowledgeRegistryConfig(BaseModel):
+    name: str
+    description: str
+    base_path: str
+    tool_mode: KnowledgeToolMode = KnowledgeToolMode.FULL
+
 class LocalKnowledgeRegistry(CoreKnowledgeRegistry):
+    component_schema = LocalKnowledgeRegistryConfig
+    component_type = "knowledge"
+
     """Filesystem-backed implementation of ``CoreKnowledgeRegistry``.
 
     Layout::
@@ -66,6 +76,23 @@ class LocalKnowledgeRegistry(CoreKnowledgeRegistry):
             name=name, description=description, tool_mode=tool_mode
         )
         self.base_path: Path = Path(base_path).expanduser().resolve()
+
+    def _to_config(self) -> LocalKnowledgeRegistryConfig:
+        return LocalKnowledgeRegistryConfig(
+            name=self.name,
+            description=self.description,
+            base_path=str(self.base_path),
+            tool_mode=self.tool_mode,
+        )
+
+    @classmethod
+    def _from_config(cls, config: LocalKnowledgeRegistryConfig) -> "LocalKnowledgeRegistry":
+        return cls(
+            name=config.name,
+            description=config.description,
+            base_path=config.base_path,
+            tool_mode=config.tool_mode,
+        )
 
     # -------- PATH HELPERS -----------------------------------------------------------
     @property

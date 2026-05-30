@@ -17,6 +17,9 @@ class StackConfig(BaseModel):
     version: str = Field(default="1.0.0")
     is_edited: bool = Field(default=False)
     layer_class: str = Field(...)
+    template: str | None = Field(default=None)
+    load_from: str | None = Field(default=None)
+    extra_variables: dict[str, t.Any] = Field(default_factory=dict)
 
 
 # -------- AGENT CONFIG -----------------------------------------------------------
@@ -33,6 +36,24 @@ class AgentConfig(BaseModel):
 
 
 # -------- MODEL CONFIG -----------------------------------------------------------
+class AgentComponentConfig(BaseModel):
+    """Portable constructor configuration for an ``Agent``."""
+
+    name: str
+    description: str
+    instructions: str
+    client: dict[str, t.Any]
+    config: AgentConfig = Field(default_factory=AgentConfig)
+    toolset: list[dict[str, t.Any]] = Field(default_factory=list)
+    capabilities: list[dict[str, t.Any]] = Field(default_factory=list)
+    workspace: dict[str, t.Any] | None = None
+    middlewares: list[dict[str, t.Any]] = Field(default_factory=list)
+    framework_layers: list[dict[str, t.Any]] = Field(default_factory=list)
+    executor: dict[str, t.Any] | None = None
+    output_format: str | None = None
+    priority_tools: list[str] = Field(default_factory=list)
+
+
 class ModelConfig(BaseModel):
     """Model Config"""
 
@@ -57,5 +78,17 @@ class OllamaChatCompletionClientConfig(BaseModel):
     api_key: SecretStr | None = None
     think: OllamaThink | None = None
     keep_alive: str | int | None = None
+    options: dict[str, t.Any] = Field(default_factory=dict)
+    config: dict[str, t.Any] = Field(default_factory=dict)
+
+
+class OpenAIChatCompletionClientConfig(BaseModel):
+    """Configuration for OpenAIChatCompletionClient serialization."""
+
+    model: str
+    api_key: SecretStr | None = None
+    base_url: str | None = None
+    organization: str | None = None
+    project: str | None = None
     options: dict[str, t.Any] = Field(default_factory=dict)
     config: dict[str, t.Any] = Field(default_factory=dict)

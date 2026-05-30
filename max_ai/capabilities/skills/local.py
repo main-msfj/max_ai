@@ -20,11 +20,19 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from pydantic import BaseModel
 
 from ...base.skills import CoreSkillRegistry
 
 
+class LocalSkillRegistryConfig(BaseModel):
+    source: str
+    skills: list[str]
+
 class LocalSkillRegistry(CoreSkillRegistry):
+    component_schema = LocalSkillRegistryConfig
+    component_type = "skills"
+
     """Skill registry backed by a local directory.
 
     Expects ``source`` to be an existing directory whose immediate
@@ -45,6 +53,13 @@ class LocalSkillRegistry(CoreSkillRegistry):
     def __init__(self, source: str | Path, skills: list[str]) -> None:
         super().__init__(source=source, skills=skills)
         self._source_path: Path = self._resolve_source_path(self.source)
+
+    def _to_config(self) -> LocalSkillRegistryConfig:
+        return LocalSkillRegistryConfig(source=self.source, skills=list(self.skills))
+
+    @classmethod
+    def _from_config(cls, config: LocalSkillRegistryConfig) -> "LocalSkillRegistry":
+        return cls(source=config.source, skills=config.skills)
 
     async def connect(self) -> None:
         """Refresh local skills from source before validating cache."""

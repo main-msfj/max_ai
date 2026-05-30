@@ -68,6 +68,18 @@ def _type_to_provider_str(cls: type) -> str:
 KNOWN_PROVIDERS: dict[str, str] = {
     "ollama": "max_ai.clients.ollama.client.OllamaChatCompletionClient",
     "OllamaChatCompletionClient": "max_ai.clients.ollama.client.OllamaChatCompletionClient",
+    "maxai.llm.OllamaChatCompletionClient": "max_ai.clients.ollama.client.OllamaChatCompletionClient",
+    "OpenAIChatCompletionClient": "max_ai.clients.openai.client.OpenAIChatCompletionClient",
+    "maxai.llm.OpenAIChatCompletionClient": "max_ai.clients.openai.client.OpenAIChatCompletionClient",
+    "maxai.stacks.AgentPolicyLayer": "max_ai.stacks.agent_policy_layer.AgentPolicyLayer",
+    "maxai.stacks.TaskAnalysisLayer": "max_ai.stacks.task_analysis_layer.TaskAnalysisLayer",
+    "maxai.stacks.RenderingLayer": "max_ai.stacks.rendering_layer.RenderingLayer",
+    "maxai.stacks.PriorityToolsLayer": "max_ai.stacks.priority_tools_layer.PriorityToolsLayer",
+    "maxai.stacks.SkillsLayer": "max_ai.stacks.skills_layer.SkillsLayer",
+    "maxai.stacks.RoutineLayer": "max_ai.stacks.routine_layer.RoutineLayer",
+    "maxai.stacks.KnowledgeLayer": "max_ai.stacks.knowledge_layer.KnowledgeLayer",
+    "maxai.stacks.ContextLayer": "max_ai.stacks.context_layer.ContextLayer",
+    "maxai.stacks.MemoryLayer": "max_ai.stacks.memory_layer.MemoryLayer",
 }
 
 

@@ -103,7 +103,7 @@ class CoreChatCompletionClient(ComponentBase[BaseModel], ABC):
     # -------- PUBLIC ENTRY POINT -----------------------------------------------------------
     async def run(
         self,
-        ctx: "RunContext",
+        ctx: RunContext,
         prompts: PromptCtx,
         tools: list["CoreTool"] | None = None,
         output_format: t.Type[BaseModel] | None = None,

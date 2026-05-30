@@ -10,6 +10,7 @@ from abc import ABC, abstractmethod
 import tiktoken
 from pydantic import BaseModel, Field, PrivateAttr
 
+from ..config import setting
 from ..core.compaction import CompactionResult, MessageGroup
 from ..core.messages import AssistantMessage, CoreMessage, ToolMessage
 
@@ -85,6 +86,57 @@ class TokenCounter(BaseModel):
                     part["data"] = f"<{part_type}_bytes>"
 
         return json.dumps(data, ensure_ascii=False, default=str)
+
+
+def client_max_output_tokens(client: t.Any) -> int:
+    options = getattr(client, "generation_options", None)
+    if isinstance(options, dict) and options.get("max_tokens") is not None:
+        return int(options["max_tokens"])
+
+    config = getattr(client, "config", None)
+    max_output = getattr(config, "max_output_tokens", 0) or 0
+    if max_output:
+        return int(max_output)
+
+    return setting.compaction_min_output_tokens
+
+
+def live_message_capacity_tokens(
+    max_context_tokens: int,
+    *,
+    max_output_tokens: int,
+) -> int:
+    if max_context_tokens <= 0:
+        return 0
+
+    safety_margin = int(max_context_tokens * setting.compaction_safety_margin_ratio)
+    live_tokens = (
+        max_context_tokens
+        - setting.compaction_prompt_budget_tokens
+        - max_output_tokens
+        - safety_margin
+    )
+    return max(0, live_tokens)
+
+
+def live_message_threshold_tokens(
+    max_context_tokens: int,
+    *,
+    max_output_tokens: int,
+) -> int:
+    capacity = live_message_capacity_tokens(
+        max_context_tokens,
+        max_output_tokens=max_output_tokens,
+    )
+    if capacity <= 0:
+        return 0
+    return max(1, int(capacity * setting.compaction_live_message_threshold))
+
+
+def live_message_budget_tokens(capacity_tokens: int) -> int:
+    if capacity_tokens <= 0:
+        return 0
+    return max(1, int(capacity_tokens * setting.compaction_live_message_keep_ratio))
 
 
 def group_atomic_messages(
@@ -194,6 +246,10 @@ __all__ = [
     "CompactionResult",
     "CoreCompaction",
     "TokenCounter",
+    "client_max_output_tokens",
+    "live_message_budget_tokens",
+    "live_message_capacity_tokens",
+    "live_message_threshold_tokens",
     "group_atomic_messages",
     "split_recent_messages",
 ]

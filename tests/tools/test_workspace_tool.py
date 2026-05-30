@@ -10,30 +10,20 @@ from max_ai.types.tool_call import ToolCallRecord
 
 
 @pytest.mark.asyncio
-async def test_workspace_tool_writes_reads_lists_and_deletes_artifacts(
+async def test_workspace_tool_reads_and_lists_artifacts(
     tmp_path: Path,
 ) -> None:
     artifacts = tmp_path / "artifacts"
+    report = artifacts / "reports" / "summary.txt"
+    report.parent.mkdir(parents=True)
+    report.write_text("hello", encoding="utf-8")
+
     tool = WorkspaceTool()
     context = ToolContext(
         run_id="run_1",
         user_id="u1",
         deps={"artifacts_dir": str(artifacts)},
     )
-
-    write = await tool.execute(
-        ToolCallRecord(
-            tool_name="workspace",
-            parameters={
-                "action": "write",
-                "path": "reports/summary.txt",
-                "content": "hello",
-            },
-        ),
-        context,
-    )
-    assert write.success is True
-    assert write.result == {"path": "reports/summary.txt", "bytes": 5}
 
     read = await tool.execute(
         ToolCallRecord(
@@ -57,16 +47,6 @@ async def test_workspace_tool_writes_reads_lists_and_deletes_artifacts(
         {"path": "reports/summary.txt", "type": "file", "bytes": 5}
     ]
 
-    deleted = await tool.execute(
-        ToolCallRecord(
-            tool_name="workspace",
-            parameters={"action": "delete", "path": "reports/summary.txt"},
-        ),
-        context,
-    )
-    assert deleted.success is True
-    assert deleted.result == {"path": "reports/summary.txt", "deleted": True}
-
 
 @pytest.mark.asyncio
 async def test_workspace_tool_rejects_paths_outside_artifacts(tmp_path: Path) -> None:
@@ -80,7 +60,7 @@ async def test_workspace_tool_rejects_paths_outside_artifacts(tmp_path: Path) ->
     result = await tool.execute(
         ToolCallRecord(
             tool_name="workspace",
-            parameters={"action": "write", "path": "../escape.txt", "content": "no"},
+            parameters={"action": "read", "path": "../escape.txt"},
         ),
         context,
     )

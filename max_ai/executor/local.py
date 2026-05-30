@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from ..base.executor import CoreExecutor
 from ..base.tools import CoreTool, ToolContext
@@ -28,13 +28,26 @@ from ..termination import CancellationToken
 from ..types.tool_call import ToolCallRecord, ToolResult
 
 
+class LocalExecutorConfig(BaseModel):
+    default_timeout: int = 300
+
 class LocalExecutor(CoreExecutor):
+    component_schema = LocalExecutorConfig
+    component_type = "executor"
+
     """In-process executor — the default.
 
     Wraps ``tool.execute(...)`` with timeout, cancellation linking,
     and exception capture. Every failure mode is mapped to a
     ``ToolResult`` so the caller never has to handle exceptions.
     """
+
+    def _to_config(self) -> LocalExecutorConfig:
+        return LocalExecutorConfig(default_timeout=self.default_timeout)
+
+    @classmethod
+    def _from_config(cls, config: LocalExecutorConfig) -> "LocalExecutor":
+        return cls(default_timeout=config.default_timeout)
 
     async def bind_to_workspace(self, workspace_registry_root: str | Path) -> None:
         """Bind workspace root for API compatibility with sandbox executors."""

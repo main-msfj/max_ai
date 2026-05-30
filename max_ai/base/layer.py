@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from .component import ComponentBase
 from ..errors.stacks import StackError
+from ..core.models import StackConfig
 
 
 class CoreLayer(ComponentBase[BaseModel], ABC):
@@ -183,6 +184,29 @@ class CoreLayer(ComponentBase[BaseModel], ABC):
             )
 
     # -------- RENDER -----------------------------------------------------------
+    # -------- COMPONENT SERIALIZATION -----------------------------------------------------------
+    def _to_config(self) -> StackConfig:
+        description = self.__class__.__doc__.strip().split("\n\n")[0] if self.__class__.__doc__ else self.name
+        return StackConfig(
+            name=self.name,
+            instructions=self.template,
+            description=description,
+            is_edited=True,
+            layer_class=f"{self.__class__.__module__}.{self.__class__.__qualname__}",
+            template=self.template,
+            load_from=str(self._load_from) if self._load_from is not None else None,
+            extra_variables=dict(self._extra_variables),
+        )
+
+    @classmethod
+    def _from_config(cls, config: StackConfig) -> t.Self:
+        template = config.template if config.template is not None else config.instructions
+        return cls(
+            template=template,
+            load_from=None,
+            extra_variables=config.extra_variables,
+        )
+
     def render(self, variables: t.Mapping[str, t.Any]) -> str:
         """
         Render the compiled template with the given variables.

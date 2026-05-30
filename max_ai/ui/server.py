@@ -33,8 +33,15 @@ from max_ai.core.event_type import (
     ToolApprovalEvent,
     ToolCallEvent,
     ToolCallResponseEvent,
+    ToolProgressEvent,
 )
-from max_ai.base.compaction import TokenCounter
+from max_ai.base.compaction import (
+    TokenCounter,
+    client_max_output_tokens,
+    live_message_budget_tokens,
+    live_message_capacity_tokens,
+    live_message_threshold_tokens,
+)
 from max_ai.core.messages import ImagePart, TextPart, UserMessage
 from max_ai.termination import CancellationToken
 from max_ai.types.agent_response import AgentResponse
@@ -446,7 +453,7 @@ async def _resume_turn_for_context(
                 yield {
                     "type": "session_state",
                     "agent_name": agent_name,
-                    "messages": _serialize_messages(ctx.messages),
+                    "messages": _serialize_messages(_context_messages(ctx)),
                     "pending_approvals": pending_approvals,
                     "context_usage": _context_usage(ctx, agent),
                 }
@@ -535,7 +542,7 @@ async def _stream_ui_events(
             yield {
                 "type": "session_state",
                 "agent_name": agent_name,
-                "messages": _serialize_messages(context.messages),
+                "messages": _serialize_messages(_context_messages(context)),
                 "pending_approvals": pending_approvals,
                 "context_usage": _context_usage(context, agent),
             }
@@ -620,6 +627,8 @@ def _event_payload(event: CoreEvent) -> dict[str, t.Any]:
             "live_message_threshold_tokens": event.live_message_threshold_tokens,
             "live_message_budget_tokens": event.live_message_budget_tokens,
             "summary": event.summary,
+            "context_summary_persisted": event.context_summary_persisted,
+            "context_summary_session_id": event.context_summary_session_id,
         }
 
     if isinstance(event, ModelStreamChunkEvent):
@@ -648,6 +657,14 @@ def _event_payload(event: CoreEvent) -> dict[str, t.Any]:
             "tool_call_id": event.tool_call_id,
             "tool_name": event.tool_name,
             "parameters": parameters,
+        }
+
+    if isinstance(event, ToolProgressEvent):
+        return {
+            "type": "tool_progress",
+            "tool_call_id": event.tool_call_id,
+            "tool_name": event.tool_name,
+            "content": event.content,
         }
 
     if isinstance(event, ToolCallResponseEvent):
@@ -787,11 +804,7 @@ def _get_session(app: FastAPI, session_id: str) -> dict[str, t.Any]:
 
 
 def _resolve_workspace_root(workspace_root: str | Path | None) -> Path:
-    root = (
-        Path(workspace_root)
-        if workspace_root is not None
-        else setting.root_dir / "tmp"
-    )
+    root = Path(workspace_root) if workspace_root is not None else setting.root_dir
     return root.expanduser().resolve()
 
 
@@ -889,6 +902,13 @@ def _agent_info(agent: Agent) -> dict[str, t.Any]:
     }
 
 
+def _context_messages(ctx: RunContext) -> list[t.Any]:
+    return [
+        *ctx.message_history.iter_messages(),
+        *ctx.messages,
+    ]
+
+
 def _serialize_messages(messages: t.Sequence[t.Any]) -> list[dict[str, t.Any]]:
     return [_serialize_message(message) for message in messages]
 
@@ -931,23 +951,11 @@ def _serialize_message(message: t.Any) -> dict[str, t.Any]:
 
 
 def _last_assistant_message(ctx: RunContext) -> dict[str, t.Any] | None:
-    for message in reversed(ctx.messages):
+    for message in reversed(_context_messages(ctx)):
         if getattr(message, "role", None) == "assistant":
             return _serialize_message(message)
     return None
 
-
-def _client_max_tokens(client: t.Any) -> int:
-    options = getattr(client, "generation_options", None)
-    if isinstance(options, dict) and options.get("max_tokens") is not None:
-        return int(options["max_tokens"])
-
-    config = getattr(client, "config", None)
-    max_output = getattr(config, "max_output_tokens", 0) or 0
-    if max_output:
-        return int(max_output)
-
-    return setting.compaction_min_output_tokens
 
 
 def _context_usage(ctx: RunContext, agent: Agent) -> dict[str, t.Any]:
@@ -955,7 +963,8 @@ def _context_usage(ctx: RunContext, agent: Agent) -> dict[str, t.Any]:
     config = getattr(client, "config", None)
     tokenizer_base = getattr(config, "tokenizer_base", "o200k_base")
     counter = TokenCounter(tokenizer_base=tokenizer_base)
-    live_tokens = counter.count_messages(ctx.messages)
+    context_messages = _context_messages(ctx)
+    live_tokens = counter.count_messages(context_messages)
     max_context = getattr(config, "max_context_window", None) or None
     prompt_tokens = 0
     prompt_layers: list[dict[str, t.Any]] = []
@@ -975,28 +984,46 @@ def _context_usage(ctx: RunContext, agent: Agent) -> dict[str, t.Any]:
             prompt_layers = []
 
     summary = ctx.runtime_state.shared_state.get("compaction_summary")
-    summary_tokens = counter.count_serialized(summary) if summary else 0
-    reserved_output = _client_max_tokens(client)
+    budgeted_prompt_tokens = setting.compaction_prompt_budget_tokens
+    reserved_output = client_max_output_tokens(client)
     safety_margin = int(max_context * setting.compaction_safety_margin_ratio) if max_context else 0
-    used = prompt_tokens + summary_tokens + live_tokens + reserved_output + safety_margin
+    used = budgeted_prompt_tokens + live_tokens + reserved_output + safety_margin
+    live_capacity = (
+        live_message_capacity_tokens(
+            max_context,
+            max_output_tokens=reserved_output,
+        )
+        if max_context
+        else None
+    )
+    live_threshold = (
+        live_message_threshold_tokens(
+            max_context,
+            max_output_tokens=reserved_output,
+        )
+        if max_context
+        else None
+    )
 
     return {
         "used": used,
         "max": max_context,
         "live_message_tokens": live_tokens,
-        "prompt_tokens": prompt_tokens,
-        "summary_tokens": summary_tokens,
+        "prompt_tokens": budgeted_prompt_tokens,
+        "actual_prompt_tokens": prompt_tokens,
+        "summary_tokens": 0,
         "reserved_output_tokens": reserved_output,
         "safety_margin_tokens": safety_margin,
         "prompt_budget_tokens": setting.compaction_prompt_budget_tokens,
         "summary_budget_tokens": setting.compaction_summary_budget_tokens,
-        "live_message_threshold_tokens": (
-            int(max_context * setting.compaction_live_message_threshold)
-            if max_context
+        "live_message_capacity_tokens": live_capacity,
+        "live_message_threshold_tokens": live_threshold,
+        "live_message_budget_tokens": (
+            live_message_budget_tokens(live_capacity)
+            if live_capacity is not None
             else None
         ),
-        "live_message_budget_tokens": setting.compaction_live_message_budget_tokens,
-        "message_count": len(ctx.messages),
+        "message_count": len(context_messages),
         "summary": summary,
         "prompt_layers": prompt_layers,
     }

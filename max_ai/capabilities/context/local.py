@@ -22,11 +22,21 @@ import random
 import typing as t
 from datetime import datetime
 from pathlib import Path
+from pydantic import BaseModel
 
 from ...base.context import CoreLogBookRegistry, LogBookToolMode, ContextBlock
 
 
+class LocalContextRegistryConfig(BaseModel):
+    user_id: str
+    session_id: str
+    base_path: str
+    tool_mode: LogBookToolMode = LogBookToolMode.READ_ONLY
+
 class LocalContextRegistry(CoreLogBookRegistry):
+    component_schema = LocalContextRegistryConfig
+    component_type = "context"
+
     """Filesystem-backed implementation of ``CoreLogBookRegistry``.
 
     Layout::
@@ -72,6 +82,23 @@ class LocalContextRegistry(CoreLogBookRegistry):
             user_id=user_id, session_id=session_id, tool_mode=tool_mode
         )
         self.base_path: Path = Path(base_path).expanduser().resolve()
+
+    def _to_config(self) -> LocalContextRegistryConfig:
+        return LocalContextRegistryConfig(
+            user_id=self.user_id,
+            session_id=self.session_id,
+            base_path=str(self.base_path),
+            tool_mode=self.tool_mode,
+        )
+
+    @classmethod
+    def _from_config(cls, config: LocalContextRegistryConfig) -> "LocalContextRegistry":
+        return cls(
+            user_id=config.user_id,
+            session_id=config.session_id,
+            base_path=config.base_path,
+            tool_mode=config.tool_mode,
+        )
 
     # -------- PATH HELPERS -----------------------------------------------------------
     @property

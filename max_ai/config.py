@@ -40,12 +40,12 @@ class Settings(BaseSettings):
     files: list[str] = Field(default=[".json", ".pdf", ".docx", ".xlsl", ".pptx"])
 
     # Context compaction budgets. Environment overrides use the uppercase
-    # field names, e.g. COMPACTION_PROMPT_BUDGET_TOKENS=3000.
-    compaction_prompt_budget_tokens: int = Field(default=3000, gt=0)
+    # field names, e.g. COMPACTION_PROMPT_BUDGET_TOKENS=6000.
+    compaction_prompt_budget_tokens: int = Field(default=6000, gt=0)
     compaction_summary_budget_tokens: int = Field(default=2000, gt=0)
     compaction_safety_margin_ratio: float = Field(default=0.05, ge=0, lt=1)
-    compaction_live_message_threshold: float = Field(default=0.4, gt=0, lt=1)
-    compaction_live_message_budget_tokens: int = Field(default=2000, gt=0)
+    compaction_live_message_threshold: float = Field(default=0.8, gt=0, lt=1)
+    compaction_live_message_keep_ratio: float = Field(default=0.2, gt=0, lt=1)
     compaction_min_output_tokens: int = Field(default=1024, gt=0)
 
     @field_validator("root_dir")

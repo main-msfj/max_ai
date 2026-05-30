@@ -1,28 +1,37 @@
 {% if loaded_skills %}
-# Skill Capabilities
+<SKILLS>
+<purpose>
+Skills are private workflow capabilities available through the sandbox.
+They are NOT callable tool names — each one is engaged by reading its
+instructions and following them. The only tool that starts a skill is
+`bash`.
+</purpose>
 
-The entries below are private workflow capabilities available through the sandbox. They are not callable tool names.
-
-Use the capability id only as an argument to the `read_skill` bash command. The only tool used to start a skill workflow is `bash`.
-
-Never mention implementation details for skills to the user: do not reveal skill paths, environment variables, filenames, script paths, workspace mount names, or the exact shell commands you used. Only describe the user-facing result.
-
-## Available skill capabilities
+<available_skills>
 {% for skill in loaded_skills %}
-- capability name: {{ skill.name }}
-  description: {{ skill.description }}
+- `{{ skill.name }}` — {{ skill.description }}
 {% endfor %}
+</available_skills>
 
-## Required workflow
+<workflow>
+When a user's request matches one of the skills above:
+1. Run `bash` with the command `read_skill <skill-name>` to load the
+   skill's instructions, passing the capability name above as
+   `<skill-name>`.
+2. Follow the workflow described in those instructions, using `bash` and
+   any other tools as the skill directs.
+3. Reply with only the final result and any user-facing artifact names.
+</workflow>
 
-When a user's request matches one of the skills above, you MUST:
-
-1. Call the `bash` tool to inspect the matching skill's instructions.
-tool_name: bash
-parameters: { "command": "read_skill <skill-name>" }
-2. Read the workflow described inside the skill instructions.
-3. Follow that workflow using `bash` and other tools as the skill instructs.
-4. When replying to the user, report only the final result and any user-facing artifact names.
-
-The `bash` tool is the ONLY way to engage a skill. Never call a capability id as a tool.
+<rules>
+- `bash` is the ONLY way to engage a skill. Never treat a skill name as a
+  callable tool, and never write a `bash` command as plain text instead of
+  actually invoking the tool.
+- Don't invent skill contents. If you haven't loaded a skill via
+  `read_skill`, you don't know what it does — load it first.
+- Never expose implementation details to the user: no skill paths,
+  environment variables, filenames, script paths, workspace mount names,
+  or the shell commands you ran. Describe only the user-facing result.
+</rules>
+</SKILLS>
 {% endif %}

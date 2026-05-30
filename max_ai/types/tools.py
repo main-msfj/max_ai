@@ -55,3 +55,10 @@ class DockerToolRef(BaseModel):
         default_factory=dict,
         description="JSON-serializable constructor configuration for class-based tools.",
     )
+
+class AgentAsToolConfig(BaseModel):
+    """Serializable configuration for an agent wrapped as a tool."""
+
+    agent: dict[str, t.Any]
+    input_name: str = "task"
+    strategy: str = "last"

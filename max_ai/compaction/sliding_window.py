@@ -4,20 +4,45 @@ import typing as t
 
 from pydantic import Field
 
+from ..config import setting
+from ..types.stacks import PromptCtx
+from ..core.messages import UserMessage
+from ..types.run_context import RunContext
+from ..core.compaction import CompactionOutput, CompactionResult
+
 from ..base.compaction import (
     CoreCompaction,
     TokenCounter,
+    client_max_output_tokens,
     group_atomic_messages,
+    live_message_budget_tokens,
+    live_message_capacity_tokens,
+    live_message_threshold_tokens,
     split_recent_messages,
 )
-from ..config import setting
-from ..core.compaction import CompactionOutput, CompactionResult
-from ..core.messages import UserMessage
-from ..types.run_context import RunContext
-from ..types.stacks import PromptCtx
 
 if t.TYPE_CHECKING:
     from ..base.clients import CoreChatCompletionClient
+
+
+SUMMARY_PROMPT = (
+    "<COMPACTION_SUMMARY>\n"
+    "This is compressed prior conversation context. Use it for continuity, "
+    "but the current live messages always win if they conflict.\n"
+    "{payload}\n"
+    "</COMPACTION_SUMMARY>"
+)
+
+SUMMARY_TASK = (
+    "Create an updated compact conversation summary.\n"
+    "Combine the previous summary with the messages below. The messages "
+    "below are newer, so they win over the previous summary if there is "
+    "any conflict. Preserve objectives, pending work, completed work, "
+    "decisions, and important context. Return only the requested "
+    "structured output.\n\n"
+    "Previous summary:\n{previous}\n\n"
+    "Newer messages to merge:\n{transcript}"
+)
 
 
 class SlidingWindowCompaction(CoreCompaction):
@@ -33,20 +58,26 @@ class SlidingWindowCompaction(CoreCompaction):
     async def compact(
         self,
         *,
-        ctx: "RunContext",
-        prompts: "PromptCtx",
+        ctx: RunContext,
+        prompts: PromptCtx,
         max_context_tokens: int,
-        client: "CoreChatCompletionClient",
+        client: CoreChatCompletionClient,
     ) -> CompactionResult:
         previous_summary = self._load_previous_summary(ctx)
 
-        live_message_threshold_tokens = int(
-            max_context_tokens * setting.compaction_live_message_threshold
+        max_output_tokens = client_max_output_tokens(client)
+        live_message_capacity = live_message_capacity_tokens(
+            max_context_tokens,
+            max_output_tokens=max_output_tokens,
         )
-        live_message_budget_tokens = setting.compaction_live_message_budget_tokens
+        live_message_threshold = live_message_threshold_tokens(
+            max_context_tokens,
+            max_output_tokens=max_output_tokens,
+        )
+        live_message_budget = live_message_budget_tokens(live_message_capacity)
         total_tokens = self.token_counter.count_messages(ctx.messages)
 
-        if total_tokens <= live_message_threshold_tokens:
+        if total_tokens <= live_message_threshold:
             if previous_summary is not None:
                 self._inject_summary(prompts, previous_summary)
             return CompactionResult(
@@ -59,7 +90,7 @@ class SlidingWindowCompaction(CoreCompaction):
         groups = group_atomic_messages(ctx.messages, self.token_counter)
         old_messages, recent_messages = split_recent_messages(
             groups,
-            max_tokens=live_message_budget_tokens,
+            max_tokens=live_message_budget,
         )
 
         summary = None
@@ -70,8 +101,8 @@ class SlidingWindowCompaction(CoreCompaction):
                 old_messages=old_messages,
             )
             summary = summary_output.model_dump_json(exclude_none=True)
-            ctx.runtime_state.shared_state["compaction_summary"] = summary_output.model_dump(
-                exclude_none=True
+            ctx.runtime_state.shared_state["compaction_summary"] = (
+                summary_output.model_dump(exclude_none=True)
             )
             self._inject_summary(prompts, summary_output)
             ctx.messages = recent_messages
@@ -123,18 +154,12 @@ class SlidingWindowCompaction(CoreCompaction):
         payload = summary.model_dump_json(exclude_none=True)
         if not payload or payload == "{}":
             return ""
-        return (
-            "<COMPACTION_SUMMARY>\n"
-            "This is compressed prior conversation context. Use it for continuity, "
-            "but the current live messages always win if they conflict.\n"
-            f"{payload}\n"
-            "</COMPACTION_SUMMARY>"
-        )
+        return SUMMARY_PROMPT.format(payload=payload)
 
     async def _summarize_old_messages(
         self,
         *,
-        client: "CoreChatCompletionClient",
+        client: CoreChatCompletionClient,
         previous_summary: CompactionOutput | None,
         old_messages: list[t.Any],
     ) -> CompactionOutput:
@@ -177,23 +202,18 @@ class SlidingWindowCompaction(CoreCompaction):
             else "No previous summary."
         )
         transcript = self._messages_transcript(old_messages)
-        return (
-            "Create an updated compact conversation summary.\n"
-            "Combine the previous summary with the messages below. The messages "
-            "below are newer, so they win over the previous summary if there is "
-            "any conflict. Preserve objectives, pending work, completed work, "
-            "decisions, and important context. Return only the requested "
-            "structured output.\n\n"
-            f"Previous summary:\n{previous}\n\n"
-            f"Newer messages to merge:\n{transcript}"
-        )
+        return SUMMARY_TASK.format(previous=previous, transcript=transcript)
 
     def _messages_transcript(self, messages: list[t.Any]) -> str:
         rows: list[str] = []
         for message in messages:
             role = getattr(message, "role", "message")
             source = getattr(message, "source", "unknown")
-            text = message.text() if callable(getattr(message, "text", None)) else str(message)
+            text = (
+                message.text()
+                if callable(getattr(message, "text", None))
+                else str(message)
+            )
             if not text and getattr(message, "tool_calls", None):
                 text = f"tool_calls={message.tool_calls}"
             rows.append(f"[{role}/{source}] {text}")

@@ -32,6 +32,7 @@ from max_ai.capabilities.knowledge import LocalKnowledgeRegistry
 from max_ai.capabilities.routines import LocalRoutineRegistry
 from max_ai.capabilities.skills.local import LocalSkillRegistry
 from max_ai.types.workspace import WorkspaceDirectory
+from max_ai.errors.memory import MemoryError
 
 
 # =====================================================================
@@ -59,23 +60,24 @@ async def test_local_memory_registry_round_trip(tmp_path: Path):
         all_facts = await mem.get_context()
         assert len(all_facts) == 2
 
-        by_category = {f.category: f for f in all_facts}
-        assert by_category["user_identity"].content == "Software engineer in Buenos Aires"
-        assert by_category["language"].content == "Spanish, prefers technical English"
-        assert isinstance(by_category["language"].last_updated, datetime)
+        by_key = {f.key: f for f in all_facts}
+        assert by_key["user_identity"].category == "general"
+        assert by_key["user_identity"].content == "Software engineer in Buenos Aires"
+        assert by_key["language"].content == "Spanish, prefers technical English"
+        assert isinstance(by_key["language"].last_updated, datetime)
 
         # Update existing key overwrites.
         await mem.update_fact("language", "English only")
         updated = await mem.get_context()
         assert len(updated) == 2  # still two
-        by_cat = {f.category: f for f in updated}
-        assert by_cat["language"].content == "English only"
+        by_key = {f.key: f for f in updated}
+        assert by_key["language"].content == "English only"
 
         # Delete removes it.
         await mem.delete_fact("language")
         after_delete = await mem.get_context()
         assert len(after_delete) == 1
-        assert after_delete[0].category == "user_identity"
+        assert after_delete[0].key == "user_identity"
 
         # Delete missing key is silent no-op.
         await mem.delete_fact("never_existed")  # must not raise
@@ -89,9 +91,9 @@ async def test_local_memory_registry_round_trip(tmp_path: Path):
 async def test_local_memory_rejects_invalid_keys(tmp_path: Path):
     mem = LocalMemoryRegistry(user_id="u1", base_path=tmp_path)
     async with mem:
-        with pytest.raises(ValueError):
+        with pytest.raises(MemoryError):
             await mem.update_fact("", "value")
-        with pytest.raises(ValueError):
+        with pytest.raises(MemoryError):
             await mem.update_fact("   ", "value")
 
 

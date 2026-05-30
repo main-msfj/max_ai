@@ -1,39 +1,35 @@
-"""
-Filesystem-backed memory registry.
-
-Stores user facts as a single JSON file per user under
-``{base_path}/memory/{user_id}.json``. The file holds a flat mapping
-from key → MemoryBlock — keys are stable identifiers (e.g.
-``"user_identity"``, ``"language"``, ``"project"``) and double as the
-block's category.
-
-Not concurrency-safe: simultaneous writers from different processes can
-clobber each other's changes. Intended for local development and tests,
-not multi-process production workloads.
-"""
+"""Filesystem-backed memory registry."""
 
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 
-from ...base.memory import CoreMemoryRegistry, MemoryToolMode
-from ...core import MemoryBlock
+from pydantic import BaseModel
+
+from ...base.memory import CoreMemoryRegistry, MemoryRecord, MemoryToolMode
+
+
+class LocalMemoryRegistryConfig(BaseModel):
+    user_id: str
+    base_path: str
+    tool_mode: MemoryToolMode = MemoryToolMode.FULL
 
 
 class LocalMemoryRegistry(CoreMemoryRegistry):
+    component_schema = LocalMemoryRegistryConfig
+    component_type = "memory"
+
     """Filesystem-backed implementation of ``CoreMemoryRegistry``.
 
     Layout::
 
         {base_path}/
             memory/
-                {user_id}.json          # {key: MemoryBlock, ...}
+                {user_id}.json          # {key: MemoryRecord, ...}
 
-    The file is read on every operation — no caching. This keeps the
-    on-disk state authoritative and makes it trivial to inspect or
-    edit by hand for debugging.
+    The file is read on every operation. This keeps the on-disk state
+    authoritative and makes it simple to inspect or edit during local dev.
     """
 
     def __init__(
@@ -45,7 +41,21 @@ class LocalMemoryRegistry(CoreMemoryRegistry):
         super().__init__(user_id=user_id, tool_mode=tool_mode)
         self.base_path: Path = Path(base_path).expanduser().resolve()
 
-    # -------- PATH HELPERS -----------------------------------------------------------
+    def _to_config(self) -> LocalMemoryRegistryConfig:
+        return LocalMemoryRegistryConfig(
+            user_id=self.user_id,
+            base_path=str(self.base_path),
+            tool_mode=self.tool_mode,
+        )
+
+    @classmethod
+    def _from_config(cls, config: LocalMemoryRegistryConfig) -> "LocalMemoryRegistry":
+        return cls(
+            user_id=config.user_id,
+            base_path=config.base_path,
+            tool_mode=config.tool_mode,
+        )
+
     @property
     def _memory_dir(self) -> Path:
         return self.base_path / "memory"
@@ -54,81 +64,39 @@ class LocalMemoryRegistry(CoreMemoryRegistry):
     def _user_file(self) -> Path:
         return self._memory_dir / f"{self.user_id}.json"
 
-    # -------- LIFECYCLE -----------------------------------------------------------
     async def connect(self) -> None:
-        """Ensure the memory directory exists. The user file itself is
-        only created on first write — readers tolerate its absence."""
         self._memory_dir.mkdir(parents=True, exist_ok=True)
 
     async def disconnect(self) -> None:
         return None
 
-    # -------- READ OPERATIONS -----------------------------------------------------------
-    async def get_context(self) -> list[MemoryBlock]:
-        """Return every stored fact for this user.
-
-        Empty list when the user has no memory file yet — first call
-        for a new user is not an error.
-        """
+    async def _read_all(self) -> list[MemoryRecord]:
         await self._ensure_connected()
-        return list(self._read_all().values())
+        return list(self._load_store().values())
 
-    async def list_facts(self) -> list[MemoryBlock]:
-        """Same as ``get_context`` for the local backend.
-
-        Both surfaces exist on the base contract because remote
-        backends may want to expose a richer or filtered view via
-        ``get_context`` (e.g. relevance-ranked) while keeping
-        ``list_facts`` as the raw dump.
-        """
-        return await self.get_context()
-
-    # -------- WRITE OPERATIONS -----------------------------------------------------------
-    async def update_fact(self, key: str, value: str) -> None:
-        """Create or overwrite the memory entry under ``key``.
-
-        ``key`` doubles as the ``MemoryBlock.category`` and as the
-        dict key on disk. Empty or whitespace-only keys are rejected.
-        """
+    async def _write_many(self, records: list[MemoryRecord]) -> None:
+        if not records:
+            return
         await self._ensure_connected()
-        clean_key = self._validate_key(key)
-        self.require_type(value, str, "value")
-
-        store = self._read_all()
-        store[clean_key] = MemoryBlock(
-            category=clean_key,
-            content=value,
-            last_updated=datetime.now(timezone.utc),
-        )
+        store = self._load_store()
+        for record in records:
+            store[record.key] = record
         self._write_all(store)
 
-    async def delete_fact(self, key: str) -> None:
-        """Remove ``key`` from the store. Silent no-op if absent."""
+    async def _delete_many(self, keys: list[str]) -> None:
+        if not keys:
+            return
         await self._ensure_connected()
-        clean_key = self._validate_key(key)
-
-        store = self._read_all()
-        if clean_key in store:
-            del store[clean_key]
+        store = self._load_store()
+        changed = False
+        for key in keys:
+            if key in store:
+                del store[key]
+                changed = True
+        if changed:
             self._write_all(store)
 
-    # -------- INTERNALS -----------------------------------------------------------
-    @staticmethod
-    def _validate_key(key: str) -> str:
-        if not isinstance(key, str):
-            raise TypeError(f"key must be str, got {type(key).__name__}")
-        clean = key.strip()
-        if not clean:
-            raise ValueError("key must be a non-empty, non-whitespace string")
-        return clean
-
-    def _read_all(self) -> dict[str, MemoryBlock]:
-        """Load the user's full memory dict from disk.
-
-        Returns an empty dict if the file doesn't exist yet. A corrupt
-        or non-conforming file fails loud — the user finds out
-        immediately instead of silently losing data.
-        """
+    def _load_store(self) -> dict[str, MemoryRecord]:
         path = self._user_file
         if not path.is_file():
             return {}
@@ -136,9 +104,7 @@ class LocalMemoryRegistry(CoreMemoryRegistry):
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as e:
-            raise ValueError(
-                f"Memory file {path} is not valid JSON: {e}"
-            ) from e
+            raise ValueError(f"Memory file {path} is not valid JSON: {e}") from e
 
         if not isinstance(raw, dict):
             raise ValueError(
@@ -146,29 +112,27 @@ class LocalMemoryRegistry(CoreMemoryRegistry):
                 f"top level, got {type(raw).__name__}"
             )
 
-        result: dict[str, MemoryBlock] = {}
+        result: dict[str, MemoryRecord] = {}
         for key, payload in raw.items():
             try:
-                result[key] = MemoryBlock.model_validate(payload)
+                if isinstance(payload, dict) and "key" not in payload:
+                    payload = {**payload, "key": key}
+                record = MemoryRecord.model_validate(payload)
+                result[record.key] = record
             except Exception as e:
                 raise ValueError(
                     f"Memory file {path}: entry {key!r} is not a valid "
-                    f"MemoryBlock: {e}"
+                    f"MemoryRecord: {e}"
                 ) from e
         return result
 
-    def _write_all(self, store: dict[str, MemoryBlock]) -> None:
-        """Persist the entire store back to disk.
-
-        Writes to a temp file and renames atomically so a crash
-        mid-write doesn't leave the user's memory file truncated.
-        """
+    def _write_all(self, store: dict[str, MemoryRecord]) -> None:
         path = self._user_file
         path.parent.mkdir(parents=True, exist_ok=True)
 
         serializable = {
-            key: json.loads(block.model_dump_json())
-            for key, block in store.items()
+            key: json.loads(record.model_dump_json(exclude_none=True))
+            for key, record in store.items()
         }
         text = json.dumps(serializable, indent=2, ensure_ascii=False)
 

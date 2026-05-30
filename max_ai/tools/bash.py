@@ -25,7 +25,12 @@ logger = logging.getLogger(__name__)
 log = ScopedLogger(logger, scope=["DockerSanbox"])
 
 _VALID_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+# Strict form: exactly `read_skill <name>` with no extra arguments.
 _READ_SKILL_RE = re.compile(r"^\s*read_skill\s+([A-Za-z0-9_-]+)\s*$")
+# Loose detector: the command *intends* to be a read_skill invocation,
+# even if it's malformed (extra args, quotes, chaining). Used to give a
+# helpful error instead of letting the shell fail with "command not found".
+_READ_SKILL_PREFIX_RE = re.compile(r"^\s*read_skill\b")
 
 
 # =====================================================================
@@ -43,6 +48,11 @@ _READ_SKILL_RE = re.compile(r"^\s*read_skill\s+([A-Za-z0-9_-]+)\s*$")
 # Inside /mnt the model has full freedom — read, write, install, delete,
 # run scripts. This list does NOT restrict what the model can do with
 # its own workspace.
+#
+# NOTE: these patterns are bypassable by a determined adversary (string
+# splitting, command substitution, env indirection). They exist to give
+# the model a clear, actionable error — NOT to contain a hostile actor.
+# Containment is the sandbox's job; never run skills without it.
 # =====================================================================
 
 _DANGEROUS_PATTERNS: list[tuple[re.Pattern[str], str]] = [
@@ -226,8 +236,15 @@ class BashTool(CoreRuntimeTool):
 
         reason = _find_dangerous(command)
         if reason is not None:
+            # Surface the actual reason so the model can self-correct on the
+            # next turn instead of blindly retrying or inventing a workaround.
             return CoreToolParameters(
-                is_tool_valid=False, msg_error="I am unable to do that action"
+                is_tool_valid=False,
+                msg_error=(
+                    f"Command blocked: {reason}. This action is not allowed. "
+                    "Stay inside /mnt and avoid system-level operations; adjust "
+                    "the command and try again."
+                ),
             )
         return validation
 
@@ -263,9 +280,9 @@ class BashTool(CoreRuntimeTool):
         command = t.cast(str, tool_request.parameters["command"])
         timeout = tool_request.parameters.get("timeout_seconds") or self.timeout_seconds
         if timeout <= 0:
-            mag_error = "timeout_seconds must be greater than zero."
-            log.info(mag_error)
-            return ToolResult.invalid_parameters(tool_request.id, mag_error)
+            msg_error = "timeout_seconds must be greater than zero."
+            log.info(msg_error)
+            return ToolResult.invalid_parameters(tool_request.id, msg_error)
 
         try:
             runtime = self._runtime_dirs(tool_context)
@@ -274,7 +291,14 @@ class BashTool(CoreRuntimeTool):
             runtime.skills.mkdir(parents=True, exist_ok=True)
             runtime.artifacts.mkdir(parents=True, exist_ok=True)
 
-            command = self._expand_internal_command(command, runtime)
+            command, expand_error = self._expand_internal_command(command, runtime)
+            if expand_error is not None:
+                # Malformed read_skill invocation or unknown skill name.
+                # Returning the catalog/usage keeps the model anchored to
+                # real skills instead of guessing paths.
+                log.info(expand_error)
+                return ToolResult.invalid_parameters(tool_request.id, expand_error)
+
             env = os.environ.copy()
 
             proc = await asyncio.create_subprocess_shell(
@@ -292,8 +316,8 @@ class BashTool(CoreRuntimeTool):
 
             stdout = stdout_b.decode(errors="replace")
             stderr = stderr_b.decode(errors="replace")
-            stdout, stdout_truncated = self._truncate(stdout)
-            stderr, stderr_truncated = self._truncate(stderr)
+            stdout, stdout_truncated, stdout_chars = self._truncate(stdout)
+            stderr, stderr_truncated, stderr_chars = self._truncate(stderr)
 
             return ToolResult.success_result(
                 tool_request.id,
@@ -305,6 +329,8 @@ class BashTool(CoreRuntimeTool):
                     "command": command,
                     "stdout_truncated": stdout_truncated,
                     "stderr_truncated": stderr_truncated,
+                    "stdout_original_chars": stdout_chars,
+                    "stderr_original_chars": stderr_chars,
                 },
                 metadata={"name": self.name},
             )
@@ -324,20 +350,65 @@ class BashTool(CoreRuntimeTool):
         except Exception as e:
             return ToolResult.execution_error(tool_request.id, str(e))
 
-    def _truncate(self, value: str) -> tuple[str, bool]:
-        if len(value) <= self.max_output_chars:
-            return value, False
+    def _truncate(self, value: str) -> tuple[str, bool, int]:
+        """Truncate to max_output_chars, reporting the original length.
+
+        Returns ``(text, was_truncated, original_chars)``. Surfacing the
+        original size lets the model know how much it did NOT see, so it
+        doesn't reason over a partial output as if it were complete.
+        """
+        original = len(value)
+        if original <= self.max_output_chars:
+            return value, False, original
         keep = max(self.max_output_chars, 0)
-        return value[:keep] + "\n[output truncated]", True
+        return value[:keep] + "\n[output truncated]", True, original
 
     @staticmethod
-    def _expand_internal_command(command: str, runtime: RuntimeDirs) -> str:
+    def _expand_internal_command(
+        command: str, runtime: RuntimeDirs
+    ) -> tuple[str, str | None]:
+        """Expand ``read_skill <name>`` into a cat of that skill's SKILL.md.
+
+        Returns ``(command_to_run, error_message)``:
+
+        - Not a read_skill invocation → ``(command, None)`` unchanged.
+        - Looks like read_skill but malformed (extra args, quotes,
+          chaining) → ``(command, usage_error)``.
+        - Valid form but the skill isn't materialized → ``(command,
+          not_found_error)`` listing the available skills.
+        - Valid and present → ``(cat_command, None)``.
+
+        The error branches exist so the model gets an actionable message
+        and stays anchored to the real skill catalog, instead of a raw
+        "command not found" or an invented path.
+        """
+        if not _READ_SKILL_PREFIX_RE.match(command):
+            return command, None
+
         match = _READ_SKILL_RE.match(command)
         if match is None:
-            return command
+            return command, (
+                "read_skill takes exactly one skill name and no extra arguments. "
+                "Usage: read_skill <skill-name>. To run scripts or chain commands, "
+                "issue them as a separate bash call after loading the skill."
+            )
+
         skill_name = match.group(1)
         skill_file = runtime.skills / skill_name / "SKILL.md"
-        return f"cat {skill_file.as_posix()!r}"
+        if not skill_file.is_file():
+            available = (
+                sorted(p.name for p in runtime.skills.iterdir() if p.is_dir())
+                if runtime.skills.is_dir()
+                else []
+            )
+            return command, (
+                f"Skill {skill_name!r} not found. "
+                f"Available skills: {available or 'none'}. "
+                "Use one of the available skill names exactly as listed; "
+                "do not invent skill names or paths."
+            )
+
+        return f"cat {skill_file.as_posix()!r}", None
 
     @classmethod
     def _runtime_dirs(cls, tool_context: ToolContext) -> RuntimeDirs:
@@ -348,8 +419,10 @@ class BashTool(CoreRuntimeTool):
         artifacts = cls._path_from_deps_or_env(deps, "artifacts_dir", "ARTIFACTS_DIR")
 
         if root is None:
+            # Fallback layout matches the workspace registry (no `tmp`
+            # segment): <root_dir>/<user_id>.
             user_id = cls._safe_user_id(tool_context.user_id)
-            root = setting.root_dir / "tmp" / user_id
+            root = setting.root_dir / user_id
         if tools is None:
             tools = root / "tools"
         if skills is None:

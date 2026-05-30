@@ -101,68 +101,30 @@ def test_ensure_runtime_layout_creates_user_dirs(tmp_path: Path) -> None:
     assert (host_runtime / "artifacts").is_dir()
 
 
-def test_docker_run_once_command_uses_worker_and_mounts(tmp_path: Path) -> None:
-    repo = _repo_fixture(tmp_path)
-    workspace = tmp_path / "workspace"
-    executor = DockerExecutor(repo_root=repo)
-    executor.workspace_root = workspace
-    host_runtime = workspace / "u1"
+def test_docker_mount_args_mount_user_runtime_as_mnt(tmp_path: Path) -> None:
+    executor = DockerExecutor(repo_root=_repo_fixture(tmp_path))
+    host_runtime = tmp_path / "workspace" / "u1"
 
-    command = executor._docker_run_once_command(host_runtime)
+    args = executor._docker_mount_args(host_runtime)
 
-    assert command[:5] == ["docker", "run", "--rm", "-i", "--network"]
-    assert f"{host_runtime}:/mnt" in command
-    assert f"{workspace / '.docker-runtime' / 'app'}:/app:ro" in command
-    assert "PYTHONPATH=/app" in command
-    assert "MAX_AI_TOOL_SOURCE_DIR=/app/tools" in command
-    assert command[-5:] == ["python", "-m", "max_ai.executor.docker.worker", "-", "-"]
+    assert args == ["-v", f"{executor._docker_visible_path(host_runtime)}:/mnt"]
 
 
-def test_prepare_app_mount_stages_package_metadata_and_tool_files(tmp_path: Path) -> None:
-    repo = _repo_fixture(tmp_path)
-    tool_file = tmp_path / "docker_tools.py"
-    tool_file.write_text("VALUE = 42\n", encoding="utf-8")
-    workspace = tmp_path / "workspace"
-    executor = DockerExecutor(repo_root=repo, tool_files=[tool_file])
-    executor.workspace_root = workspace
+def test_docker_env_args_expose_runtime_directories() -> None:
+    args = DockerExecutor()._docker_env_args()
 
-    app_mount = executor._prepare_app_mount()
-
-    assert app_mount == workspace / ".docker-runtime" / "app"
-    assert (app_mount / "pyproject.toml").is_file()
-    assert (app_mount / "README.md").is_file()
-    assert (app_mount / "max_ai" / "__init__.py").is_file()
-    assert (app_mount / "tools" / "docker_tools.py").read_text(encoding="utf-8") == "VALUE = 42\n"
-
-
-def test_prepare_app_mount_accepts_single_tool_file_path(tmp_path: Path) -> None:
-    repo = _repo_fixture(tmp_path)
-    tool_file = tmp_path / "docker_tools.py"
-    tool_file.write_text("VALUE = 42\n", encoding="utf-8")
-    workspace = tmp_path / "workspace"
-    executor = DockerExecutor(repo_root=repo, tool_files=str(tool_file))
-    executor.workspace_root = workspace
-
-    app_mount = executor._prepare_app_mount()
-
-    assert executor.tool_files == [tool_file.resolve()]
-    assert (app_mount / "tools" / "docker_tools.py").is_file()
-
-
-def test_tool_result_from_stdout_uses_last_json_line() -> None:
-    stdout = "\n".join(
-        [
-            "debug line",
-            '{"success":true,"error":null,"result":5,"failure_reason":null,'
-            '"tool_call_id":"call_1","metadata":{}}',
-        ]
-    )
-
-    result = DockerExecutor._tool_result_from_stdout(stdout)
-
-    assert result is not None
-    assert result.success is True
-    assert result.result == 5
+    assert args == [
+        "-e",
+        "RUNTIME_DIR=/mnt",
+        "-e",
+        "TOOLS_DIR=/mnt/tools",
+        "-e",
+        "SKILLS_DIR=/mnt/skills",
+        "-e",
+        "ARTIFACTS_DIR=/mnt/artifacts",
+        "-e",
+        "WORKSPACE_DIR=/mnt/artifacts",
+    ]
 
 
 def test_bash_container_name_is_stable_and_prefixed(tmp_path: Path) -> None:
@@ -174,10 +136,31 @@ def test_bash_container_name_is_stable_and_prefixed(tmp_path: Path) -> None:
 
 def test_docker_executor_expands_read_skill_alias_to_container_path(tmp_path: Path) -> None:
     executor = DockerExecutor(repo_root=_repo_fixture(tmp_path))
+    host_runtime = tmp_path / "workspace" / "u1"
+    skill = host_runtime / "skills" / "create-ppt"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("instructions", encoding="utf-8")
 
-    command = executor._expand_internal_bash_command("read_skill create-ppt")
+    command, error = executor._expand_internal_bash_command(
+        "read_skill create-ppt", host_runtime
+    )
 
-    assert command == "cat '/mnt/skills/create-ppt/SKILL.md'"
+    assert error is None
+    assert "cat '/mnt/skills/create-ppt/SKILL.md'" in command
+
+
+def test_docker_executor_rejects_unknown_read_skill(tmp_path: Path) -> None:
+    executor = DockerExecutor(repo_root=_repo_fixture(tmp_path))
+    host_runtime = tmp_path / "workspace" / "u1"
+    (host_runtime / "skills").mkdir(parents=True)
+
+    command, error = executor._expand_internal_bash_command(
+        "read_skill missing", host_runtime
+    )
+
+    assert command == "read_skill missing"
+    assert error is not None
+    assert "Skill 'missing' not found" in error
 
 
 @pytest.mark.asyncio

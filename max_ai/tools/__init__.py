@@ -11,4 +11,13 @@ __all__ = [
     "FunctionAsTool",
     "BashTool",
     "WorkspaceTool",
+    "AgentAsTool",
 ]
+
+
+def __getattr__(name: str):
+    if name == "AgentAsTool":
+        from .agent_as_tool import AgentAsTool
+
+        return AgentAsTool
+    raise AttributeError(name)

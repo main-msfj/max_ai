@@ -234,7 +234,6 @@ function renderContextWindow() {
 
   const live = Number(usage.live_message_tokens || 0);
   const prompt = Number(usage.prompt_tokens || 0);
-  const summary = Number(usage.summary_tokens || 0);
   const reserved = Number(usage.reserved_output_tokens || 0);
   const safety = Number(usage.safety_margin_tokens || 0);
   const total = Number(usage.used || 0);
@@ -263,14 +262,12 @@ function renderContextWindow() {
     <div class="cw-counts"><span>${fmtCount(total)} / ${fmtCount(max || 0)} tokens</span></div>
     <div class="cw-bar" aria-hidden="true">
       ${segment(prompt, "prompt", "Prompt")}
-      ${segment(summary, "summary", "Summary")}
       ${segment(live, "live", "Live messages")}
       ${segment(safety, "safety", "Safety margin")}
       ${segment(reserved, "reserved", "Reserved output")}
     </div>
     <div class="cw-legend">
       <span><i class="prompt"></i>Prompt ${fmtCount(prompt)}</span>
-      <span><i class="summary"></i>Summary ${fmtCount(summary)}</span>
       <span><i class="live"></i>Live ${fmtCount(live)}</span>
       <span><i class="reserved"></i>Output ${fmtCount(reserved)}</span>
     </div>
@@ -400,7 +397,8 @@ function renderInputMessages(messages) {
         <pre>${escapeHtml(msg.thinking)}</pre>
       </div>
     ` : "";
-    const toolCalls = msg.tool_calls ? `<span class="lf-message-chip">${fmtCount(msg.tool_calls)} tool call${msg.tool_calls === 1 ? "" : "s"}</span>` : "";
+    const toolCallCount = Array.isArray(msg.tool_calls) ? msg.tool_calls.length : Number(msg.tool_calls || 0);
+    const toolCalls = toolCallCount ? `<span class="lf-message-chip">${fmtCount(toolCallCount)} tool call${toolCallCount === 1 ? "" : "s"}</span>` : "";
 
     return `
       <details class="lf-message-card"${index === messages.length - 1 ? " open" : ""}>
@@ -627,7 +625,8 @@ function renderMessages() {
   const activeThinkingMessage = state.messages.some((msg) => (
     msg.role === "assistant" && msg.streaming && String(msg.thinking || "").trim()
   ));
-  let html = state.messages.map((msg, index) => {
+  let html = runningToolsHtml();
+  html += state.messages.map((msg, index) => {
     if (msg.role === "approval_status") return ''; // Skip internal status renders for clean UI
     if (msg.role === "tool") return ''; // Tool outputs stay in traces, not the chat transcript.
 
@@ -745,14 +744,15 @@ function handlePacket(packet) {
         tool_name: ev.tool_name,
         started_at: Date.now(),
       };
+      pushActivity(`Running tool: ${ev.tool_name || "tool"}`, "tool");
     } else if (ev.type === "tool_result") {
       delete state.runningTools[ev.tool_call_id];
       const denied = String(ev.error || "").toLowerCase().includes("denied")
         || String(ev.error || "").toLowerCase().includes("declined")
         || String(ev.error || "").toLowerCase().includes("rejected");
       pushActivity(
-        ev.success ? "Processing tool result" : (denied ? "Skipped denied tool" : "Tool failed"),
-        ev.success ? "info" : (denied ? "approval" : "error"),
+        ev.success ? "Tool completed" : (denied ? "Skipped denied tool" : "Tool failed"),
+        ev.success ? "tool" : (denied ? "approval" : "error"),
       );
     } else if (ev.type === "approval_item") {
       delete state.runningTools[ev.item?.tool_call_id];
@@ -846,6 +846,7 @@ function handlePacket(packet) {
       tool_name: packet.tool_name,
       started_at: Date.now(),
     };
+    pushActivity(`Running tool: ${packet.tool_name || "tool"}`, "tool");
   }
   else if (packet.type === "tool_result") {
     delete state.runningTools[packet.tool_call_id];
@@ -853,8 +854,8 @@ function handlePacket(packet) {
       || String(packet.error || "").toLowerCase().includes("declined")
       || String(packet.error || "").toLowerCase().includes("rejected");
     pushActivity(
-      packet.success ? "Processing tool result" : (denied ? "Skipped denied tool" : "Tool failed"),
-      packet.success ? "info" : (denied ? "approval" : "error"),
+      packet.success ? "Tool completed" : (denied ? "Skipped denied tool" : "Tool failed"),
+      packet.success ? "tool" : (denied ? "approval" : "error"),
     );
   }
 

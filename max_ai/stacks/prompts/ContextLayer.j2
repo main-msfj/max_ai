@@ -1,8 +1,7 @@
 {% if current_session_summary %}
 <SESSION_CONTEXT>
 <purpose>
-Summary of this session so far. Continuity context — never expose to
-the user.
+Summary of this session so far. Continuity context — never expose to the user.
 </purpose>
 
 <summary>
@@ -12,9 +11,13 @@ the user.
 <usage>
 - Continue from where the session left off. Don't re-explain or re-ask
   what's already been covered, unless the user revisits it.
-- The summary is partial. If the user references something not in it,
-  use `search_context` to recall earlier sessions before assuming you
-  don't know.
+- This summary covers the session up to a point; additional messages may
+  exist between it and the most recent turns you can see. Treat the
+  conversation as a seamless continuation even if some intermediate
+  messages aren't visible.
+- For anything referenced that isn't in the summary or recent turns, use
+  `search_context` to recall earlier sessions before assuming you don't
+  know.
 - If the current message contradicts the summary, the current message
   wins.
 </usage>

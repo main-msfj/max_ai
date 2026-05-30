@@ -28,13 +28,22 @@ import random
 import shutil
 import tempfile
 from pathlib import Path
+from pydantic import BaseModel
 
 from ...base.routines import CoreRoutineRegistry, RoutineToolMode
 from ...core import RoutineBlocks
 from ...types.routines import RoutineSummary
 
 
+class LocalRoutineRegistryConfig(BaseModel):
+    source_path: str
+    routines: list[str]
+    tool_mode: RoutineToolMode = RoutineToolMode.FULL
+
 class LocalRoutineRegistry(CoreRoutineRegistry):
+    component_schema = LocalRoutineRegistryConfig
+    component_type = "routines"
+
     """Filesystem-backed implementation of ``CoreRoutineRegistry``.
 
     Source layout (read-only)::
@@ -71,6 +80,21 @@ class LocalRoutineRegistry(CoreRoutineRegistry):
 
         self.routines: list[str] = self._validate_routine_names(routines)
         self._tmp_root: Path | None = None
+
+    def _to_config(self) -> LocalRoutineRegistryConfig:
+        return LocalRoutineRegistryConfig(
+            source_path=str(self.source_path),
+            routines=list(self.routines),
+            tool_mode=self.tool_mode,
+        )
+
+    @classmethod
+    def _from_config(cls, config: LocalRoutineRegistryConfig) -> "LocalRoutineRegistry":
+        return cls(
+            source_path=config.source_path,
+            routines=config.routines,
+            tool_mode=config.tool_mode,
+        )
 
     # -------- VALIDATION -----------------------------------------------------------
     @staticmethod

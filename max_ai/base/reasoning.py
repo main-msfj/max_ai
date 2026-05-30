@@ -42,6 +42,7 @@ from ..base.clients import CoreChatCompletionClient
 from ..base.tools import CoreTool
 
 from ..core.messages import AssistantMessage
+from ..core.messages import CoreMessage
 from .compaction import TokenCounter
 from ..core.event_type import (
     CoreEvent,
@@ -52,6 +53,7 @@ from ..core.event_type import (
     ModelCallEvent,
 )
 
+from ..types.chat_history import ChatHistory
 from ..types.run_context import RunContext
 from ..types.stacks import PromptCtx
 from ..types.completions import (
@@ -235,9 +237,46 @@ class BaseReasoning(ABC):
         """
         return list(self.tool_executor.tools.values())
 
+    @staticmethod
+    def _conversation_messages(ctx: RunContext) -> list[CoreMessage]:
+        """Return persisted history followed by the current live transcript."""
+        return [
+            *ctx.message_history.iter_messages(),
+            *ctx.messages,
+        ]
+
+    @staticmethod
+    def _without_assistant_thinking(
+        messages: t.Sequence[CoreMessage],
+    ) -> list[CoreMessage]:
+        """Strip private assistant reasoning from model-facing messages."""
+        cleaned: list[CoreMessage] = []
+        for message in messages:
+            if isinstance(message, AssistantMessage) and message.thinking:
+                cleaned.append(message.model_copy(update={"thinking": None}))
+                continue
+            cleaned.append(message)
+        return cleaned
+
+    def _model_context(self, ctx: RunContext) -> RunContext:
+        """Return a copy safe to hand to chat-completion clients."""
+        return ctx.model_copy(
+            update={
+                "message_history": ChatHistory(
+                    message_history=self._without_assistant_thinking(
+                        list(ctx.message_history.iter_messages())
+                    )
+                ),
+                "messages": self._without_assistant_thinking(ctx.messages),
+            }
+        )
+
+    def _model_input_messages(self, ctx: RunContext) -> list[CoreMessage]:
+        return self._without_assistant_thinking(self._conversation_messages(ctx))
+
     def _input_messages_with_token_counts(
-        self, messages: t.Sequence["CoreMessage"]
-    ) -> list["CoreMessage"]:
+        self, messages: t.Sequence[CoreMessage]
+    ) -> list[CoreMessage]:
         """Return model input messages with per-message token counts attached."""
         counter = TokenCounter(
             tokenizer_base=self.client.config.tokenizer_base,
@@ -293,7 +332,7 @@ class BaseReasoning(ABC):
         async def _single_call(_ctx: RunContext) -> ChatCompletionResult:
             task = asyncio.create_task(
                 self.client.run(
-                    ctx=_ctx,
+                    ctx=self._model_context(_ctx),
                     prompts=prompts,
                     tools=self._tools,
                     output_format=output_format,
@@ -308,7 +347,9 @@ class BaseReasoning(ABC):
         yield ModelCallEvent(
             source=self.name,
             model=str(model_metadata.get("model") or "unknown"),
-            input_messages=self._input_messages_with_token_counts(ctx.messages),
+            input_messages=self._input_messages_with_token_counts(
+                self._model_input_messages(ctx)
+            ),
         )
 
         backoff = 1.0
@@ -408,7 +449,7 @@ class BaseReasoning(ABC):
             _ctx: RunContext,
         ) -> t.AsyncGenerator[ChatCompletionChunk, None]:
             stream = await self.client.run(
-                ctx=_ctx,
+                ctx=self._model_context(_ctx),
                 prompts=prompts,
                 tools=self._tools,
                 output_format=output_format,
@@ -432,7 +473,9 @@ class BaseReasoning(ABC):
                 yield ModelCallEvent(
                     source=self.name,
                     model=str(model_metadata.get("model") or "unknown"),
-                    input_messages=self._input_messages_with_token_counts(ctx.messages),
+                    input_messages=self._input_messages_with_token_counts(
+                        self._model_input_messages(ctx)
+                    ),
                 )
                 async for item in self.middleware_chain.execute_stream(
                     action="model_call_stream",

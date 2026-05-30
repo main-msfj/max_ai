@@ -34,6 +34,7 @@ from ..base.workspace import WorkSpaceRegistry
 from ..tools.bash import BashTool
 from ..tools.function_as_tool import FunctionAsTool
 from ..tools.workspace import WorkspaceTool
+from ..types.tools import ToolApprovalMode
 
 logger = logging.getLogger(__name__)
 log = ScopedLogger(logger, prefix="[AgentCapabilities]")
@@ -146,7 +147,7 @@ class AgentCapabilities:
     def get_native_tools(self) -> list[CoreTool]:
         tools: list[CoreTool] = [WorkspaceTool()]
         if self.skills is not None:
-            tools.append(BashTool())
+            tools.append(BashTool(approval_mode=ToolApprovalMode.AUTO_APPROVED))
         return tools
 
     def collect_tools(self) -> list[CoreTool]:

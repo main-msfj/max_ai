@@ -5,21 +5,38 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import importlib
 import typing as t
 from abc import ABC
 
 from pydantic import BaseModel
 
-from .component import ComponentBase
-from .compaction import CompactionResult, CoreCompaction
+from .component import ComponentBase, is_component_class
+from .compaction import (
+    CompactionResult,
+    CoreCompaction,
+    client_max_output_tokens,
+    live_message_budget_tokens,
+    live_message_capacity_tokens,
+    live_message_threshold_tokens,
+)
 from .tool_executor import ToolExecutor
 from .workspace import WorkSpaceRegistry
 from .clients import CoreChatCompletionClient
 from .capability import CoreAgentCapabilities
+from .tools import CoreTool
+from .executor import CoreExecutor
+from .skills import CoreSkillRegistry
+from .memory import CoreMemoryRegistry
+from .context import CoreLogBookRegistry
+from .routines import CoreRoutineRegistry
+from .knowledge import CoreKnowledgeRegistry
+from ..stacks import CoreLayer
 
 
 from ..loggers import ScopedLogger
-from ..core.models import AgentConfig
+from ..core.models import AgentConfig, AgentComponentConfig
+from ..core.compaction import MemoryMaintenanceOutput
 from ..config import setting
 from ..base.middleware import CoreMiddleware
 from ..core.messages import CoreMessage, UserMessage
@@ -35,6 +52,7 @@ from ..errors.agent import AgentError
 from ..types.completions import Usage
 from ..reasoning.react import ReActLoop
 from ..executor.local import LocalExecutor
+from ..executor.routing import RoutingExecutor
 from ..types.run_context import RunContext
 from ..termination import CancellationToken
 from ..workspace.system import LocalWorkSpace
@@ -45,17 +63,8 @@ from ..manager.capabilities import AgentCapabilities
 from ..manager.stacks import PromptVariablesBuilder, build_default_stack
 
 if t.TYPE_CHECKING:
-    from .tools import CoreTool
-    from ..stacks import CoreLayer
-    from .executor import CoreExecutor
     from .reasoning import BaseReasoning
-    from .skills import CoreSkillRegistry
-    from .compaction import CompactionResult, CoreCompaction
-    from .memory import CoreMemoryRegistry
-    from .context import CoreLogBookRegistry
-    from .routines import CoreRoutineRegistry
     from ..manager.stacks import LayerContainer
-    from .knowledge import CoreKnowledgeRegistry
 
 RunYield = t.Union[CoreEvent, AgentResponse]
 ConfigT = t.TypeVar("ConfigT", bound=BaseModel)
@@ -144,7 +153,9 @@ class Agent(ComponentBase[BaseModel], ABC):
             compaction: Optional user-provided context compaction strategy.
                 Defaults to SlidingWindowCompaction.
             executor: Optional user-provided execution strategy. Defaults to
-                ``LocalExecutor``.
+                ``LocalExecutor`` when the agent has no skills, or to a
+                ``RoutingExecutor`` (local tools in-process, runtime tools
+                in a Docker sandbox) when skills are present.
             workspace Optional User-provided Workspace Resgistry. Default to
                 ``LocalWorkspace``.
             output_format: Pydantic model for structured response.
@@ -180,6 +191,143 @@ class Agent(ComponentBase[BaseModel], ABC):
         self._rendered_layers: dict[type[CoreLayer], str] = {}
         self._rendered_layer_usage: dict[str, PromptLayerUsage] = {}
         self._prompt_tokens: int = 0
+
+    component_schema = AgentComponentConfig
+    component_type = "agent"
+
+    # -------- COMPONENT SERIALIZATION -----------------------------------------------------------
+    def _to_config(self) -> AgentComponentConfig:
+        return AgentComponentConfig(
+            name=self.name,
+            description=self.description,
+            instructions=self.instructions,
+            client=self.client.dump_component().model_dump(exclude_none=True),
+            config=self.config,
+            toolset=self._dump_components(self.capabilities.toolset, "toolset"),
+            capabilities=self._dump_components(
+                [
+                    cap
+                    for cap in self.capabilities.capabilities
+                    if not isinstance(cap, WorkSpaceRegistry)
+                ],
+                "capabilities",
+            ),
+            workspace=self.workspace.dump_component().model_dump(exclude_none=True)
+            if self._is_dumpable_component(self.workspace)
+            else None,
+            middlewares=self._dump_components(self.middlewares, "middlewares"),
+            framework_layers=self._dump_components(
+                list(self.prompt_stack), "framework_layers"
+            ),
+            executor=self.executor.dump_component().model_dump(exclude_none=True)
+            if self._is_dumpable_component(self.executor)
+            else None,
+            output_format=self._type_ref(self.output_format),
+            priority_tools=list(self.capabilities.priority_tools),
+        )
+
+    @classmethod
+    def _from_config(cls, config: AgentComponentConfig) -> t.Self:
+        client = ComponentBase.load_component(
+            config.client, expected=CoreChatCompletionClient
+        )
+        toolset = [
+            ComponentBase.load_component(item, expected=CoreTool)
+            for item in config.toolset
+        ]
+        capabilities = [
+            ComponentBase.load_component(item, expected=CoreAgentCapabilities)
+            for item in config.capabilities
+        ]
+        workspace = (
+            ComponentBase.load_component(config.workspace, expected=WorkSpaceRegistry)
+            if config.workspace is not None
+            else None
+        )
+        middlewares = [
+            ComponentBase.load_component(item, expected=CoreMiddleware)
+            for item in config.middlewares
+        ]
+        framework_layers = [
+            ComponentBase.load_component(item, expected=CoreLayer)
+            for item in config.framework_layers
+        ]
+        executor = (
+            ComponentBase.load_component(config.executor, expected=CoreExecutor)
+            if config.executor is not None
+            else None
+        )
+
+        memory = next(
+            (cap for cap in capabilities if isinstance(cap, CoreMemoryRegistry)), None
+        )
+        skills = next(
+            (cap for cap in capabilities if isinstance(cap, CoreSkillRegistry)), None
+        )
+        logbook = next(
+            (cap for cap in capabilities if isinstance(cap, CoreLogBookRegistry)), None
+        )
+        routines = next(
+            (cap for cap in capabilities if isinstance(cap, CoreRoutineRegistry)), None
+        )
+        knowledge = [
+            cap for cap in capabilities if isinstance(cap, CoreKnowledgeRegistry)
+        ]
+
+        return cls(
+            name=config.name,
+            description=config.description,
+            instructions=config.instructions,
+            client=client,
+            toolset=toolset,
+            memory=memory,
+            skills=skills,
+            logbook=logbook,
+            routines=routines,
+            knowledge=knowledge,
+            workspace=workspace,
+            middlewares=middlewares,
+            framework_layers=framework_layers,
+            executor=executor,
+            output_format=cls._load_type_ref(config.output_format),
+            priority_tools=config.priority_tools,
+            config=config.config,
+        )
+
+    @staticmethod
+    def _is_dumpable_component(value: t.Any) -> bool:
+        return isinstance(value, ComponentBase) and is_component_class(type(value))
+
+    @classmethod
+    def _dump_components(
+        cls, values: t.Iterable[t.Any], field: str
+    ) -> list[dict[str, t.Any]]:
+        dumped: list[dict[str, t.Any]] = []
+        for value in values:
+            if not cls._is_dumpable_component(value):
+                raise TypeError(
+                    f"Agent {field} contains non-serializable {type(value).__name__}."
+                )
+            dumped.append(value.dump_component().model_dump(exclude_none=True))
+        return dumped
+
+    @staticmethod
+    def _type_ref(value: type[BaseModel] | None) -> str | None:
+        if value is None:
+            return None
+        return f"{value.__module__}.{value.__qualname__}"
+
+    @staticmethod
+    def _load_type_ref(value: str | None) -> type[BaseModel] | None:
+        if value is None:
+            return None
+        module_name, _, attr = value.rpartition(".")
+        if not module_name or not attr:
+            raise ValueError(f"Invalid type reference: {value!r}")
+        loaded = getattr(importlib.import_module(module_name), attr)
+        if not isinstance(loaded, type) or not issubclass(loaded, BaseModel):
+            raise TypeError(f"Output format must be a Pydantic model: {value!r}")
+        return loaded
 
     # -------- LIFECYCLE -----------------------------------------------------------
     def build_registries(
@@ -304,6 +452,8 @@ class Agent(ComponentBase[BaseModel], ABC):
         max_context_tokens: int,
         result: CompactionResult | None = None,
         total_token_count: int = 0,
+        context_summary_persisted: bool = False,
+        context_summary_session_id: str | None = None,
     ) -> CompactionEvent:
         result_changed = bool(result and result.changed)
         return CompactionEvent(
@@ -316,11 +466,19 @@ class Agent(ComponentBase[BaseModel], ABC):
             old_token_count=result.old_token_count if result else 0,
             recent_token_count=result.recent_token_count if result else 0,
             total_token_count=result.total_token_count if result else total_token_count,
-            live_message_threshold_tokens=int(
-                max_context_tokens * setting.compaction_live_message_threshold
+            live_message_threshold_tokens=live_message_threshold_tokens(
+                max_context_tokens,
+                max_output_tokens=client_max_output_tokens(self.client),
             ),
-            live_message_budget_tokens=setting.compaction_live_message_budget_tokens,
+            live_message_budget_tokens=live_message_budget_tokens(
+                live_message_capacity_tokens(
+                    max_context_tokens,
+                    max_output_tokens=client_max_output_tokens(self.client),
+                )
+            ),
             summary=result.summary if result else None,
+            context_summary_persisted=context_summary_persisted,
+            context_summary_session_id=context_summary_session_id,
         )
 
     async def _apply_compaction(
@@ -338,12 +496,218 @@ class Agent(ComponentBase[BaseModel], ABC):
             max_context_tokens=max_context_tokens,
             client=self.client,
         )
+        (
+            context_persisted,
+            context_session_id,
+        ) = await self._persist_context_after_compaction(
+            ctx=ctx,
+            result=result,
+        )
+        await self._maintain_memory_after_compaction(
+            ctx=ctx, prompts=prompts, result=result
+        )
 
         return self._compaction_event(
             phase="end",
             max_context_tokens=max_context_tokens,
             result=result,
+            context_summary_persisted=context_persisted,
+            context_summary_session_id=context_session_id,
         )
+
+    async def _persist_context_after_compaction(
+        self,
+        *,
+        ctx: RunContext,
+        result: CompactionResult,
+    ) -> tuple[bool, str | None]:
+        logbook = self.registries.logbook
+        session_id = ctx.session_id or getattr(logbook, "session_id", None)
+        if logbook is None or not result.changed or not result.summary:
+            return False, session_id
+
+        upsert_summary = getattr(logbook, "upsert_summary", None)
+        if not callable(upsert_summary):
+            return False, session_id
+
+        if not session_id:
+            return False, None
+
+        try:
+            await logbook._ensure_connected()
+            await upsert_summary(
+                session_id=session_id,
+                summary=result.summary,
+                metadata={
+                    "source": "compaction",
+                    "strategy": type(self.compaction).__name__,
+                    "old_message_count": len(result.old_messages),
+                    "recent_message_count": len(result.recent_messages),
+                    "old_token_count": result.old_token_count,
+                    "recent_token_count": result.recent_token_count,
+                    "total_token_count": result.total_token_count,
+                },  # type: ignore[dict-item]
+            )
+            return True, session_id
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "Context summary persistence during compaction failed",
+                agent_name=self.name,
+                session_id=session_id,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return False, session_id
+
+    async def _maintain_memory_after_compaction(
+        self,
+        *,
+        ctx: RunContext,
+        prompts: PromptCtx,
+        result: CompactionResult,
+    ) -> None:
+        memory = self.registries.memory
+        has_compacted_content = bool(result.old_messages or result.summary)
+        if memory is None or not has_compacted_content:
+            return
+
+        try:
+            await memory._ensure_connected()
+            facts = await memory.list_facts()
+            task = self._memory_maintenance_task(
+                facts=facts,
+                messages=result.old_messages,
+                summary=result.summary,
+            )
+            maintenance_ctx = RunContext(
+                user_id=ctx.user_id,
+                session_id=ctx.session_id,
+                messages=[UserMessage(source="memory-maintenance", content=task)],
+            )
+            maintenance_prompts = PromptCtx.model_construct(
+                stack=None,
+                variables={},
+                rendered_layers={},
+                layer_usage={},
+                prompt_tokens=0,
+            )
+            maintenance = await self.client.run(
+                ctx=maintenance_ctx,
+                prompts=maintenance_prompts,
+                tools=None,
+                output_format=MemoryMaintenanceOutput,
+                stream=False,
+                max_tokens=setting.compaction_summary_budget_tokens,
+            )
+            structured = maintenance.message.structured_output
+            if isinstance(structured, MemoryMaintenanceOutput):
+                output = structured
+            elif structured is not None:
+                output = MemoryMaintenanceOutput.model_validate(structured.model_dump())
+            elif maintenance.message.text().strip():
+                output = MemoryMaintenanceOutput.model_validate_json(
+                    maintenance.message.text().strip()
+                )
+            else:
+                output = MemoryMaintenanceOutput()
+
+            applied_updates = 0
+            for update in output.updates:
+                if await self._apply_memory_maintenance_update(memory, update):
+                    applied_updates += 1
+            if applied_updates:
+                await self._refresh_memory_prompt_layer(prompts)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "Memory maintenance during compaction failed",
+                agent_name=self.name,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+
+    async def _apply_memory_maintenance_update(
+        self,
+        memory: "CoreMemoryRegistry",
+        update: t.Any,
+    ) -> bool:
+        key = str(update.key).strip()
+        category = str(update.category).strip()
+        content = str(update.content).strip()
+        if not key or not category or not content:
+            return False
+
+        upsert = getattr(memory, "upsert_memory", None)
+        if callable(upsert):
+            await upsert(key=key, category=category, content=content)
+            return True
+        await memory.update_fact(key, content)
+        return True
+
+    async def _refresh_memory_prompt_layer(self, prompts: PromptCtx) -> None:
+        for layer in self.prompt_stack:
+            if type(layer).__name__ != "MemoryLayer":
+                continue
+            await self._render_prompt_layer(layer)
+            prompts.rendered_layers[type(layer)] = self._rendered_layers[type(layer)]
+            prompts.layer_usage = self.rendered_layer_usage
+            prompts.prompt_tokens = self.prompt_tokens
+            return
+
+    def _memory_maintenance_task(
+        self,
+        *,
+        facts: list[t.Any],
+        messages: list[CoreMessage],
+        summary: str | None,
+    ) -> str:
+        current_facts = (
+            "\n".join(
+                f"- key={getattr(fact, 'key', None) or getattr(fact, 'category', 'unknown')}; "
+                f"category={getattr(fact, 'category', 'unknown')}; "
+                f"content={getattr(fact, 'content', '')}"
+                for fact in facts
+            )
+            or "No stored memory facts."
+        )
+        transcript = self._memory_messages_transcript(messages)
+        compacted_summary = summary or "No compaction summary was produced."
+        return (
+            "You are maintaining durable user memory during context compaction.\n"
+            "Review every stored memory fact, the compaction summary, and the "
+            "conversation messages that are about to be compacted. Return only "
+            "structured output.\n\n"
+            "Rules:\n"
+            "- Compare the compacted information against current memory facts before "
+            "returning any update.\n"
+            "- If the compacted information already matches memory, return an empty "
+            "updates list and keep going.\n"
+            "- Update existing facts when newer messages refine, correct, or add "
+            "durable user-specific information.\n"
+            "- Reuse an existing key whenever the new information belongs to that fact.\n"
+            "- Create a new key only for durable information that does not fit an "
+            "existing fact.\n"
+            "- Do not include transient conversation details, tool mechanics, or assistant claims.\n"
+            "- Do not delete facts; deletion requires explicit user approval elsewhere.\n"
+            "- If nothing should change, return an empty updates list.\n\n"
+            f"Current memory facts:\n{current_facts}\n\n"
+            f"Compaction summary:\n{compacted_summary}\n\n"
+            f"Messages to learn from:\n{transcript}"
+        )
+
+    def _memory_messages_transcript(self, messages: list[CoreMessage]) -> str:
+        rows: list[str] = []
+        for message in messages:
+            role = getattr(message, "role", "message")
+            source = getattr(message, "source", "unknown")
+            text = (
+                message.text()
+                if callable(getattr(message, "text", None))
+                else str(message)
+            )
+            if not text and getattr(message, "tool_calls", None):
+                text = f"tool_calls={message.tool_calls}"
+            rows.append(f"[{role}/{source}] {text}")
+        return "\n".join(rows)
 
     def _build_reasoning(
         self,
@@ -385,18 +749,64 @@ class Agent(ComponentBase[BaseModel], ABC):
         return LocalWorkSpace()
 
     def validate_executor_object(self, executor: CoreExecutor | None) -> CoreExecutor:
-        """Resolve executor."""
+        """Resolve the execution strategy.
+
+        Defaults split execution by tool type:
+
+        - No skills → a plain ``LocalExecutor``; every tool runs
+          in-process (developer-authored code, trusted accordingly).
+        - Skills present → a ``RoutingExecutor`` that keeps ordinary
+          tools local and routes runtime tools (``CoreRuntimeTool``, i.e.
+          ``bash`` and the skill scripts it runs) into a Docker sandbox.
+
+        A user-supplied executor is always honored as-is.
+        """
         if executor is not None:
             return executor
 
-        return LocalExecutor(default_timeout=self.config.tool_timeout)
+        local = LocalExecutor(default_timeout=self.config.tool_timeout)
+        if not self.registries.requires_sandbox_executor:
+            return local
+
+        # Lazy import: only agents with skills pull in the Docker stack,
+        # so a skill-free agent never requires Docker to be installed.
+        from ..executor import DockerExecutor
+
+        return RoutingExecutor(local=local, sandbox=DockerExecutor())
 
     def _validate_runtime_safety(self) -> None:
-        """Validate runtime combinations that can affect the host machine."""
-        if self.registries.requires_sandbox_executor and isinstance(
-            self.executor, LocalExecutor
-        ):
+        """Validate that runtime tools have a sandboxed execution path.
+
+        Runtime tools (``CoreRuntimeTool`` — e.g. ``bash``, and therefore
+        the skill scripts the model runs through it) execute model-chosen
+        commands and must not run in-process. They require a
+        sandbox-capable executor. Ordinary tools are unaffected; they run
+        locally regardless.
+
+        Raises:
+            AgentError: when skills are present but the resolved executor
+                cannot isolate runtime tools.
+        """
+        if not self.registries.requires_sandbox_executor:
+            return
+        if not self._executor_can_sandbox(self.executor):
             raise AgentError.unsafe_local_executor_for_skills(self.name)
+
+    @classmethod
+    def _executor_can_sandbox(cls, executor: CoreExecutor) -> bool:
+        """Return True if ``executor`` can isolate runtime tools.
+
+        - ``RoutingExecutor`` qualifies iff it has a sandbox backend that
+          itself qualifies.
+        - A bare ``LocalExecutor`` cannot isolate model-driven commands.
+        - Any other executor (Docker, a custom sandbox) is trusted to
+          provide isolation.
+        """
+        if isinstance(executor, RoutingExecutor):
+            return executor.sandbox is not None and cls._executor_can_sandbox(
+                executor.sandbox
+            )
+        return not isinstance(executor, LocalExecutor)
 
     def _build_response(
         self,
@@ -512,12 +922,16 @@ class Agent(ComponentBase[BaseModel], ABC):
         reasoning = self._build_reasoning(tool_executor)
         max_context_tokens = getattr(self.client.config, "max_context_window", 0) or 0
         live_message_tokens = self._token_counter.count_messages(ctx.messages)
-        live_message_threshold_tokens = int(
-            max_context_tokens * setting.compaction_live_message_threshold
-        ) if max_context_tokens > 0 else 0
+        live_message_threshold = (
+            live_message_threshold_tokens(
+                max_context_tokens,
+                max_output_tokens=client_max_output_tokens(self.client),
+            )
+            if max_context_tokens > 0
+            else 0
+        )
         compaction_started = (
-            max_context_tokens > 0
-            and live_message_tokens > live_message_threshold_tokens
+            max_context_tokens > 0 and live_message_tokens > live_message_threshold
         )
         if compaction_started:
             yield self._compaction_event(
@@ -526,7 +940,9 @@ class Agent(ComponentBase[BaseModel], ABC):
                 total_token_count=live_message_tokens,
             )
         compaction_event = await self._apply_compaction(ctx, prompts)
-        if compaction_event is not None and (compaction_started or compaction_event.changed):
+        if compaction_event is not None and (
+            compaction_started or compaction_event.changed
+        ):
             yield compaction_event
 
         loop_state = reasoning.LOOP_STATE_CLS()

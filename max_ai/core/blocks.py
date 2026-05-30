@@ -49,6 +49,7 @@ class ChatHistoryBlock(BaseModel):
 class MemoryBlock(BaseModel):
     """Single block of memory"""
 
+    key: str | None = Field(default=None, description="Stable memory identifier")
     category: str = Field(..., description="Memory category")
     content: str = Field(..., description="Consolidated value for this memory fact")
     last_updated: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

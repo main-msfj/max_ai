@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from max_ai.base.memory import MemoryToolMode
+from max_ai.base.memory import MemoryToolMode, RecallQuery
 from max_ai.capabilities.memory import SQLiteMemoryRegistry
 from max_ai.errors.memory import MemoryError
 
@@ -21,12 +21,24 @@ def fake_embedding(text: str) -> list[float]:
     ]
 
 
-@pytest.mark.asyncio
-async def test_sqlite_memory_registry_round_trip(tmp_path: Path, monkeypatch):
+def fake_embeddings(texts) -> list[list[float]]:
+    return [fake_embedding(text) for text in texts]
+
+
+def patch_embeddings(monkeypatch):
     monkeypatch.setattr(
         "max_ai.capabilities.memory.sqlite.get_lightweight_embedding",
         fake_embedding,
     )
+    monkeypatch.setattr(
+        "max_ai.capabilities.memory.sqlite.get_lightweight_embeddings",
+        fake_embeddings,
+    )
+
+
+@pytest.mark.asyncio
+async def test_sqlite_memory_registry_round_trip(tmp_path: Path, monkeypatch):
+    patch_embeddings(monkeypatch)
     mem = SQLiteMemoryRegistry(user_id="u1", base_path=tmp_path)
 
     async with mem:
@@ -42,38 +54,40 @@ async def test_sqlite_memory_registry_round_trip(tmp_path: Path, monkeypatch):
         facts = await mem.list_facts()
         by_content = {fact.content: fact for fact in facts}
         assert by_content["Prefers Spanish for casual conversation."].category == "preference"
-        assert by_content["Working on a Python agent framework."].category == "project"
+        assert by_content["Working on a Python agent framework."].category == "general"
 
-        results = await mem.search("python framework", limit=1)
+        results = await mem.recall(RecallQuery(text="python framework", limit=1))
         assert len(results) == 1
-        assert results[0].category == "project"
+        assert results[0].key == "project"
 
         await mem.delete_fact("language")
         after_delete = await mem.list_facts()
         assert len(after_delete) == 1
-        assert after_delete[0].category == "project"
+        assert after_delete[0].key == "project"
 
     db_path = tmp_path / "backend-local" / "memory.sqlite3"
     assert db_path.is_file()
     with sqlite3.connect(db_path) as conn:
-        rows = conn.execute("SELECT user_id, key, category, content, vector FROM memory").fetchall()
+        rows = conn.execute(
+            "SELECT user_id, key, category, content, confidence, source, expires_at, vector FROM memory"
+        ).fetchall()
     assert rows == [
         (
             "u1",
             "project",
-            "project",
+            "general",
             "Working on a Python agent framework.",
-            "[1.0, 0.0, 1.0]",
+            1.0,
+            None,
+            None,
+            "[1.0, 0.0, 0.0]",
         )
     ]
 
 
 @pytest.mark.asyncio
-async def test_sqlite_memory_search_can_filter_by_category(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(
-        "max_ai.capabilities.memory.sqlite.get_lightweight_embedding",
-        fake_embedding,
-    )
+async def test_sqlite_memory_recall_can_filter_by_category(tmp_path: Path, monkeypatch):
+    patch_embeddings(monkeypatch)
     mem = SQLiteMemoryRegistry(user_id="u1", base_path=tmp_path)
 
     async with mem:
@@ -88,7 +102,9 @@ async def test_sqlite_memory_search_can_filter_by_category(tmp_path: Path, monke
             content="Python project.",
         )
 
-        results = await mem.search("python spanish project", category="preference")
+        results = await mem.recall(
+            RecallQuery(text="python spanish project", category="preference")
+        )
 
     assert len(results) == 1
     assert results[0].content == "Prefers Spanish."
@@ -96,10 +112,7 @@ async def test_sqlite_memory_search_can_filter_by_category(tmp_path: Path, monke
 
 @pytest.mark.asyncio
 async def test_sqlite_memory_exposes_category_update_tool(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(
-        "max_ai.capabilities.memory.sqlite.get_lightweight_embedding",
-        fake_embedding,
-    )
+    patch_embeddings(monkeypatch)
     mem = SQLiteMemoryRegistry(
         user_id="u1",
         base_path=tmp_path,
@@ -115,7 +128,12 @@ async def test_sqlite_memory_exposes_category_update_tool(tmp_path: Path, monkey
         "delete_memory",
     }
     update_tool = next(tool for tool in mem.tools if tool.name == "update_memory")
-    assert set(update_tool.parameters["properties"]) == {"key", "category", "content"}
+    assert set(update_tool.parameters["properties"]) == {
+        "key",
+        "category",
+        "content",
+        "confidence",
+    }
 
 
 @pytest.mark.asyncio
@@ -129,10 +147,7 @@ async def test_sqlite_memory_rejects_empty_required_fields(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_sqlite_memory_context_only_includes_recent_memories(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(
-        "max_ai.capabilities.memory.sqlite.get_lightweight_embedding",
-        fake_embedding,
-    )
+    patch_embeddings(monkeypatch)
     mem = SQLiteMemoryRegistry(user_id="u1", base_path=tmp_path, context_days=30)
 
     async with mem:
@@ -142,25 +157,30 @@ async def test_sqlite_memory_context_only_includes_recent_memories(tmp_path: Pat
             content="Prefers Spanish.",
         )
         old_timestamp = (datetime.now(timezone.utc) - timedelta(days=45)).isoformat()
-        conn = await mem._ensure_db()
+        conn = await mem._db()
         conn.execute(
             """
-            INSERT INTO memory (user_id, key, category, content, last_updated, vector)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO memory
+                (user_id, key, category, content, confidence, source,
+                 last_updated, expires_at, vector)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 "u1",
                 "old",
                 "project",
                 "Old Python project.",
+                1.0,
+                None,
                 old_timestamp,
+                None,
                 json.dumps(fake_embedding("Old Python project.")),
             ),
         )
         conn.commit()
 
         context = await mem.get_context()
-        search_results = await mem.search("old python project")
+        search_results = await mem.recall(RecallQuery(text="old python project"))
 
     assert [memory.content for memory in context] == ["Prefers Spanish."]
     assert any(memory.content == "Old Python project." for memory in search_results)

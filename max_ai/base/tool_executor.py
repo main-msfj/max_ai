@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shlex
 import typing as t
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
@@ -61,6 +62,7 @@ from ..core.event_type import (
     ToolCallEvent,
     ToolApprovalEvent,
     ToolCallResponseEvent,
+    ToolProgressEvent,
 )
 
 
@@ -196,20 +198,29 @@ class ToolExecutor:
                 yield item
             return
 
-        if self._is_skill_name_call(record):
-            async for item in self._yield_skill_name_misuse(record):
+        coerced_skill_name = self._coerce_bash_skill_name_to_read_skill(record)
+        if coerced_skill_name is not None:
+            _log.info(
+                "Coerced bash skill-name command into read_skill",
+                skill_name=coerced_skill_name,
+            )
+
+        skill_name_misuse = self._skill_name_misuse(record)
+        if skill_name_misuse is not None:
+            async for item in self._yield_skill_name_misuse(record, skill_name_misuse):
                 yield item
             return
 
         # 3. Observability: the model attempted a tool call. Emit this
         # before resolution so missing-tool failures still have a visible
         # call event in traces/UI.
-        yield ToolCallEvent(
-            source=self.agent_name,
-            tool_name=record.tool_name,
-            parameters=record.parameters,
-            tool_call_id=record.id,
-        )
+        if record.tool_name != "bash":
+            yield ToolCallEvent(
+                source=self.agent_name,
+                tool_name=record.tool_name,
+                parameters=record.parameters,
+                tool_call_id=record.id,
+            )
 
         # 4. Resolve the tool.
         resolution = self._resolve_tool(record)
@@ -256,6 +267,14 @@ class ToolExecutor:
                 yield item
             return
 
+        if tool.name == "bash":
+            yield ToolProgressEvent(
+                source=self.agent_name,
+                tool_name=tool.name,
+                content="Running skill",
+                tool_call_id=record.id,
+            )
+
         # 8. Run the tool through middleware.
         async for item in self._run_through_middleware(
             ctx, tool, record, cancellation_token
@@ -272,9 +291,42 @@ class ToolExecutor:
             error_msg=f"Tool '{record.tool_name}' not found in tool registry.",
         )
 
-    def _is_skill_name_call(self, record: ToolCallRecord) -> bool:
+    def _coerce_bash_skill_name_to_read_skill(
+        self, record: ToolCallRecord
+    ) -> str | None:
         skill_names = self.runtime_deps.get("skill_names") or []
-        return isinstance(skill_names, list) and record.tool_name in skill_names
+        if not isinstance(skill_names, list):
+            return None
+
+        if record.tool_name != "bash":
+            return None
+        command = record.parameters.get("command")
+        if not isinstance(command, str):
+            return None
+        normalized = command.strip().strip('\'"')
+        skill_name = normalized if normalized in skill_names else None
+        if skill_name is None:
+            try:
+                first_token = shlex.split(command, posix=True)[0]
+            except (IndexError, ValueError):
+                first_token = ""
+            if first_token in skill_names:
+                skill_name = first_token
+
+        if skill_name is not None:
+            record.parameters["command"] = f"read_skill {skill_name}"
+            record.parameters.pop("args", None)
+            return skill_name
+        return None
+
+    def _skill_name_misuse(self, record: ToolCallRecord) -> str | None:
+        skill_names = self.runtime_deps.get("skill_names") or []
+        if not isinstance(skill_names, list):
+            return None
+
+        if record.tool_name in skill_names:
+            return record.tool_name
+        return None
 
     # -------- APPROVAL EVALUATION -----------------------------------------------------------
     def _evaluate_approval(
@@ -383,44 +435,6 @@ class ToolExecutor:
             return self.runtime_executor
         return self.executor
 
-    # async def _invoke_tool(
-    #     self,
-    #     tool: CoreTool,
-    #     record: ToolCallRecord,
-    #     ctx: RunContext,
-    #     cancellation_token: CancellationToken | None,
-    # ) -> ToolResult:
-    #     """Actually call ``tool.execute(...)`` with timeout + cancellation + try/except.
-
-    #     Returns a ``ToolResult`` — never raises (every exception is
-    #     captured and turned into a ``tool_failure``).
-    #     """
-    #     timeout = tool.timeout_seconds or self.waiting_timeout
-    #     tool_ctx = ToolContext(
-    #         run_id=ctx.run_id,
-    #         session_id=ctx.session_id or "",
-    #     )
-
-    #     try:
-    #         task = asyncio.create_task(
-    #             tool.execute(record, tool_ctx, cancellation_token)
-    #         )
-    #         if cancellation_token is not None:
-    #             cancellation_token.link_future(task)
-    #         return await asyncio.wait_for(task, timeout=timeout)
-
-    #     except asyncio.TimeoutError:
-    #         return ToolResult.timeout(record.id, timeout_seconds=timeout)
-
-    #     except asyncio.CancelledError:
-    #         return ToolResult.cancelled_during_execution(record.id)
-
-    #     except ValidationError as ve:
-    #         return ToolResult.invalid_parameters(record.id, str(ve))
-
-    #     except Exception as e:
-    #         return ToolResult.execution_error(record.id, str(e))
-
     # -------- PARALLEL EXECUTION -----------------------------------------------------------
     async def _execute_parallel(
         self,
@@ -510,11 +524,12 @@ class ToolExecutor:
     async def _yield_skill_name_misuse(
         self,
         record: ToolCallRecord,
+        skill_name: str,
     ) -> AsyncGenerator[ToolExecutorYield, None]:
-        """Handle a model calling a skill capability id as a tool."""
+        """Handle a model calling a skill capability id as a tool or shell command."""
         message = (
             "This skill capability was not executed. Retry by calling the bash "
-            f"tool with command: read_skill {record.tool_name}. Do not mention "
+            f"tool with command: read_skill {skill_name}. Do not mention "
             "this retry instruction to the user."
         )
         result = ToolResult.execution_error(

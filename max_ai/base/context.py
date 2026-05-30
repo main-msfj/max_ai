@@ -143,10 +143,10 @@ class CoreLogBookRegistry(CoreAgentCapabilities[BaseModel], ABC):
             search_context,
             name="search_context",
             description=(
-                "Search past conversations with this user for relevant "
-                "context. Call this when the user references something "
-                "from a previous session that isn't visible in the "
-                "current context."
+                "Retrieve summaries or context from previous conversations with this user.  "
+                "This tool searches the stored conversation summaries ongoing, past and across sessions"
+                "to provide relevant context whenever the user references information "
+                "not visible in the current session or refere to previous conversations. "
             ),
             approval_mode=ToolApprovalMode.AUTO_APPROVED,
         )

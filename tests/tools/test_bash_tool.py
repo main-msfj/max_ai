@@ -112,4 +112,4 @@ async def test_bash_tool_blocks_destructive_shell_commands(tmp_path: Path) -> No
 
     assert result.success is False
     assert result.error is not None
-    assert "I am unable to do that action" in result.error
+    assert "Command blocked: destructive operation" in result.error

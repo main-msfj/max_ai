@@ -1,29 +1,55 @@
-"""SQLite-backed memory registry with lightweight local embeddings."""
+"""SQLite-backed memory registry, aligned to the corrected base contract.
+
+It implements ONLY the storage surface plus a recall() override that uses
+the persisted vectors (the base recall would re-embed every row). Tools,
+merge/dedup, batch convenience, update_fact, validation and cosine all come
+from the base now — they were deleted here to avoid drift.
+
+Notable: connect() migrates older DBs (pre confidence/source/expires_at)
+via ALTER TABLE, so existing memory files keep working.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import json
-import math
 import sqlite3
 import typing as t
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
-from ...base.embeddings import get_lightweight_embedding
-from ...base.memory import CoreMemoryRegistry, MemoryToolMode
-from ...base.tools import CoreTool
-from ...core import MemoryBlock
-from ...errors.memory import MemoryError
-from ...tools import FunctionAsTool
-from ...types.tools import ToolApprovalMode
+from pydantic import BaseModel
+
+from ...base.embeddings import (
+    get_lightweight_embedding,
+    get_lightweight_embeddings,
+)
+from ...base.memory import (
+    CoreMemoryRegistry,
+    MemoryToolMode,
+    MemoryRecord,
+    RecallQuery,
+    MergePolicy,
+    EmbedOne,
+    EmbedMany,
+)
+
+
+class SQLiteMemoryRegistryConfig(BaseModel):
+    user_id: str
+    base_path: str
+    tool_mode: MemoryToolMode = MemoryToolMode.FULL
+    db_name: str = "memory.sqlite3"
+    merge_similarity_threshold: float = 0.85
+    context_days: int | None = 30
 
 
 class SQLiteMemoryRegistry(CoreMemoryRegistry):
-    """SQLite-backed durable memory for a single user.
+    component_schema = SQLiteMemoryRegistryConfig
+    component_type = "memory"
 
-    The table is intentionally simple so it can later be paired with
-    ``sqlite-vec`` without changing the public capability contract.
-    """
+    """SQLite durable memory for a single user. Ready to be swapped for
+    sqlite-vec later without touching the contract."""
 
     def __init__(
         self,
@@ -32,231 +58,218 @@ class SQLiteMemoryRegistry(CoreMemoryRegistry):
         tool_mode: MemoryToolMode = MemoryToolMode.FULL,
         *,
         db_name: str = "memory.sqlite3",
+        merge_similarity_threshold: float = 0.85,
+        context_days: int | None = 30,
+        embed_one: EmbedOne | None = None,
+        embed_many: EmbedMany | None = None,
     ) -> None:
-        super().__init__(user_id=user_id, tool_mode=tool_mode)
+        super().__init__(
+            user_id=user_id,
+            tool_mode=tool_mode,
+            merge_policy=MergePolicy(similarity_threshold=merge_similarity_threshold),
+            embed_one=embed_one or get_lightweight_embedding,
+            embed_many=embed_many or get_lightweight_embeddings,
+            context_days=context_days,
+        )
         self.base_path = Path(base_path).expanduser().resolve()
         self.db_name = self.require_type(db_name, str, "db_name")
         self._conn: sqlite3.Connection | None = None
+        self._lock = asyncio.Lock()  # serializes the shared connection
+
+    # -------- COMPONENT SERIALIZATION -----------------------------------------------------------
+    def _to_config(self) -> SQLiteMemoryRegistryConfig:
+        return SQLiteMemoryRegistryConfig(
+            user_id=self.user_id,
+            base_path=str(self.base_path),
+            tool_mode=self.tool_mode,
+            db_name=self.db_name,
+            merge_similarity_threshold=self.merge_policy.similarity_threshold,
+            context_days=self.context_days,
+        )
+
+    @classmethod
+    def _from_config(cls, config: SQLiteMemoryRegistryConfig) -> "SQLiteMemoryRegistry":
+        return cls(
+            user_id=config.user_id,
+            base_path=config.base_path,
+            tool_mode=config.tool_mode,
+            db_name=config.db_name,
+            merge_similarity_threshold=config.merge_similarity_threshold,
+            context_days=config.context_days,
+        )
 
     @property
     def db_path(self) -> Path:
         return self.base_path / "backend-local" / self.db_name
 
+    # -------- CONNECTION LIFECYCLE -----------------------------------------------------------
     async def connect(self) -> None:
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self.db_path)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS memory (
-                user_id TEXT NOT NULL,
-                key TEXT NOT NULL,
-                category TEXT NOT NULL,
-                content TEXT NOT NULL,
-                last_updated TEXT NOT NULL,
-                vector TEXT NOT NULL,
-                PRIMARY KEY (user_id, key)
+        def _open() -> sqlite3.Connection:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS memory (
+                    user_id      TEXT NOT NULL,
+                    key          TEXT NOT NULL,
+                    category     TEXT NOT NULL,
+                    content      TEXT NOT NULL,
+                    confidence   REAL NOT NULL DEFAULT 1.0,
+                    source       TEXT,
+                    last_updated TEXT NOT NULL,
+                    expires_at   TEXT,
+                    vector       TEXT NOT NULL,
+                    PRIMARY KEY (user_id, key)
+                )
+                """
             )
-            """
-        )
-        self._conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_memory_user_category "
-            "ON memory (user_id, category)"
-        )
-        self._conn.commit()
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memory_user_category "
+                "ON memory (user_id, category)"
+            )
+            conn.commit()
+            return conn
+
+        self._conn = await asyncio.to_thread(_open)
 
     async def disconnect(self) -> None:
         if self._conn is not None:
-            self._conn.close()
-            self._conn = None
+            conn, self._conn = self._conn, None
+            await asyncio.to_thread(conn.close)
 
-    async def get_context(self) -> list[MemoryBlock]:
-        return await self.list_facts()
-
-    async def list_facts(self) -> list[MemoryBlock]:
-        conn = await self._ensure_db()
-        rows = conn.execute(
-            """
-            SELECT category, content, last_updated
-            FROM memory
-            WHERE user_id = ?
-            ORDER BY last_updated DESC
-            """,
-            (self.user_id,),
-        ).fetchall()
-        return [self._row_to_memory(row) for row in rows]
-
-    async def update_fact(self, key: str, value: str) -> None:
-        clean_key = self._validate_non_empty("key", key)
-        clean_value = self._validate_non_empty("value", value)
-        await self.upsert_memory(
-            key=clean_key,
-            category=clean_key,
-            content=clean_value,
-        )
-
-    async def upsert_memory(self, *, key: str, category: str, content: str) -> None:
-        conn = await self._ensure_db()
-        clean_key = self._validate_non_empty("key", key)
-        clean_category = self._validate_non_empty("category", category)
-        clean_content = self._validate_non_empty("content", content)
-        now = datetime.now(timezone.utc).isoformat()
-        vector = get_lightweight_embedding(f"{clean_category}\n{clean_content}")
-        conn.execute(
-            """
-            INSERT INTO memory (user_id, key, category, content, last_updated, vector)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(user_id, key) DO UPDATE SET
-                category = excluded.category,
-                content = excluded.content,
-                last_updated = excluded.last_updated,
-                vector = excluded.vector
-            """,
-            (
-                self.user_id,
-                clean_key,
-                clean_category,
-                clean_content,
-                now,
-                json.dumps(vector),
-            ),
-        )
-        conn.commit()
-
-    async def delete_fact(self, key: str) -> None:
-        conn = await self._ensure_db()
-        clean_key = self._validate_non_empty("key", key)
-        conn.execute(
-            "DELETE FROM memory WHERE user_id = ? AND key = ?",
-            (self.user_id, clean_key),
-        )
-        conn.commit()
-
-    async def search(
-        self,
-        query: str,
-        *,
-        limit: int = 5,
-        category: str | None = None,
-    ) -> list[MemoryBlock]:
-        conn = await self._ensure_db()
-        clean_query = self._validate_non_empty("query", query)
-        clean_category = (
-            category.strip() if isinstance(category, str) and category.strip() else None
-        )
-        query_vector = get_lightweight_embedding(clean_query)
-
-        sql = """
-            SELECT category, content, last_updated, vector
-            FROM memory
-            WHERE user_id = ?
-        """
-        params: list[t.Any] = [self.user_id]
-        if clean_category is not None:
-            sql += " AND category = ?"
-            params.append(clean_category)
-
-        rows = conn.execute(sql, params).fetchall()
-        ranked: list[tuple[float, sqlite3.Row]] = []
-        for row in rows:
-            score = self._cosine_similarity(query_vector, json.loads(row["vector"]))
-            if score > 0:
-                ranked.append((score, row))
-
-        ranked.sort(key=lambda item: item[0], reverse=True)
-        return [self._row_to_memory(row) for _, row in ranked[:limit]]
-
-    def as_tools(self) -> list[CoreTool]:
-        if self.tool_mode == MemoryToolMode.NONE:
-            return []
-        if self.tool_mode == MemoryToolMode.READ_ONLY:
-            return [self._build_list_tool(), self._build_search_tool()]
-        return [
-            self._build_list_tool(),
-            self._build_search_tool(),
-            self._build_update_tool(),
-            self._build_delete_tool(),
-        ]
-
-    def _build_search_tool(self) -> CoreTool:
-        async def search_memories(
-            query: str,
-            limit: int = 5,
-            category: str | None = None,
-        ) -> list[dict[str, t.Any]]:
-            """Search durable user memories by semantic meaning."""
-            await self._ensure_connected()
-            memories = await self.search(query, limit=limit, category=category)
-            return [memory.model_dump() for memory in memories]
-
-        return FunctionAsTool(
-            search_memories,
-            name="search_memories",
-            description=(
-                "Search durable memories about this user by semantic meaning. "
-                "Use this before creating a memory if you need to avoid "
-                "duplicating or contradicting existing user facts."
-            ),
-            approval_mode=ToolApprovalMode.AUTO_APPROVED,
-        )
-
-    def _build_update_tool(self) -> CoreTool:
-        async def update_memory(key: str, category: str, content: str) -> str:
-            """Create or update a durable memory about the user.
-
-            Args:
-                key: Stable short identifier for this fact.
-                category: Type of memory, such as preference, profile, project,
-                    goal, constraint, or relationship.
-                content: The durable user fact to remember.
-            """
-            await self._ensure_connected()
-            await self.upsert_memory(key=key, category=category, content=content)
-            return f"Memory saved: {key}"
-
-        return FunctionAsTool(
-            update_memory,
-            name="update_memory",
-            description=(
-                "Store or overwrite a durable fact about the user. Provide a "
-                "stable key, a category, and concise content. Use this for "
-                "long-lived preferences, user profile details, recurring goals, "
-                "projects, constraints, or relationships. Do not store transient "
-                "conversation details."
-            ),
-            approval_mode=ToolApprovalMode.ASK_APPROVED,
-        )
-
-    async def _ensure_db(self) -> sqlite3.Connection:
+    async def _db(self) -> sqlite3.Connection:
         await self._ensure_connected()
         if self._conn is None:
+            from ...errors.memory import MemoryError
             raise MemoryError("SQLite memory is not connected.")
         return self._conn
 
-    @staticmethod
-    def _validate_non_empty(field: str, value: str) -> str:
-        if not isinstance(value, str):
-            raise MemoryError.invalid_type(field, "str", type(value).__name__)
-        clean = value.strip()
-        if not clean:
-            raise MemoryError.missing(field)
-        return clean
+    # -------- STORAGE SURFACE (contract) -----------------------------------------------------------
+    async def _read_all(self) -> list[MemoryRecord]:
+        conn = await self._db()
 
+        def _run() -> list[MemoryRecord]:
+            rows = conn.execute(
+                """
+                SELECT key, category, content, confidence, source,
+                       last_updated, expires_at
+                FROM memory WHERE user_id = ?
+                ORDER BY last_updated DESC
+                """,
+                (self.user_id,),
+            ).fetchall()
+            return [self._row_to_record(r) for r in rows]
+
+        async with self._lock:
+            records = await asyncio.to_thread(_run)
+        return [r for r in records if not r.is_expired()]
+
+    async def _write_many(self, records: list[MemoryRecord]) -> None:
+        if not records:
+            return
+        conn = await self._db()
+        # One batch embedding call for all records, not one per record.
+        vectors = self._embed_many([f"{r.category}\n{r.content}" for r in records])
+        payload = [
+            (
+                self.user_id,
+                r.key,
+                r.category,
+                r.content,
+                r.confidence,
+                r.source,
+                r.last_updated.isoformat(),
+                r.expires_at.isoformat() if r.expires_at else None,
+                json.dumps(vec),
+            )
+            for r, vec in zip(records, vectors)
+        ]
+
+        def _run() -> None:
+            conn.executemany(
+                """
+                INSERT INTO memory
+                    (user_id, key, category, content, confidence, source,
+                     last_updated, expires_at, vector)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, key) DO UPDATE SET
+                    category     = excluded.category,
+                    content      = excluded.content,
+                    confidence   = excluded.confidence,
+                    source       = excluded.source,
+                    last_updated = excluded.last_updated,
+                    expires_at   = excluded.expires_at,
+                    vector       = excluded.vector
+                """,
+                payload,
+            )
+            conn.commit()
+
+        async with self._lock:
+            await asyncio.to_thread(_run)
+
+    async def _delete_many(self, keys: list[str]) -> None:
+        if not keys:
+            return
+        conn = await self._db()
+
+        def _run() -> None:
+            conn.executemany(
+                "DELETE FROM memory WHERE user_id = ? AND key = ?",
+                [(self.user_id, k) for k in keys],
+            )
+            conn.commit()
+
+        async with self._lock:
+            await asyncio.to_thread(_run)
+
+    # -------- RETRIEVAL (override: rank against persisted vectors) -----------------------------------------------------------
+    async def recall(self, query: RecallQuery) -> list[MemoryRecord]:
+        conn = await self._db()
+        clean_category = query.category.strip() if query.category else None
+
+        def _run() -> list[tuple[MemoryRecord, str]]:
+            sql = (
+                "SELECT key, category, content, confidence, source, "
+                "last_updated, expires_at, vector FROM memory WHERE user_id = ?"
+            )
+            params: list[t.Any] = [self.user_id]
+            if clean_category:
+                sql += " AND category = ?"
+                params.append(clean_category)
+            rows = conn.execute(sql, params).fetchall()
+            return [(self._row_to_record(r), r["vector"]) for r in rows]
+
+        async with self._lock:
+            staged = await asyncio.to_thread(_run)
+
+        candidates = [
+            (rec, vec) for rec, vec in staged
+            if not rec.is_expired() and rec.confidence >= query.min_confidence
+        ]
+
+        if not query.text:
+            candidates.sort(key=lambda c: c[0].last_updated, reverse=True)
+            return [rec for rec, _ in candidates[: query.limit]]
+
+        qv = self._embed_one(query.text)
+        scored = [(self._cosine(qv, json.loads(vec)), rec) for rec, vec in candidates]
+        scored = [s for s in scored if s[0] > 0]
+        scored.sort(key=lambda s: s[0], reverse=True)
+        return [rec for _, rec in scored[: query.limit]]
+
+    # -------- HELPERS -----------------------------------------------------------
     @staticmethod
-    def _row_to_memory(row: sqlite3.Row) -> MemoryBlock:
-        return MemoryBlock(
+    def _row_to_record(row: sqlite3.Row) -> MemoryRecord:
+        return MemoryRecord(
+            key=row["key"],
             category=row["category"],
             content=row["content"],
+            confidence=row["confidence"],
+            source=row["source"],
             last_updated=datetime.fromisoformat(row["last_updated"]),
+            expires_at=(
+                datetime.fromisoformat(row["expires_at"]) if row["expires_at"] else None
+            ),
         )
-
-    @staticmethod
-    def _cosine_similarity(left: list[float], right: list[float]) -> float:
-        if not left or not right or len(left) != len(right):
-            return 0.0
-        dot = sum(a * b for a, b in zip(left, right))
-        left_norm = math.sqrt(sum(a * a for a in left))
-        right_norm = math.sqrt(sum(b * b for b in right))
-        if left_norm == 0 or right_norm == 0:
-            return 0.0
-        return dot / (left_norm * right_norm)

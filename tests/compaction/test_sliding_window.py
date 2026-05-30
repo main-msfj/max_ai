@@ -55,8 +55,11 @@ def make_compaction() -> SlidingWindowCompaction:
 
 
 def set_compaction_settings(monkeypatch, *, threshold=0.4, live_budget=5):
+    monkeypatch.setattr(setting, "compaction_prompt_budget_tokens", 0)
+    monkeypatch.setattr(setting, "compaction_min_output_tokens", 0)
+    monkeypatch.setattr(setting, "compaction_safety_margin_ratio", 0)
     monkeypatch.setattr(setting, "compaction_live_message_threshold", threshold)
-    monkeypatch.setattr(setting, "compaction_live_message_budget_tokens", live_budget)
+    monkeypatch.setattr(setting, "compaction_live_message_keep_ratio", live_budget / 100)
 
 
 def make_prompts() -> PromptCtx:

@@ -5,33 +5,22 @@ from pathlib import Path
 from max_ai.executor.docker import DockerExecutor
 
 
-def test_docker_executor_stages_minimal_app_and_tool_files(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    package = repo / "max_ai"
-    package.mkdir(parents=True)
-    (package / "__init__.py").write_text("", encoding="utf-8")
-    (repo / "pyproject.toml").write_text("[project]\nname='maxai'\n", encoding="utf-8")
-    (repo / "README.md").write_text("readme\n", encoding="utf-8")
+def test_docker_executor_creates_runtime_layout(tmp_path: Path) -> None:
+    host_runtime = tmp_path / "workspace" / "user_1"
+    executor = DockerExecutor(repo_root=tmp_path)
 
-    tool_file = tmp_path / "custom_tools.py"
-    tool_file.write_text("def add(a: int, b: int) -> int:\n    return a + b\n", encoding="utf-8")
+    executor._ensure_runtime_layout(host_runtime)
 
-    workspace = tmp_path / "workspace"
-    executor = DockerExecutor(repo_root=repo, tool_files=[tool_file])
-    executor.workspace_root = workspace
-
-    app_mount = executor._prepare_app_mount()
-
-    assert app_mount == workspace / ".docker-runtime" / "app"
-    assert (app_mount / "pyproject.toml").is_file()
-    assert (app_mount / "README.md").is_file()
-    assert (app_mount / "max_ai" / "__init__.py").is_file()
-    assert (app_mount / "tools" / "custom_tools.py").read_text(encoding="utf-8") == (
-        "def add(a: int, b: int) -> int:\n    return a + b\n"
-    )
+    assert (host_runtime / "tools").is_dir()
+    assert (host_runtime / "skills").is_dir()
+    assert (host_runtime / "artifacts").is_dir()
 
 
-def test_docker_executor_sets_tool_source_dir_env() -> None:
+def test_docker_executor_sets_runtime_env() -> None:
     env_args = DockerExecutor()._docker_env_args()
 
-    assert "MAX_AI_TOOL_SOURCE_DIR=/app/tools" in env_args
+    assert "RUNTIME_DIR=/mnt" in env_args
+    assert "TOOLS_DIR=/mnt/tools" in env_args
+    assert "SKILLS_DIR=/mnt/skills" in env_args
+    assert "ARTIFACTS_DIR=/mnt/artifacts" in env_args
+    assert "WORKSPACE_DIR=/mnt/artifacts" in env_args

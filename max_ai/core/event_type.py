@@ -259,6 +259,12 @@ class CompactionEvent(AgentEvent):
         default=0, description="Raw live message budget kept after compaction"
     )
     summary: str | None = Field(default=None, description="Updated structured summary payload")
+    context_summary_persisted: bool = Field(
+        default=False, description="Whether the summary was written to the context registry"
+    )
+    context_summary_session_id: str | None = Field(
+        default=None, description="Session id used when persisting the context summary"
+    )
 
 
 # -------- -----------------------------------------------------------

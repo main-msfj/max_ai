@@ -1,4 +1,4 @@
-"""Tool for reading and editing generated artifacts."""
+"""Tool for inspecting generated artifacts (read-only)."""
 
 from __future__ import annotations
 
@@ -10,25 +10,31 @@ from pathlib import Path
 from ..base.tools import CoreTool, ToolContext
 from ..config import setting
 from ..types.tool_call import ToolCallRecord, ToolResult
-from ..types.tools import DockerToolRef, ToolApprovalMode
+from ..types.tools import ToolApprovalMode
 
 
 _VALID_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 class WorkspaceTool(CoreTool):
-    """Read and edit files under ``tmp/<user_id>/artifacts``."""
+    """List and read files under the user's ``<user_id>/artifacts`` directory.
+
+    Read-only on purpose: skills write their outputs to artifacts/ through
+    bash, so this tool exists only so the model can inspect what it has
+    already produced. It cannot write or delete — use bash for that.
+    """
 
     def __init__(self, timeout_seconds: float = 60) -> None:
         super().__init__(
             name="workspace",
             description=(
-                "Read, write, list, and delete files under the user's artifacts/ "
-                "directory only. Use this for documents and outputs you create "
+                "List and read files under the user's artifacts/ directory only. "
+                "Use this to inspect documents and outputs you already created "
                 "FOR the user (reports, generated files, deliverables). "
+                "It is read-only: to create or edit files, use the bash tool. "
                 "Do NOT use this to read skill instructions or skill scripts — "
-                "those live under $SKILLS_DIR and are only accessible via the "
-                "bash tool. Paths are relative to artifacts/."
+                "those live under $SKILLS_DIR and are only accessible via bash. "
+                "Paths are relative to artifacts/."
             ),
             approval_mode=ToolApprovalMode.AUTO_APPROVED,
             timeout_seconds=timeout_seconds,
@@ -41,33 +47,17 @@ class WorkspaceTool(CoreTool):
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["list", "read", "write", "delete"],
+                    "enum": ["list", "read"],
                     "description": "Artifacts operation to perform.",
                 },
                 "path": {
                     "type": ["string", "null"],
                     "description": "Relative file or directory path inside artifacts.",
                 },
-                "content": {
-                    "type": ["string", "null"],
-                    "description": "Text content for write operations.",
-                },
-                "overwrite": {
-                    "type": ["boolean", "null"],
-                    "description": "Whether write may replace an existing file.",
-                },
             },
             "required": ["action"],
             "additionalProperties": False,
         }
-
-    def docker_ref(self) -> DockerToolRef:
-        return DockerToolRef(
-            kind="class",
-            module=__name__,
-            qualname=type(self).__qualname__,
-            config={"timeout_seconds": self.timeout_seconds},
-        )
 
     async def execute(
         self,
@@ -105,9 +95,9 @@ class WorkspaceTool(CoreTool):
             if not isinstance(path, str) or not path.strip():
                 return ToolResult.invalid_parameters(
                     tool_request.id,
-                    "path is required for read, write, and delete actions.",
+                    "path is required for the read action.",
                 )
-            
+
             skill_redirect = self._maybe_redirect_skill_path(tool_request.id, path)
             if skill_redirect is not None:
                 return skill_redirect
@@ -120,55 +110,31 @@ class WorkspaceTool(CoreTool):
                         tool_request.id,
                         f"Artifacts file does not exist: {path}",
                     )
-                return ToolResult.success_result(
-                    tool_request.id,
-                    {
-                        "path": self._relative(target, artifacts),
-                        "content": target.read_text(encoding="utf-8"),
-                    },
-                    metadata={"name": self.name},
-                )
-
-            if action == "write":
-                content = tool_request.parameters.get("content")
-                if not isinstance(content, str):
-                    return ToolResult.invalid_parameters(
-                        tool_request.id,
-                        "content is required for write action.",
-                    )
-                overwrite = bool(tool_request.parameters.get("overwrite", True))
-                if target.exists() and not overwrite:
-                    return ToolResult.execution_error(
-                        tool_request.id,
-                        f"Artifacts file already exists: {path}",
-                    )
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(content, encoding="utf-8")
-                return ToolResult.success_result(
-                    tool_request.id,
-                    {
-                        "path": self._relative(target, artifacts),
-                        "bytes": len(content.encode("utf-8")),
-                    },
-                    metadata={"name": self.name},
-                )
-
-            if action == "delete":
-                if not target.exists():
+                rel_path = self._relative(target, artifacts)
+                try:
+                    content = target.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
                     return ToolResult.success_result(
                         tool_request.id,
-                        {"path": self._relative(target, artifacts), "deleted": False},
+                        {
+                            "path": rel_path,
+                            "exists": True,
+                            "type": "file",
+                            "bytes": target.stat().st_size,
+                            "binary": True,
+                        },
                         metadata={"name": self.name},
                     )
-                if target.is_dir():
-                    return ToolResult.execution_error(
-                        tool_request.id,
-                        "delete only supports files.",
-                    )
-                target.unlink()
+
                 return ToolResult.success_result(
                     tool_request.id,
-                    {"path": self._relative(target, artifacts), "deleted": True},
+                    {
+                        "path": rel_path,
+                        "exists": True,
+                        "type": "file",
+                        "bytes": target.stat().st_size,
+                        "content": content,
+                    },
                     metadata={"name": self.name},
                 )
 
@@ -192,8 +158,10 @@ class WorkspaceTool(CoreTool):
             if not isinstance(value, (str, Path)):
                 raise TypeError("artifacts_dir must be a string or Path.")
             return Path(value).expanduser().resolve()
+        # Fallback layout matches the workspace registry (no `tmp` segment):
+        # <root_dir>/<user_id>/artifacts.
         user_id = cls._safe_user_id(tool_context.user_id)
-        return (setting.root_dir / "tmp" / user_id / "artifacts").resolve()
+        return (setting.root_dir / user_id / "artifacts").resolve()
 
     @staticmethod
     def _safe_user_id(user_id: str) -> str:
@@ -206,6 +174,7 @@ class WorkspaceTool(CoreTool):
 
     @staticmethod
     def _resolve_inside(root: Path, relative_path: str | Path) -> Path:
+        relative_path = WorkspaceTool._normalize_artifacts_path(relative_path)
         target = (root / relative_path).expanduser().resolve()
         root_resolved = root.resolve()
         try:
@@ -213,6 +182,17 @@ class WorkspaceTool(CoreTool):
         except ValueError:
             raise ValueError("path must stay inside the artifacts directory.") from None
         return target
+
+    @staticmethod
+    def _normalize_artifacts_path(relative_path: str | Path) -> str | Path:
+        if isinstance(relative_path, Path):
+            return relative_path
+        clean = relative_path.strip()
+        if clean == "artifacts":
+            return "."
+        if clean.startswith("artifacts/"):
+            return clean.removeprefix("artifacts/") or "."
+        return relative_path
 
     @staticmethod
     def _relative(path: Path, root: Path) -> str:
@@ -256,12 +236,12 @@ class WorkspaceTool(CoreTool):
     def _maybe_redirect_skill_path(
         tool_call_id: str, path: str
     ) -> ToolResult | None:
-        """Redirect skill-path reads/writes to the bash tool.
+        """Redirect skill-path reads to the bash tool.
 
         The LLM occasionally tries to read SKILL.md or skill scripts through
-        workspace because the descriptions both mention 'read files'. Skills
-        live under $SKILLS_DIR, which workspace cannot access. Return a
-        helpful error pointing at bash so the model self-corrects on retry.
+        workspace. Skills live under $SKILLS_DIR, which workspace cannot
+        access. Return a helpful error pointing at bash so the model
+        self-corrects on retry.
         """
         normalized = path.strip().lstrip("./").replace("\\", "/")
         parts = normalized.split("/")
@@ -289,7 +269,6 @@ class WorkspaceTool(CoreTool):
                 f"workspace cannot access skill files — they live under "
                 f"$SKILLS_DIR, not artifacts/. Use the bash tool instead:\n"
                 f'  cat "$SKILLS_DIR/{skill_name}/SKILL.md"\n'
-                f"workspace is only for files you create FOR the user under "
-                f"artifacts/."
+                f"workspace is only for reading files under artifacts/."
             ),
         )

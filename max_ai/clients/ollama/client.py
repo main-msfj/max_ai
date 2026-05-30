@@ -490,9 +490,14 @@ class OllamaChatCompletionClient(
         if tools:
             request["tools"] = tools
 
-        # Per-call think override > client-level default. Most Ollama
-        # thinking models accept booleans; GPT-OSS requires low/medium/high.
+        # Per-call think override > client-level default. Tool calling is much
+        # more reliable on Ollama when hidden reasoning is disabled; otherwise
+        # some local models describe the function call in text instead of
+        # emitting a structured tool call. Keep explicit caller choices intact.
+        think_was_overridden = "think" in kwargs
         think = self._validate_think(kwargs.pop("think", self.think))
+        if think is None and tools and self.think is None and not think_was_overridden:
+            think = False
         if think is not None:
             request["think"] = think
 
@@ -779,6 +784,15 @@ class OllamaChatCompletionClient(
             accumulated_content.append(delta_text)
             yield ChatCompletionChunk(
                 content=delta_text,
+                is_complete=False,
+            )
+
+        final_message = getattr(final_response, "message", None)
+        final_thinking = getattr(final_message, "thinking", None)
+        if final_thinking:
+            yield ChatCompletionChunk(
+                content="",
+                thinking=final_thinking,
                 is_complete=False,
             )
 

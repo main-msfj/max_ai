@@ -6,27 +6,42 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PIP_ROOT_USER_ACTION=ignore
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 
+# Runtime layout. The host runtime dir is bind-mounted as /mnt; these are
+# sane defaults (DockerExecutor also passes them explicitly at run time).
 ENV RUNTIME_DIR=/mnt
 ENV TOOLS_DIR=/mnt/tools
 ENV SKILLS_DIR=/mnt/skills
 ENV ARTIFACTS_DIR=/mnt/artifacts
 ENV WORKSPACE_DIR=/mnt/artifacts
-ENV PYTHONPATH=/app
 
 WORKDIR /mnt
 
+# --- System tooling skill scripts may shell out to ---
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
     bash ca-certificates curl findutils git jq procps ripgrep unzip \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir \
-    jsonschema \
-    pydantic \
-    pydantic-settings \
-    pyyaml \
-    uv
+# --- Python tooling (build-time only) ---
+# uv/pip are used to bake dependencies into the image below. They are NOT
+# usable for runtime installs: bash containers run with `--network none`,
+# so skills cannot install packages on the fly. Everything a skill needs
+# must be installed here.
+RUN pip install --no-cache-dir uv
 
-RUN mkdir -p /app /mnt/tools /mnt/skills /mnt/artifacts
+# --- Skill runtime dependencies (bake everything skills import) ---
+# Because of `--network none`, whatever your skill scripts import must be
+# present in the image. Add/trim this list to match your skills. The
+# entries below are typical for document-generation skills; remove what
+# you don't use and add what you do.
+RUN pip install --no-cache-dir \
+    python-docx \
+    python-pptx \
+    openpyxl \
+    pandas \
+    pillow \
+    markdown
+
+RUN mkdir -p /mnt/tools /mnt/skills /mnt/artifacts
 
 CMD ["/bin/bash"]
