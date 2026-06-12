@@ -5,6 +5,8 @@ Includes tool execution, agent responses, usage tracking,
 stop signals, and orchestration results.
 """
 
+from __future__ import annotations
+
 import uuid
 import typing as t
 from typing import Annotated
@@ -12,8 +14,12 @@ from datetime import datetime, timezone
 from pydantic import BaseModel, Discriminator, Field, ConfigDict
 
 from .messages import CoreMessage
-from ..types.tool_call import ToolResult
 from ..types.completions import Usage
+from ..types.tool_call import ToolResult
+
+from ..reasoning.plan import AgentPlan
+from ..reasoning.eval import EvalResult
+from ..base.scratchpad import Scratchpad
 
 
 # -------- -----------------------------------------------------------
@@ -208,6 +214,34 @@ class ReasoningCompleteEvent(ReasoningEvent):
     total_iterations: int = Field(..., description="How many iterations were executed")
 
 
+class PlanningEvent(ReasoningEvent):
+    """Event emitted when a plan is generated."""
+
+    EVENT_TYPE = "planning"
+    phase: t.Literal["start", "complete", "failed", "skipped"]
+    plan: AgentPlan | None = Field(default=None)
+
+
+class EvalEvent(ReasoningEvent):
+    """Emmited durin the self-evaluationn step"""
+
+    EVENT_TYPE = "eval"
+    phase: t.Literal["start", "complete", "failed", "skipped"]
+    score: float | None = Field(default=None)
+    passed: bool | None = Field(default=None)
+    result: EvalResult | None = Field(default=None)
+
+
+class UserInputRequestEvent(ReasoningEvent):
+    EVENT_TYPE = "user_input_request"
+    question: str = Field(description="Questsion ask to user")
+    options: list[str] | None
+
+class ScratchpadUpdateEvent(ReasoningEvent):
+    EVENT_TYPE = "scratchpad_update"
+    scratchpad: Scratchpad
+
+
 # -------- -----------------------------------------------------------
 #  Agent Events
 # -------- -----------------------------------------------------------
@@ -247,20 +281,31 @@ class CompactionEvent(AgentEvent):
     changed: bool = Field(
         default=False, description="Whether compaction changed the active transcript"
     )
-    old_message_count: int = Field(default=0, description="Messages moved out of context")
+    old_message_count: int = Field(
+        default=0, description="Messages moved out of context"
+    )
     recent_message_count: int = Field(default=0, description="Messages kept in context")
-    old_token_count: int = Field(default=0, description="Token count moved out of context")
-    recent_token_count: int = Field(default=0, description="Token count kept in context")
-    total_token_count: int = Field(default=0, description="Token count before compaction")
+    old_token_count: int = Field(
+        default=0, description="Token count moved out of context"
+    )
+    recent_token_count: int = Field(
+        default=0, description="Token count kept in context"
+    )
+    total_token_count: int = Field(
+        default=0, description="Token count before compaction"
+    )
     live_message_threshold_tokens: int = Field(
         default=0, description="Live message token count that triggered compaction"
     )
     live_message_budget_tokens: int = Field(
         default=0, description="Raw live message budget kept after compaction"
     )
-    summary: str | None = Field(default=None, description="Updated structured summary payload")
+    summary: str | None = Field(
+        default=None, description="Updated structured summary payload"
+    )
     context_summary_persisted: bool = Field(
-        default=False, description="Whether the summary was written to the context registry"
+        default=False,
+        description="Whether the summary was written to the context registry",
     )
     context_summary_session_id: str | None = Field(
         default=None, description="Session id used when persisting the context summary"
@@ -282,7 +327,6 @@ class ToolCallEvent(ToolEvent):
         time_str = self.timestamp.strftime("%H:%M:%S")
         params_str = ", ".join(f"{k}={v}" for k, v in self.parameters.items())
         return f"[{self.source}] {time_str} | tool_call: {self.tool_name}({params_str})"
-
 
 
 class ToolCallResponseEvent(ToolEvent):
@@ -412,6 +456,9 @@ AgentEvents = Annotated[
         ModelStreamChunkEvent,
         ReasoningIterationEvent,
         ReasoningCompleteEvent,
+        PlanningEvent,
+        ScratchpadUpdateEvent,
+        EvalEvent,
         ToolCallEvent,
         ToolCallResponseEvent,
         ToolApprovalEvent,

@@ -1,0 +1,152 @@
+================================================================================
+  JOBS DONE — MaxAI Framework Session Log
+================================================================================
+
+FECHA: 2026-06-12
+
+
+────────────────────────────────────────────────────────────────────────────────
+  FEEDBACK CLAVE (lo que estaba mal y cómo lo vemos ahora)
+────────────────────────────────────────────────────────────────────────────────
+
+1. El framework era un "super-chatbot", no un agente real
+   - ReAct puro sin planning = el LLM improvisa en cada paso, sin hoja de ruta
+   - Un agente real hace: Goal decomposition → Plan → Execute → Evaluate → Re-plan
+   - Esto ya fue corregido (ver "Lo que construimos" abajo)
+
+2. Memory maintenance era frágil
+   - _apply_memory_maintenance_update() usaba getattr(memory, "upsert_memory", None)
+     — si el backend no tenía ese método, la categoría se perdía silenciosamente
+   - 3 fallbacks de parsing que enmascaraban fallos del LLM
+   - Corregido: directo a memory.upsert(MemoryRecord(...)), isinstance check estricto,
+     TypeError si el LLM no devuelve MemoryMaintenanceOutput bien formado
+
+3. Compaction solo ocurría antes del loop, no dentro
+   - Una iteración con tool outputs grandes podía reventar el context limit a mitad del run
+   - Corregido: _should_compact() + _run_mid_loop_compaction() dentro del loop
+
+4. Skills: el protocolo de invocación introduce fricción cognitiva
+   - El modelo tiene que: (1) reconocer que necesita un skill, (2) saber que usa bash,
+     (3) escribir el comando exacto "read_skill <name>" — 3 pasos cognitivos
+   - Industria (LangGraph, Hermes): usan un tool explícito read_skill(name="X")
+   - NO corregido todavía — estimado ~2 horas, se pospuso para sesión futura
+
+5. Código duplicado en bash executor y docker executor
+   - _READ_SKILL_RE, _expand_read_skill() están copiados verbatim en:
+     tools/bash.py y executor/docker/docker.py
+   - NO corregido — relacionado con el punto 4 arriba
+
+
+────────────────────────────────────────────────────────────────────────────────
+  LO QUE CONSTRUIMOS (implementado y con tests)
+────────────────────────────────────────────────────────────────────────────────
+
+BUG FIX — Memory maintenance (base/agent.py)
+  - Eliminado: _apply_memory_maintenance_update() completo (era el método frágil)
+  - Eliminados: 3 fallbacks de parsing (model_validate sin check, model_validate_json,
+    empty object)
+  - Agregado: isinstance(structured, MemoryMaintenanceOutput) — falla rápido y limpio
+  - Agregado: upsert directo con MemoryRecord(key, category, content, source="compaction")
+  - Sin eventos (maintenance es hidden/silent — solo log.warning en fallo)
+  - Tests: 398 tests passing
+
+PASO 1 — Planning explícito antes del ReAct loop (reasoning/react_planning.py)
+  - ReActLoop con enable_planning: bool flag
+  - _planning_step() — LLM genera AgentPlan (structured output) antes del while loop
+  - Plan se inyecta en ctx.messages como SystemMessage
+  - Graceful fallback: si planning falla, el loop continúa sin plan
+  - Emite PlanningEvent(phase="start" | "complete" | "failed")
+  - AgentPlan y PlanStep en reasoning/plan.py
+
+PASO 2 — Self-eval loop (reasoning/react_planning.py)
+  - enable_self_eval: bool flag, eval_threshold: float, max_eval_retries: int
+  - _eval_step() — LLM evalúa su propio output con output_format=EvalResult
+  - Si score < threshold → inyecta feedback en ctx.messages y reintenta el loop
+  - Emite EvalEvent(phase="start" | "complete" | "failed" | "skipped")
+  - EvalResult y EvalCheck en reasoning/eval.py
+
+PASO 3 — Compaction dentro del loop (base/reasoning.py)
+  - _should_compact(ctx) — verifica token count contra threshold
+  - _run_mid_loop_compaction(ctx, prompts) — corre el compactor y actualiza ctx.messages
+  - Integrado en react_simple.py Y react_planning.py
+  - Emite CompactionEvent(phase="end", changed: bool)
+  - Tests en tests/reasoning/test_mid_loop_compaction.py
+
+
+────────────────────────────────────────────────────────────────────────────────
+  LO QUE FALTA (trabajo futuro, en orden de prioridad)
+────────────────────────────────────────────────────────────────────────────────
+
+PRIORIDAD ALTA
+
+  [ ] Skills: convertir read_skill en tool propio
+      - Crear tools/read_skill.py con schema explícito (name: str)
+      - Eliminar _coerce_bash_skill_name_to_read_skill() de tool_executor.py
+      - Eliminar _skill_name_misuse() y _yield_skill_name_misuse()
+      - Eliminar _READ_SKILL_RE, _expand_read_skill() de bash.py Y docker.py
+      - Actualizar SkillsLayer.j2 — instrucción nueva: "usa el tool read_skill"
+      - Esfuerzo estimado: ~2 horas
+
+  [ ] Paso 3 — Long-horizon via logbook write (ver notas.text para diseño completo)
+      - write_observation() abstracto en CoreLogBookRegistry
+      - WriteObservationTool en tools/observation.py
+      - Auto-registro en agent.prepare() si hay logbook disponible
+      - ContextLayer ya existente — incluir observaciones recientes en render
+      - Esfuerzo estimado: 2-3 días
+
+PRIORIDAD MEDIA
+
+  [ ] Orchestrator + sub-task decomposition
+      - Un agente cuyos tools son otros agentes (AgentAsTool ya existe en el código)
+      - Paralelismo con DAG de dependencias entre sub-tasks
+      - Esfuerzo estimado: 1-2 semanas
+
+  [ ] Race condition en reasoning loop (base/reasoning.py)
+      - bind() llamado dos veces en la misma instancia sobrescribe el wiring
+      - concurrent agent.run() calls no son seguros
+      - Fix: crear instancia nueva del loop en cada run, o usar lock
+      - Esfuerzo estimado: horas
+
+  [ ] Approval policies dinámicas
+      - Hoy: approval_mode es fijo por tool
+      - Futuro: función (tool, context) → bool que considera estado actual del run
+
+PRIORIDAD BAJA / FUTURO LEJANO
+
+  [ ] State machines (WorkflowAgent)
+      - Para flujos con orden garantizado (onboarding, checkout, pipelines)
+      - LangGraph usa grafos de estado — podría implementarse encima de FinishReason
+      - Solo necesario si hay casos de uso específicos con flujos deterministas
+
+  [ ] LATS / Tree of Thoughts
+      - Explorar múltiples caminos de ejecución antes de comprometerse
+      - Muy costoso en tokens
+      - Solo si ReAct+Planning sigue fallando en tareas complejas
+
+  [ ] Memory como grafo (en lugar de lista de facts)
+      - Mem0/Letta usan grafos de conocimiento para deduplicación y razonamiento relacional
+      - Cambio arquitectónico grande — requiere rediseño de CoreMemoryRegistry
+
+
+────────────────────────────────────────────────────────────────────────────────
+  ARQUITECTURA DEL FRAMEWORK (estado actual)
+────────────────────────────────────────────────────────────────────────────────
+
+Lo que está bien y no hay que tocar:
+  - Separación base/ core/ types/ reasoning/ — roles claros
+  - Pydantic en toda la codebase — type safety real
+  - Pattern __init__ sync + prepare() async — correcto para dependencias async
+  - Stream de CoreEvent al caller — correcto para UIs reactivas
+  - ToolCallRecord con estados explícitos (PENDING → APPROVED → EXECUTING → CONSUMED)
+  - Approval workflow integrado en el loop — pausa, resume, rechaza
+  - MCP integration bien abstraída
+  - CancellationToken thread-safe
+
+Resumen ejecutivo:
+  El framework está bien construido. El código es más limpio que LangChain y
+  más tipado que la mayoría de proyectos personales. Con los 3 pasos implementados
+  (planning, self-eval, compaction in-loop), ya no es un "super-chatbot" — tiene
+  los cimientos de un agente real. El siguiente gap importante es long-horizon
+  (logbook write) y multi-agent (orchestrator).
+
+================================================================================

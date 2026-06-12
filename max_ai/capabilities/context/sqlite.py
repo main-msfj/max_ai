@@ -11,6 +11,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from ...base.context import ContextBlock, CoreLogBookRegistry, LogBookToolMode
+from ...base.observation import ObservationRecord
 from ...base.embeddings import get_lightweight_embedding
 
 
@@ -95,6 +96,23 @@ class SQLiteContextRegistry(CoreLogBookRegistry):
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_context_user_timestamp "
             "ON context (user_id, timestamp)"
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS observations (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                content TEXT NOT NULL,
+                observation_type TEXT NOT NULL DEFAULT 'finding',
+                tags TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_observations_user_created "
+            "ON observations (user_id, created_at DESC)"
         )
         self._conn.commit()
 
@@ -185,6 +203,73 @@ class SQLiteContextRegistry(CoreLogBookRegistry):
             ),
         )
         conn.commit()
+
+    async def write_observation(
+        self,
+        content: str,
+        observation_type: str = "finding",
+        tags: list[str] | None = None,
+    ) -> str:
+        conn = await self._ensure_db()
+        record = ObservationRecord(
+            session_id=self.session_id,
+            content=self._validate_non_empty("content", content),
+            observation_type=observation_type,  # type: ignore[arg-type]
+            tags=tags or [],
+        )
+        conn.execute(
+            """
+            INSERT INTO observations
+                (id, user_id, session_id, content, observation_type, tags, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record.id,
+                self.user_id,
+                record.session_id,
+                record.content,
+                record.observation_type,
+                json.dumps(record.tags),
+                record.created_at.isoformat(),
+            ),
+        )
+        conn.commit()
+        return record.id
+
+    async def get_observations(
+        self,
+        limit: int = 20,
+        tags: list[str] | None = None,
+    ) -> list[ObservationRecord]:
+        conn = await self._ensure_db()
+        rows = conn.execute(
+            """
+            SELECT id, session_id, content, observation_type, tags, created_at
+            FROM observations
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (self.user_id, limit),
+        ).fetchall()
+
+        records = [
+            ObservationRecord(
+                id=row["id"],
+                session_id=row["session_id"],
+                content=row["content"],
+                observation_type=row["observation_type"],
+                tags=json.loads(row["tags"] or "[]"),
+                created_at=datetime.fromisoformat(row["created_at"]),
+            )
+            for row in rows
+        ]
+
+        if tags:
+            tag_set = set(tags)
+            records = [r for r in records if tag_set.intersection(r.tags)]
+
+        return records
 
     async def _ensure_db(self) -> sqlite3.Connection:
         await self._ensure_connected()

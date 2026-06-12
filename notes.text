@@ -1,0 +1,893 @@
+Análisis del Framework MaxAI
+Lo que está bien
+Arquitectura sólida
+
+Separación de responsabilidades muy limpia: base/, core/, types/, reasoning/ tienen roles claros
+Pydantic en toda la codebase — type safety real, no solo hints
+Pattern de lifecycle en dos fases (__init__ sync + prepare() async) es la forma correcta de manejar dependencias asíncronas
+Sistema de eventos bien diseñado: el caller recibe un stream de CoreEvent en lugar de un blob final — esto es lo correcto para UIs reactivas
+Tool System
+
+ToolCallRecord con estados explícitos (PENDING → APPROVED → EXECUTING → CONSUMED) es production-grade
+Approval workflow integrado en el loop — pausar, resumir, rechazar funciona correctamente
+MCP integration bien abstraída: los tools MCP son indistinguibles de los nativos para el ReAct loop
+Context Management
+
+Compaction con sliding window + extracción de memoria post-compaction es más sofisticado que la mayoría de frameworks
+CancellationToken thread-safe es correcto y necesario
+Lo que está mal (bugs reales)
+1. Race condition en reasoning loop (base/reasoning.py)
+
+
+# Calling bind() twice on same instance overwrites previous wiring
+# → concurrent agent.run() calls ARE UNSAFE
+Cada run() debería crear una instancia nueva del loop o usar un lock.
+
+2. Compaction solo ocurre antes del loop, no dentro (base/agent.py)
+Si una sola iteración genera muchos tokens (tool outputs grandes), puedes hit el context limit en el medio de un run. La compaction debería poder ocurrir también dentro del loop.
+
+3. Memory maintenance es un string hardcodeado mandado al LLM
+Si el modelo ignora el formato o falla silenciosamente, la memoria se desactualiza sin errores. Necesita validación del resultado o schema forzado.
+
+4. Bash coercion heurística para skills — shlex.split() para detectar skill names es frágil.
+
+Tu intuición es correcta: es más un super-chatbot que un agente
+La razón exacta: el loop es ReAct puro sin planning. El flujo es:
+
+
+LLM call → tool call → LLM call → tool call → stop
+Eso es reactivo, no agentivo en el sentido moderno. Un agente real hace:
+
+
+Goal decomposition → Plan → Execute steps → Evaluate → Re-plan → Done
+Lo que falta concretamente:
+
+Característica	MaxAI	Frameworks modernos
+Multi-agent	❌ (solo AgentAsTool)	LangGraph, CrewAI, AutoGen
+Planning explícito	❌	ReAct + planning, LATS, ToT
+State machines	❌	LangGraph graphs
+Sub-task decomposition	❌	OpenAI Swarm, AutoGen
+Long-horizon adaptation	❌	Voyager, SWE-agent
+Reward/eval loop	❌	DSPy, ARC
+Cómo compararte con las tendencias actuales (2025-2026)
+Las tendencias que dominan ahora:
+
+1. Agentic loops con evaluación — No solo ReAct, sino loops que se auto-evalúan y re-planifican. Frameworks como LangGraph usan grafos de estado donde el agente puede "retroceder" a un nodo anterior.
+
+2. Multi-agent como primera clase — AutoGen v2, CrewAI, OpenAI Swarm tratan la coordinación entre agentes como el primitivo central, no como un feature opcional.
+
+3. Structured outputs forzados — Tu output_format Pydantic va en la dirección correcta, pero los frameworks modernos fuerzan structured output en cada paso del loop, no solo al final.
+
+4. Memory como grafo, no lista — Mem0, Letta/MemGPT usan grafos de conocimiento en lugar de listas de facts. Más robusto para deduplicación y razonamiento relacional.
+
+5. Tool use con confidence/planning — Antes de ejecutar un tool, el agente genera un plan con pasos y probabilidades de éxito.
+
+Qué agregar para que sea realmente agentivo
+Prioridad alta (cambia la naturaleza del framework):
+
+Planning step explícito — Antes del ReAct loop, el agente genera un plan estructurado (lista de steps con herramientas esperadas). El loop ejecuta el plan y puede re-planificar si un step falla.
+
+Multi-agent nativo — Un Orchestrator que puede instanciar y coordinar múltiples Agent en paralelo o secuencia, con mensajes entre ellos. Tu AgentSelectionEvent ya existe en los tipos — falta la implementación.
+
+Self-evaluation dentro del loop — Después de cada N iteraciones, el agente evalúa si está progresando hacia el goal. Si no, re-planifica en lugar de continuar en círculos.
+
+Prioridad media:
+
+Compaction in-loop — Trigger compaction cuando el token count supera un threshold dentro de cualquier iteración, no solo al inicio.
+
+Approval policies dinámicas — En lugar de approval_mode fijo por tool, una función (tool, context) → bool que puede considerar el estado actual.
+
+Structured intermediate outputs — Que cada iteración del loop tenga un schema esperado, no solo el output final.
+
+Resumen ejecutivo
+El framework está bien construido para lo que hace — un agente conversacional con herramientas, aprobaciones, memoria y context management. El código es más limpio que LangChain y más tipado que la mayoría de proyectos personales.
+
+El gap principal es que no tiene planning ni coordinación multi-agente. Agregar un planning step antes del ReAct loop sería el cambio de mayor impacto para transformarlo de "super-chatbot" a "agente real" sin reescribir todo. Los cimientos son buenos — la arquitectura modular permite agregar esto sin romper lo que ya funciona.
+
+
+Te explico cada uno en detalle, con ejemplos concretos de cómo se vería en tu framework.
+
+1. Multi-agent — "necesito un agente fuerte primero"
+Tu intuición es correcta. El orden natural es:
+
+
+Agente fuerte → Orchestrator → Multi-agent
+Lo que tienes ahora es un agente fuerte. El siguiente paso no es reescribir nada — es agregar una capa encima. Un orchestrator es simplemente un agente cuyas "tools" son otros agentes.
+
+
+# Lo que tendrías
+research_agent = Agent(name="researcher", tools=[web_search, read_url])
+writer_agent   = Agent(name="writer",     tools=[draft_text, format_doc])
+
+orchestrator = Agent(
+    name="orchestrator",
+    tools=[
+        AgentAsTool(research_agent),  # ya tienes esto en el código
+        AgentAsTool(writer_agent),
+    ]
+)
+
+# El orchestrator decide solo cuándo llamar a cada sub-agente
+orchestrator.run("Write a report about quantum computing")
+El orchestrator llama al researcher para buscar, recibe los resultados como tool output, luego llama al writer. Tus agentes no se "hablan" directamente — el orchestrator coordina. Esto ya casi funciona con tu AgentAsTool — falta el orchestrator como entidad y patrones de routing.
+
+2. Planning explícito — ReAct vs ReAct+Plan vs LATS vs ToT
+Primero entendamos el problema con ReAct puro (lo que tienes):
+
+
+Task: "Investiga los competidores de mi empresa y escribe un reporte"
+
+Iteración 1: LLM decide → llama web_search("competitors")
+Iteración 2: LLM decide → llama web_search("competitor A details")  
+Iteración 3: LLM decide → llama web_search("competitor B details")
+Iteración 10: LLM decide → llama format_report()
+... stop
+El LLM improvisa en cada paso. No sabe cuántos pasos faltan, puede entrar en loops, puede olvidar el objetivo original si el contexto crece.
+
+ReAct + Planning (el más práctico)
+Agregas un step de planning antes del loop:
+
+
+Step 0 (PLAN):
+  LLM genera:
+  {
+    "goal": "Research competitors and write report",
+    "steps": [
+      {"id": 1, "action": "search", "query": "top competitors in X industry"},
+      {"id": 2, "action": "search", "query": "details for each competitor found"},
+      {"id": 3, "action": "synthesize", "description": "compile findings"},
+      {"id": 4, "action": "write", "description": "format as report"}
+    ]
+  }
+
+Step 1-N (EXECUTE): ReAct loop normal, pero guiado por el plan
+El plan vive en el contexto como referencia. El LLM puede desviarse si es necesario, pero tiene una hoja de ruta. En tu framework, esto sería un PlanningLayer en el prompt stack + un PlanningStep antes de execute_reasoning_loop.
+
+LATS — Language Agent Tree Search
+Es más potente pero más caro. En lugar de una sola línea de ejecución, explores múltiples caminos:
+
+
+                    [Task]
+                   /      \
+             [Plan A]    [Plan B]
+             /    \          \
+         [Step1a] [Step1b]  [Step1c]
+            |                  |
+         [Step2a]           [Step2c]  ← este llegó más lejos, usamos este
+En cada punto de decisión, el agente genera N alternativas, las evalúa, y continúa con la mejor. Como un árbol de búsqueda de ajedrez. Muy costoso en tokens. Útil para tareas donde hay múltiples caminos válidos (código, resolución de problemas).
+
+Cuándo usarlo: Cuando el agente falla frecuentemente en tareas complejas y necesitas explorar alternativas.
+
+ToT — Tree of Thoughts
+Similar a LATS pero más estructurado. El LLM genera explícitamente "pensamientos" como nodos del árbol y los evalúa antes de proceder:
+
+
+Thought 1: "Podría buscar primero los competidores directos..."  → Score: 8/10
+Thought 2: "Podría analizar el mercado primero..."              → Score: 6/10
+Thought 3: "Podría empezar con el reporte y rellenar datos..."  → Score: 4/10
+
+→ Elige Thought 1, genera hijos de ese nodo
+Para MaxAI ahora: Empieza con ReAct+Plan. LATS y ToT son optimizaciones para después cuando tengas casos de uso específicos donde el agente falla.
+
+3. State Machines
+El problema que resuelven: algunos flujos tienen estados bien definidos que no deberían saltarse.
+
+Imagina un agente de onboarding de usuario:
+
+
+Sin state machine (ReAct puro):
+  → El LLM podría ir directo a "crear cuenta" sin verificar el email
+  → O volver a "pedir nombre" cuando ya lo tiene
+  → El flujo no tiene garantías
+
+Con state machine:
+  COLLECT_INFO → VERIFY_EMAIL → CREATE_ACCOUNT → SEND_WELCOME → DONE
+      ↑                              ↓
+      └──────── (si falla) ──────────┘
+LangGraph implementa esto como un grafo donde cada nodo es una función y las aristas son condiciones. El agente no puede saltar nodos — el grafo fuerza el orden.
+
+En tu framework hoy, si necesitas esto, lo harías con un prompt muy específico o con código externo. No está built-in.
+
+Cuándo lo necesitas: Cuando tienes flujos multi-paso donde el orden importa y no puedes confiar en que el LLM siempre lo haga bien (onboarding, checkouts, procesos de negocio, pipelines de datos).
+
+Para MaxAI: Podrías agregar un WorkflowAgent que en lugar de un ReAct loop libre, sigue un grafo de estados definido. Tu FinishReason y CancellationToken ya son los cimientos para esto.
+
+4. Sub-task Decomposition
+Tu asunción es correcta — el orchestrator es el que hace esto. Pero hay dos patrones:
+
+Pattern 1: Orchestrator decide en runtime (lo que describes)
+
+
+Orchestrator recibe: "Analiza ventas Q1 y Q2, compara, escribe reporte"
+
+→ Llama AgentAsTool(data_agent, "get Q1 sales")    # tool call 1
+→ Llama AgentAsTool(data_agent, "get Q2 sales")    # tool call 2  
+→ Llama AgentAsTool(writer_agent, "compare and write report")  # tool call 3
+El orchestrator improvisa la división de tareas. Funciona bien para tareas moderadas.
+
+Pattern 2: Decomposition explícita antes de ejecutar
+
+
+Step 1 - DECOMPOSE:
+  Input: "Analiza ventas Q1 y Q2, compara, escribe reporte"
+  Output: [
+    {task: "get_q1_data",   agent: "data_agent",   depends_on: []},
+    {task: "get_q2_data",   agent: "data_agent",   depends_on: []},
+    {task: "compare",       agent: "analyst_agent", depends_on: ["get_q1_data", "get_q2_data"]},
+    {task: "write_report",  agent: "writer_agent",  depends_on: ["compare"]}
+  ]
+
+Step 2 - EXECUTE:
+  → q1 y q2 corren en PARALELO (no dependen entre sí)
+  → compare espera a que ambos terminen
+  → write_report espera a compare
+La diferencia clave: paralelismo. Con decomposición explícita y un DAG de dependencias, puedes ejecutar tareas independientes al mismo tiempo. Esto es lo que hace OpenAI Swarm y AutoGen — y es donde el tiempo de ejecución se reduce dramáticamente.
+
+5. Long-horizon Adaptation
+Este es el problema más difícil. Un "horizonte largo" significa tareas que toman muchas iteraciones o mucho tiempo — horas, días, o cientos de tool calls.
+
+El problema que tienes hoy:
+
+Tu compaction guarda un resumen del contexto, pero el agente empieza cada run casi desde cero. Si una tarea tarda 3 días con múltiples sesiones, el agente "olvida" qué intentó, qué falló, y por qué tomó ciertas decisiones.
+
+Lo que significa long-horizon adaptation:
+
+
+Día 1: Agente intenta Strategy A → falla en step 7
+       → Guarda en memoria: "Strategy A falla porque X"
+
+Día 2: Agente recuerda que A falló → intenta Strategy B
+       → Parcialmente exitoso, llega hasta step 12
+       → Guarda: "B funciona hasta step 12, necesito Y para continuar"
+
+Día 3: Agente continúa desde step 12 con Y disponible
+       → Completa la tarea
+Esto requiere:
+
+Memoria episódica — no solo facts del usuario, sino el historial de intentos y resultados del propio agente
+Task state persistence — poder pausar y resumir una tarea entre sesiones
+Self-reflection — el agente evalúa sus propios intentos anteriores antes de decidir qué hacer
+Ejemplo real: SWE-agent (el que resuelve issues de GitHub) mantiene un "scratchpad" donde el agente escribe sus observaciones, hipótesis, y próximos pasos — y ese scratchpad persiste entre iteraciones. Tu CoreLogBookRegistry es el cimiento correcto para esto, pero falta la parte donde el agente mismo escribe en él, no solo el sistema.
+
+Para MaxAI: El cambio concreto sería permitir que el agente tenga un tool write_to_logbook(observation) que use durante el run para documentar su propio razonamiento. Luego en el siguiente run, ese logbook se inyecta como contexto.
+
+6. Reward/Eval Loop
+Este es el más transformador en términos de calidad de output.
+
+El problema con solo ReAct:
+
+
+Agente escribe código → lo ejecuta → si no tira error → "done"
+No hay evaluación de calidad. Si el código funciona pero es inseguro, ineficiente, o no cumple el objetivo real — el agente no lo sabe.
+
+Con un eval loop:
+
+
+Agente escribe código
+    ↓
+Evaluator (otro LLM call o tool) evalúa:
+  - ¿Cumple los requirements? → score: 7/10
+  - ¿Es seguro? → score: 4/10 ← problema
+  - ¿Es eficiente? → score: 8/10
+    ↓
+Si score < threshold → agente recibe feedback y re-intenta
+    ↓
+Agente re-escribe considerando el feedback
+    ↓
+Re-evalúa → score: 9/10 → done
+Tres tipos de evaluación:
+
+Self-eval — El mismo agente evalúa su output antes de terminar:
+
+
+"Revisa tu respuesta anterior. ¿Cumple completamente el objetivo? 
+¿Hay edge cases que no manejaste? Si encuentras problemas, corrígelos."
+Simple de implementar, costo moderado, mejora calidad notablemente.
+
+Critic agent — Un segundo agente especializado en evaluar:
+
+
+critic = Agent(
+    name="critic",
+    instructions="You evaluate outputs for correctness, security, and completeness. 
+                  Return structured feedback with specific issues and scores."
+)
+Más costoso pero más objetivo — el critic no tiene el "bias" de haber generado el output.
+
+Reward model — Un modelo entrenado específicamente para evaluar (como RLHF). Esto es lo que usan los labs para mejorar modelos. Para un framework personal, es overkill — el critic agent es suficiente.
+
+Para MaxAI concreto:
+
+
+# Agregarías un EvalStep después del ReAct loop
+class EvalStep:
+    def __init__(self, criteria: list[str], threshold: float = 0.8, max_retries: int = 2):
+        ...
+    
+    async def evaluate(self, task: str, output: str) -> EvalResult:
+        # LLM call para evaluar
+        ...
+
+# En el agent.run():
+result = await reasoning_loop.run(task)
+eval_result = await eval_step.evaluate(task, result)
+if eval_result.score < threshold:
+    result = await reasoning_loop.run(task, feedback=eval_result.feedback)
+Resumen: orden de implementación recomendado para MaxAI
+
+Ahora (tienes):     Agente fuerte con ReAct + tools + memory + MCP
+
+Paso 1:             ReAct + Planning
+                    → Agrega un planning step antes del loop
+                    → Mayor coherencia en tareas largas
+                    → 2-3 días de trabajo
+
+Paso 2:             Self-eval loop  
+                    → El agente evalúa su propio output
+                    → Mejora calidad sin multi-agent
+                    → 1-2 días de trabajo
+
+Paso 3:             Long-horizon via logbook write
+                    → El agente escribe observaciones en su propio logbook
+                    → Tasks pueden resumirse entre sesiones
+                    → 2-3 días de trabajo
+
+Paso 4:             Orchestrator + sub-task decomposition
+                    → Un agente cuyos tools son otros agentes
+                    → Paralelismo con DAG de dependencias
+                    → 1-2 semanas de trabajo
+
+Paso 5:             State machines (si tienes casos de uso específicos)
+Paso 6:             LATS/ToT (si los pasos anteriores no son suficientes)
+Los pasos 1-3 no requieren multi-agent y transforman MaxAI de "super-chatbot" a "agente real". El paso 4 es donde entras en territorio de framework completo.
+
+
+
+Plan: Pasos 1-3 para MaxAI
+PASO 1 — Planning explícito antes del ReAct loop
+El problema concreto
+Tu ReActLoop.execute_reasoning_loop() empieza directo en el while loop. El LLM improvisa en cada iteración sin saber a dónde va. En tareas largas esto produce loops circulares y pérdida del objetivo.
+
+Qué vamos a agregar
+Un PlanningStep que corre una sola vez antes del while loop. El LLM genera un plan estructurado, ese plan vive en el contexto como guía.
+
+
+ARQUITECTURA ACTUAL
+───────────────────────────────────────────────────────────────
+agent.run()
+  └─► execute_reasoning_loop(ctx, prompts)
+        │
+        └─► while iteration < max:
+               ├── LLM call   ← improvisa aquí
+               ├── tool calls
+               └── loop
+
+
+ARQUITECTURA CON PLANNING (Paso 1)
+───────────────────────────────────────────────────────────────
+agent.run()
+  └─► execute_reasoning_loop(ctx, prompts)
+        │
+        ├─► [NUEVO] _planning_step(ctx, prompts)      ← LLM genera plan
+        │     │
+        │     │  produce:
+        │     │   AgentPlan(
+        │     │     steps=[
+        │     │       PlanStep(id=1, description="...", tool_hint="web_search"),
+        │     │       PlanStep(id=2, description="...", tool_hint="read_url"),
+        │     │       PlanStep(id=3, description="...", tool_hint=None),
+        │     │     ],
+        │     │     rationale="why this plan"
+        │     │   )
+        │     │
+        │     └─► plan se inyecta en ctx como SystemMessage
+        │
+        └─► while iteration < max:
+               ├── LLM call   ← ahora tiene el plan como referencia
+               ├── tool calls
+               └── loop
+Dónde vive en tu código
+
+max_ai/
+  reasoning/
+    react.py           ← MODIFICAR: agregar _planning_step() y flag enable_planning
+    plan.py            ← NUEVO: PlanStep, AgentPlan (Pydantic models)
+
+  core/
+    event_type.py      ← MODIFICAR: agregar PlanningEvent
+
+  stacks/
+    planning.py        ← NUEVO: PlanningLayer (Jinja2 template con instrucciones)
+Pseudocódigo
+
+# reasoning/plan.py  (NUEVO)
+class PlanStep(BaseModel):
+    id: int
+    description: str        # "Search for top 5 competitors"
+    tool_hint: str | None   # "web_search" — orientativo, no obligatorio
+    depends_on: list[int]   # ids de steps previos necesarios
+
+class AgentPlan(BaseModel):
+    steps: list[PlanStep]
+    rationale: str          # por qué este plan
+
+
+# reasoning/react.py  (MODIFICAR)
+class ReActLoop(BaseReasoning):
+
+    def __init__(
+        self,
+        max_loop_iterations: int = 3,
+        max_connection_retries: int = 3,
+        enable_planning: bool = False,      # ← flag nuevo, default False
+    ):
+        ...
+        self.enable_planning = enable_planning
+
+    async def execute_reasoning_loop(self, ctx, prompts, loop_state, ...):
+
+        # ── NUEVO BLOQUE ─────────────────────────────────────────────
+        if self.enable_planning:
+            async for event in self._planning_step(ctx, prompts, loop_state):
+                yield event
+            # si el planning falló, continuamos sin plan (graceful fallback)
+        # ─────────────────────────────────────────────────────────────
+
+        while loop_state.iteration < self.max_loop_iterations:
+            # ... loop existente sin cambios ...
+
+
+    async def _planning_step(self, ctx, prompts, loop_state):
+        """
+        Una sola llamada al LLM con output_format=AgentPlan.
+        El resultado se convierte en SystemMessage y se añade a ctx.messages.
+        """
+        yield PlanningEvent(source=self.name, phase="start")
+
+        result = await self.client.run(
+            ctx=self._model_context(ctx),
+            prompts=prompts,          # mismo prompt del agente
+            tools=self._tools,
+            output_format=AgentPlan,  # ← forced structured output
+            stream=False,
+        )
+        loop_state.record_usage(result.usage)
+
+        plan: AgentPlan = result.message.structured_output
+
+        if plan is None:
+            yield PlanningEvent(source=self.name, phase="failed")
+            return   # graceful: el loop continúa sin plan
+
+        # Serializar el plan como texto y meterlo al contexto
+        plan_text = _render_plan(plan)
+        ctx.messages.append(
+            SystemMessage(
+                content=f"## Your execution plan\n{plan_text}\n"
+                        "Follow this plan. You may adapt if needed."
+            )
+        )
+
+        yield PlanningEvent(source=self.name, phase="complete", plan=plan)
+
+
+def _render_plan(plan: AgentPlan) -> str:
+    """
+    Step 1: Search for top 5 competitors [web_search]
+    Step 2: Get details on each competitor [web_search]
+    Step 3: Synthesize findings [no tool]
+    Rationale: Start broad, then deep-dive per competitor.
+    """
+    lines = []
+    for s in plan.steps:
+        hint = f" [{s.tool_hint}]" if s.tool_hint else ""
+        deps = f" (after steps {s.depends_on})" if s.depends_on else ""
+        lines.append(f"Step {s.id}: {s.description}{hint}{deps}")
+    lines.append(f"Rationale: {plan.rationale}")
+    return "\n".join(lines)
+Cómo lo usas
+
+# Sin cambios en el agente — solo en el loop
+agent = MyAgent(
+    reasoning=ReActLoop(
+        max_loop_iterations=10,
+        enable_planning=True,   # ← activa el planning
+    )
+)
+PASO 2 — Self-eval loop
+El problema concreto
+Cuando el ReAct loop termina con finish_reason="stop" (sin tool calls), el agente asume que hizo bien su trabajo. No verifica nada. Puede entregar código que corre pero no cumple el requirement, o un análisis que olvidó la mitad de los puntos.
+
+Qué vamos a agregar
+Un EvalStep que corre una sola vez después del while loop. El LLM evalúa su propio output. Si el score está bajo el threshold, el loop corre de nuevo con el feedback.
+
+
+ARQUITECTURA CON SELF-EVAL (Paso 2)
+───────────────────────────────────────────────────────────────
+execute_reasoning_loop(ctx, prompts):
+
+  [Paso 1] _planning_step(...)          ← genera plan
+  
+    ┌─────────────────────────────────────────────────────────┐
+      │  eval_attempt = 0                                       │
+        │                                                         │
+          │  while eval_attempt < max_eval_retries:                 │
+            │                                                         │
+              │     [ReAct loop existente]                              │
+                │       while iteration < max:                            │
+                  │         LLM call → tool calls → loop                    │
+                    │         break on finish_reason="stop"                   │
+                      │                                                         │
+                        │     [NUEVO] _eval_step(ctx, prompts, loop_state)        │
+                          │       ├── si score >= threshold  → break (done)         │
+                            │       ├── si score < threshold   → añade feedback       │
+                              │       │    a ctx.messages y continúa el while externo   │
+                                │       └── si eval falla          → break (graceful)     │
+                                  │                                                         │
+                                    │  yield ReasoningCompleteEvent                           │
+                                      └─────────────────────────────────────────────────────────┘
+                                      Dónde vive en tu código
+
+max_ai/
+  reasoning/
+    react.py           ← MODIFICAR: wrap del loop en while externo + _eval_step()
+    eval.py            ← NUEVO: EvalCriteria, EvalResult (Pydantic models)
+
+  core/
+    event_type.py      ← MODIFICAR: agregar EvalEvent
+Pseudocódigo
+
+# reasoning/eval.py  (NUEVO)
+class EvalResult(BaseModel):
+    score: float                  # 0.0 - 1.0
+    passed: bool                  # score >= threshold
+    issues: list[str]             # ["Missing error handling", "SQL injection risk"]
+    suggestions: list[str]        # ["Add try/except", "Use parameterized queries"]
+    summary: str                  # "Good structure but security gaps"
+
+
+# reasoning/react.py  (MODIFICAR)
+class ReActLoop(BaseReasoning):
+
+    def __init__(
+        self,
+        max_loop_iterations: int = 3,
+        max_connection_retries: int = 3,
+        enable_planning: bool = False,
+        enable_self_eval: bool = False,     # ← flag nuevo
+        eval_threshold: float = 0.8,        # ← score mínimo para pasar
+        max_eval_retries: int = 2,          # ← máximo de intentos
+        eval_criteria: list[str] | None = None,  # ← qué evaluar
+    ):
+        ...
+
+    async def execute_reasoning_loop(self, ctx, prompts, loop_state, ...):
+
+        # Paso 1: planning (ya lo tenemos)
+        if self.enable_planning:
+            async for event in self._planning_step(ctx, prompts, loop_state):
+                yield event
+
+        # ── NUEVO BLOQUE ─────────────────────────────────────────────
+        eval_attempt = 0
+        while eval_attempt <= self.max_eval_retries:
+        # ─────────────────────────────────────────────────────────────
+
+            # Loop ReAct existente — SIN CAMBIOS INTERNOS
+            while loop_state.iteration < self.max_loop_iterations:
+                ...  # código existente intacto
+            # fin del ReAct loop
+
+            # ── NUEVO BLOQUE ─────────────────────────────────────────
+            if not self.enable_self_eval:
+                break  # sin eval, salimos normal
+
+            if loop_state.finish_reason != "stop":
+                break  # si terminó por otro motivo (approval, max_iter), no evaluar
+
+            eval_result = None
+            async for event in self._eval_step(ctx, prompts, loop_state):
+                if isinstance(event, EvalCompleteEvent):
+                    eval_result = event.result
+                yield event
+
+            if eval_result is None or eval_result.passed:
+                break  # pasó o falló silenciosamente → salimos
+
+            eval_attempt += 1
+            if eval_attempt > self.max_eval_retries:
+                break  # agotamos reintentos
+
+            # Inyectar feedback para el siguiente intento
+            feedback_text = _render_eval_feedback(eval_result)
+            ctx.messages.append(
+                UserMessage(
+                    source="self-eval",
+                    content=f"## Self-evaluation feedback\n{feedback_text}\n"
+                            "Please improve your response addressing these issues."
+                )
+            )
+            # reset iteration counter para el siguiente ReAct loop
+            loop_state.iteration = 0
+            # ─────────────────────────────────────────────────────────
+
+        yield self._reasoning_complete(loop_state)
+
+
+    async def _eval_step(self, ctx, prompts, loop_state):
+        """
+        Una sola llamada al LLM que evalúa el último output del agente.
+        output_format=EvalResult para forzar estructura.
+        """
+        yield EvalEvent(source=self.name, phase="start")
+
+        # El último mensaje del asistente es lo que evaluamos
+        last_assistant_msg = _get_last_assistant_message(ctx.messages)
+        if last_assistant_msg is None:
+            yield EvalEvent(source=self.name, phase="skipped")
+            return
+
+        criteria_text = "\n".join(
+            f"- {c}" for c in (self.eval_criteria or _DEFAULT_CRITERIA)
+        )
+        eval_ctx = ctx.model_copy(update={
+            "messages": [
+                *ctx.messages,
+                UserMessage(
+                    source="eval",
+                    content=f"Evaluate your last response against these criteria:\n"
+                            f"{criteria_text}\n"
+                            f"Original task: {_get_original_task(ctx)}"
+                )
+            ]
+        })
+
+        result = await self.client.run(
+            ctx=self._model_context(eval_ctx),
+            prompts=prompts,
+            tools=None,           # sin tools en el eval
+            output_format=EvalResult,
+            stream=False,
+        )
+        loop_state.record_usage(result.usage)
+
+        eval_result: EvalResult = result.message.structured_output
+        if eval_result is None:
+            yield EvalEvent(source=self.name, phase="failed")
+            return
+
+        eval_result = eval_result.model_copy(
+            update={"passed": eval_result.score >= self.eval_threshold}
+        )
+        yield EvalCompleteEvent(
+            source=self.name,
+            score=eval_result.score,
+            passed=eval_result.passed,
+            result=eval_result,
+        )
+
+
+_DEFAULT_CRITERIA = [
+    "Does the response fully address the original task?",
+    "Are there missing steps or incomplete sections?",
+    "Are there factual errors or unsupported claims?",
+]
+PASO 3 — Long-horizon via logbook write
+El problema concreto
+Tu CoreLogBookRegistry es read-only desde el agente (según el análisis). El agente puede leer el historial de sesiones pasadas pero no puede escribir sus propias observaciones durante un run. Esto significa que si una tarea falla a mitad, en la siguiente sesión el agente empieza sin saber qué intentó.
+
+Qué vamos a agregar
+Un tool write_observation que el LLM puede llamar voluntariamente durante el run para documentar decisiones, hallazgos, o problemas encontrados. Esas observaciones persisten en el logbook y se inyectan en sesiones futuras.
+
+
+ARQUITECTURA CON LOGBOOK WRITE (Paso 3)
+───────────────────────────────────────────────────────────────
+
+DURANTE EL RUN (sesión actual):
+─────────────────────────────────
+  ReAct loop:
+    Iter 1: LLM llama web_search("competitors")
+    Iter 2: LLM llama write_observation(          ← NUEVO TOOL
+               "Found 3 main competitors: A, B, C.
+                B has no public API. Focus on A and C.")
+    Iter 3: LLM llama web_search("competitor A pricing")
+    ...
+
+  Las observaciones van al logbook del usuario/sesión.
+
+
+EN UNA SESIÓN FUTURA:
+─────────────────────────────────
+  agent.prepare()
+    └─► ContextLayer renderiza:
+          "## Past observations (session 2025-06-10)
+           - Found 3 main competitors: A, B, C
+           - B has no public API. Focus on A and C.
+           - Strategy A for pricing research failed (403 errors)
+           ..."
+
+  El agente retoma donde quedó sin repetir errores pasados.
+
+
+FLUJO COMPLETO (multi-sesión):
+─────────────────────────────────
+  Sesión 1:  Task → Plan → Execute → write_observation × N → done
+                                           │
+                                           ▼
+  Logbook: [obs1, obs2, obs3, ...]  ← persiste entre sesiones
+                                           │
+                                           ▼
+  Sesión 2:  prepare() ──reads──► ContextLayer inyecta observaciones
+             Task → Plan (informado) → Execute (evita errores pasados) → done
+Dónde vive en tu código
+
+max_ai/
+  base/
+    context.py         ← MODIFICAR: agregar write_observation() al CoreLogBookRegistry
+                         y cambiar ToolMode a READ_WRITE
+
+  tools/               ← NUEVO DIRECTORIO o en base/
+    observation.py     ← NUEVO: ObservationTool (CoreTool que llama logbook.write())
+
+  stacks/
+    context.py         ← MODIFICAR: ContextLayer ya existe, incluir observaciones
+                         de sesiones recientes además del summary
+Pseudocódigo
+
+# base/context.py  (MODIFICAR)
+class CoreLogBookRegistry(ABC):
+
+    # ... métodos existentes ...
+
+    # NUEVO método abstracto
+    @abstractmethod
+    async def write_observation(
+        self,
+        session_id: str,
+        content: str,
+        tags: list[str] | None = None,
+        # "finding", "error", "decision", "hypothesis"
+        observation_type: str = "finding",
+    ) -> str:
+        """
+        Guarda una observación del agente durante el run.
+        Retorna el id de la observación creada.
+        """
+        ...
+
+    @abstractmethod
+    async def get_observations(
+        self,
+        user_id: str,
+        limit: int = 20,
+        tags: list[str] | None = None,
+    ) -> list[Observation]:
+        """Lee observaciones de sesiones pasadas para inyectar al contexto."""
+        ...
+
+
+# tools/observation.py  (NUEVO)
+class WriteObservationTool(CoreTool):
+    """
+    Tool que el LLM llama voluntariamente para documentar hallazgos.
+    AUTO_APPROVED — no necesita aprobación del usuario.
+    """
+    name = "write_observation"
+    description = (
+        "Save an observation, finding, or decision to your logbook. "
+        "Use this to document important discoveries, errors encountered, "
+        "or decisions made during the task so future sessions can build on them."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "content": {
+                "type": "string",
+                "description": "The observation to save. Be specific and factual."
+            },
+            "observation_type": {
+                "type": "string",
+                "enum": ["finding", "error", "decision", "hypothesis"],
+                "description": "Type of observation"
+            },
+            "tags": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional tags for filtering later"
+            }
+        },
+        "required": ["content"]
+    }
+    approval_mode = ApprovalMode.AUTO_APPROVED
+
+    def __init__(self, logbook: CoreLogBookRegistry, session_id: str):
+        self._logbook = logbook
+        self._session_id = session_id
+
+    async def execute(self, content: str, observation_type: str = "finding",
+                      tags: list[str] | None = None) -> ToolResult:
+        try:
+            obs_id = await self._logbook.write_observation(
+                session_id=self._session_id,
+                content=content,
+                observation_type=observation_type,
+                tags=tags,
+            )
+            return ToolResult.success(
+                tool_call_id=...,
+                value=f"Observation saved (id: {obs_id})"
+            )
+        except Exception as e:
+            return ToolResult.execution_error(tool_call_id=..., error=str(e))
+
+
+# base/agent.py  (MODIFICAR — en prepare() o en run_stream_events())
+# Registrar el tool automáticamente si el agente tiene logbook
+if self.registries.logbook is not None:
+    observation_tool = WriteObservationTool(
+        logbook=self.registries.logbook,
+        session_id=ctx.session_id,
+    )
+    tool_executor.register(observation_tool)   # añadir al executor
+Resumen visual del estado final
+
+execute_reasoning_loop() con los 3 pasos:
+═══════════════════════════════════════════════════════════════
+
+   INPUT: ctx (messages + tool_state), prompts
+
+      │
+      ▼
+   ┌─────────────────────────────────────────────┐
+   │  PASO 1: _planning_step()   (si habilitado) │
+   │                                             │
+   │  LLM → AgentPlan (structured output)        │
+   │  Plan se inyecta en ctx.messages            │
+   │  Yield PlanningEvent                        │
+   └──────────────────┬──────────────────────────┘
+                      │
+      ┌───────────────▼───────────────────────────┐
+      │  PASO 2: eval wrapper (si habilitado)     │
+      │                                           │
+      │  eval_attempt = 0                         │
+      │  while eval_attempt <= max_eval_retries:  │
+      │                                           │
+      │    ┌──────────────────────────────────┐   │
+      │    │  ReAct loop EXISTENTE (intacto)  │   │
+      │    │                                  │   │
+      │    │  while iteration < max:          │   │
+      │    │    LLM call                      │   │
+      │    │    tool calls  ←── PASO 3:       │   │
+      │    │    loop            write_obs     │   │
+      │    │                   disponible     │   │
+      │    │  break on stop                   │   │
+      │    └──────────────────────────────────┘   │
+      │                                           │
+      │    _eval_step() → EvalResult              │
+      │    si passed → break                      │
+      │    si failed → inject feedback, retry     │
+      └───────────────────────────────────────────┘
+                      │
+                      ▼
+   yield ReasoningCompleteEvent
+
+   OUTPUT: AgentResponse
+Orden de implementación
+
+Semana 1:
+  Día 1-2   →  plan.py + PlanningEvent + _planning_step() en react.py
+  Día 3     →  test: agente con enable_planning=True en una tarea compleja
+               verificar que el plan aparece en ctx.messages
+
+Semana 2:
+  Día 1-2   →  eval.py + EvalEvent + _eval_step() + while externo en react.py
+  Día 3     →  test: agente con enable_self_eval=True
+               verificar que el feedback se inyecta y el score mejora
+
+Semana 3:
+  Día 1-2   →  write_observation() en CoreLogBookRegistry
+               ObservationTool
+               registro automático en agent.prepare()
+  Día 3     →  test: 2 sesiones consecutivas
+               verificar que sesión 2 ve las observaciones de sesión 1
+La clave del diseño: los 3 pasos son aditivos y opcionales. El ReAct loop existente no cambia internamente — los pasos 1 y 2 son wrappers alrededor de él. El paso 3 es un tool más en el toolset. Puedes implementar cada uno en aislamiento sin romper lo que ya funciona.

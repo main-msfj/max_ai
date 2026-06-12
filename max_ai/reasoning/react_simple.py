@@ -25,21 +25,23 @@ import typing as t
 
 from pydantic import BaseModel
 
-from ..base.reasoning import BaseReasoning, BaseLoopState
 
 from ..loggers import ScopedLogger
 from ..termination import CancellationToken
+from ..base.reasoning import BaseReasoning, BaseLoopState
 
 from ..core.messages import ToolMessage
 from ..core.event_type import (
     CoreEvent,
-    ReasoningIterationEvent,
-    ReasoningCompleteEvent,
     ToolApprovalEvent,
+    ScratchpadUpdateEvent,
+    UserInputRequestEvent,
+    ReasoningCompleteEvent,
+    ReasoningIterationEvent,
 )
 
-from ..types.run_context import RunContext
 from ..types.stacks import PromptCtx
+from ..types.run_context import RunContext
 from ..types.tool_call import ToolCallRecord
 
 if t.TYPE_CHECKING:
@@ -141,11 +143,9 @@ class ReActLoop(BaseReasoning):
         """
         if not isinstance(loop_state, ReActLoopState):
             loop_state = ReActLoopState(**loop_state.model_dump())
+        self._set_loop_state(loop_state)
 
-        _log = log.child(
-            run_id=ctx.run_id,
-            session_id=ctx.session_id,
-        )
+        _log = log.child(run_id=ctx.run_id, session_id=ctx.session_id)
 
         while loop_state.iteration < self.max_loop_iterations:
             if cancellation_token and cancellation_token.is_cancelled():
@@ -182,6 +182,10 @@ class ReActLoop(BaseReasoning):
                         yield ev
                     yield self._reasoning_complete(loop_state)
                     return
+
+            if self._should_compact(ctx):
+                async for event in self._run_mid_loop_compaction(ctx, prompts):
+                    yield event
 
             loop_state.iteration += 1
 
@@ -259,7 +263,22 @@ class ReActLoop(BaseReasoning):
                 yield self._reasoning_complete(loop_state)
                 return
 
-            # 7. Tools ran. Loop back to let the LLM rephrase results.
+            # 7. Tools ran. Loop back
+            if loop_state.scratchpad_updated:
+                loop_state.scratchpad_updated = False
+                yield ScratchpadUpdateEvent(
+                    source=self.name,
+                    scratchpad=loop_state.scratchpad.model_copy(deep=True),
+                )
+
+            if loop_state.finish_reason == "input_needed":
+                yield UserInputRequestEvent(
+                    source=self.name,
+                    question=loop_state.pending_user_input_question or "",
+                    options=loop_state.pending_user_input_options,
+                )
+                yield self._reasoning_complete(loop_state)
+                return
 
         else:
             loop_state.finish_reason = "max_iterations_exceeded"

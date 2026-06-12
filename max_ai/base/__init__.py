@@ -8,6 +8,7 @@ from .component import Component, ComponentBase, CoreLifecycleComponent
 from .compaction import CompactionResult, CoreCompaction
 from .capability import CoreAgentCapabilities
 from .context import CoreLogBookRegistry
+from .observation import ObservationRecord
 from .embeddings import (
     DEFAULT_LIGHTWEIGHT_EMBEDDING_MODEL,
     get_lightweight_embedding,
@@ -16,7 +17,6 @@ from .embeddings import (
 from .skills import CoreSkillRegistry
 
 __all__ = [
-    "Agent",
     "CoreLayer",
     "Component",
     "ComponentBase",
@@ -36,6 +36,7 @@ __all__ = [
     "get_lightweight_embeddings",
     "ToolContext",
     "CoreSkillRegistry",
+    "ObservationRecord"
 ]
 
 

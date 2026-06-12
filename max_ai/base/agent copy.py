@@ -50,7 +50,7 @@ from ..core.event_type import (
 from ..types.stacks import PromptCtx, PromptLayerUsage
 from ..errors.agent import AgentError
 from ..types.completions import Usage
-from ..reasoning.react import ReActLoop
+from ..reasoning.react_planning import ReActLoop
 from ..executor.local import LocalExecutor
 from ..types.run_context import RunContext
 from ..termination import CancellationToken

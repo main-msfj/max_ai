@@ -25,6 +25,7 @@ FinishReason = t.Literal[
     "no_result",  # client returned without a result (provider error)
     "error",  # uncaught exception in the run
     "cancelled",  # cancellation token was triggered
+    "input_needed",  # run paused waiting for additional input from the user
 ]
 
 

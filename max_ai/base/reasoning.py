@@ -33,38 +33,37 @@ import typing as t
 from abc import ABC, abstractmethod
 
 from pydantic import BaseModel, Field, ConfigDict
+from .compaction import TokenCounter
 
 from ..loggers import ScopedLogger
-from ..middleware.chain import MiddlewareChain
 from ..termination import CancellationToken
+from ..middleware.chain import MiddlewareChain
 
-from ..base.clients import CoreChatCompletionClient
 from ..base.tools import CoreTool
+from ..base.scratchpad import Scratchpad
+from ..base.clients import CoreChatCompletionClient
 
 from ..core.messages import AssistantMessage
 from ..core.messages import CoreMessage
-from .compaction import TokenCounter
 from ..core.event_type import (
     CoreEvent,
     ErrorEvent,
+    ModelCallEvent,
+    CompactionEvent,
+    ToolApprovalEvent,
     ModelResponseEvent,
     ModelStreamChunkEvent,
-    ToolApprovalEvent,
-    ModelCallEvent,
 )
 
-from ..types.chat_history import ChatHistory
-from ..types.run_context import RunContext
 from ..types.stacks import PromptCtx
-from ..types.completions import (
-    ChatCompletionChunk,
-    ChatCompletionResult,
-    Usage,
-)
+from ..types.run_context import RunContext
+from ..types.chat_history import ChatHistory
+from ..types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
 
 from ..errors.client import ClientError
 
 if t.TYPE_CHECKING:
+    from .compaction import CoreCompaction
     from .tool_executor import ToolExecutor
     from ..core.messages import ToolCall
 
@@ -105,6 +104,15 @@ class BaseLoopState(BaseModel):
     # Last LLM result — the loop body needs this to read tool_calls
     # and finish_reason after an LLM call returns.
     last_result: ChatCompletionResult | None = Field(default=None)
+
+    # strucure human in the loop
+    pending_user_input: asyncio.Future[str] | None = Field(default=None, exclude=True)
+    pending_user_input_question: str | None = Field(default=None, exclude=True)
+    pending_user_input_options: list[str] | None = Field(default=None, exclude=True)
+
+    # scratchpad
+    scratchpad: Scratchpad = Field(default_factory=Scratchpad)
+    scratchpad_updated: bool = Field(default=False)
 
     @property
     def retries(self) -> int:
@@ -174,16 +182,25 @@ class BaseReasoning(ABC):
         # bind() raises a clear error rather than silently passing None.
         self._name: str | None = None
         self._client: CoreChatCompletionClient | None = None
-        self._tool_executor: "ToolExecutor | None" = None
+        self._tool_executor: ToolExecutor | None = None
         self._middleware_chain: MiddlewareChain | None = None
+        self._compaction: CoreCompaction | None = None
+        self._max_context_tokens: int = 0
+
+        self._current_loop_state: BaseLoopState | None = None
+
+    def _set_loop_state(self, state: BaseLoopState) -> None:
+        self._current_loop_state = state
 
     # -------- BIND -----------------------------------------------------------
     def bind(
         self,
         name: str,
         client: CoreChatCompletionClient,
-        tool_executor: "ToolExecutor",
+        tool_executor: ToolExecutor,
         middleware_chain: MiddlewareChain,
+        compaction: CoreCompaction | None = None,
+        max_context_tokens: int = 0,
     ) -> t.Self:
         """Wire runtime dependencies. Called by the agent inside ``run()``.
 
@@ -200,7 +217,53 @@ class BaseReasoning(ABC):
         self._client = client
         self._tool_executor = tool_executor
         self._middleware_chain = middleware_chain
+        self._compaction = compaction
+        self._max_context_tokens = max_context_tokens
         return self
+
+    def _should_compact(self, ctx: RunContext) -> bool:
+        from .compaction import live_message_threshold_tokens, client_max_output_tokens
+
+        if self._compaction is None or self._max_context_tokens <= 0:
+            return False
+        counter = TokenCounter(tokenizer_base=self.client.config.tokenizer_base)
+        live_tokens = counter.count_messages(ctx.messages)
+        threshold = live_message_threshold_tokens(
+            self._max_context_tokens,
+            max_output_tokens=client_max_output_tokens(self.client),
+        )
+        return threshold > 0 and live_tokens > threshold
+
+    async def _run_mid_loop_compaction(
+        self,
+        ctx: RunContext,
+        prompts: PromptCtx,
+    ) -> t.AsyncGenerator[CoreEvent, None]:
+        if self._compaction is None:
+            return
+
+        result = await self._compaction.compact(
+            ctx=ctx,
+            prompts=prompts,
+            max_context_tokens=self._max_context_tokens,
+            client=self.client,
+        )
+
+        ctx.messages[:] = result.recent_messages
+
+        yield CompactionEvent(
+            source=self.name,
+            phase="end",
+            strategy=type(self._compaction).__name__,
+            changed=result.changed,
+            old_message_count=len(result.old_messages),
+            recent_message_count=len(result.recent_messages),
+            old_token_count=result.old_token_count,
+            recent_token_count=result.recent_token_count,
+            total_token_count=result.total_token_count,
+            live_message_threshold_tokens=0,
+            live_message_budget_tokens=0,
+        )
 
     # -------- RUNTIME ACCESSORS -----------------------------------------------------------
     @property
@@ -216,7 +279,7 @@ class BaseReasoning(ABC):
         return self._client
 
     @property
-    def tool_executor(self) -> "ToolExecutor":
+    def tool_executor(self) -> ToolExecutor:
         if self._tool_executor is None:
             raise RuntimeError(f"{type(self).__name__} not bound — call .bind() first.")
         return self._tool_executor
@@ -294,6 +357,14 @@ class BaseReasoning(ABC):
         return counted
 
     # -------- NON-STREAMING LLM CALL -----------------------------------------------------------
+    def resume(self, answer: str) -> None:
+        if self._current_loop_state is None:
+            raise RuntimeError("No active reasoning loop to resume.")
+        future = self._current_loop_state.pending_user_input
+        if future is None or future.done():
+            raise RuntimeError("No pending user input to resume.")
+        future.set_result(answer)
+
     async def _call_llm(
         self,
         ctx: RunContext,

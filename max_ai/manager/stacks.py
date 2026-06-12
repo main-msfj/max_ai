@@ -213,7 +213,11 @@ class PromptVariablesBuilder:
         if context is None:
             return {}
         summary = await context.get_current_session_summary()
-        return {"current_session_summary": summary}
+        observations = await context.get_observations(limit=20)
+        return {
+            "current_session_summary": summary,
+            "past_observations": observations if observations else None,
+        }
 
     # -------- DISPATCH TABLE -----------------------------------------------------------
     # Layers without entries here (RenderingLayer, TaskAnalysisLayer)

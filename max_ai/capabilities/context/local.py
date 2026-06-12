@@ -25,6 +25,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from ...base.context import CoreLogBookRegistry, LogBookToolMode, ContextBlock
+from ...base.observation import ObservationRecord
 
 
 class LocalContextRegistryConfig(BaseModel):
@@ -82,6 +83,7 @@ class LocalContextRegistry(CoreLogBookRegistry):
             user_id=user_id, session_id=session_id, tool_mode=tool_mode
         )
         self.base_path: Path = Path(base_path).expanduser().resolve()
+        self._observations: list[ObservationRecord] = []
 
     def _to_config(self) -> LocalContextRegistryConfig:
         return LocalContextRegistryConfig(
@@ -165,6 +167,33 @@ class LocalContextRegistry(CoreLogBookRegistry):
 
         scored.sort(key=lambda pair: pair[0], reverse=True)
         return [block for _, block in scored[:limit]]
+
+    # -------- OBSERVATIONS (in-memory for local backend) -----------------------------------------------------------
+    async def write_observation(
+        self,
+        content: str,
+        observation_type: str = "finding",
+        tags: list[str] | None = None,
+    ) -> str:
+        record = ObservationRecord(
+            session_id=self.session_id,
+            content=content,
+            observation_type=observation_type,  # type: ignore[arg-type]
+            tags=tags or [],
+        )
+        self._observations.insert(0, record)
+        return record.id
+
+    async def get_observations(
+        self,
+        limit: int = 20,
+        tags: list[str] | None = None,
+    ) -> list[ObservationRecord]:
+        records = [r for r in self._observations if r.session_id == self.session_id or True]
+        if tags:
+            tag_set = set(tags)
+            records = [r for r in records if tag_set.intersection(r.tags)]
+        return records[:limit]
 
     # -------- INTERNALS -----------------------------------------------------------
     @staticmethod

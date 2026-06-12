@@ -67,4 +67,4 @@ class ContextLayer(Component[StackConfig], CoreLayer):
         return self._load_file(self._DEFAULT_TEMPLATE_PATH / f"{self.name}.j2")
 
     def _optional_variables(self) -> set[str]:
-        return {"current_session_summary"}
+        return {"current_session_summary", "past_observations"}

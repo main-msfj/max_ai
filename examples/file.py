@@ -1,11 +1,17 @@
 """Complete example for serving a Docker-backed Agent in the Max AI Web UI."""
 
-from pathlib import Path
+from __future__ import annotations
+
+import asyncio
 import os
+import typing as t
+from pathlib import Path
+
 from dotenv import load_dotenv
 
-from max_ai.ui import server
+from max_ai.ui import create_app
 from max_ai.base.agent import Agent
+from max_ai.base.tools import CoreTool
 from max_ai.executor import DockerExecutor
 from max_ai.core.models import ModelConfig
 from max_ai.clients.ollama import OllamaChatCompletionClient
@@ -15,6 +21,12 @@ from max_ai.capabilities.skills.local import LocalSkillRegistry
 from max_ai.capabilities.memory import SQLiteMemoryRegistry
 from max_ai.capabilities.context import SQLiteContextRegistry
 from max_ai.capabilities.routines import SQLiteRoutineRegistry
+from max_ai.mcp import (
+    HTTPServerConfig,
+    MCPClientManager,
+    StdioMCPServerConfig,
+    create_mcp_tools,
+)
 from docker_tools import get_weather, check_link
 
 
@@ -28,6 +40,7 @@ SESSION_ID = "session1234"
 BACKEND_DIR = EXAMPLE_DIR / "backend-local"
 
 load_dotenv()
+
 
 def build_client_ollama() -> OllamaChatCompletionClient:
     return OllamaChatCompletionClient(
@@ -43,9 +56,10 @@ def build_client_ollama() -> OllamaChatCompletionClient:
         max_tokens=3000,
     )
 
+
 def build_client_openai() -> OpenAIChatCompletionClient:
     return OpenAIChatCompletionClient(
-        model="gpt-5.4-nano", # gpt-5-nano gpt-4.1-nano
+        model="gpt-5.4-nano",  # gpt-5-nano gpt-4.1-nano
         api_key=os.getenv("OPENAI_KEY"),
         config=ModelConfig(
             max_context_window=15000,
@@ -54,6 +68,7 @@ def build_client_openai() -> OpenAIChatCompletionClient:
         ),
         max_tokens=3000,
     )
+
 
 def build_executor() -> DockerExecutor:
     return DockerExecutor(image="maxai-sandbox:py311")
@@ -80,27 +95,68 @@ def build_context() -> SQLiteContextRegistry:
         base_path=EXAMPLE_DIR,
     )
 
+
 def build_routines() -> SQLiteRoutineRegistry:
     return SQLiteRoutineRegistry(base_path=EXAMPLE_DIR)
 
 
-def build_agent() -> Agent:
+def build_mcp_server_configs() -> list[HTTPServerConfig | StdioMCPServerConfig]:
+    """Build optional MCP server configs from environment variables."""
+    configs: list[HTTPServerConfig | StdioMCPServerConfig] = []
+
+    tavily_url = os.getenv("TAVILY_URL")
+    if tavily_url:
+        configs.append(
+            HTTPServerConfig(
+                server_id="tavily-websearch",
+                url=tavily_url,
+                token=os.getenv("TAVILY_KEY")
+            )
+        )
+
+    return configs
+
+
+async def build_mcp_client_manager() -> tuple[
+    MCPClientManager,
+    list[CoreTool | t.Callable[..., t.Any]],
+]:
+    return await create_mcp_tools(build_mcp_server_configs())
+
+
+def build_agent(
+    mcp_tools: t.Sequence[CoreTool | t.Callable[..., t.Any]] | None = None,
+) -> Agent:
     return Agent(
         name="Sara",
         description="Example Max AI agent.",
         instructions=("You are a helpful assistant. Be concise and useful. "),
-        client=build_client_openai(),
+        client=build_client_ollama(),
         memory=build_memory(),
         # routines=build_routines(),
         logbook=build_context(),
         skills=build_skills(),
-        toolset=TOOLSET,
+        toolset=[*TOOLSET, *(mcp_tools or [])],
         executor=build_executor(),
         middlewares=[ConsoleTraceMiddleware()],
     )
 
 
-agent = build_agent()
+async def main() -> None:
+    import uvicorn
+
+    mcp_manager, mcp_tools = await build_mcp_client_manager()
+    agent = build_agent(mcp_tools)
+    app = create_app(agent, user_id=USER_ID, session_id=SESSION_ID)
+
+    config = uvicorn.Config(app, host="0.0.0.0", port=8000)
+    web_server = uvicorn.Server(config)
+
+    try:
+        await web_server.serve()
+    finally:
+        await mcp_manager.disconnect_all()
+
 
 if __name__ == "__main__":
-    server(agent, host="0.0.0.0", port=8000, user_id=USER_ID, session_id=SESSION_ID)
+    asyncio.run(main())

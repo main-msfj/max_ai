@@ -27,7 +27,7 @@ from .capability import CoreAgentCapabilities
 from .tools import CoreTool
 from .executor import CoreExecutor
 from .skills import CoreSkillRegistry
-from .memory import CoreMemoryRegistry
+from .memory import CoreMemoryRegistry, MemoryRecord
 from .context import CoreLogBookRegistry
 from .routines import CoreRoutineRegistry
 from .knowledge import CoreKnowledgeRegistry
@@ -50,7 +50,7 @@ from ..core.event_type import (
 from ..types.stacks import PromptCtx, PromptLayerUsage
 from ..errors.agent import AgentError
 from ..types.completions import Usage
-from ..reasoning.react import ReActLoop
+from ..reasoning.react_planning import ReActLoop
 from ..executor.local import LocalExecutor
 from ..executor.routing import RoutingExecutor
 from ..types.run_context import RunContext
@@ -600,21 +600,22 @@ class Agent(ComponentBase[BaseModel], ABC):
                 max_tokens=setting.compaction_summary_budget_tokens,
             )
             structured = maintenance.message.structured_output
-            if isinstance(structured, MemoryMaintenanceOutput):
-                output = structured
-            elif structured is not None:
-                output = MemoryMaintenanceOutput.model_validate(structured.model_dump())
-            elif maintenance.message.text().strip():
-                output = MemoryMaintenanceOutput.model_validate_json(
-                    maintenance.message.text().strip()
+            if not isinstance(structured, MemoryMaintenanceOutput):
+                raise TypeError(
+                    f"expected MemoryMaintenanceOutput, got {type(structured).__name__}"
                 )
-            else:
-                output = MemoryMaintenanceOutput()
 
             applied_updates = 0
-            for update in output.updates:
-                if await self._apply_memory_maintenance_update(memory, update):
-                    applied_updates += 1
+            for update in structured.updates:
+                key = update.key.strip()
+                category = update.category.strip()
+                content = update.content.strip()
+                if not key or not category or not content:
+                    continue
+                await memory.upsert(
+                    MemoryRecord(key=key, category=category, content=content, source="compaction")
+                )
+                applied_updates += 1
             if applied_updates:
                 await self._refresh_memory_prompt_layer(prompts)
         except Exception as exc:  # noqa: BLE001
@@ -624,24 +625,6 @@ class Agent(ComponentBase[BaseModel], ABC):
                 error=str(exc),
                 error_type=type(exc).__name__,
             )
-
-    async def _apply_memory_maintenance_update(
-        self,
-        memory: "CoreMemoryRegistry",
-        update: t.Any,
-    ) -> bool:
-        key = str(update.key).strip()
-        category = str(update.category).strip()
-        content = str(update.content).strip()
-        if not key or not category or not content:
-            return False
-
-        upsert = getattr(memory, "upsert_memory", None)
-        if callable(upsert):
-            await upsert(key=key, category=category, content=content)
-            return True
-        await memory.update_fact(key, content)
-        return True
 
     async def _refresh_memory_prompt_layer(self, prompts: PromptCtx) -> None:
         for layer in self.prompt_stack:
@@ -730,6 +713,8 @@ class Agent(ComponentBase[BaseModel], ABC):
             client=self.client,
             tool_executor=tool_executor,
             middleware_chain=tool_executor.mw_chain,
+            compaction=self.compaction,
+            max_context_tokens=getattr(self.client.config, "max_context_window", 0) or 0,
         )
 
     def validate_compaction_object(

@@ -23,3 +23,21 @@ Summary of this session so far. Continuity context — never expose to the user.
 </usage>
 </SESSION_CONTEXT>
 {% endif %}
+{% if past_observations %}
+<PAST_OBSERVATIONS>
+<purpose>
+Findings, errors, and decisions recorded by you in previous sessions.
+Use these to avoid repeating work or mistakes. Never expose to the user.
+</purpose>
+
+{% for obs in past_observations %}- [{{ obs.observation_type }}] {{ obs.content }}{% if obs.tags %} (tags: {{ obs.tags | join(", ") }}){% endif %}
+{% endfor %}
+<usage>
+- Before searching or attempting a task, check if you already have a
+  relevant observation. If you found that something failed before, don't
+  try the same approach again.
+- Use `write_observation` during this run to document new findings so
+  future sessions can build on them.
+</usage>
+</PAST_OBSERVATIONS>
+{% endif %}
