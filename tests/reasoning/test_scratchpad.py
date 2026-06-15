@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from max_ai.reasoning.react_simple import ReActLoop as SimpleReActLoop, ReActLoopState as SimpleLoopState
-from max_ai.reasoning.react_planning import ReActLoop as PlanningReActLoop, ReActLoopState as PlanningLoopState
+from max_ai.reasoning.react_planning import ReActLoopPlanning as PlanningReActLoop, ReActLoopPlanningState as PlanningLoopState
 from max_ai.core.messages import AssistantMessage, ToolMessage
 from max_ai.core.event_type import ReasoningCompleteEvent, ScratchpadUpdateEvent
 from max_ai.core.models import ModelConfig

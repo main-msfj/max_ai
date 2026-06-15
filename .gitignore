@@ -1,6 +1,8 @@
 .env
-user_001/
-user123/
+# Per-user runtime workspaces (e.g. user_001/, user123/)
+user*/
+# Runtime/state dir (skills staging, pytest artifacts)
+var/
 .vscode/
 .venv
 .pytest_cache/

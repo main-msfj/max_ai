@@ -134,17 +134,17 @@ async def test_local_context_registry_summary_and_search(tmp_path: Path):
         summary = await ctx.get_current_session_summary()
         assert summary == "Conversation about bicycle frame materials."
 
-        # Search finds session_001 by content.
+        # Semantic search ranks the rocket/spaceship session on top.
         results = await ctx.search("rocket spaceship")
-        assert len(results) == 1
+        assert results
         assert results[0].session_id == "session_001"
         assert "spaceship" in results[0].content
         assert results[0].score is not None
         assert results[0].score > 0
-
-        # Search with no match returns [].
-        empty = await ctx.search("zzznothingmatches")
-        assert empty == []
+        # The on-topic match must clearly outscore the off-topic one.
+        scores = {r.session_id: r.score for r in results}
+        if "session_002" in scores:
+            assert scores["session_001"] > scores["session_002"]
 
 
 @pytest.mark.asyncio
@@ -205,12 +205,12 @@ async def test_local_knowledge_registry_search(tmp_path: Path):
         for block in results:
             assert block.score is not None
             assert block.score > 0
-        # Top result should be the FastAPI block (most token overlap).
+        # Top result should be the FastAPI block (closest semantically).
         assert "FastAPI" in results[0].content
-
-        # Irrelevant query returns empty.
-        empty = await kb.search("zzznothingmatches")
-        assert empty == []
+        # The unrelated cooking block must rank below the on-topic blocks.
+        cooking = next((b for b in results if "pasta" in b.content), None)
+        if cooking is not None:
+            assert cooking.score < results[0].score
 
 
 @pytest.mark.asyncio
@@ -256,10 +256,12 @@ async def test_local_routine_registry_only_authorized(tmp_path: Path):
         catalog = await reg.get_catalog()
         assert {r.name for r in catalog} == {"client_followup", "email_reply"}
 
-        # Search only inside authorized routines.
+        # Search ranks the email routine on top, and never leaks the
+        # unauthorized routine regardless of semantic score.
         results = await reg.search("email")
-        assert len(results) == 1
+        assert results
         assert results[0].name == "email_reply"
+        assert "internal_secret" not in {r.name for r in results}
 
         # Fetch authorized routine succeeds.
         block = await reg.fetch("client_followup")

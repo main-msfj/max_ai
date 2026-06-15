@@ -1,5 +1,5 @@
 """
-Pure ReAct reasoning loop.
+Pure ReAct+Planning reasoning loop.
 
 Drives the canonical Reason-Act cycle: LLM proposes an action (tool
 call or final answer), the executor runs the action, the result is
@@ -54,11 +54,11 @@ if t.TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
-log = ScopedLogger(logger, scope=["ReActLoop"])
+log = ScopedLogger(logger, scope=["ReActLoopPlanning"])
 
 
 # -------- LOOP STATE -----------------------------------------------------------
-class ReActLoopState(BaseLoopState):
+class ReActLoopPlanningState(BaseLoopState):
     """ReAct-specific loop state.
 
     Currently identical to ``BaseLoopState``. Reserved as the
@@ -71,7 +71,7 @@ class ReActLoopState(BaseLoopState):
 
 
 # -------- LOOP -----------------------------------------------------------
-class ReActLoop(BaseReasoning):
+class ReActLoopPlanning(BaseReasoning):
     """Pure ReAct reasoning loop.
 
     One iteration:
@@ -94,11 +94,11 @@ class ReActLoop(BaseReasoning):
     pause, missing LLM result, or external cancellation.
     """
 
-    LOOP_STATE_CLS: t.ClassVar[type[BaseLoopState]] = ReActLoopState
+    LOOP_STATE_CLS: t.ClassVar[type[BaseLoopState]] = ReActLoopPlanningState
 
     def __init__(
         self,
-        max_loop_iterations: int = 3,
+        max_loop_iterations: int = 10,
         max_connection_retries: int = 3,
         enable_planning: bool = False,
         enable_self_eval: bool = False,
@@ -157,8 +157,8 @@ class ReActLoop(BaseReasoning):
             ``CoreEvent`` instances (model events, reasoning events,
             tool events, errors).
         """
-        if not isinstance(loop_state, ReActLoopState):
-            loop_state = ReActLoopState(**loop_state.model_dump())
+        if not isinstance(loop_state, ReActLoopPlanningState):
+            loop_state = ReActLoopPlanningState(**loop_state.model_dump())
         self._set_loop_state(loop_state)
         _log = log.child(run_id=ctx.run_id, session_id=ctx.session_id)
 
@@ -387,7 +387,7 @@ class ReActLoop(BaseReasoning):
         self,
         ctx: RunContext,
         prompts: PromptCtx,
-        loop_state: ReActLoopState,
+        loop_state: ReActLoopPlanningState,
     ) -> t.AsyncGenerator[CoreEvent, None]:
         """Optional planning step before the main ReAct loop."""
         from .plan import AgentPlan
@@ -437,7 +437,7 @@ class ReActLoop(BaseReasoning):
         self,
         ctx: RunContext,
         prompts: PromptCtx,
-        loop_state: ReActLoopState,
+        loop_state: ReActLoopPlanningState,
     ) -> t.AsyncGenerator[CoreEvent, None]:
         """Optional self-evaluation step after the main ReAct loop."""
         from .eval import EvalResult

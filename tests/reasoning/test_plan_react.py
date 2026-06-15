@@ -5,7 +5,10 @@ from __future__ import annotations
 import pytest
 import typing as t
 
-from max_ai.reasoning.react_planning import ReActLoop, ReActLoopState
+from max_ai.reasoning.react_planning import (
+    ReActLoopPlanning as ReActLoop,
+    ReActLoopPlanningState as ReActLoopState,
+)
 from max_ai.reasoning.plan import AgentPlan, PlanStep
 from max_ai.reasoning.eval import EvalResult, EvalCheck
 from max_ai.core.messages import AssistantMessage, ToolMessage, UserMessage, SystemMessage

@@ -7,7 +7,10 @@ import typing as t
 import pytest
 
 from max_ai.base.reasoning import BaseLoopState
-from max_ai.reasoning.react_planning import ReActLoop, ReActLoopState
+from max_ai.reasoning.react_planning import (
+    ReActLoopPlanning as ReActLoop,
+    ReActLoopPlanningState as ReActLoopState,
+)
 
 from max_ai.base.clients import CoreChatCompletionClient
 from max_ai.core.messages import AssistantMessage, ToolMessage, ToolCall

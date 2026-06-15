@@ -18,12 +18,13 @@ other. Intended for local development and tests.
 from __future__ import annotations
 
 import json
-import random
+import math
 import typing as t
 from datetime import datetime
 from pathlib import Path
 from pydantic import BaseModel
 
+from ...base.embeddings import get_lightweight_embedding
 from ...base.context import CoreLogBookRegistry, LogBookToolMode, ContextBlock
 from ...base.observation import ObservationRecord
 
@@ -157,10 +158,14 @@ class LocalContextRegistry(CoreLogBookRegistry):
         if not store:
             return []
 
+        query_vector = get_lightweight_embedding(query)
+
         scored: list[tuple[float, ContextBlock]] = []
         for session_id, entry in store.items():
             summary = entry.get("summary", "") or ""
-            score = self._fake_score(query, summary)
+            score = self._cosine_similarity(
+                query_vector, get_lightweight_embedding(summary)
+            )
             if score <= 0:
                 continue
             scored.append((score, self._entry_to_block(session_id, entry, score)))
@@ -197,22 +202,19 @@ class LocalContextRegistry(CoreLogBookRegistry):
 
     # -------- INTERNALS -----------------------------------------------------------
     @staticmethod
-    def _fake_score(query: str, content: str) -> float:
-        """Token-overlap score with a tiny random tiebreaker.
+    def _cosine_similarity(left: list[float], right: list[float]) -> float:
+        """Cosine similarity between two embedding vectors.
 
-        Returns 0.0 when there's no overlap. Otherwise returns
-        ``overlap / len(query_tokens)`` plus a small random nudge so
-        ties between sessions don't always sort the same way.
+        Returns 0.0 for empty, mismatched-length, or zero-norm vectors.
         """
-        query_tokens = {t for t in query.lower().split() if t}
-        if not query_tokens:
+        if not left or not right or len(left) != len(right):
             return 0.0
-        content_tokens = {t for t in content.lower().split() if t}
-        overlap = len(query_tokens & content_tokens)
-        if overlap == 0:
+        dot = sum(a * b for a, b in zip(left, right))
+        left_norm = math.sqrt(sum(a * a for a in left))
+        right_norm = math.sqrt(sum(b * b for b in right))
+        if left_norm == 0 or right_norm == 0:
             return 0.0
-        base = overlap / len(query_tokens)
-        return base + random.uniform(0, 0.001)
+        return dot / (left_norm * right_norm)
 
     @staticmethod
     def _entry_to_block(

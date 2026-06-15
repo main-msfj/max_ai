@@ -50,7 +50,7 @@ from ..core.event_type import (
 from ..types.stacks import PromptCtx, PromptLayerUsage
 from ..errors.agent import AgentError
 from ..types.completions import Usage
-from ..reasoning.react_planning import ReActLoop
+from ..reasoning.react_planning import ReActLoopPlanning
 from ..executor.local import LocalExecutor
 from ..executor.routing import RoutingExecutor
 from ..types.run_context import RunContext
@@ -613,7 +613,9 @@ class Agent(ComponentBase[BaseModel], ABC):
                 if not key or not category or not content:
                     continue
                 await memory.upsert(
-                    MemoryRecord(key=key, category=category, content=content, source="compaction")
+                    MemoryRecord(
+                        key=key, category=category, content=content, source="compaction"
+                    )
                 )
                 applied_updates += 1
             if applied_updates:
@@ -703,7 +705,7 @@ class Agent(ComponentBase[BaseModel], ABC):
         """
         reasoning = self.reasoning
         if reasoning is None:
-            reasoning = ReActLoop(
+            reasoning = ReActLoopPlanning(
                 max_loop_iterations=self.config.max_loop_iterations,
                 max_connection_retries=self.config.max_connection_retries,
             )
@@ -714,7 +716,8 @@ class Agent(ComponentBase[BaseModel], ABC):
             tool_executor=tool_executor,
             middleware_chain=tool_executor.mw_chain,
             compaction=self.compaction,
-            max_context_tokens=getattr(self.client.config, "max_context_window", 0) or 0,
+            max_context_tokens=getattr(self.client.config, "max_context_window", 0)
+            or 0,
         )
 
     def validate_compaction_object(

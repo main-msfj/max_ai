@@ -92,7 +92,7 @@ class ReActLoop(BaseReasoning):
 
     def __init__(
         self,
-        max_loop_iterations: int = 3,
+        max_loop_iterations: int = 10,
         max_connection_retries: int = 3,
     ) -> None:
         """Initialize the ReAct loop.

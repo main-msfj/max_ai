@@ -24,12 +24,13 @@ other. Intended for local development and tests.
 from __future__ import annotations
 
 import json
-import random
+import math
 import shutil
 import tempfile
 from pathlib import Path
 from pydantic import BaseModel
 
+from ...base.embeddings import get_lightweight_embedding
 from ...base.routines import CoreRoutineRegistry, RoutineToolMode
 from ...core import RoutineBlocks
 from ...types.routines import RoutineSummary
@@ -175,18 +176,24 @@ class LocalRoutineRegistry(CoreRoutineRegistry):
     ) -> list[RoutineSummary]:
         """Search authorized routines by ``name`` and ``description`` only.
 
-        Routines whose combined ``name + description`` has zero token
-        overlap with the query are dropped; the rest are sorted by
-        score descending and the top ``limit`` are returned.
+        The query and each routine's combined ``name + description`` are
+        embedded with the local lightweight embedding model and scored
+        by cosine similarity. Routines with non-positive similarity are
+        dropped; the rest are sorted by score descending and the top
+        ``limit`` are returned.
         """
         await self._ensure_connected()
         if not isinstance(query, str) or not query.strip():
             return []
 
+        query_vector = get_lightweight_embedding(query)
+
         scored: list[tuple[float, RoutineSummary]] = []
         for block in self._load_all():
             haystack = f"{block.name} {block.description}"
-            score = self._fake_score(query, haystack)
+            score = self._cosine_similarity(
+                query_vector, get_lightweight_embedding(haystack)
+            )
             if score <= 0:
                 continue
             scored.append(
@@ -234,17 +241,19 @@ class LocalRoutineRegistry(CoreRoutineRegistry):
         return clean
 
     @staticmethod
-    def _fake_score(query: str, content: str) -> float:
-        """Token-overlap score with a tiny random tiebreaker."""
-        query_tokens = {t for t in query.lower().split() if t}
-        if not query_tokens:
+    def _cosine_similarity(left: list[float], right: list[float]) -> float:
+        """Cosine similarity between two embedding vectors.
+
+        Returns 0.0 for empty, mismatched-length, or zero-norm vectors.
+        """
+        if not left or not right or len(left) != len(right):
             return 0.0
-        content_tokens = {t for t in content.lower().split() if t}
-        overlap = len(query_tokens & content_tokens)
-        if overlap == 0:
+        dot = sum(a * b for a, b in zip(left, right))
+        left_norm = math.sqrt(sum(a * a for a in left))
+        right_norm = math.sqrt(sum(b * b for b in right))
+        if left_norm == 0 or right_norm == 0:
             return 0.0
-        base = overlap / len(query_tokens)
-        return base + random.uniform(0, 0.001)
+        return dot / (left_norm * right_norm)
 
     def _load_all(self) -> list[RoutineBlocks]:
         """Load every authorized routine from the staging directory."""

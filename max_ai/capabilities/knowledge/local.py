@@ -6,9 +6,10 @@ Each knowledge source is a single JSON file under
 ``KnowledgeBlock`` entries. The agent uses ``search`` to pull relevant
 blocks for a query.
 
-Search uses token overlap as a placeholder scorer — the same algorithm
-as ``LocalContextRegistry`` and ``LocalRoutineRegistry``. Real semantic
-search will replace ``_fake_score`` once embeddings are wired in.
+Search uses local embedding cosine similarity — the same lightweight
+embedding helper used by the SQLite memory/routine backends. Block
+content is embedded at search time (these registries store no
+precomputed vectors on disk).
 
 The registry is read-only from the agent's perspective. Block ingestion
 (chunking, vectorization, writing to disk) happens externally —
@@ -21,10 +22,11 @@ other. Intended for local development and tests.
 from __future__ import annotations
 
 import json
-import random
+import math
 from pathlib import Path
 from pydantic import BaseModel
 
+from ...base.embeddings import get_lightweight_embedding
 from ...base.knowledge import CoreKnowledgeRegistry, KnowledgeToolMode
 from ...core import KnowledgeBlock
 
@@ -118,8 +120,9 @@ class LocalKnowledgeRegistry(CoreKnowledgeRegistry):
     ) -> list[KnowledgeBlock]:
         """Search this knowledge source for relevant blocks.
 
-        Uses token overlap on ``content`` as a placeholder scoring
-        function. Blocks with zero overlap are dropped; the rest are
+        Embeds the query and each block's ``content`` with the local
+        lightweight embedding model and scores by cosine similarity.
+        Blocks with non-positive similarity are dropped; the rest are
         sorted by score descending and the top ``limit`` are returned.
 
         Returns an empty list when the source file doesn't exist yet.
@@ -132,9 +135,12 @@ class LocalKnowledgeRegistry(CoreKnowledgeRegistry):
         if not blocks:
             return []
 
+        query_vector = get_lightweight_embedding(query)
+
         scored: list[tuple[float, KnowledgeBlock]] = []
         for block in blocks:
-            score = self._fake_score(query, block.content)
+            block_vector = get_lightweight_embedding(block.content)
+            score = self._cosine_similarity(query_vector, block_vector)
             if score <= 0:
                 continue
             # Re-emit the block with the freshly computed score.
@@ -155,22 +161,19 @@ class LocalKnowledgeRegistry(CoreKnowledgeRegistry):
 
     # -------- INTERNALS -----------------------------------------------------------
     @staticmethod
-    def _fake_score(query: str, content: str) -> float:
-        """Token-overlap score with a tiny random tiebreaker.
+    def _cosine_similarity(left: list[float], right: list[float]) -> float:
+        """Cosine similarity between two embedding vectors.
 
-        Returns 0.0 when there's no overlap. Otherwise returns
-        ``overlap / len(query_tokens)`` plus a small random nudge so
-        ties don't always sort the same way.
+        Returns 0.0 for empty, mismatched-length, or zero-norm vectors.
         """
-        query_tokens = {t for t in query.lower().split() if t}
-        if not query_tokens:
+        if not left or not right or len(left) != len(right):
             return 0.0
-        content_tokens = {t for t in content.lower().split() if t}
-        overlap = len(query_tokens & content_tokens)
-        if overlap == 0:
+        dot = sum(a * b for a, b in zip(left, right))
+        left_norm = math.sqrt(sum(a * a for a in left))
+        right_norm = math.sqrt(sum(b * b for b in right))
+        if left_norm == 0 or right_norm == 0:
             return 0.0
-        base = overlap / len(query_tokens)
-        return base + random.uniform(0, 0.001)
+        return dot / (left_norm * right_norm)
 
     def _read_all(self) -> list[KnowledgeBlock]:
         """Load every block in the source file.
