@@ -100,12 +100,13 @@ class ReActLoopPlanning(BaseReasoning):
         self,
         max_loop_iterations: int = 10,
         max_connection_retries: int = 3,
-        enable_planning: bool = False,
-        enable_self_eval: bool = False,
         eval_threshold: float = 0.8,
         max_eval_retries: int = 2,
         eval_criteria: list[str] | None = None,
-        eval_max_extra_tokens: int | None = None
+        eval_max_extra_tokens: int | None = None,
+        enable_planning: bool = False,
+        enable_self_eval: bool = False,
+        enable_intermediate_eval: bool = False,
     ) -> None:
         """Initialize the ReAct loop.
 
@@ -125,6 +126,7 @@ class ReActLoopPlanning(BaseReasoning):
         self.max_eval_retries = max_eval_retries
         self.eval_criteria = eval_criteria or []
         self.eval_max_extra_tokens = eval_max_extra_tokens
+        self.enable_intermediate_eval = enable_intermediate_eval
 
     # -------- ENTRY POINT -----------------------------------------------------------
     async def execute_reasoning_loop(
@@ -155,7 +157,7 @@ class ReActLoopPlanning(BaseReasoning):
                 to the client untouched.
             eval_criteria: Per-run self-eval criteria. Overrides the
                 criteria set at construction; falls back to defaults
-                when neither is given. Ignored unless self-eval runs
+                when neither is given. Ignored unless self-eval runs.
             **kwargs: Provider-specific overrides forwarded to
                 ``client.run()``.
 
@@ -273,6 +275,7 @@ class ReActLoopPlanning(BaseReasoning):
                 # 6. Execute. Approval events are batched so the entire
                 #    pause set arrives together at the end of the turn.
                 approval_events: list[ToolApprovalEvent] = []
+                tool_msgs_this_round: list[ToolMessage] = []
                 async for item in self.tool_executor.execute_tool_call(
                     ctx=ctx,
                     records=records,
@@ -280,6 +283,7 @@ class ReActLoopPlanning(BaseReasoning):
                 ):
                     if isinstance(item, ToolMessage):
                         ctx.messages.append(item)
+                        tool_msgs_this_round.append(item)
                         loop_state.tool_calls += 1
                         continue
 
@@ -296,7 +300,7 @@ class ReActLoopPlanning(BaseReasoning):
                     yield self._reasoning_complete(loop_state)
                     return
 
-                # 7. Tools ran. Loop back 
+                # 7. Tools ran. Loop back
                 if loop_state.scratchpad_updated:
                     loop_state.scratchpad_updated = False
                     yield ScratchpadUpdateEvent(
@@ -304,14 +308,31 @@ class ReActLoopPlanning(BaseReasoning):
                         scratchpad=loop_state.scratchpad.model_copy(deep=True),
                     )
 
+                if self.enable_intermediate_eval:
+                    failed = [m for m in tool_msgs_this_round if not m.success]
+                    if failed:
+                        errors_text = "\n".join(
+                            f"- {m.tool_name}: {m.error}" for m in failed
+                        )
+                        ctx.messages.append(
+                            UserMessage(
+                                source="intermediate-eval",
+                                content=(
+                                    f"A tool call failed:\n{errors_text}\n"
+                                    f"Reconsider your approach before continuing."
+                                ),
+                            )
+                        )
+                        yield EvalEvent(source=self.name, phase="intermediate")
+
                 if loop_state.finish_reason == "input_needed":
                     yield UserInputRequestEvent(
-                        source=self.name, 
+                        source=self.name,
                         question=loop_state.pending_user_input_question or "",
-                        options=loop_state.pending_user_input_options
+                        options=loop_state.pending_user_input_options,
                     )
                     yield self._reasoning_complete(loop_state)
-                    return 
+                    return
 
             else:
                 loop_state.finish_reason = "max_iterations_exceeded"
@@ -337,7 +358,8 @@ class ReActLoopPlanning(BaseReasoning):
             if eval_passed:
                 break
 
-            # Cost Layer 
+            # Cost cap: stop retrying once eval retries have spent the
+            # token budget, instead of silently re-running the loop.
             if self.eval_max_extra_tokens is not None:
                 spent = self._total_tokens(loop_state) - eval_tokens_baseline
                 if spent >= self.eval_max_extra_tokens:
@@ -393,15 +415,16 @@ class ReActLoopPlanning(BaseReasoning):
             ctx.tool_state.add(record)
             records.append(record)
         return records
-    
-    @staticmethod   
+
+    @staticmethod
     def _total_tokens(loop_state: BaseLoopState) -> int:
-        """Accumulated token per Run (input + output)
-        cached tokens are ignore ared they are discount or
-        sometimes no exposed if we use opensource
+        """Accumulated billable tokens for the run (input + output).
+
+        Cached tokens are excluded: they are discounted (~10% cost) and
+        often not exposed by open-source/local providers, so counting
+        them would make the eval budget inconsistent across backends.
         """
         return loop_state.tokens_input + loop_state.tokens_output
-
 
     def _reasoning_complete(self, loop_state: BaseLoopState) -> ReasoningCompleteEvent:
         """Build the terminal event for the current turn."""
@@ -466,10 +489,11 @@ class ReActLoopPlanning(BaseReasoning):
         ctx: RunContext,
         prompts: PromptCtx,
         loop_state: ReActLoopPlanningState,
-        eval_criteria: list[str] | None = None
+        eval_criteria: list[str] | None = None,
     ) -> t.AsyncGenerator[CoreEvent, None]:
         """Optional self-evaluation step after the main ReAct loop."""
         from .eval import EvalResult
+
         yield EvalEvent(source=self.name, phase="start")
 
         # Find last AssistantMessage in the transcript to evaluate
@@ -487,7 +511,11 @@ class ReActLoopPlanning(BaseReasoning):
             "Are there factual errors or unsupported claims?",
         ]
 
-        criteria = eval_criteria if eval_criteria is not None else (self.eval_criteria or defaults)
+        criteria = (
+            eval_criteria
+            if eval_criteria is not None
+            else (self.eval_criteria or defaults)
+        )
         criteria_text = "\n".join(f"- {c}" for c in criteria)
 
         # Inject the evaluation prompt with the assistant's last response and the criteria
@@ -513,21 +541,21 @@ class ReActLoopPlanning(BaseReasoning):
                 await self.client.run(
                     ctx=self._model_context(eval_ctx),
                     prompts=prompts,
-                    tools=None,  
-                    output_format=EvalResult,  
-                    stream=False,  
+                    tools=None,
+                    output_format=EvalResult,
+                    stream=False,
                 ),
             )
         except Exception:
             yield EvalEvent(source=self.name, phase="failed")
             return
-        
+
         loop_state.record_completion(result)
         eval_result = result.message.structured_output
         if not isinstance(eval_result, EvalResult):
             yield EvalEvent(source=self.name, phase="failed")
             return
-        
+
         # Evalidate Pass/Fail
         checks = eval_result.checks
         score = sum(1 for c in checks if c.passed) / len(checks) if checks else 0.0
@@ -542,5 +570,5 @@ class ReActLoopPlanning(BaseReasoning):
             phase="complete",
             score=score,
             passed=passed,
-            result=eval_result
+            result=eval_result,
         )

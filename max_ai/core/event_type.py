@@ -226,7 +226,7 @@ class EvalEvent(ReasoningEvent):
     """Emmited durin the self-evaluationn step"""
 
     EVENT_TYPE = "eval"
-    phase: t.Literal["start", "complete", "failed", "skipped"]
+    phase: t.Literal["start", "complete", "failed", "skipped", "intermediate"]
     score: float | None = Field(default=None)
     passed: bool | None = Field(default=None)
     result: EvalResult | None = Field(default=None)

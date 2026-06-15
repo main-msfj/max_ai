@@ -135,9 +135,10 @@ class ReActLoop(BaseReasoning):
             cancellation_token: External cancellation signal.
             output_format: Optional structured-output schema; forwarded
                 to the client untouched.
-            eval_criteria: Per-run self-eval criteria. Overrides the
-                criteria set at construction; falls back to defaults
-                when neither is given. Ignored unless self-eval runs
+            eval_criteria: Accepted to satisfy the reasoning contract but
+                ignored — this is the pure ReAct loop with no self-eval.
+                Kept as an explicit parameter (not ``**kwargs``) so it is
+                never forwarded to ``client.run()``.
             **kwargs: Provider-specific overrides forwarded to
                 ``client.run()``.
 
@@ -151,9 +152,6 @@ class ReActLoop(BaseReasoning):
         self._set_loop_state(loop_state)
 
         _log = log.child(run_id=ctx.run_id, session_id=ctx.session_id)
-
-        if eval_criteria is not None:
-            _log.warning("eval_critera does not affect React Simple")
 
         while loop_state.iteration < self.max_loop_iterations:
             if cancellation_token and cancellation_token.is_cancelled():
