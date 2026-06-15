@@ -4,11 +4,13 @@ Run Context Management
 This Module works a parent for agent running context
 this is the value that change in running time
 """
+from __future__ import annotations
 
 import uuid
 from pydantic import BaseModel, Field
 
 from ..core.messages import Message
+from ..reasoning.plan import AgentPlan
 from ..core.tool_state import ToolState
 
 from .runtime import RuntimeState
@@ -25,3 +27,4 @@ class RunContext(BaseModel):
     message_history: ChatHistory = Field(default_factory=ChatHistory)
     tool_state: ToolState = Field(default_factory=ToolState)
     runtime_state: RuntimeState = Field(default_factory=RuntimeState)
+    plan: AgentPlan | None = Field(default=None)

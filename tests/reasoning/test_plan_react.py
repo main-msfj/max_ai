@@ -11,7 +11,7 @@ from max_ai.reasoning.react_planning import (
 )
 from max_ai.reasoning.plan import AgentPlan, PlanStep
 from max_ai.reasoning.eval import EvalResult, EvalCheck
-from max_ai.core.messages import AssistantMessage, ToolMessage, UserMessage, SystemMessage
+from max_ai.core.messages import AssistantMessage, ToolMessage, ToolCall, UserMessage, SystemMessage
 from max_ai.core.event_type import (
     PlanningEvent,
     EvalEvent,
@@ -59,6 +59,23 @@ class FakeToolExecutor:
         yield
 
 
+class FakeFailingToolExecutor:
+    """Executor whose tools always fail — yields an error ToolMessage
+    per requested record. Drives the intermediate-eval check."""
+
+    def __init__(self):
+        self.tools = {}
+
+    async def execute_tool_call(self, ctx, records, cancellation_token=None):
+        for record in records:
+            yield ToolMessage.error_message(
+                tool_call_id=record.id,
+                tool_name=record.tool_name,
+                error="boom: tool blew up",
+                source="fake-tool",
+            )
+
+
 class FakeMiddlewareChain:
     async def execute(self, action, ctx, data, func, metadata=None):
         yield await func(ctx)
@@ -83,6 +100,20 @@ def make_result(content="done", structured_output=None, tokens=0):
         ),
         model="fake",
         finish_reason="stop",
+    )
+
+
+def make_tool_result(tool_name="do_thing", call_id="call_1", tokens=0):
+    """LLM response that requests one tool call (drives the tool path)."""
+    return ChatCompletionResult(
+        message=AssistantMessage(
+            source="fake",
+            content="",
+            tool_calls=[ToolCall(id=call_id, tool_name=tool_name, parameters={})],
+        ),
+        usage=Usage(llm_calls=1, attempts_to_call_api=1, tokens_output=tokens),
+        model="fake",
+        finish_reason="tool_calls",
     )
 
 
@@ -115,7 +146,8 @@ def make_eval(passed_checks: int, total_checks: int, issues: list[str] | None = 
 
 def make_loop(client, enable_planning=False, enable_self_eval=False,
               eval_threshold=0.8, max_eval_retries=1,
-              eval_max_extra_tokens=None):
+              eval_max_extra_tokens=None, enable_intermediate_eval=False,
+              tool_executor=None):
     loop = ReActLoop(
         max_loop_iterations=3,
         enable_planning=enable_planning,
@@ -123,11 +155,12 @@ def make_loop(client, enable_planning=False, enable_self_eval=False,
         eval_threshold=eval_threshold,
         max_eval_retries=max_eval_retries,
         eval_max_extra_tokens=eval_max_extra_tokens,
+        enable_intermediate_eval=enable_intermediate_eval,
     )
     loop.bind(
         name="test_agent",
         client=client,
-        tool_executor=FakeToolExecutor(),
+        tool_executor=tool_executor or FakeToolExecutor(),
         middleware_chain=FakeMiddlewareChain(),
     )
     return loop
@@ -492,3 +525,74 @@ async def test_eval_falls_back_to_constructor_criteria(ctx, prompts):
     assert client.eval_messages is not None
     eval_text = " ".join((m.content or "") for m in client.eval_messages)
     assert "CONSTRUCTOR_CRITERION" in eval_text
+
+
+# -------- INTERMEDIATE EVAL ---------------------------------------------------
+@pytest.mark.asyncio
+async def test_intermediate_eval_fires_on_tool_failure(ctx, prompts):
+    """enable_intermediate_eval=True + un tool que falla → se emite un
+    EvalEvent(phase='intermediate') y se inyecta feedback en ctx.messages.
+
+    Secuencia: la 1ª respuesta del LLM pide un tool (que falla), la 2ª es
+    la respuesta final sin tools. El check intermedio debe dispararse
+    entre ambas.
+    """
+    client = FakeChatClient(results=[
+        make_tool_result(tool_name="do_thing"),   # pide tool → fallará
+        make_result(content="final answer"),      # respuesta final
+    ])
+    loop = make_loop(
+        client,
+        enable_intermediate_eval=True,
+        tool_executor=FakeFailingToolExecutor(),
+    )
+    state = ReActLoopState()
+
+    events = await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=state))
+    print_events(events, "test_intermediate_eval_fires_on_tool_failure")
+
+    # Se emitió el evento intermedio.
+    intermediate = [e for e in events if isinstance(e, EvalEvent) and e.phase == "intermediate"]
+    assert len(intermediate) == 1
+
+    # Se inyectó el feedback con la fuente correcta y el error del tool.
+    feedback = [m for m in ctx.messages
+                if isinstance(m, UserMessage) and m.source == "intermediate-eval"]
+    assert len(feedback) == 1
+    assert "do_thing" in feedback[0].content
+    print(f"\n  feedback inyectado: {feedback[0].content[:80]}")
+
+
+@pytest.mark.asyncio
+async def test_intermediate_eval_silent_when_tools_succeed(ctx, prompts):
+    """Con el flag ON pero el tool que SÍ tiene éxito → no se dispara nada.
+    El check solo reacciona a fallos."""
+    client = FakeChatClient(results=[
+        make_tool_result(tool_name="do_thing"),
+        make_result(content="final answer"),
+    ])
+    # FakeToolExecutor por defecto no produce ToolMessages de error
+    # (de hecho no produce ninguno), así que no hay fallo que detectar.
+    loop = make_loop(client, enable_intermediate_eval=True)
+    state = ReActLoopState()
+
+    events = await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=state))
+
+    assert not any(isinstance(e, EvalEvent) and e.phase == "intermediate" for e in events)
+    assert not any(isinstance(m, UserMessage) and m.source == "intermediate-eval"
+                   for m in ctx.messages)
+
+
+@pytest.mark.asyncio
+async def test_intermediate_eval_off_by_default(ctx, prompts):
+    """Sin el flag (default) → aunque un tool falle, no se dispara el check."""
+    client = FakeChatClient(results=[
+        make_tool_result(tool_name="do_thing"),
+        make_result(content="final answer"),
+    ])
+    loop = make_loop(client, tool_executor=FakeFailingToolExecutor())
+    state = ReActLoopState()
+
+    events = await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=state))
+
+    assert not any(isinstance(e, EvalEvent) and e.phase == "intermediate" for e in events)
