@@ -755,6 +755,7 @@ class BaseReasoning(ABC):
         stream_tokens: bool = False,
         cancellation_token: CancellationToken | None = None,
         output_format: t.Type[BaseModel] | None = None,
+        eval_criteria: list[str] | None = None,
         **kwargs: t.Any,
     ) -> t.AsyncGenerator[CoreEvent, None]:
         """Execute the reasoning loop for one agent turn.

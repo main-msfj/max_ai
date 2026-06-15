@@ -117,6 +117,7 @@ class ReActLoop(BaseReasoning):
         stream_tokens: bool = False,
         cancellation_token: CancellationToken | None = None,
         output_format: t.Type[BaseModel] | None = None,
+        eval_criteria: list[str] | None = None,
         **kwargs: t.Any,
     ) -> t.AsyncGenerator[CoreEvent, None]:
         """Drive the ReAct cycle for one agent turn.
@@ -134,6 +135,9 @@ class ReActLoop(BaseReasoning):
             cancellation_token: External cancellation signal.
             output_format: Optional structured-output schema; forwarded
                 to the client untouched.
+            eval_criteria: Per-run self-eval criteria. Overrides the
+                criteria set at construction; falls back to defaults
+                when neither is given. Ignored unless self-eval runs
             **kwargs: Provider-specific overrides forwarded to
                 ``client.run()``.
 
@@ -141,11 +145,15 @@ class ReActLoop(BaseReasoning):
             ``CoreEvent`` instances (model events, reasoning events,
             tool events, errors).
         """
+
         if not isinstance(loop_state, ReActLoopState):
             loop_state = ReActLoopState(**loop_state.model_dump())
         self._set_loop_state(loop_state)
 
         _log = log.child(run_id=ctx.run_id, session_id=ctx.session_id)
+
+        if eval_criteria is not None:
+            _log.warning("eval_critera does not affect React Simple")
 
         while loop_state.iteration < self.max_loop_iterations:
             if cancellation_token and cancellation_token.is_cancelled():

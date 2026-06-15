@@ -135,6 +135,7 @@ class ReActLoopPlanning(BaseReasoning):
         stream_tokens: bool = False,
         cancellation_token: CancellationToken | None = None,
         output_format: t.Type[BaseModel] | None = None,
+        eval_criteria: list[str] | None = None,
         **kwargs: t.Any,
     ) -> t.AsyncGenerator[CoreEvent, None]:
         """Drive the ReAct cycle for one agent turn.
@@ -152,6 +153,9 @@ class ReActLoopPlanning(BaseReasoning):
             cancellation_token: External cancellation signal.
             output_format: Optional structured-output schema; forwarded
                 to the client untouched.
+            eval_criteria: Per-run self-eval criteria. Overrides the
+                criteria set at construction; falls back to defaults
+                when neither is given. Ignored unless self-eval runs
             **kwargs: Provider-specific overrides forwarded to
                 ``client.run()``.
 
@@ -325,7 +329,7 @@ class ReActLoopPlanning(BaseReasoning):
                 break
 
             eval_passed = False
-            async for event in self._eval_step(ctx, prompts, loop_state):
+            async for event in self._eval_step(ctx, prompts, loop_state, eval_criteria):
                 if isinstance(event, EvalEvent) and event.phase == "complete":
                     eval_passed = event.passed or False
                 yield event
@@ -462,10 +466,10 @@ class ReActLoopPlanning(BaseReasoning):
         ctx: RunContext,
         prompts: PromptCtx,
         loop_state: ReActLoopPlanningState,
+        eval_criteria: list[str] | None = None
     ) -> t.AsyncGenerator[CoreEvent, None]:
         """Optional self-evaluation step after the main ReAct loop."""
         from .eval import EvalResult
-
         yield EvalEvent(source=self.name, phase="start")
 
         # Find last AssistantMessage in the transcript to evaluate
@@ -477,11 +481,13 @@ class ReActLoopPlanning(BaseReasoning):
             return
 
         # Build Next Criteria
-        criteria = self.eval_criteria or [
+        defaults = [
             "Does the response fully address the original task?",
             "Are there missing steps or incomplete sections?",
             "Are there factual errors or unsupported claims?",
         ]
+
+        criteria = eval_criteria if eval_criteria is not None else (self.eval_criteria or defaults)
         criteria_text = "\n".join(f"- {c}" for c in criteria)
 
         # Inject the evaluation prompt with the assistant's last response and the criteria

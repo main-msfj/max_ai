@@ -30,9 +30,14 @@ class FakeChatClient:
         self.config = ModelConfig()
         self._results = list(results)
         self._call_count = 0
+        # Spy: messages seen on the eval call (output_format=EvalResult).
+        # Lets a test assert which criteria reached the eval prompt.
+        self.eval_messages: list | None = None
 
     async def run(self, ctx, prompts, tools=None, output_format=None, stream=False, **kw):
         self._call_count += 1
+        if output_format is not None and output_format.__name__ == "EvalResult":
+            self.eval_messages = list(ctx.messages)
         result = self._results.pop(0)
         print(f"\n  [FakeClient call #{self._call_count}] output_format={output_format.__name__ if output_format else None} → structured_output={type(result.message.structured_output).__name__ if result.message.structured_output else None}")
         return result
@@ -435,3 +440,55 @@ async def test_eval_no_cap_is_unaffected(ctx, prompts):
     eval_completes = [e for e in events if isinstance(e, EvalEvent) and e.phase == "complete"]
     assert eval_completes[-1].passed is True
     assert state.finish_reason == "stop"
+
+
+# -------- PER-RUN CRITERIA ----------------------------------------------------
+@pytest.mark.asyncio
+async def test_eval_per_run_criteria_overrides_constructor(ctx, prompts):
+    """eval_criteria pasado por-run gana sobre el del constructor.
+
+    El criterio por-run debe llegar al prompt de evaluación; el del
+    constructor no debe aparecer. Lo verificamos espiando los mensajes
+    que el _eval_step entrega al client.run().
+    """
+    client = FakeChatClient(results=[
+        make_result(content="answer"),
+        make_result(structured_output=make_eval(passed_checks=3, total_checks=3)),
+    ])
+    loop = make_loop(client, enable_self_eval=True)
+    loop.eval_criteria = ["CONSTRUCTOR_CRITERION"]  # set como si viniera del __init__
+    state = ReActLoopState()
+
+    await collect(loop.execute_reasoning_loop(
+        ctx=ctx, prompts=prompts, loop_state=state,
+        eval_criteria=["PER_RUN_CRITERION"],
+    ))
+
+    assert client.eval_messages is not None, "el eval debió correr y ser espiado"
+    eval_text = " ".join((m.content or "") for m in client.eval_messages)
+    print(f"\n  eval prompt contiene PER_RUN? {'PER_RUN_CRITERION' in eval_text}")
+    print(f"  eval prompt contiene CONSTRUCTOR? {'CONSTRUCTOR_CRITERION' in eval_text}")
+
+    assert "PER_RUN_CRITERION" in eval_text
+    assert "CONSTRUCTOR_CRITERION" not in eval_text
+
+
+@pytest.mark.asyncio
+async def test_eval_falls_back_to_constructor_criteria(ctx, prompts):
+    """Sin eval_criteria por-run → usa el del constructor."""
+    client = FakeChatClient(results=[
+        make_result(content="answer"),
+        make_result(structured_output=make_eval(passed_checks=3, total_checks=3)),
+    ])
+    loop = make_loop(client, enable_self_eval=True)
+    loop.eval_criteria = ["CONSTRUCTOR_CRITERION"]
+    state = ReActLoopState()
+
+    await collect(loop.execute_reasoning_loop(
+        ctx=ctx, prompts=prompts, loop_state=state,
+        # sin eval_criteria → None → cae al constructor
+    ))
+
+    assert client.eval_messages is not None
+    eval_text = " ".join((m.content or "") for m in client.eval_messages)
+    assert "CONSTRUCTOR_CRITERION" in eval_text
