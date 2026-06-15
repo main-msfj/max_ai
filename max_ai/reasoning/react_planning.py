@@ -105,6 +105,7 @@ class ReActLoopPlanning(BaseReasoning):
         eval_threshold: float = 0.8,
         max_eval_retries: int = 2,
         eval_criteria: list[str] | None = None,
+        eval_max_extra_tokens: int | None = None
     ) -> None:
         """Initialize the ReAct loop.
 
@@ -123,6 +124,7 @@ class ReActLoopPlanning(BaseReasoning):
         self.eval_threshold = eval_threshold
         self.max_eval_retries = max_eval_retries
         self.eval_criteria = eval_criteria or []
+        self.eval_max_extra_tokens = eval_max_extra_tokens
 
     # -------- ENTRY POINT -----------------------------------------------------------
     async def execute_reasoning_loop(
@@ -169,6 +171,7 @@ class ReActLoopPlanning(BaseReasoning):
 
         # Eval Wrapper
         eval_attempt = 0
+        eval_tokens_baseline = self._total_tokens(loop_state)
         while eval_attempt <= self.max_eval_retries:
             # Reset iteraction counter for the reasoning loop
             loop_state.iteration = 0
@@ -330,6 +333,18 @@ class ReActLoopPlanning(BaseReasoning):
             if eval_passed:
                 break
 
+            # Cost Layer 
+            if self.eval_max_extra_tokens is not None:
+                spent = self._total_tokens(loop_state) - eval_tokens_baseline
+                if spent >= self.eval_max_extra_tokens:
+                    _log.warning(
+                        "Eval budget exhausted; stopping retries",
+                        spent=spent,
+                        budget=self.eval_max_extra_tokens,
+                    )
+                    yield EvalEvent(source=self.name, phase="skipped")
+                    break
+
             eval_attempt += 1
             if eval_attempt > self.max_eval_retries:
                 _log.warning(
@@ -374,6 +389,15 @@ class ReActLoopPlanning(BaseReasoning):
             ctx.tool_state.add(record)
             records.append(record)
         return records
+    
+    @staticmethod   
+    def _total_tokens(loop_state: BaseLoopState) -> int:
+        """Accumulated token per Run (input + output)
+        cached tokens are ignore ared they are discount or
+        sometimes no exposed if we use opensource
+        """
+        return loop_state.tokens_input + loop_state.tokens_output
+
 
     def _reasoning_complete(self, loop_state: BaseLoopState) -> ReasoningCompleteEvent:
         """Build the terminal event for the current turn."""

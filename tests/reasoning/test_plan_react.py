@@ -64,14 +64,18 @@ class FakeMiddlewareChain:
 
 
 # -------- HELPERS -------------------------------------------------------------
-def make_result(content="done", structured_output=None):
+def make_result(content="done", structured_output=None, tokens=0):
     return ChatCompletionResult(
         message=AssistantMessage(
             source="fake",
             content=content,
             structured_output=structured_output,
         ),
-        usage=Usage(llm_calls=1, attempts_to_call_api=1),
+        usage=Usage(
+            llm_calls=1,
+            attempts_to_call_api=1,
+            tokens_output=tokens,
+        ),
         model="fake",
         finish_reason="stop",
     )
@@ -105,13 +109,15 @@ def make_eval(passed_checks: int, total_checks: int, issues: list[str] | None = 
 
 
 def make_loop(client, enable_planning=False, enable_self_eval=False,
-              eval_threshold=0.8, max_eval_retries=1):
+              eval_threshold=0.8, max_eval_retries=1,
+              eval_max_extra_tokens=None):
     loop = ReActLoop(
         max_loop_iterations=3,
         enable_planning=enable_planning,
         enable_self_eval=enable_self_eval,
         eval_threshold=eval_threshold,
         max_eval_retries=max_eval_retries,
+        eval_max_extra_tokens=eval_max_extra_tokens,
     )
     loop.bind(
         name="test_agent",
@@ -352,4 +358,80 @@ async def test_planning_and_eval_together(ctx, prompts):
     print(f"  CompleteEvent at idx={complete_idx}")
 
     assert planning_idx < eval_idx < complete_idx
+    assert state.finish_reason == "stop"
+
+
+# -------- COST CAP ------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_eval_budget_cap_stops_retries(ctx, prompts):
+    """eval_max_extra_tokens bajo → el cap corta los reintentos antes que
+    max_eval_retries, y emite un EvalEvent(phase='skipped') visible.
+
+    Cada respuesta reporta tokens=100, así que tras el 1er intento ya se
+    gastaron 200 tokens (respuesta + eval). Con un cap de 150 y eval que
+    siempre falla (0/3 checks), el cap muerde en el primer check —
+    mucho antes de agotar los 5 retries permitidos.
+    """
+    # Holgura de results: si el cap NO cortara, max_eval_retries=5 pediría
+    # hasta 12 calls. Proveemos de sobra para que un fallo del cap se
+    # manifieste como "demasiados eval rounds", no como IndexError.
+    results = []
+    for _ in range(6):
+        results.append(make_result(content="weak answer", tokens=100))
+        results.append(make_result(
+            structured_output=make_eval(passed_checks=0, total_checks=3),
+            tokens=100,
+        ))
+    client = FakeChatClient(results=results)
+    loop = make_loop(
+        client,
+        enable_self_eval=True,
+        eval_threshold=0.8,
+        max_eval_retries=5,        # alto: NO queremos que esto sea el freno
+        eval_max_extra_tokens=150, # bajo: queremos que ESTO sea el freno
+    )
+    state = ReActLoopState()
+
+    events = await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=state))
+    print_events(events, "test_eval_budget_cap_stops_retries")
+
+    # El cap se hizo visible.
+    skipped = [e for e in events if isinstance(e, EvalEvent) and e.phase == "skipped"]
+    assert len(skipped) == 1, "esperaba exactamente un EvalEvent(phase='skipped')"
+
+    # Cortó MUY pronto: como mucho un eval completo corrió antes del corte,
+    # nada que ver con los 5 retries que max_eval_retries habría permitido.
+    completed_evals = [e for e in events if isinstance(e, EvalEvent) and e.phase == "complete"]
+    print(f"\n  eval rounds run: {len(completed_evals)} (max_eval_retries=5 habría permitido 6)")
+    assert len(completed_evals) < 5
+
+
+@pytest.mark.asyncio
+async def test_eval_no_cap_is_unaffected(ctx, prompts):
+    """eval_max_extra_tokens=None (default) → el cap nunca actúa; el flujo
+    de retries se comporta como siempre. Test de no-regresión."""
+    client = FakeChatClient(results=[
+        make_result(content="weak answer", tokens=100),
+        make_result(structured_output=make_eval(passed_checks=1, total_checks=3),
+                    tokens=100),
+        make_result(content="better answer", tokens=100),
+        make_result(structured_output=make_eval(passed_checks=3, total_checks=3),
+                    tokens=100),
+    ])
+    loop = make_loop(
+        client,
+        enable_self_eval=True,
+        eval_threshold=0.8,
+        max_eval_retries=2,
+        eval_max_extra_tokens=None,  # sin cap
+    )
+    state = ReActLoopState()
+
+    events = await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=state))
+    print_events(events, "test_eval_no_cap_is_unaffected")
+
+    # Sin cap: ningún 'skipped', y el retry normal llevó a un pase final.
+    assert not any(isinstance(e, EvalEvent) and e.phase == "skipped" for e in events)
+    eval_completes = [e for e in events if isinstance(e, EvalEvent) and e.phase == "complete"]
+    assert eval_completes[-1].passed is True
     assert state.finish_reason == "stop"
