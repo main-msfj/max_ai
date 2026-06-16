@@ -43,6 +43,8 @@ from ..base.tools import CoreTool
 from ..base.scratchpad import Scratchpad
 from ..base.clients import CoreChatCompletionClient
 
+from ..reasoning.plan import AgentPlan
+
 from ..core.messages import AssistantMessage
 from ..core.messages import CoreMessage
 from ..core.event_type import (
@@ -113,6 +115,11 @@ class BaseLoopState(BaseModel):
     # scratchpad
     scratchpad: Scratchpad = Field(default_factory=Scratchpad)
     scratchpad_updated: bool = Field(default=False)
+
+    # self-directed plan: the model edits this via the update_plan tool; the
+    # loop syncs plan_draft -> ctx.plan and emits a PlanningEvent when set.
+    plan_draft: AgentPlan | None = Field(default=None)
+    plan_updated: bool = Field(default=False)
 
     @property
     def retries(self) -> int:
