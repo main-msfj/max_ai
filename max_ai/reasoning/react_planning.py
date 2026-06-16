@@ -568,59 +568,6 @@ class ReActLoopPlanning(BaseReasoning):
         ctx.plan = plan
         yield PlanningEvent(source=self.name, phase="complete", plan=plan)
 
-
-    async def _replan_step(
-        self,
-        ctx: RunContext,
-        prompts: PromptCtx,
-        loop_state: ReActLoopPlanningState,
-    ) -> t.AsyncGenerator[CoreEvent, None]:
-        """Optional planning step before the main ReAct loop."""
-        from .plan import AgentPlan
-
-        yield PlanningEvent(source=self.name, phase="start")
-
-        try:
-            # For simplicity, we reuse the same LLM call infrastructure as the main loop.
-            # The planning prompt should be designed to elicit a plan in a single turn.
-            result = t.cast(
-                ChatCompletionResult,
-                await self.client.run(
-                    ctx=self._model_context(ctx),
-                    prompts=prompts,
-                    tools=None,  # Planning prompt should not include tool calls
-                    output_format=AgentPlan,  # Expect the plan to be structured as an AgentPlan
-                    stream=False,  # Planning is a single-turn call; no streaming
-                ),
-            )
-        except Exception:
-            yield PlanningEvent(source=self.name, phase="failed")
-            return
-
-        loop_state.record_completion(result)
-        plan = result.message.structured_output
-        if not isinstance(plan, AgentPlan):
-            yield PlanningEvent(source=self.name, phase="failed")
-            return
-
-        # Serialize plan and passed into context
-        line: list[str] = []
-        for s in plan.steps:
-            hint = f" [{s.tool_hint}]" if s.tool_hint else ""
-            line.append(f"{s.id}. {s.description}{hint}")
-        line.append(f"Rationale: {plan.rationale}")
-        plan_text = "\n".join(line)
-
-        ctx.messages.append(
-            SystemMessage(
-                source="planning",
-                content=f"## Execution plan\n{plan_text}\n\nFollow this plan. You may adapt if needed.",
-            )
-        )
-        ctx.plan = plan
-        yield PlanningEvent(source=self.name, phase="complete", plan=plan)
-
-
     async def _eval_step(
         self,
         ctx: RunContext,
