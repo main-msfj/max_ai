@@ -34,15 +34,23 @@ class AgentPlan(BaseModel):
     rationale: str = Field(..., description="Rationale behind the plan")
 
     def active_step(self) -> PlanStep | None:
-        """Accumulative Step in the run"""
+        """The step currently in progress, or None."""
         return next((s for s in self.steps if s.status == "active"), None)
     
     def next_pending(self) -> PlanStep | None:
-         return next((s for s in self.steps if s.status == "pending"), None) 
+        """The first pending step (the next to run)."""
+        return next((s for s in self.steps if s.status == "pending"), None) 
     
     def mark_done(self, step_id: int) -> None:
         """Mark as completed by id"""
         for s in self.steps:
             if s.id == step_id:
                 s.status = "done"
+                return 
+            
+    def mark_failed(self, step_id: int) -> None:
+        """Mark a step as failed (could not be completed)"""
+        for s in self.steps:
+            if s.id == step_id:
+                s.status = "failed"
                 return 

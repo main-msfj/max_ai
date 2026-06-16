@@ -68,6 +68,7 @@ class ReActLoopPlanningState(BaseLoopState):
 
     last_eval_issues: list[str] = Field(default_factory=list)
     last_eval_score: float | None = Field(default=None)
+    step_failures: dict[int, int] = Field(default_factory=dict)
 
 
 # -------- LOOP -----------------------------------------------------------
@@ -107,6 +108,7 @@ class ReActLoopPlanning(BaseReasoning):
         enable_planning: bool = False,
         enable_self_eval: bool = False,
         enable_intermediate_eval: bool = False,
+        max_step_retries: int = 2
     ) -> None:
         """Initialize the ReAct loop.
 
@@ -127,6 +129,7 @@ class ReActLoopPlanning(BaseReasoning):
         self.eval_criteria = eval_criteria or []
         self.eval_max_extra_tokens = eval_max_extra_tokens
         self.enable_intermediate_eval = enable_intermediate_eval
+        self.max_step_retries = max_step_retries
 
     # -------- ENTRY POINT -----------------------------------------------------------
     async def execute_reasoning_loop(
@@ -230,6 +233,24 @@ class ReActLoopPlanning(BaseReasoning):
                     max_iterations=self.max_loop_iterations,
                 )
 
+                if ctx.plan is not None:
+                    step = ctx.plan.active_step()
+                    if step is None:
+                        step = ctx.plan.next_pending()
+                        if step is not None:
+                            step.status = "active"
+
+                    if step is not None:
+                        ctx.messages.append(
+                            SystemMessage(
+                                source="plan-progress",
+                                content=f"You are working on step {step.id}: {step.description}",
+                            )
+                        )
+                        yield PlanningEvent(
+                            source=self.name, phase="progress", plan=ctx.plan
+                        )
+
                 # 1. LLM call (stream or non-stream — same contract).
                 call = self._call_llm_stream if stream_tokens else self._call_llm
                 paused_in_call = False
@@ -267,6 +288,18 @@ class ReActLoopPlanning(BaseReasoning):
                 # 4. Final answer — no tool calls, we're done.
                 if not assistant_msg.tool_calls:
                     loop_state.finish_reason = result.finish_reason or "stop"
+
+                    # 4.1 (piece 4, rule C): the active step finished as pure
+                    # LLM output (no tool — e.g. "summarize"). Close it before
+                    # exiting so the plan ends fully done, not stuck on the
+                    # last step.
+                    if ctx.plan is not None:
+                        active = ctx.plan.active_step()
+                        if active is not None:
+                            ctx.plan.mark_done(active.id)
+                            yield PlanningEvent(
+                                source=self.name, phase="progress", plan=ctx.plan
+                            )
                     break
 
                 # 5. Promote tool calls into records on ctx.tool_state.
@@ -324,6 +357,33 @@ class ReActLoopPlanning(BaseReasoning):
                             )
                         )
                         yield EvalEvent(source=self.name, phase="intermediate")
+
+                # 8. Advance the plan based on this round's tools.
+                #    (piece 4, rule A): all tools succeeded → step done; on
+                #    the next iteration piece 3 promotes the next pending step.
+                #    (piece 5): a tool failed → count it; once a step exceeds
+                #    max_step_retries, mark it failed and replan from here.
+                if ctx.plan is not None and tool_msgs_this_round:
+                    active = ctx.plan.active_step()
+                    if active is not None:
+                        if all(m.success for m in tool_msgs_this_round):
+                            ctx.plan.mark_done(active.id)
+                            yield PlanningEvent(
+                                source=self.name, phase="progress", plan=ctx.plan
+                            )
+                        else:
+                            n = loop_state.step_failures.get(active.id, 0) + 1
+                            loop_state.step_failures[active.id] = n
+                            if n >= self.max_step_retries:
+                                ctx.plan.mark_failed(active.id)
+                                reason = (
+                                    f"step {active.id} ({active.description}) "
+                                    f"failed {n} times"
+                                )
+                                async for ev in self._planning_step(
+                                    ctx, prompts, loop_state, replan_reason=reason
+                                ):
+                                    yield ev
 
                 if loop_state.finish_reason == "input_needed":
                     yield UserInputRequestEvent(
@@ -439,6 +499,81 @@ class ReActLoopPlanning(BaseReasoning):
         ctx: RunContext,
         prompts: PromptCtx,
         loop_state: ReActLoopPlanningState,
+        replan_reason: str | None = None,
+    ) -> t.AsyncGenerator[CoreEvent, None]:
+        """Generate (or regenerate) the execution plan.
+
+        Used in two situations, sharing the same machinery:
+          * Initial planning before the main ReAct loop (``replan_reason``
+            is None).
+          * Replanning after a step failed too many times (piece 5):
+            ``replan_reason`` carries the failure context so the LLM can
+            produce a revised plan instead of repeating the dead end.
+        """
+        from .plan import AgentPlan
+
+        yield PlanningEvent(source=self.name, phase="start")
+
+        # The only difference between plan and replan: replanning injects the
+        # failure context so the new plan avoids the dead end.
+        if replan_reason is not None:
+            ctx.messages.append(
+                SystemMessage(
+                    source="replan",
+                    content=(
+                        f"The previous plan could not be completed: "
+                        f"{replan_reason}.\n"
+                        f"Produce a revised plan from the current state."
+                    ),
+                )
+            )
+
+        try:
+            # For simplicity, we reuse the same LLM call infrastructure as the main loop.
+            # The planning prompt should be designed to elicit a plan in a single turn.
+            result = t.cast(
+                ChatCompletionResult,
+                await self.client.run(
+                    ctx=self._model_context(ctx),
+                    prompts=prompts,
+                    tools=None,  # Planning prompt should not include tool calls
+                    output_format=AgentPlan,  # Expect the plan to be structured as an AgentPlan
+                    stream=False,  # Planning is a single-turn call; no streaming
+                ),
+            )
+        except Exception:
+            yield PlanningEvent(source=self.name, phase="failed")
+            return
+
+        loop_state.record_completion(result)
+        plan = result.message.structured_output
+        if not isinstance(plan, AgentPlan):
+            yield PlanningEvent(source=self.name, phase="failed")
+            return
+
+        # Serialize plan and passed into context
+        line: list[str] = []
+        for s in plan.steps:
+            hint = f" [{s.tool_hint}]" if s.tool_hint else ""
+            line.append(f"{s.id}. {s.description}{hint}")
+        line.append(f"Rationale: {plan.rationale}")
+        plan_text = "\n".join(line)
+
+        ctx.messages.append(
+            SystemMessage(
+                source="planning",
+                content=f"## Execution plan\n{plan_text}\n\nFollow this plan. You may adapt if needed.",
+            )
+        )
+        ctx.plan = plan
+        yield PlanningEvent(source=self.name, phase="complete", plan=plan)
+
+
+    async def _replan_step(
+        self,
+        ctx: RunContext,
+        prompts: PromptCtx,
+        loop_state: ReActLoopPlanningState,
     ) -> t.AsyncGenerator[CoreEvent, None]:
         """Optional planning step before the main ReAct loop."""
         from .plan import AgentPlan
@@ -482,7 +617,9 @@ class ReActLoopPlanning(BaseReasoning):
                 content=f"## Execution plan\n{plan_text}\n\nFollow this plan. You may adapt if needed.",
             )
         )
+        ctx.plan = plan
         yield PlanningEvent(source=self.name, phase="complete", plan=plan)
+
 
     async def _eval_step(
         self,

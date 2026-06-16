@@ -218,7 +218,7 @@ class PlanningEvent(ReasoningEvent):
     """Event emitted when a plan is generated."""
 
     EVENT_TYPE = "planning"
-    phase: t.Literal["start", "complete", "failed", "skipped"]
+    phase: t.Literal["start", "complete", "failed", "skipped", "progress"]
     plan: AgentPlan | None = Field(default=None)
 
 

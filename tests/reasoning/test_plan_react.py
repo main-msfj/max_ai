@@ -76,6 +76,23 @@ class FakeFailingToolExecutor:
             )
 
 
+class FakeSuccessToolExecutor:
+    """Executor whose tools always succeed — yields one successful
+    ToolMessage per requested record. Drives piece 4 rule A."""
+
+    def __init__(self):
+        self.tools = {}
+
+    async def execute_tool_call(self, ctx, records, cancellation_token=None):
+        for record in records:
+            yield ToolMessage.success_message(
+                tool_call_id=record.id,
+                tool_name=record.tool_name,
+                content="ok: tool ran",
+                source="fake-tool",
+            )
+
+
 class FakeMiddlewareChain:
     async def execute(self, action, ctx, data, func, metadata=None):
         yield await func(ctx)
@@ -147,15 +164,16 @@ def make_eval(passed_checks: int, total_checks: int, issues: list[str] | None = 
 def make_loop(client, enable_planning=False, enable_self_eval=False,
               eval_threshold=0.8, max_eval_retries=1,
               eval_max_extra_tokens=None, enable_intermediate_eval=False,
-              tool_executor=None):
+              tool_executor=None, max_step_retries=2, max_loop_iterations=3):
     loop = ReActLoop(
-        max_loop_iterations=3,
+        max_loop_iterations=max_loop_iterations,
         enable_planning=enable_planning,
         enable_self_eval=enable_self_eval,
         eval_threshold=eval_threshold,
         max_eval_retries=max_eval_retries,
         eval_max_extra_tokens=eval_max_extra_tokens,
         enable_intermediate_eval=enable_intermediate_eval,
+        max_step_retries=max_step_retries,
     )
     loop.bind(
         name="test_agent",
@@ -214,7 +232,14 @@ async def test_planning_emits_events(ctx, prompts):
     events = await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=state))
     print_events(events, "test_planning_emits_events")
 
-    planning_events = [e for e in events if isinstance(e, PlanningEvent)]
+    # This test focuses on the planning step's own events (start/complete).
+    # The phase="progress" event from plan-progress injection has its own
+    # dedicated test below.
+    planning_events = [
+        e
+        for e in events
+        if isinstance(e, PlanningEvent) and e.phase in ("start", "complete")
+    ]
     assert len(planning_events) == 2
     assert planning_events[0].phase == "start"
     assert planning_events[1].phase == "complete"
@@ -239,10 +264,16 @@ async def test_planning_injects_system_message(ctx, prompts):
     await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=state))
     print_messages(ctx, "after planning")
 
-    system_msgs = [m for m in ctx.messages if isinstance(m, SystemMessage)]
-    assert len(system_msgs) == 1
-    assert "Execution plan" in system_msgs[0].content
-    assert "Search for info" in system_msgs[0].content
+    # Filter by source: the planning step emits source="planning"; piece 3's
+    # plan-progress injection adds a separate source="plan-progress" message.
+    plan_msgs = [
+        m
+        for m in ctx.messages
+        if isinstance(m, SystemMessage) and m.source == "planning"
+    ]
+    assert len(plan_msgs) == 1
+    assert "Execution plan" in plan_msgs[0].content
+    assert "Search for info" in plan_msgs[0].content
 
 
 @pytest.mark.asyncio
@@ -276,6 +307,180 @@ async def test_planning_disabled_no_events(ctx, prompts):
 
     assert not any(isinstance(e, PlanningEvent) for e in events)
     print("  No PlanningEvents — correct")
+
+
+# -------- PLAN-PROGRESS (piece 3) TESTS ---------------------------------------
+@pytest.mark.asyncio
+async def test_plan_progress_activates_and_injects(ctx, prompts):
+    """ctx.plan set → first iteration activates step 1, injects a
+    plan-progress SystemMessage and emits PlanningEvent(phase="progress")."""
+    # Plan is set directly (no _planning_step) to isolate piece 3.
+    ctx.plan = make_plan()
+    client = FakeChatClient(results=[make_result(content="answer")])
+    loop = make_loop(client, enable_planning=False)
+    state = ReActLoopState()
+
+    events = await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=state))
+    print_events(events, "test_plan_progress_activates_and_injects")
+    print_messages(ctx, "after plan-progress")
+
+    # Two progress events: one when piece 3 activates step 1, one when
+    # piece 4 (rule C) marks it done at the final answer.
+    progress = [e for e in events if isinstance(e, PlanningEvent) and e.phase == "progress"]
+    assert len(progress) == 2
+    assert progress[0].plan is ctx.plan
+
+    # Step 1 was activated, then closed by piece 4 (rule C: the final
+    # answer had no tool calls). Step 2 was never reached.
+    assert ctx.plan.steps[0].status == "done"
+    assert ctx.plan.steps[1].status == "pending"
+
+    # A plan-progress message naming step 1 was injected.
+    pp = [m for m in ctx.messages if isinstance(m, SystemMessage) and m.source == "plan-progress"]
+    assert len(pp) == 1
+    assert "step 1" in pp[0].content
+    assert "Search for info" in pp[0].content
+
+
+@pytest.mark.asyncio
+async def test_plan_progress_advances_after_successful_tool(ctx, prompts):
+    """piece 4 (rule A + C, the research case): step 1 uses a tool that
+    succeeds → marked done; step 2 is then activated and finishes as pure
+    LLM output → marked done. The plan advances end to end."""
+    ctx.plan = make_plan()
+    # iter 1: step 1 runs a tool (browser-like) that succeeds -> done.
+    # iter 2: step 2 is the summary (no tool) -> done, loop ends.
+    client = FakeChatClient(results=[
+        make_tool_result(),
+        make_result(content="here is the summary"),
+    ])
+    loop = make_loop(
+        client, enable_planning=False, tool_executor=FakeSuccessToolExecutor()
+    )
+    state = ReActLoopState()
+
+    await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=state))
+    print_messages(ctx, "after research plan")
+
+    # Both steps fully done — the plan advanced end to end.
+    assert ctx.plan.steps[0].status == "done"
+    assert ctx.plan.steps[1].status == "done"
+
+    # Step 2 was activated only after step 1 closed: a plan-progress message
+    # naming step 2 must have been injected.
+    pp = [m for m in ctx.messages if isinstance(m, SystemMessage) and m.source == "plan-progress"]
+    assert any("step 2" in m.content for m in pp)
+
+
+@pytest.mark.asyncio
+async def test_plan_progress_only_advances_on_success(ctx, prompts):
+    """piece 4 (rule A) guards on all(m.success): a successful tool round
+    closes the active step, but the rule never fires unless tools succeeded.
+    Verified by checking the active step advances exactly once per success."""
+    ctx.plan = make_plan()
+    # iter 1: tool succeeds -> step 1 done. iter 2: final answer -> step 2 done.
+    client = FakeChatClient(results=[
+        make_tool_result(),
+        make_result(content="summary"),
+    ])
+    loop = make_loop(
+        client, enable_planning=False, tool_executor=FakeSuccessToolExecutor()
+    )
+    state = ReActLoopState()
+
+    events = await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=state))
+
+    # Step 1 closed by rule A (tool success), step 2 by rule C (final answer).
+    assert [s.status for s in ctx.plan.steps] == ["done", "done"]
+    # No step was left active/pending at the end — the whole plan completed.
+    assert all(s.status == "done" for s in ctx.plan.steps)
+
+
+# -------- REPLAN (piece 5) TESTS ----------------------------------------------
+@pytest.mark.asyncio
+async def test_replan_after_step_fails(ctx, prompts):
+    """piece 5: when a step fails max_step_retries times it is marked failed
+    and the loop replans — ctx.plan is replaced by the new plan."""
+    ctx.plan = make_plan()  # steps 1, 2
+    recovery_plan = AgentPlan(
+        steps=[PlanStep(id=99, description="recovery step")],
+        rationale="retry differently",
+    )
+    client = FakeChatClient(results=[
+        make_tool_result(),                          # iter 1: step 1 -> tool (fails)
+        make_result(structured_output=recovery_plan),  # replan -> new plan
+        make_result(content="done"),                 # iter 2: step 99 -> final answer
+    ])
+    loop = make_loop(
+        client,
+        enable_planning=False,
+        tool_executor=FakeFailingToolExecutor(),
+        max_step_retries=1,          # replan on the first failure
+        max_loop_iterations=5,
+    )
+    state = ReActLoopState()
+
+    events = await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=state))
+    print_events(events, "test_replan_after_step_fails")
+
+    # The failure was counted for step 1.
+    assert state.step_failures.get(1) == 1
+    # ctx.plan was replaced by the recovery plan and it completed.
+    assert [s.id for s in ctx.plan.steps] == [99]
+    assert ctx.plan.steps[0].status == "done"
+
+    # A replan emitted its own start/complete planning events.
+    phases = [e.phase for e in events if isinstance(e, PlanningEvent)]
+    assert "start" in phases and "complete" in phases
+
+
+@pytest.mark.asyncio
+async def test_no_replan_before_threshold(ctx, prompts):
+    """piece 5: a single failure under max_step_retries does NOT replan —
+    the step stays in the original plan and is retried."""
+    ctx.plan = make_plan()  # steps 1, 2
+    # One failing tool turn, then the LLM gives up with a final answer. With
+    # max_step_retries=2, the single failure must not trigger a replan.
+    client = FakeChatClient(results=[
+        make_tool_result(),
+        make_result(content="answer"),
+    ])
+    loop = make_loop(
+        client,
+        enable_planning=False,
+        tool_executor=FakeFailingToolExecutor(),
+        max_step_retries=2,
+        max_loop_iterations=5,
+    )
+    state = ReActLoopState()
+
+    events = await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=state))
+
+    # Failure counted but below threshold → original plan kept (ids 1, 2).
+    assert state.step_failures.get(1) == 1
+    assert [s.id for s in ctx.plan.steps] == [1, 2]
+    # No replan: no PlanningEvent(phase="start") was emitted (planning was off).
+    assert not any(
+        isinstance(e, PlanningEvent) and e.phase == "start" for e in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_plan_progress_skipped_when_no_plan(ctx, prompts):
+    """ctx.plan is None → no plan-progress injection, no progress events."""
+    assert ctx.plan is None  # default
+    client = FakeChatClient(results=[make_result(content="answer")])
+    loop = make_loop(client, enable_planning=False)
+    state = ReActLoopState()
+
+    events = await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=state))
+    print_events(events, "test_plan_progress_skipped_when_no_plan")
+
+    assert not any(isinstance(e, PlanningEvent) and e.phase == "progress" for e in events)
+    assert not any(
+        isinstance(m, SystemMessage) and m.source == "plan-progress" for m in ctx.messages
+    )
+    print("  No plan-progress — correct")
 
 
 # -------- EVAL TESTS ----------------------------------------------------------
