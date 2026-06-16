@@ -49,6 +49,8 @@ from ..types.tool_call import ToolCallRecord
 
 from ..types.completions import ChatCompletionResult
 
+from .eval import EvalConfig
+
 if t.TYPE_CHECKING:
     from ..core.messages import ToolCall
 
@@ -101,34 +103,30 @@ class ReActLoopPlanning(BaseReasoning):
         self,
         max_loop_iterations: int = 10,
         max_connection_retries: int = 3,
-        eval_threshold: float = 0.8,
-        max_eval_retries: int = 2,
-        eval_criteria: list[str] | None = None,
-        eval_max_extra_tokens: int | None = None,
-        enable_planning: bool = False,
-        enable_self_eval: bool = False,
-        enable_intermediate_eval: bool = False,
-        max_step_retries: int = 2
+        eval: EvalConfig | None = None,
+        max_step_retries: int = 2,
     ) -> None:
-        """Initialize the ReAct loop.
+        """Initialize the planning ReAct loop.
 
         Only config goes here. The agent calls ``bind()`` later to
         inject runtime dependencies (name, client, tool_executor,
         middleware_chain).
 
+        Planning is intrinsic to this loop — it always produces a plan
+        (use the plain ``ReActLoop`` when you don't want one). Self-eval is
+        opt-in: pass an ``EvalConfig`` to enable it, leave ``eval=None`` to
+        skip it.
+
         Args:
             max_loop_iterations: Cap on iterations within one turn.
             max_connection_retries: Per-call transient-error retry budget.
+            eval: Self-evaluation config; ``None`` disables self-eval.
+            max_step_retries: Failures a plan step may accumulate before it
+                is marked failed and the loop replans.
         """
         super().__init__(max_connection_retries=max_connection_retries)
         self.max_loop_iterations = max_loop_iterations
-        self.enable_planning = enable_planning
-        self.enable_self_eval = enable_self_eval
-        self.eval_threshold = eval_threshold
-        self.max_eval_retries = max_eval_retries
-        self.eval_criteria = eval_criteria or []
-        self.eval_max_extra_tokens = eval_max_extra_tokens
-        self.enable_intermediate_eval = enable_intermediate_eval
+        self.eval = eval
         self.max_step_retries = max_step_retries
 
     # -------- ENTRY POINT -----------------------------------------------------------
@@ -173,15 +171,19 @@ class ReActLoopPlanning(BaseReasoning):
         self._set_loop_state(loop_state)
         _log = log.child(run_id=ctx.run_id, session_id=ctx.session_id)
 
-        # Planning
-        if self.enable_planning:
+        # Planning is intrinsic to this loop. Plan only when none exists yet,
+        # so a resume (where ctx.plan was already built and persisted) does
+        # not throw away the in-flight plan and start over.
+        if ctx.plan is None:
             async for event in self._planning_step(ctx, prompts, loop_state):
                 yield event
 
-        # Eval Wrapper
+        # Eval Wrapper. max_retries comes from the eval config; with no eval
+        # config the loop runs exactly once (the `eval is None` breaks below).
         eval_attempt = 0
         eval_tokens_baseline = self._total_tokens(loop_state)
-        while eval_attempt <= self.max_eval_retries:
+        max_eval_retries = self.eval.max_retries if self.eval is not None else 0
+        while eval_attempt <= max_eval_retries:
             # Reset iteraction counter for the reasoning loop
             loop_state.iteration = 0
 
@@ -341,7 +343,7 @@ class ReActLoopPlanning(BaseReasoning):
                         scratchpad=loop_state.scratchpad.model_copy(deep=True),
                     )
 
-                if self.enable_intermediate_eval:
+                if self.eval is not None and self.eval.intermediate:
                     failed = [m for m in tool_msgs_this_round if not m.success]
                     if failed:
                         errors_text = "\n".join(
@@ -402,8 +404,9 @@ class ReActLoopPlanning(BaseReasoning):
                     final_iteration=loop_state.iteration,
                 )
 
-            # Eval step
-            if not self.enable_self_eval:
+            # Eval step. Skipped entirely when no eval config was provided
+            # or it explicitly disables self_eval.
+            if self.eval is None or not self.eval.self_eval:
                 break
 
             if loop_state.finish_reason != "stop":
@@ -420,22 +423,22 @@ class ReActLoopPlanning(BaseReasoning):
 
             # Cost cap: stop retrying once eval retries have spent the
             # token budget, instead of silently re-running the loop.
-            if self.eval_max_extra_tokens is not None:
+            if self.eval.max_extra_tokens is not None:
                 spent = self._total_tokens(loop_state) - eval_tokens_baseline
-                if spent >= self.eval_max_extra_tokens:
+                if spent >= self.eval.max_extra_tokens:
                     _log.warning(
                         "Eval budget exhausted; stopping retries",
                         spent=spent,
-                        budget=self.eval_max_extra_tokens,
+                        budget=self.eval.max_extra_tokens,
                     )
                     yield EvalEvent(source=self.name, phase="skipped")
                     break
 
             eval_attempt += 1
-            if eval_attempt > self.max_eval_retries:
+            if eval_attempt > max_eval_retries:
                 _log.warning(
                     "Max self-evaluation attempts exceeded",
-                    max_eval_attempts=self.max_eval_retries,
+                    max_eval_attempts=max_eval_retries,
                     final_attempt=eval_attempt,
                 )
                 break
@@ -595,10 +598,11 @@ class ReActLoopPlanning(BaseReasoning):
             "Are there factual errors or unsupported claims?",
         ]
 
+        config_criteria = self.eval.criteria if self.eval is not None else None
         criteria = (
             eval_criteria
             if eval_criteria is not None
-            else (self.eval_criteria or defaults)
+            else (config_criteria or defaults)
         )
         criteria_text = "\n".join(f"- {c}" for c in criteria)
 
@@ -643,7 +647,8 @@ class ReActLoopPlanning(BaseReasoning):
         # Evalidate Pass/Fail
         checks = eval_result.checks
         score = sum(1 for c in checks if c.passed) / len(checks) if checks else 0.0
-        passed = score >= self.eval_threshold
+        threshold = self.eval.threshold if self.eval is not None else 0.8
+        passed = score >= threshold
 
         # Update loop state
         loop_state.last_eval_score = score

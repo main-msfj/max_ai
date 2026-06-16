@@ -8,6 +8,7 @@ import typing as t
 
 from max_ai.reasoning.react_simple import ReActLoop as SimpleReActLoop, ReActLoopState as SimpleLoopState
 from max_ai.reasoning.react_planning import ReActLoopPlanning as PlanningReActLoop, ReActLoopPlanningState as PlanningLoopState
+from max_ai.reasoning.plan import AgentPlan
 from max_ai.core.messages import AssistantMessage, ToolMessage
 from max_ai.core.event_type import ReasoningCompleteEvent, UserInputRequestEvent
 from max_ai.core.models import ModelConfig
@@ -326,6 +327,9 @@ async def test_simple_loop_finish_reason_input_needed(ctx, prompts):
 @pytest.mark.asyncio
 async def test_planning_loop_emits_user_input_event(ctx, prompts):
     """Planning loop also yields UserInputRequestEvent correctly."""
+    # Inert plan so the loop skips its planning step (this test is about the
+    # user-input event, not planning).
+    ctx.plan = AgentPlan(steps=[], rationale="no steps")
     loop_state = PlanningLoopState()
     tool = UserInputTool(loop_state=loop_state)
 

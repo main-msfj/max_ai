@@ -10,7 +10,7 @@ from max_ai.reasoning.react_planning import (
     ReActLoopPlanningState as ReActLoopState,
 )
 from max_ai.reasoning.plan import AgentPlan, PlanStep
-from max_ai.reasoning.eval import EvalResult, EvalCheck
+from max_ai.reasoning.eval import EvalResult, EvalCheck, EvalConfig
 from max_ai.core.messages import AssistantMessage, ToolMessage, ToolCall, UserMessage, SystemMessage
 from max_ai.core.event_type import (
     PlanningEvent,
@@ -144,6 +144,13 @@ def make_plan():
     )
 
 
+def empty_plan():
+    """A plan with no steps. Present (so the loop won't generate one) but
+    inert — active_step()/next_pending() return None, so no plan-progress
+    fires. Used by eval tests that don't care about plan mechanics."""
+    return AgentPlan(steps=[], rationale="no steps")
+
+
 def make_eval(passed_checks: int, total_checks: int, issues: list[str] | None = None):
     checks = [
         EvalCheck(
@@ -165,14 +172,26 @@ def make_loop(client, enable_planning=False, enable_self_eval=False,
               eval_threshold=0.8, max_eval_retries=1,
               eval_max_extra_tokens=None, enable_intermediate_eval=False,
               tool_executor=None, max_step_retries=2, max_loop_iterations=3):
+    """Build a bound ReActLoopPlanning for tests.
+
+    Planning is now intrinsic to the loop (it always plans when ctx.plan is
+    None), so ``enable_planning`` no longer maps to a constructor flag — the
+    planning-focused tests control behaviour by seeding ``ctx.plan`` (or not).
+    The old eval flags are translated into an ``EvalConfig``: any eval flag
+    being set builds one, otherwise ``eval`` stays None (no self-eval).
+    """
+    eval_cfg = None
+    if enable_self_eval or enable_intermediate_eval:
+        eval_cfg = EvalConfig(
+            self_eval=enable_self_eval,
+            intermediate=enable_intermediate_eval,
+            threshold=eval_threshold,
+            max_retries=max_eval_retries,
+            max_extra_tokens=eval_max_extra_tokens,
+        )
     loop = ReActLoop(
         max_loop_iterations=max_loop_iterations,
-        enable_planning=enable_planning,
-        enable_self_eval=enable_self_eval,
-        eval_threshold=eval_threshold,
-        max_eval_retries=max_eval_retries,
-        eval_max_extra_tokens=eval_max_extra_tokens,
-        enable_intermediate_eval=enable_intermediate_eval,
+        eval=eval_cfg,
         max_step_retries=max_step_retries,
     )
     loop.bind(
@@ -296,17 +315,37 @@ async def test_planning_failed_continues(ctx, prompts):
 
 
 @pytest.mark.asyncio
-async def test_planning_disabled_no_events(ctx, prompts):
-    """enable_planning=False → cero PlanningEvents."""
-    client = FakeChatClient(results=[make_result(content="answer")])
-    loop = make_loop(client, enable_planning=False)
+async def test_planning_always_runs_when_no_plan(ctx, prompts):
+    """Planning is intrinsic to this loop: with no ctx.plan it always plans
+    (no enable flag), emitting start/complete PlanningEvents."""
+    client = FakeChatClient(results=[
+        make_result(structured_output=make_plan()),
+        make_result(content="answer"),
+    ])
+    loop = make_loop(client)
     state = ReActLoopState()
 
     events = await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=state))
-    print_events(events, "test_planning_disabled_no_events")
+    print_events(events, "test_planning_always_runs_when_no_plan")
 
-    assert not any(isinstance(e, PlanningEvent) for e in events)
-    print("  No PlanningEvents — correct")
+    phases = [e.phase for e in events if isinstance(e, PlanningEvent)]
+    assert "start" in phases and "complete" in phases
+
+
+@pytest.mark.asyncio
+async def test_planning_skipped_when_plan_already_present(ctx, prompts):
+    """If ctx.plan is already set (e.g. a resume), the loop does NOT replan —
+    no PlanningEvent(start) is emitted, the existing plan is used as-is."""
+    ctx.plan = make_plan()
+    client = FakeChatClient(results=[make_result(content="answer")])
+    loop = make_loop(client)
+    state = ReActLoopState()
+
+    events = await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=state))
+
+    assert not any(
+        isinstance(e, PlanningEvent) and e.phase == "start" for e in events
+    )
 
 
 # -------- PLAN-PROGRESS (piece 3) TESTS ---------------------------------------
@@ -466,27 +505,31 @@ async def test_no_replan_before_threshold(ctx, prompts):
 
 
 @pytest.mark.asyncio
-async def test_plan_progress_skipped_when_no_plan(ctx, prompts):
-    """ctx.plan is None → no plan-progress injection, no progress events."""
-    assert ctx.plan is None  # default
-    client = FakeChatClient(results=[make_result(content="answer")])
-    loop = make_loop(client, enable_planning=False)
+async def test_plan_progress_skipped_when_planning_fails(ctx, prompts):
+    """If planning fails (no plan produced), ctx.plan stays None and the loop
+    injects no plan-progress messages or progress events."""
+    client = FakeChatClient(results=[
+        make_result(structured_output=None),  # planning fails
+        make_result(content="answer"),
+    ])
+    loop = make_loop(client)
     state = ReActLoopState()
 
     events = await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=state))
-    print_events(events, "test_plan_progress_skipped_when_no_plan")
+    print_events(events, "test_plan_progress_skipped_when_planning_fails")
 
+    assert ctx.plan is None
     assert not any(isinstance(e, PlanningEvent) and e.phase == "progress" for e in events)
     assert not any(
         isinstance(m, SystemMessage) and m.source == "plan-progress" for m in ctx.messages
     )
-    print("  No plan-progress — correct")
 
 
 # -------- EVAL TESTS ----------------------------------------------------------
 @pytest.mark.asyncio
 async def test_eval_passes_on_high_score(ctx, prompts):
     """Todos los checks pasan → passed=True, score=1.0."""
+    ctx.plan = empty_plan()  # plan present (so the loop won't plan) but inert
     client = FakeChatClient(results=[
         make_result(content="good answer"),
         make_result(structured_output=make_eval(passed_checks=3, total_checks=3)),
@@ -510,6 +553,7 @@ async def test_eval_passes_on_high_score(ctx, prompts):
 @pytest.mark.asyncio
 async def test_eval_retries_on_low_score(ctx, prompts):
     """Score bajo → feedback inyectado → segundo intento → pasa."""
+    ctx.plan = empty_plan()
     client = FakeChatClient(results=[
         make_result(content="weak answer"),
         make_result(structured_output=make_eval(
@@ -544,6 +588,7 @@ async def test_eval_retries_on_low_score(ctx, prompts):
 @pytest.mark.asyncio
 async def test_eval_score_calculated_from_checks(ctx, prompts):
     """2/3 checks pasados = score 0.666, bajo threshold 0.8 → falla primer intento."""
+    ctx.plan = empty_plan()
     client = FakeChatClient(results=[
         make_result(content="partial answer"),
         make_result(structured_output=make_eval(passed_checks=2, total_checks=3)),
@@ -563,7 +608,8 @@ async def test_eval_score_calculated_from_checks(ctx, prompts):
 
 @pytest.mark.asyncio
 async def test_eval_disabled_no_events(ctx, prompts):
-    """enable_self_eval=False → cero EvalEvents."""
+    """eval=None → cero EvalEvents."""
+    ctx.plan = empty_plan()
     client = FakeChatClient(results=[make_result(content="answer")])
     loop = make_loop(client, enable_self_eval=False)
     state = ReActLoopState()
@@ -584,7 +630,7 @@ async def test_planning_and_eval_together(ctx, prompts):
         make_result(content="answer"),
         make_result(structured_output=make_eval(passed_checks=3, total_checks=3)),
     ])
-    loop = make_loop(client, enable_planning=True, enable_self_eval=True)
+    loop = make_loop(client, enable_self_eval=True)
     state = ReActLoopState()
 
     events = await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=state))
@@ -618,6 +664,7 @@ async def test_eval_budget_cap_stops_retries(ctx, prompts):
     # Holgura de results: si el cap NO cortara, max_eval_retries=5 pediría
     # hasta 12 calls. Proveemos de sobra para que un fallo del cap se
     # manifieste como "demasiados eval rounds", no como IndexError.
+    ctx.plan = empty_plan()
     results = []
     for _ in range(6):
         results.append(make_result(content="weak answer", tokens=100))
@@ -653,6 +700,7 @@ async def test_eval_budget_cap_stops_retries(ctx, prompts):
 async def test_eval_no_cap_is_unaffected(ctx, prompts):
     """eval_max_extra_tokens=None (default) → el cap nunca actúa; el flujo
     de retries se comporta como siempre. Test de no-regresión."""
+    ctx.plan = empty_plan()
     client = FakeChatClient(results=[
         make_result(content="weak answer", tokens=100),
         make_result(structured_output=make_eval(passed_checks=1, total_checks=3),
@@ -689,12 +737,13 @@ async def test_eval_per_run_criteria_overrides_constructor(ctx, prompts):
     constructor no debe aparecer. Lo verificamos espiando los mensajes
     que el _eval_step entrega al client.run().
     """
+    ctx.plan = empty_plan()
     client = FakeChatClient(results=[
         make_result(content="answer"),
         make_result(structured_output=make_eval(passed_checks=3, total_checks=3)),
     ])
     loop = make_loop(client, enable_self_eval=True)
-    loop.eval_criteria = ["CONSTRUCTOR_CRITERION"]  # set como si viniera del __init__
+    loop.eval.criteria = ["CONSTRUCTOR_CRITERION"]  # set como si viniera del __init__
     state = ReActLoopState()
 
     await collect(loop.execute_reasoning_loop(
@@ -714,12 +763,13 @@ async def test_eval_per_run_criteria_overrides_constructor(ctx, prompts):
 @pytest.mark.asyncio
 async def test_eval_falls_back_to_constructor_criteria(ctx, prompts):
     """Sin eval_criteria por-run → usa el del constructor."""
+    ctx.plan = empty_plan()
     client = FakeChatClient(results=[
         make_result(content="answer"),
         make_result(structured_output=make_eval(passed_checks=3, total_checks=3)),
     ])
     loop = make_loop(client, enable_self_eval=True)
-    loop.eval_criteria = ["CONSTRUCTOR_CRITERION"]
+    loop.eval.criteria = ["CONSTRUCTOR_CRITERION"]
     state = ReActLoopState()
 
     await collect(loop.execute_reasoning_loop(
@@ -742,6 +792,7 @@ async def test_intermediate_eval_fires_on_tool_failure(ctx, prompts):
     la respuesta final sin tools. El check intermedio debe dispararse
     entre ambas.
     """
+    ctx.plan = empty_plan()  # inert plan: no step mechanics interfere
     client = FakeChatClient(results=[
         make_tool_result(tool_name="do_thing"),   # pide tool → fallará
         make_result(content="final answer"),      # respuesta final

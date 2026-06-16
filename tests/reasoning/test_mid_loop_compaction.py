@@ -7,6 +7,7 @@ import typing as t
 
 from max_ai.reasoning.react_simple import ReActLoop as SimpleReActLoop, ReActLoopState as SimpleLoopState
 from max_ai.reasoning.react_planning import ReActLoopPlanning as PlanningReActLoop, ReActLoopPlanningState as PlanningLoopState
+from max_ai.reasoning.plan import AgentPlan
 from max_ai.core.messages import AssistantMessage, ToolMessage, UserMessage
 from max_ai.core.event_type import ReasoningCompleteEvent, CompactionEvent
 from max_ai.core.models import ModelConfig
@@ -320,6 +321,7 @@ async def test_simple_loop_still_completes_after_compaction(ctx, prompts):
 @pytest.mark.asyncio
 async def test_planning_loop_emits_compaction_event(ctx, prompts):
     """Planning loop also emits CompactionEvent when threshold exceeded."""
+    ctx.plan = AgentPlan(steps=[], rationale="no steps")  # skip planning step
     compaction = FakeCompaction(keep_last=1)
     client = FakeChatClient(results=[make_result("done")], max_context_window=10_000)
     loop = make_planning_loop(client, compaction=compaction, max_context_tokens=10_000)
@@ -337,6 +339,7 @@ async def test_planning_loop_emits_compaction_event(ctx, prompts):
 @pytest.mark.asyncio
 async def test_planning_loop_completes_after_compaction(ctx, prompts):
     """Planning loop finishes correctly after mid-loop compaction."""
+    ctx.plan = AgentPlan(steps=[], rationale="no steps")  # skip planning step
     compaction = FakeCompaction(keep_last=1)
     client = FakeChatClient(results=[make_result("answer")], max_context_window=500)
     loop = make_planning_loop(client, compaction=compaction, max_context_tokens=500)

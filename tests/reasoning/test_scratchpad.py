@@ -6,6 +6,7 @@ import pytest
 
 from max_ai.reasoning.react_simple import ReActLoop as SimpleReActLoop, ReActLoopState as SimpleLoopState
 from max_ai.reasoning.react_planning import ReActLoopPlanning as PlanningReActLoop, ReActLoopPlanningState as PlanningLoopState
+from max_ai.reasoning.plan import AgentPlan
 from max_ai.core.messages import AssistantMessage, ToolMessage
 from max_ai.core.event_type import ReasoningCompleteEvent, ScratchpadUpdateEvent
 from max_ai.core.models import ModelConfig
@@ -290,6 +291,9 @@ async def test_simple_loop_multiple_scratchpad_updates(ctx, prompts):
 @pytest.mark.asyncio
 async def test_planning_loop_emits_scratchpad_event(ctx, prompts):
     """Planning loop also emits ScratchpadUpdateEvent correctly."""
+    # Inert plan so the loop doesn't run its planning step (this test is
+    # about scratchpad events, not planning).
+    ctx.plan = AgentPlan(steps=[], rationale="no steps")
     loop_state = PlanningLoopState()
     tool = ScratchpadTool(loop_state=loop_state)
 

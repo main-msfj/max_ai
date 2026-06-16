@@ -50,7 +50,7 @@ from ..core.event_type import (
 from ..types.stacks import PromptCtx, PromptLayerUsage
 from ..errors.agent import AgentError
 from ..types.completions import Usage
-from ..reasoning.react_planning import ReActLoopPlanning
+from ..reasoning.react_simple import ReActLoop
 from ..executor.local import LocalExecutor
 from ..executor.routing import RoutingExecutor
 from ..types.run_context import RunContext
@@ -705,7 +705,10 @@ class Agent(ComponentBase[BaseModel], ABC):
         """
         reasoning = self.reasoning
         if reasoning is None:
-            reasoning = ReActLoopPlanning(
+            # Default to the plain ReAct loop. Planning is intrinsic and
+            # adds an LLM call per turn, so it is opt-in: pass
+            # reasoning=ReActLoopPlanning(...) when you want it.
+            reasoning = ReActLoop(
                 max_loop_iterations=self.config.max_loop_iterations,
                 max_connection_retries=self.config.max_connection_retries,
             )
