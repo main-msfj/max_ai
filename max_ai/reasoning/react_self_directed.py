@@ -81,6 +81,18 @@ class ReActLoopSelfDirected(ReActLoop):
             loop_state = ReActLoopState(**loop_state.model_dump())
         self._set_loop_state(loop_state)
 
+        # Register the update_plan tool bound to *this* run's loop_state so the
+        # model can manage its own plan. Done here (not in __init__) because the
+        # tool needs the per-run loop_state, which only exists now. Idempotent:
+        # skip if already present (e.g. on resume, or a user-registered one).
+        # Imported locally to avoid a loop<->tool import cycle.
+        from ..tools.update_plan import UpdatePlanTool
+
+        if UpdatePlanTool.TOOL_NAME not in self.tool_executor.tools:
+            self.tool_executor.tools[UpdatePlanTool.TOOL_NAME] = UpdatePlanTool(
+                loop_state=loop_state
+            )
+
         _log = log.child(run_id=ctx.run_id, session_id=ctx.session_id)
 
         while loop_state.iteration < self.max_loop_iterations:

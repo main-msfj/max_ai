@@ -28,12 +28,14 @@ from max_ai.core.event_type import (
     ModelCallEvent,
     ModelResponseEvent,
     ModelStreamChunkEvent,
+    PlanningEvent,
     ReasoningCompleteEvent,
     ReasoningIterationEvent,
     ToolApprovalEvent,
     ToolCallEvent,
     ToolCallResponseEvent,
     ToolProgressEvent,
+    UserInputRequestEvent,
 )
 from max_ai.base.compaction import (
     TokenCounter,
@@ -114,6 +116,12 @@ class ChatApproveRequest(BaseModel):
 
 class ChatCancelRequest(BaseModel):
     session_id: str
+    agent_name: str | None = None
+
+
+class ChatInputRequest(BaseModel):
+    session_id: str
+    answer: str
     agent_name: str | None = None
 
 
@@ -297,6 +305,19 @@ def create_app(
             return {"status": "idle"}
         token.cancel()
         return {"status": "cancelling"}
+
+    @app.post("/api/chat/input")
+    async def chat_input(req: ChatInputRequest) -> dict[str, str]:
+        # Resolve a pending human-input request. The original chat stream is
+        # still open, blocked on the loop's future; provide_user_input resolves
+        # it and that stream resumes on its own — no new stream here.
+        agent_name = _select_agent_name(app, req.agent_name)
+        agent: Agent = app.state.agents[agent_name]
+        try:
+            agent.provide_user_input(req.answer)
+        except RuntimeError as exc:
+            return {"status": "error", "message": str(exc)}
+        return {"status": "ok"}
 
     return app
 
@@ -698,6 +719,22 @@ def _event_payload(event: CoreEvent) -> dict[str, t.Any]:
             "message": event.error_message,
             "error_type": event.error_type,
             "recoverable": event.is_recoverable,
+        }
+
+    if isinstance(event, PlanningEvent):
+        return {
+            "type": "planning",
+            "event_type": event.event_type,
+            "phase": event.phase,  # start | progress | complete | failed
+            "plan": jsonable_encoder(event.plan) if event.plan else None,
+        }
+
+    if isinstance(event, UserInputRequestEvent):
+        return {
+            "type": "user_input_request",
+            "event_type": event.event_type,
+            "question": event.question,
+            "options": event.options,
         }
 
     return {

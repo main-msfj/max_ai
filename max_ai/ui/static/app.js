@@ -27,6 +27,8 @@ const state = {
   contextWindowOpen: false,
   contextUsage: null,
   compactionRunning: false,
+  currentPlan: null,
+  pendingInput: null,
 };
 
 let renderQueued = false;
@@ -467,6 +469,20 @@ function summarizeEventForLog(agentName, ev) {
       attributes: ev,
     };
   }
+  if (eventType === "planning") {
+    const steps = Array.isArray(ev.plan?.steps) ? ev.plan.steps : [];
+    const done = steps.filter((s) => s.status === "done").length;
+    return {
+      type: "planning",
+      title: `[${agentName}] planning · ${ev.phase}${steps.length ? ` · ${done}/${steps.length} done` : ""}`,
+      attributes: {
+        event_type: eventType,
+        phase: ev.phase,
+        rationale: ev.plan?.rationale,
+        steps: steps.map((s) => `${s.id}. ${s.description} [${s.status}]`),
+      },
+    };
+  }
   return {
     type: eventType,
     title: `[${agentName}] ${eventType}`,
@@ -600,6 +616,49 @@ async function openPreview(url, name) {
   }
 }
 
+// --- Plan Panel ---
+const PLAN_STATUS_ICON = {
+  pending: "○",
+  active: "▶",
+  done: "✓",
+  failed: "✗",
+};
+
+function renderPlan() {
+  const panel = $("#planPanel");
+  if (!panel) return;
+
+  const plan = state.currentPlan;
+  const steps = Array.isArray(plan?.steps) ? plan.steps : [];
+  if (!plan || steps.length === 0) {
+    panel.hidden = true;
+    panel.innerHTML = "";
+    return;
+  }
+
+  const done = steps.filter((s) => s.status === "done").length;
+  const rows = steps
+    .map((s) => {
+      const status = s.status || "pending";
+      const icon = PLAN_STATUS_ICON[status] || "○";
+      return `
+        <li class="plan-step is-${escapeHtml(status)}">
+          <span class="plan-step-icon">${icon}</span>
+          <span class="plan-step-text">${escapeHtml(s.description || "")}</span>
+          ${status === "active" ? `<span class="plan-step-badge">active</span>` : ""}
+        </li>`;
+    })
+    .join("");
+
+  panel.hidden = false;
+  panel.innerHTML = `
+    <div class="plan-header">
+      <span class="plan-title">Plan</span>
+      <span class="plan-progress">${done}/${steps.length} done</span>
+    </div>
+    <ul class="plan-steps">${rows}</ul>`;
+}
+
 // --- Chat Rendering ---
 function renderMessages() {
   const container = $("#messagesContainer");
@@ -685,6 +744,26 @@ function renderMessages() {
         `).join('');
   }
 
+  // Pending human-input request
+  if (state.pendingInput) {
+    const q = escapeHtml(state.pendingInput.question || "The agent needs your input.");
+    const opts = Array.isArray(state.pendingInput.options) ? state.pendingInput.options : null;
+    const body = opts && opts.length
+      ? `<div class="input-req-options">${opts
+          .map((o) => `<button class="input-req-option" onclick="submitUserInput(${JSON.stringify(o).replace(/"/g, "&quot;")})">${escapeHtml(o)}</button>`)
+          .join("")}</div>`
+      : `<form class="input-req-form" onsubmit="submitUserInputFromForm(event); return false;">
+           <input type="text" class="input-req-text" placeholder="Type your answer..." autocomplete="off" />
+           <button type="submit" class="input-req-send">Send</button>
+         </form>`;
+    html += `
+      <div class="input-req-card">
+        <div class="input-req-title">Agent needs your input</div>
+        <p class="input-req-question">${q}</p>
+        ${body}
+      </div>`;
+  }
+
   container.innerHTML = html;
   if (scroll && wasNearBottom) {
     scroll.scrollTop = scroll.scrollHeight;
@@ -765,6 +844,18 @@ function handlePacket(packet) {
         pushActivity("Context compacted", "info");
       }
       refreshContextWindow();
+    } else if (ev.type === "planning") {
+      if (ev.phase === "start") {
+        pushActivity("Planning...", "info");
+      }
+      if (ev.plan) {
+        state.currentPlan = ev.plan;
+        renderPlan();
+      }
+    } else if (ev.type === "user_input_request") {
+      state.pendingInput = { question: ev.question || "", options: ev.options || null };
+      pushActivity("Waiting for your input...", "approval");
+      renderMessages();
     }
   } else if (packet.type === "error") {
     state.compactionRunning = false;
@@ -1002,6 +1093,39 @@ async function handleStop() {
   }
 }
 
+window.submitUserInputFromForm = function (event) {
+  const input = event.target.querySelector(".input-req-text");
+  const value = input ? input.value.trim() : "";
+  if (value) window.submitUserInput(value);
+};
+
+window.submitUserInput = async function (answer) {
+  if (!state.pendingInput || !state.sessionId) return;
+  // Clear the prompt immediately; the original chat stream is still open and
+  // will resume on its own once the server resolves the input.
+  state.pendingInput = null;
+  clearActivity();
+  pushActivity("Input sent.", "approval");
+  renderMessages();
+  logEvent("info", "User input provided", { answer });
+
+  try {
+    const res = await fetch("/api/chat/input", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_id: state.sessionId,
+        agent_name: state.selectedAgent,
+        answer,
+      }),
+    });
+    if (!res.ok) throw new Error("Input failed");
+  } catch (err) {
+    logEvent("error", "User input failed", { error: String(err) });
+    pushActivity("Failed to send input.", "error");
+  }
+};
+
 window.submitApproval = async function (toolCallId, approved) {
   if (state.isRunning) return;
   const previousApprovals = [...state.pendingApprovals];
@@ -1059,10 +1183,13 @@ async function handleNewChat() {
     state.runningTools = {};
     state.isCancelling = false;
     state.currentAbortController = null;
+    state.currentPlan = null;
+    state.pendingInput = null;
     clearActivity();
     $("#messagesContainer").innerHTML = "";
     renderAttachmentPreview();
     refreshWorkspace();
+    renderPlan();
     renderMessages();
     renderEvents();
     updateSendBtn();

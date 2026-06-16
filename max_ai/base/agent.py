@@ -181,6 +181,10 @@ class Agent(ComponentBase[BaseModel], ABC):
         self.executor = self.validate_executor_object(executor)
         self.workspace = self.validate_workspace_object(workspace)
         self.reasoning = reasoning
+        # The reasoning loop currently running, exposed while a turn is in
+        # flight so callers (e.g. the Web UI) can resolve a pending human-input
+        # request via ``provide_user_input``. None when no turn is running.
+        self._active_reasoning: BaseReasoning | None = None
         self.compaction = self.validate_compaction_object(compaction)
         self.output_format = output_format
         self.middlewares = list(middlewares or [])
@@ -939,6 +943,11 @@ class Agent(ComponentBase[BaseModel], ABC):
         loop_state = reasoning.LOOP_STATE_CLS()
         start_time = time.monotonic()
 
+        # Expose the running loop so the UI can resolve a pending human-input
+        # request mid-turn (provide_user_input). Cleared in the finally so it
+        # never dangles past the turn.
+        self._active_reasoning = reasoning
+
         try:
             async for event in reasoning.execute_reasoning_loop(
                 ctx=ctx,
@@ -972,6 +981,11 @@ class Agent(ComponentBase[BaseModel], ABC):
                 is_recoverable=False,
             )
             loop_state.finish_reason = "error"
+
+        finally:
+            # The turn is over (or paused into a response): the loop is no
+            # longer resumable from outside.
+            self._active_reasoning = None
 
         # Terminal yield — always last, always exactly one.
         yield self._build_response(ctx, loop_state, start_time)
@@ -1060,6 +1074,22 @@ class Agent(ComponentBase[BaseModel], ABC):
         # item; reaching here without one means the engine itself broke.
         assert response is not None, "run_stream_events did not yield an AgentResponse"
         return response
+
+    # -------- PUBLIC API — HUMAN INPUT -----------------------------------------------------------
+    def provide_user_input(self, answer: str) -> None:
+        """Answer a pending human-input request so the paused turn continues.
+
+        When a tool asks the user a question (via the structured human-in-loop
+        tool), the running loop blocks on an ``asyncio.Future`` and emits a
+        ``UserInputRequestEvent``. This delegates to that loop's ``resume`` to
+        resolve the future, unblocking the in-flight turn.
+
+        Raises:
+            RuntimeError: if no turn is currently awaiting input.
+        """
+        if self._active_reasoning is None:
+            raise RuntimeError("No active run is awaiting user input.")
+        self._active_reasoning.resume(answer)
 
     # -------- PUBLIC API — RESUME -----------------------------------------------------------
     async def resume(
