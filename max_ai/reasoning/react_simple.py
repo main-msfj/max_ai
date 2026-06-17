@@ -94,6 +94,7 @@ class ReActLoop(BaseReasoning):
         self,
         max_loop_iterations: int = 10,
         max_connection_retries: int = 3,
+        enable_human_input: bool = True,
     ) -> None:
         """Initialize the ReAct loop.
 
@@ -105,7 +106,10 @@ class ReActLoop(BaseReasoning):
             max_loop_iterations: Cap on iterations within one turn.
             max_connection_retries: Per-call transient-error retry budget.
         """
-        super().__init__(max_connection_retries=max_connection_retries)
+        super().__init__(
+            max_connection_retries=max_connection_retries,
+            enable_human_input=enable_human_input,
+        )
         self.max_loop_iterations = max_loop_iterations
 
     # -------- ENTRY POINT -----------------------------------------------------------
@@ -149,7 +153,10 @@ class ReActLoop(BaseReasoning):
 
         if not isinstance(loop_state, ReActLoopState):
             loop_state = ReActLoopState(**loop_state.model_dump())
+
+        # Set Loop state and Collect Native Tools
         self._set_loop_state(loop_state)
+        self._register_runtime_tools(loop_state)
 
         _log = log.child(run_id=ctx.run_id, session_id=ctx.session_id)
 

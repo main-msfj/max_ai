@@ -525,6 +525,58 @@ async def test_plan_progress_skipped_when_planning_fails(ctx, prompts):
     )
 
 
+# -------- RULE C SEMANTICS (failed vs done) -----------------------------------
+@pytest.mark.asyncio
+async def test_rule_c_marks_step_failed_after_tool_failure(ctx, prompts):
+    """Rule C (piece 4.1): if the active step had a tool failure and the LLM
+    then gives a final answer (giving up), the step is closed as ``failed`` —
+    not ``done``. Guards the feedback 3.1 semantics fix.
+
+    Sequence with max_step_retries=2 so the single failure does NOT trigger a
+    replan (piece 5 needs 2): iter 1 runs a tool on step 1 that fails (count=1),
+    iter 2 the LLM produces a final answer with no tool calls → Rule C fires.
+    """
+    ctx.plan = make_plan()  # steps 1, 2
+    client = FakeChatClient(results=[
+        make_tool_result(),                 # iter 1: step 1 -> tool (fails)
+        make_result(content="i give up"),   # iter 2: final answer, no tools
+    ])
+    loop = make_loop(
+        client,
+        enable_planning=False,
+        tool_executor=FakeFailingToolExecutor(),
+        max_step_retries=2,      # one failure stays under the replan threshold
+        max_loop_iterations=5,
+    )
+    state = ReActLoopState()
+
+    await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=state))
+    print_messages(ctx, "after rule-C-on-failure")
+
+    # The failure was counted, and Rule C closed the step as failed (not done).
+    assert state.step_failures.get(1) == 1
+    assert ctx.plan.steps[0].status == "failed"
+    print(f"\n  step 1 status={ctx.plan.steps[0].status} (failed, not done — correct)")
+
+
+@pytest.mark.asyncio
+async def test_rule_c_marks_pure_llm_step_done(ctx, prompts):
+    """Rule C legit case (no-regression): a step that finishes as pure LLM
+    output with NO prior tool failure is closed as ``done``. The fix must not
+    turn this into ``failed``."""
+    ctx.plan = make_plan()  # steps 1, 2
+    client = FakeChatClient(results=[make_result(content="the summary")])
+    loop = make_loop(client, enable_planning=False, max_loop_iterations=5)
+    state = ReActLoopState()
+
+    await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=state))
+
+    # No failures recorded → Rule C marks the active step done, as before.
+    assert state.step_failures.get(1) is None
+    assert ctx.plan.steps[0].status == "done"
+    print(f"\n  step 1 status={ctx.plan.steps[0].status} (done — pure-LLM step, no regression)")
+
+
 # -------- EVAL TESTS ----------------------------------------------------------
 @pytest.mark.asyncio
 async def test_eval_passes_on_high_score(ctx, prompts):

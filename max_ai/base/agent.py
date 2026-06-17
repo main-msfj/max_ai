@@ -1091,6 +1091,45 @@ class Agent(ComponentBase[BaseModel], ABC):
             raise RuntimeError("No active run is awaiting user input.")
         self._active_reasoning.resume(answer)
 
+    # These accessors exist for the terminal CLI (``max_ai.cli``). The loop
+    # blocks on ``await future`` *before* it emits ``UserInputRequestEvent``,
+    # so a single-process consumer cannot learn about a pending question from
+    # the event stream — by the time the event arrives, it has been answered.
+    # The web UI sidesteps this with two concurrent requests (the SSE stream
+    # stays blocked while a separate POST answers it). The CLI, running in one
+    # process, instead polls these properties while consuming the stream in a
+    # background task: when ``pending_user_input`` is set, it prompts the user
+    # and calls ``provide_user_input``.
+    @property
+    def pending_user_input(self) -> str | None:
+        """The question the agent is waiting on, or ``None`` if not paused.
+
+        Set while a turn is blocked inside the human-in-loop tool. Returns the
+        question text (``""`` if the tool supplied none), or ``None`` when no
+        turn is currently awaiting input.
+        """
+        if self._active_reasoning is None:
+            return None
+        state = self._active_reasoning._current_loop_state
+        if state is None or state.pending_user_input is None:
+            return None
+        return state.pending_user_input_question or ""
+
+    @property
+    def pending_user_input_options(self) -> list[str] | None:
+        """Choices offered with the pending question, or ``None``.
+
+        ``None`` both when no question is pending and when the pending question
+        is free-text (no options). Pair with ``pending_user_input`` to tell the
+        two apart.
+        """
+        if self._active_reasoning is None:
+            return None
+        state = self._active_reasoning._current_loop_state
+        if state is None or state.pending_user_input is None:
+            return None
+        return state.pending_user_input_options
+
     # -------- PUBLIC API — RESUME -----------------------------------------------------------
     async def resume(
         self,

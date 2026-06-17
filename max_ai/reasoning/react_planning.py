@@ -298,7 +298,16 @@ class ReActLoopPlanning(BaseReasoning):
                     if ctx.plan is not None:
                         active = ctx.plan.active_step()
                         if active is not None:
-                            ctx.plan.mark_done(active.id)
+                            if loop_state.step_failures.get(active.id, 0) > 0:
+                                # A tool failed earlier on this step and the LLM
+                                # then gave up with a final answer -> close the
+                                # step as failed, not done (feedback 3.1).
+                                ctx.plan.mark_failed(active.id)
+                            else:
+                                # Legit case: a pure-LLM step (no tool failure)
+                                # finishing as final output -> done.
+                                ctx.plan.mark_done(active.id)
+
                             yield PlanningEvent(
                                 source=self.name, phase="progress", plan=ctx.plan
                             )

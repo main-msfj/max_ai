@@ -235,7 +235,7 @@ class EvalEvent(ReasoningEvent):
 class UserInputRequestEvent(ReasoningEvent):
     EVENT_TYPE = "user_input_request"
     question: str = Field(description="Questsion ask to user")
-    options: list[str] | None
+    options: list[str] | None = Field(default=None)
 
 class ScratchpadUpdateEvent(ReasoningEvent):
     EVENT_TYPE = "scratchpad_update"
@@ -458,6 +458,7 @@ AgentEvents = Annotated[
         ReasoningCompleteEvent,
         PlanningEvent,
         ScratchpadUpdateEvent,
+        UserInputRequestEvent,
         EvalEvent,
         ToolCallEvent,
         ToolCallResponseEvent,

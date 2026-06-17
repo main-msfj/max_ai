@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p /max_ai/max_ai/cli && echo created)"
+    ],
+    "additionalDirectories": [
+      "/max_ai/max_ai/cli"
+    ]
+  }
+}

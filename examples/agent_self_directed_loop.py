@@ -122,7 +122,7 @@ def build_agent(
             "plan, then work through it, using web search when you need facts, "
             "and calling update_plan again to mark steps done as you go."
         ),
-        client=build_client_ollama(),
+        client=build_client_openai(),
         reasoning=ReActLoopSelfDirected(max_loop_iterations=12),
         toolset=list(mcp_tools or []),
         middlewares=[ConsoleTraceMiddleware()],

@@ -169,8 +169,7 @@ class BaseReasoning(ABC):
     LOOP_STATE_CLS: t.ClassVar[type[BaseLoopState]] = BaseLoopState
 
     def __init__(
-        self,
-        max_connection_retries: int = 3,
+        self, max_connection_retries: int = 3, enable_human_input: bool = True
     ) -> None:
         """Initialize config-only state.
 
@@ -182,8 +181,10 @@ class BaseReasoning(ABC):
         Args:
             max_connection_retries: Per-call retry budget for transient
                 ``ClientError`` (rate_limit, timeout, etc.).
+            enable_human_input: Enable LLm to user Elicitation question to user
         """
         self.max_connection_retries = max_connection_retries
+        self.enable_human_input = enable_human_input
 
         # Runtime — populated by bind(). Accessing any of these before
         # bind() raises a clear error rather than silently passing None.
@@ -198,6 +199,20 @@ class BaseReasoning(ABC):
 
     def _set_loop_state(self, state: BaseLoopState) -> None:
         self._current_loop_state = state
+
+    def _register_runtime_tools(self, loop_state: BaseLoopState):
+        """Register per-run tools that need this run's loop_state.
+
+        Native to every loop. Subclasses override to ADD more (e.g.
+        self-directed adds update_plan), calling super() first.
+        """
+        from ..tools.structure_human_in_loop import UserInputTool
+        if not self.enable_human_input:
+            return
+        if UserInputTool.TOOL_NAME not in self.tool_executor.tools:
+            self.tool_executor.tools[UserInputTool.TOOL_NAME] = UserInputTool(
+                loop_state
+            )
 
     # -------- BIND -----------------------------------------------------------
     def bind(

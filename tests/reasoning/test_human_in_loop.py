@@ -6,8 +6,14 @@ import asyncio
 import pytest
 import typing as t
 
-from max_ai.reasoning.react_simple import ReActLoop as SimpleReActLoop, ReActLoopState as SimpleLoopState
-from max_ai.reasoning.react_planning import ReActLoopPlanning as PlanningReActLoop, ReActLoopPlanningState as PlanningLoopState
+from max_ai.reasoning.react_simple import (
+    ReActLoop as SimpleReActLoop,
+    ReActLoopState as SimpleLoopState,
+)
+from max_ai.reasoning.react_planning import (
+    ReActLoopPlanning as PlanningReActLoop,
+    ReActLoopPlanningState as PlanningLoopState,
+)
 from max_ai.reasoning.plan import AgentPlan
 from max_ai.core.messages import AssistantMessage, ToolMessage
 from max_ai.core.event_type import ReasoningCompleteEvent, UserInputRequestEvent
@@ -28,20 +34,61 @@ class FakeChatClient:
         self._results = list(results)
         self._call_count = 0
 
-    async def run(self, ctx, prompts, tools=None, output_format=None, stream=False, **kw):
+    async def run(
+        self, ctx, prompts, tools=None, output_format=None, stream=False, **kw
+    ):
         self._call_count += 1
         return self._results.pop(0)
 
-    def format_messages(self, ctx, prompts): return []
-    def build_api_messages(self, messages): return []
-    def build_tool_schema(self, tools): return []
-    def normalize_usage_stats(self, usage): return Usage()
-    async def complete(self, *a, **kw): raise NotImplementedError
-    async def stream(self, *a, **kw): raise NotImplementedError
+    def format_messages(self, ctx, prompts):
+        return []
 
+    def build_api_messages(self, messages):
+        return []
+
+    def build_tool_schema(self, tools):
+        return []
+
+    def normalize_usage_stats(self, usage):
+        return Usage()
+
+    async def complete(self, *a, **kw):
+        raise NotImplementedError
+
+    async def stream(self, *a, **kw):
+        raise NotImplementedError
+
+
+# class FakeToolExecutor:
+#     """Executor that can optionally run a real UserInputTool."""
+
+#     def __init__(self, tool: UserInputTool | None = None):
+#         self._tool = tool
+#         self.tools: dict = {}
+
+#     async def execute_tool_call(self, ctx, records, cancellation_token=None):
+#         for record in records:
+#             if self._tool and record.tool_name == UserInputTool.TOOL_NAME:
+#                 result = await self._tool.execute(record)
+#                 yield ToolMessage(
+#                     source="tool",
+#                     tool_call_id=record.id,
+#                     tool_name=record.tool_name,
+#                     success=result.success,
+#                     content=result.result or "",
+#                 )
+#             else:
+#                 yield ToolMessage(
+#                     source="tool",
+#                     tool_call_id=record.id,
+#                     tool_name=record.tool_name,
+#                     success=True,
+#                     content="ok",
+#                 )
 
 class FakeToolExecutor:
-    """Executor that can optionally run a real UserInputTool."""
+    """Executor that runs a hand-passed UserInputTool OR whatever the loop
+    auto-registered into self.tools."""
 
     def __init__(self, tool: UserInputTool | None = None):
         self._tool = tool
@@ -51,13 +98,8 @@ class FakeToolExecutor:
         for record in records:
             if self._tool and record.tool_name == UserInputTool.TOOL_NAME:
                 result = await self._tool.execute(record)
-                yield ToolMessage(
-                    source="tool",
-                    tool_call_id=record.id,
-                    tool_name=record.tool_name,
-                    success=result.success,
-                    content=result.result or "",
-                )
+            elif record.tool_name in self.tools:
+                result = await self.tools[record.tool_name].execute(record)
             else:
                 yield ToolMessage(
                     source="tool",
@@ -66,6 +108,15 @@ class FakeToolExecutor:
                     success=True,
                     content="ok",
                 )
+                continue
+
+            yield ToolMessage(
+                source="tool",
+                tool_call_id=record.id,
+                tool_name=record.tool_name,
+                success=result.success,
+                content=result.result or "",
+            )
 
 
 class FakeMiddlewareChain:
@@ -93,6 +144,7 @@ def make_result(content="done", tool_calls=None):
 
 def make_tool_call_result(tool_name: str, parameters: dict, call_id: str = "call_001"):
     from max_ai.core.messages import ToolCall
+
     return make_result(
         content="",
         tool_calls=[ToolCall(id=call_id, tool_name=tool_name, parameters=parameters)],
@@ -260,17 +312,21 @@ async def test_simple_loop_emits_user_input_event(ctx, prompts):
     loop_state = SimpleLoopState()
     tool = UserInputTool(loop_state=loop_state)
 
-    client = FakeChatClient(results=[
-        make_tool_call_result(
-            tool_name=UserInputTool.TOOL_NAME,
-            parameters={"question": "Which format?", "options": ["JSON", "CSV"]},
-        ),
-    ])
+    client = FakeChatClient(
+        results=[
+            make_tool_call_result(
+                tool_name=UserInputTool.TOOL_NAME,
+                parameters={"question": "Which format?", "options": ["JSON", "CSV"]},
+            ),
+        ]
+    )
     loop = make_simple_loop(client, tool=tool)
 
     # Collect events — the loop will pause waiting for resume()
     events_task = asyncio.create_task(
-        _collect_events(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=loop_state))
+        _collect_events(
+            loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=loop_state)
+        )
     )
 
     # Wait until UserInputRequestEvent is emitted, then resume
@@ -300,16 +356,20 @@ async def test_simple_loop_finish_reason_input_needed(ctx, prompts):
     loop_state = SimpleLoopState()
     tool = UserInputTool(loop_state=loop_state)
 
-    client = FakeChatClient(results=[
-        make_tool_call_result(
-            tool_name=UserInputTool.TOOL_NAME,
-            parameters={"question": "Continue?"},
-        ),
-    ])
+    client = FakeChatClient(
+        results=[
+            make_tool_call_result(
+                tool_name=UserInputTool.TOOL_NAME,
+                parameters={"question": "Continue?"},
+            ),
+        ]
+    )
     loop = make_simple_loop(client, tool=tool)
 
     events_task = asyncio.create_task(
-        _collect_events(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=loop_state))
+        _collect_events(
+            loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=loop_state)
+        )
     )
 
     for _ in range(100):
@@ -333,16 +393,20 @@ async def test_planning_loop_emits_user_input_event(ctx, prompts):
     loop_state = PlanningLoopState()
     tool = UserInputTool(loop_state=loop_state)
 
-    client = FakeChatClient(results=[
-        make_tool_call_result(
-            tool_name=UserInputTool.TOOL_NAME,
-            parameters={"question": "Which tone?", "options": ["formal", "casual"]},
-        ),
-    ])
+    client = FakeChatClient(
+        results=[
+            make_tool_call_result(
+                tool_name=UserInputTool.TOOL_NAME,
+                parameters={"question": "Which tone?", "options": ["formal", "casual"]},
+            ),
+        ]
+    )
     loop = make_planning_loop(client, tool=tool)
 
     events_task = asyncio.create_task(
-        _collect_events(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=loop_state))
+        _collect_events(
+            loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=loop_state)
+        )
     )
 
     for _ in range(100):
@@ -362,3 +426,101 @@ async def test_planning_loop_emits_user_input_event(ctx, prompts):
 # -------- Helpers -------------------------------------------------------------
 async def _collect_events(gen) -> list:
     return [ev async for ev in gen]
+
+
+async def test_loop_auto_registers_human_input_tool(ctx, prompts):
+    executor = FakeToolExecutor()
+    loop = SimpleReActLoop(max_loop_iterations=5)
+    loop.bind(
+        name="t",
+        client=FakeChatClient([make_result("hi")]),
+        tool_executor=executor,
+        middleware_chain=FakeMiddlewareChain(),
+    )
+    loop_state = SimpleLoopState()
+    [
+        ev
+        async for ev in loop.execute_reasoning_loop(
+            ctx=ctx, prompts=prompts, loop_state=loop_state
+        )
+    ]
+    assert UserInputTool.TOOL_NAME in executor.tools
+
+
+async def test_disable_human_input_skips_registration(ctx, prompts):
+    executor = FakeToolExecutor()
+    loop = SimpleReActLoop(max_loop_iterations=5, enable_human_input=False)
+    loop.bind(
+        name="t",
+        client=FakeChatClient([make_result("hi")]),
+        tool_executor=executor,
+        middleware_chain=FakeMiddlewareChain(),
+    )
+    loop_state = SimpleLoopState()
+    [
+        ev
+        async for ev in loop.execute_reasoning_loop(
+            ctx=ctx, prompts=prompts, loop_state=loop_state
+        )
+    ]
+    assert UserInputTool.TOOL_NAME not in executor.tools
+
+
+async def test_self_directed_registries_both_tools(ctx, prompts):
+    from max_ai.reasoning.react_self_directed import ReActLoopSelfDirected
+    from max_ai.tools.update_plan import UpdatePlanTool
+
+    executor = FakeToolExecutor()
+    loop = ReActLoopSelfDirected(max_loop_iterations=5)
+    loop.bind(
+        name="t",
+        client=FakeChatClient([make_result("hi")]),
+        tool_executor=executor,
+        middleware_chain=FakeMiddlewareChain(),
+    )
+    loop_state = SimpleLoopState()
+    [
+        ev
+        async for ev in loop.execute_reasoning_loop(
+            ctx=ctx, prompts=prompts, loop_state=loop_state
+        )
+    ]
+    assert UserInputTool.TOOL_NAME in executor.tools
+    assert UpdatePlanTool.TOOL_NAME in executor.tools
+
+
+async def test_simple_loop_runs_auto_registered_tool_end_to_end(ctx, prompts):
+    executor = FakeToolExecutor() 
+    loop = SimpleReActLoop(max_loop_iterations=5)
+    loop.bind(
+        name="t",
+        client=FakeChatClient(
+            [
+                make_tool_call_result(
+                    UserInputTool.TOOL_NAME,
+                    {"question": "Which format?", "options": ["JSON", "CSV"]},
+                )
+            ]
+        ),
+        tool_executor=executor,
+        middleware_chain=FakeMiddlewareChain(),
+    )
+    loop_state = SimpleLoopState()
+
+    events_task = asyncio.create_task(
+        _collect_events(
+            loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=loop_state)
+        )
+    )
+
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+        if loop_state.pending_user_input is not None:
+            break
+
+    loop.resume("JSON")
+    events = await events_task
+
+    input_events = [e for e in events if isinstance(e, UserInputRequestEvent)]
+    assert len(input_events) == 1
+    assert input_events[0].question == "Which format?"

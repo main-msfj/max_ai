@@ -79,19 +79,10 @@ class ReActLoopSelfDirected(ReActLoop):
         """
         if not isinstance(loop_state, ReActLoopState):
             loop_state = ReActLoopState(**loop_state.model_dump())
+
+        # Set loop state and collect native + self-directed runtime tools.
         self._set_loop_state(loop_state)
-
-        # Register the update_plan tool bound to *this* run's loop_state so the
-        # model can manage its own plan. Done here (not in __init__) because the
-        # tool needs the per-run loop_state, which only exists now. Idempotent:
-        # skip if already present (e.g. on resume, or a user-registered one).
-        # Imported locally to avoid a loop<->tool import cycle.
-        from ..tools.update_plan import UpdatePlanTool
-
-        if UpdatePlanTool.TOOL_NAME not in self.tool_executor.tools:
-            self.tool_executor.tools[UpdatePlanTool.TOOL_NAME] = UpdatePlanTool(
-                loop_state=loop_state
-            )
+        self._register_runtime_tools(loop_state)
 
         _log = log.child(run_id=ctx.run_id, session_id=ctx.session_id)
 
@@ -244,6 +235,26 @@ class ReActLoopSelfDirected(ReActLoop):
         yield self._reasoning_complete(loop_state)
 
     # -------- HELPERS -----------------------------------------------------------
+    def _register_runtime_tools(self, loop_state: BaseLoopState) -> None:
+        """Register the native human-input tool, then add ``update_plan``.
+
+        Extends the base (which registers the human-input tool when enabled)
+        with the self-directed ``update_plan`` tool, bound to *this* run's
+        loop_state so the model can manage its own plan. Done here (not in
+        ``__init__``) because the tool needs the per-run loop_state, which only
+        exists now. Idempotent: skip if already present (e.g. on resume, or a
+        user-registered one). Imported locally to avoid a loop<->tool import
+        cycle.
+        """
+        super()._register_runtime_tools(loop_state)
+
+        from ..tools.update_plan import UpdatePlanTool
+
+        if UpdatePlanTool.TOOL_NAME not in self.tool_executor.tools:
+            self.tool_executor.tools[UpdatePlanTool.TOOL_NAME] = UpdatePlanTool(
+                loop_state=loop_state
+            )
+
     async def _sync_plan(
         self,
         ctx: RunContext,
