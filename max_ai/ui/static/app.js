@@ -28,7 +28,7 @@ const state = {
   contextUsage: null,
   compactionRunning: false,
   currentPlan: null,
-  pendingInput: null,
+  pendingInputs: [],
 };
 
 let renderQueued = false;
@@ -165,6 +165,16 @@ function activityHtml() {
       </div>
     </div>
   `;
+}
+
+// Split an option string into { label, description }. Supports the
+// conventions "Label — description", "Label - description" and
+// "Label | description"; a bare string becomes just a label.
+function parseOption(raw) {
+  const text = String(raw ?? "").trim();
+  const match = text.match(/^(.*?)\s+(?:—|\||-{1,2})\s+(.+)$/s);
+  if (match) return { label: match[1].trim(), description: match[2].trim() };
+  return { label: text, description: "" };
 }
 
 function compactText(value, max = 180) {
@@ -426,6 +436,14 @@ function renderInputMessages(messages) {
 
 function summarizeEventForLog(agentName, ev) {
   const eventType = ev.event_type || ev.type || "event";
+  if (eventType.startsWith("bash_")) {
+    const detail = eventType === "bash_started"
+      ? `${ev.description || ev.declared_action} (intención declarada)`
+      : eventType === "bash_finished"
+        ? (ev.timed_out ? "Tiempo agotado" : `Comando terminado · exit ${ev.exit_code}`)
+        : (ev.error || ev.reason || "");
+    return { type: eventType, title: `[${agentName}] ${eventType} · ${detail}`, attributes: ev };
+  }
   if (eventType === "model_call") {
     const messages = Array.isArray(ev.input_messages) ? ev.input_messages : [];
     const inputTokens = messages.reduce((sum, msg) => sum + Number(msg.token_count || 0), 0);
@@ -557,15 +575,47 @@ function renderEvents() {
 }
 
 // --- Workspace / Artifacts ---
-async function refreshWorkspace() {
+async function refreshWorkspace(sync = false) {
   try {
-    // Backend doesn't strictly need session_id query param for workspace_files
-    const res = await fetch("/api/workspace/files");
-    if (res.ok) state.workspaceFiles = await res.json();
+    const params = new URLSearchParams();
+    if (state.selectedAgent) params.set("agent_name", state.selectedAgent);
+    const res = sync
+      ? await fetch(`/api/workspace/sync?${params.toString()}`, { method: "POST" })
+      : await fetch(`/api/workspace/files?${params.toString()}`);
+    if (!res.ok) throw new Error("Workspace sync failed");
+    const payload = await res.json();
+    state.workspaceFiles = sync ? (payload.files || []) : payload;
   } catch (err) {
     console.warn("Could not fetch workspace:", err);
+    if (sync) logEvent("error", "Workspace sync failed", { error: String(err) });
   }
   renderWorkspace();
+}
+
+async function uploadWorkspaceFile(file) {
+  if (!file) return;
+  if (file.size > 8 * 1024 * 1024) {
+    logEvent("error", "Upload failed", { error: "Files must be 8 MiB or smaller." });
+    return;
+  }
+  const params = new URLSearchParams({ path: file.name });
+  if (state.sessionId) params.set("session_id", state.sessionId);
+  if (state.selectedAgent) params.set("agent_name", state.selectedAgent);
+  try {
+    const response = await fetch(`/api/workspace/upload?${params.toString()}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: await file.arrayBuffer(),
+    });
+    if (!response.ok) {
+      const messages = { 400: "Invalid file path or upload.", 409: "A file with that name already exists.", 413: "Files must be 8 MiB or smaller." };
+      throw new Error(messages[response.status] || "Upload failed.");
+    }
+    logEvent("info", "File uploaded", { file: file.name });
+    await refreshWorkspace();
+  } catch (err) {
+    logEvent("error", "Upload failed", { error: String(err) });
+  }
 }
 
 function renderWorkspace() {
@@ -575,51 +625,88 @@ function renderWorkspace() {
   $("#workspaceToggle").classList.toggle("active", state.showWorkspace);
 
   const list = $("#workspaceSidebarFiles");
-  if (state.workspaceFiles.length === 0) {
+  const files = Array.isArray(state.workspaceFiles) ? state.workspaceFiles : [];
+  if (files.length === 0) {
     list.innerHTML = `<div style="text-align:center; padding: 40px 20px; color: var(--text-muted); font-size: 13px;">No files generated yet.</div>`;
   } else {
-    list.innerHTML = state.workspaceFiles.map(f => `
-          <button class="workspace-file" data-url="${f.url}" data-name="${f.name}">
-            <span class="workspace-file-icon">${f.name.split('.').pop() || 'txt'}</span>
+    const nameCounts = new Map();
+    files.forEach((file) => {
+      const name = String(file?.name ?? "");
+      nameCounts.set(name, (nameCounts.get(name) || 0) + 1);
+    });
+    list.innerHTML = files.map((file, index) => {
+      const name = String(file?.name ?? "");
+      const path = String(file?.path ?? "");
+      const syncState = String(file?.sync_status?.state ?? "error");
+      const extension = name.split(".").pop() || "txt";
+      const size = Number(file?.size_bytes);
+      const duplicatePath = nameCounts.get(name) > 1
+        ? `<span class="workspace-file-path">${escapeHtml(path)}</span>`
+        : "";
+      return `
+          <button class="workspace-file" data-file-index="${index}">
+            <span class="workspace-file-icon">${escapeHtml(extension)}</span>
             <div style="min-width:0; flex:1;">
-              <span class="workspace-file-name">${f.name}</span>
-              <span class="workspace-file-meta">${(f.size_bytes / 1024).toFixed(1)} KB</span>
+              <span class="workspace-file-name">${escapeHtml(name)}</span>
+              ${duplicatePath}
+              <span class="workspace-file-meta">${Number.isFinite(size) ? `${(size / 1024).toFixed(1)} KB` : ""}</span>
+              <span class="workspace-file-meta" aria-label="Sync status">${escapeHtml(syncState)}</span>
             </div>
           </button>
-        `).join('');
+        `;
+    }).join("");
 
     list.querySelectorAll('.workspace-file').forEach(btn => {
-      btn.addEventListener('click', () => openPreview(btn.dataset.url, btn.dataset.name));
+      btn.addEventListener('click', () => {
+        const file = files[Number(btn.dataset.fileIndex)];
+        if (file) openPreview(file.path, file.name);
+      });
     });
   }
-  $("#workspaceMeta").innerText = `${state.workspaceFiles.length} files`;
+  $("#workspaceMeta").innerText = `${files.length} files`;
 }
 
-async function openPreview(url, name) {
-  $("#modalTitle").innerText = name;
-  $("#workspaceModalBody").innerHTML = `<div style="text-align:center; padding: 40px;"><div class="spinner" style="margin: 0 auto;"></div></div>`;
+async function openPreview(path, name) {
+  const selectedAgent = state.selectedAgent;
+  const modalTitle = $("#modalTitle");
+  const modalBody = $("#workspaceModalBody");
+  modalTitle.textContent = String(name ?? "");
+  modalBody.innerHTML = `<div style="text-align:center; padding: 40px;"><div class="spinner" style="margin: 0 auto;"></div></div>`;
   state.workspaceModalOpen = true;
   $("#workspaceModal").classList.add("open");
 
   try {
-    const res = await fetch(url);
+    const query = new URLSearchParams({ path: String(path ?? "") });
+    if (selectedAgent) query.set("agent_name", selectedAgent);
+    const res = await fetch(`/api/workspace/raw?${query.toString()}`);
     if (!res.ok) throw new Error("Failed to load file");
     const text = await res.text();
 
-    const isMd = name.endsWith('.md');
-    const content = isMd && window.__markedReady ? marked.parse(text) : `<pre style="font-family: var(--mono); font-size: 13px; color: var(--text);">${text.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</pre>`;
-
-    $("#workspaceModalBody").innerHTML = `<div class="msg-text" style="background: var(--bg-0); padding: 20px; border-radius: var(--radius-md); border: 1px solid var(--border-1); overflow-y:auto; max-height: 100%;">${content}</div>`;
-    logEvent("info", `Viewed artifact: ${name}`, { action: "Preview", file: name, bytes: text.length });
+    const preview = document.createElement("div");
+    preview.className = "msg-text";
+    preview.style.cssText = "background: var(--bg-0); padding: 20px; border-radius: var(--radius-md); border: 1px solid var(--border-1); overflow-y: auto; max-height: 100%;";
+    const pre = document.createElement("pre");
+    pre.style.cssText = "white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: 13px; color: var(--text);";
+    pre.textContent = text;
+    preview.appendChild(pre);
+    modalBody.replaceChildren(preview);
+    logEvent("info", `Viewed artifact: ${String(name ?? "")}`, {
+      action: "Preview",
+      file: String(path ?? ""),
+      bytes: text.length,
+    });
   } catch (err) {
-    $("#workspaceModalBody").innerHTML = `<div style="color: var(--danger); padding: 20px;">Could not load preview.</div>`;
+    const error = document.createElement("div");
+    error.style.cssText = "color: var(--danger); padding: 20px;";
+    error.textContent = "Could not load preview.";
+    modalBody.replaceChildren(error);
   }
 }
 
-// --- Plan Panel ---
+// --- Plan / Todo List Panel ---
 const PLAN_STATUS_ICON = {
   pending: "○",
-  active: "▶",
+  active: "◐",
   done: "✓",
   failed: "✗",
 };
@@ -637,12 +724,15 @@ function renderPlan() {
   }
 
   const done = steps.filter((s) => s.status === "done").length;
+  const active = steps.find((s) => s.status === "active");
+  const open = state.planPanelOpen !== false; // default expanded
   const rows = steps
-    .map((s) => {
+    .map((s, index) => {
       const status = s.status || "pending";
       const icon = PLAN_STATUS_ICON[status] || "○";
       return `
         <li class="plan-step is-${escapeHtml(status)}">
+          <span class="plan-step-num">${index + 1}.</span>
           <span class="plan-step-icon">${icon}</span>
           <span class="plan-step-text">${escapeHtml(s.description || "")}</span>
           ${status === "active" ? `<span class="plan-step-badge">active</span>` : ""}
@@ -651,12 +741,117 @@ function renderPlan() {
     .join("");
 
   panel.hidden = false;
+  panel.classList.toggle("is-open", open);
   panel.innerHTML = `
-    <div class="plan-header">
-      <span class="plan-title">Plan</span>
+    <div class="plan-header" onclick="togglePlanPanel()">
+      <span class="plan-caret">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      </span>
+      <span class="plan-header-icon">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>
+          <line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
+        </svg>
+      </span>
+      <span class="plan-title">Todos</span>
+      <span class="plan-active-hint">${escapeHtml(active?.description || "")}</span>
       <span class="plan-progress">${done}/${steps.length} done</span>
+      <button type="button" class="plan-dismiss" onclick="dismissPlan(event)" aria-label="Dismiss todo list" title="Dismiss">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
     </div>
     <ul class="plan-steps">${rows}</ul>`;
+  syncChatPadding();
+}
+
+// Keep the chat scroll area clear of the (variable-height) footer:
+// plan panel + attachments + textarea growth all change its height.
+function syncChatPadding() {
+  const scroll = $("#chatScroll");
+  const area = document.querySelector(".input-area");
+  if (!scroll || !area) return;
+  scroll.style.paddingBottom = `${area.offsetHeight + 24}px`;
+}
+
+window.togglePlanPanel = function () {
+  state.planPanelOpen = state.planPanelOpen === false;
+  renderPlan();
+};
+
+window.dismissPlan = function (event) {
+  if (event) event.stopPropagation();
+  state.currentPlan = null;
+  renderPlan();
+};
+
+// --- Human-in-the-loop question card ---
+// Renders an AskUserQuestion-style card: a full-width bordered panel whose
+// options are numbered rows (label + optional description), with a
+// "Type something else…" free-text row, keyboard shortcuts (1-9), a Skip
+// button, and multi-select support when pending.multiSelect is set.
+function inputRequestHtml(pending, cardIndex = 0, totalCards = 1) {
+  const question = escapeHtml(pending.question || "The agent needs your input.");
+  const opts = Array.isArray(pending.options) ? pending.options : [];
+  const hasOptions = opts.length > 0;
+  const multi = Boolean(pending.multiSelect);
+  const selected = pending.selected instanceof Set ? pending.selected : new Set();
+  const customOpen = Boolean(pending.customOpen) || !hasOptions;
+  // Number-key shortcuts only apply to the first card of a batch.
+  const showKeys = cardIndex === 0;
+
+  const optionRows = opts.map((raw, index) => {
+    const { label, description } = parseOption(raw);
+    const isSelected = selected.has(index);
+    const key = index + 1;
+    return `
+      <button type="button" class="input-req-option${isSelected ? " is-selected" : ""}"
+        data-input-card="${cardIndex}" data-input-index="${index}" data-input-multi="${multi ? "1" : "0"}">
+        <span class="input-req-option-body">
+          <span class="input-req-option-label">${escapeHtml(label)}</span>
+          ${description ? `<span class="input-req-option-desc">${escapeHtml(description)}</span>` : ""}
+        </span>
+        ${showKeys ? `<span class="input-req-key">${key <= 9 ? key : "•"}</span>` : ""}
+      </button>`;
+  }).join("");
+
+  const customRow = hasOptions
+    ? (customOpen
+        ? `<form class="input-req-form" onsubmit="submitUserInputFromForm(event, ${cardIndex}); return false;">
+             <input type="text" class="input-req-text" placeholder="Type something else…" autocomplete="off" ${cardIndex === 0 ? "autofocus" : ""} />
+             <button type="submit" class="input-req-send">Send</button>
+           </form>`
+        : `<div class="input-req-custom">
+             <button type="button" class="input-req-custom-trigger" onclick="openCustomInput(${cardIndex})">
+               <span class="input-req-option-body"><span>Type something else…</span></span>
+               ${showKeys ? `<span class="input-req-key">${Math.min(opts.length + 1, 9)}</span>` : ""}
+             </button>
+           </div>`)
+    : `<form class="input-req-form" onsubmit="submitUserInputFromForm(event, ${cardIndex}); return false;">
+         <input type="text" class="input-req-text" placeholder="Type your answer…" autocomplete="off" ${cardIndex === 0 ? "autofocus" : ""} />
+         <button type="submit" class="input-req-send">Send</button>
+       </form>`;
+
+  const progress = totalCards > 1
+    ? `<span class="input-req-count">${cardIndex + 1}/${totalCards}</span>`
+    : (hasOptions ? `<span class="input-req-count">${opts.length}</span>` : "");
+  const confirmBtn = multi
+    ? `<button type="button" class="input-req-confirm" onclick="confirmMultiInput(${cardIndex})">Confirm${selected.size ? ` (${selected.size})` : ""}</button>`
+    : "";
+
+  return `
+    <div class="input-req-card" data-card-index="${cardIndex}">
+      <div class="input-req-head">
+        <p class="input-req-question">${question}</p>
+        ${progress}
+      </div>
+      <div class="input-req-options">${optionRows}</div>
+      ${customRow}
+      <div class="input-req-foot">
+        <button type="button" class="input-req-skip" onclick="skipUserInput(${cardIndex})">Skip</button>
+        <span class="input-req-foot-spacer"></span>
+        ${confirmBtn}
+      </div>
+    </div>`;
 }
 
 // --- Chat Rendering ---
@@ -688,6 +883,7 @@ function renderMessages() {
   html += state.messages.map((msg, index) => {
     if (msg.role === "approval_status") return ''; // Skip internal status renders for clean UI
     if (msg.role === "tool") return ''; // Tool outputs stay in traces, not the chat transcript.
+    if (msg.interim) return ''; // Guard-vetoed draft answer — superseded by the next one.
 
     const isUser = msg.role === 'user';
     const bubbleCls = isUser ? 'msg-bubble user-bubble' : 'msg-bubble bot-bubble';
@@ -728,40 +924,37 @@ function renderMessages() {
   // Pending Approvals
   if (state.pendingApprovals.length > 0) {
     const disabled = state.isRunning ? " disabled" : "";
-    html += state.pendingApprovals.map(ap => `
-          <div class="approval-card">
-            <div class="approval-title">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-              Approval Required: ${ap.tool_name}
-            </div>
-            <p style="font-size:13px; color:var(--text-secondary); margin-bottom:12px;">${ap.reason || "The agent wants to execute this tool."}</p>
-            <pre style="background:var(--bg-0); padding:10px; border-radius:6px; font-family:var(--mono); font-size:12px; overflow-x:auto;">${JSON.stringify(ap.parameters, null, 2)}</pre>
-            <div class="approval-btns">
-              <button class="btn-approve" onclick="submitApproval('${ap.tool_call_id}', true)"${disabled}>Approve</button>
-              <button class="btn-deny" onclick="submitApproval('${ap.tool_call_id}', false)"${disabled}>Deny</button>
-            </div>
+    html += state.pendingApprovals.map(ap => {
+      const params = ap.parameters && Object.keys(ap.parameters).length
+        ? `<details class="approval-params">
+             <summary>Parameters</summary>
+             <pre>${escapeHtml(JSON.stringify(ap.parameters, null, 2))}</pre>
+           </details>`
+        : "";
+      return `
+        <div class="approval-card">
+          <div class="approval-head">
+            <span class="approval-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            </span>
+            <span class="approval-title">Allow <code>${escapeHtml(ap.tool_name)}</code>?</span>
           </div>
-        `).join('');
+          <p class="approval-reason">${escapeHtml(ap.reason || "The agent wants to run this tool.")}</p>
+          ${params}
+          <div class="approval-foot">
+            <button class="btn-deny" onclick="submitApproval('${ap.tool_call_id}', false)"${disabled}>Deny</button>
+            <button class="btn-approve" onclick="submitApproval('${ap.tool_call_id}', true)"${disabled}>Approve</button>
+          </div>
+        </div>`;
+    }).join('');
   }
 
-  // Pending human-input request
-  if (state.pendingInput) {
-    const q = escapeHtml(state.pendingInput.question || "The agent needs your input.");
-    const opts = Array.isArray(state.pendingInput.options) ? state.pendingInput.options : null;
-    const body = opts && opts.length
-      ? `<div class="input-req-options">${opts
-          .map((o) => `<button class="input-req-option" onclick="submitUserInput(${JSON.stringify(o).replace(/"/g, "&quot;")})">${escapeHtml(o)}</button>`)
-          .join("")}</div>`
-      : `<form class="input-req-form" onsubmit="submitUserInputFromForm(event); return false;">
-           <input type="text" class="input-req-text" placeholder="Type your answer..." autocomplete="off" />
-           <button type="submit" class="input-req-send">Send</button>
-         </form>`;
-    html += `
-      <div class="input-req-card">
-        <div class="input-req-title">Agent needs your input</div>
-        <p class="input-req-question">${q}</p>
-        ${body}
-      </div>`;
+  // Pending human-input requests — a batch renders as stacked cards.
+  if (state.pendingInputs.length > 0) {
+    const total = state.pendingInputs.length;
+    html += state.pendingInputs
+      .map((pending, index) => inputRequestHtml(pending, index, total))
+      .join("");
   }
 
   container.innerHTML = html;
@@ -817,7 +1010,13 @@ function handlePacket(packet) {
     const ev = packet.event;
     const summarized = summarizeEventForLog(packet.agent_name, ev);
     logEvent(summarized.type, summarized.title, summarized.attributes);
-    if (ev.type === "tool_call") {
+    if (ev.type === "bash_started") {
+      pushActivity(`${ev.description} (intención declarada: ${ev.declared_action})`, "tool");
+    } else if (ev.type === "bash_finished") {
+      pushActivity(ev.timed_out ? "Bash: tiempo agotado" : `Bash terminado · exit ${ev.exit_code}`, ev.timed_out || ev.exit_code !== 0 ? "error" : "tool");
+    } else if (ev.type === "bash_failed" || ev.type === "bash_cancelled") {
+      pushActivity(ev.error || ev.reason, "error");
+    } else if (ev.type === "tool_call") {
       state.runningTools[ev.tool_call_id] = {
         tool_call_id: ev.tool_call_id,
         tool_name: ev.tool_name,
@@ -849,11 +1048,29 @@ function handlePacket(packet) {
         pushActivity("Planning...", "info");
       }
       if (ev.plan) {
+        const steps = Array.isArray(ev.plan.steps) ? ev.plan.steps : [];
+        const allDone = steps.length > 0
+          && steps.every((s) => s.status === "done" || s.status === "failed");
+        // Fresh plan → expand; finished plan → collapse to a slim bar.
+        state.planPanelOpen = !allDone;
         state.currentPlan = ev.plan;
         renderPlan();
       }
     } else if (ev.type === "user_input_request") {
-      state.pendingInput = { question: ev.question || "", options: ev.options || null };
+      // Batched questions arrive as one event each — accumulate them.
+      const exists = state.pendingInputs.some(
+        (p) => p.tool_call_id && p.tool_call_id === ev.tool_call_id
+      );
+      if (!exists) {
+        state.pendingInputs.push({
+          question: ev.question || "",
+          options: ev.options || null,
+          tool_call_id: ev.tool_call_id || null,
+          multiSelect: Boolean(ev.multi_select),
+          selected: new Set(),
+          customOpen: false,
+        });
+      }
       pushActivity("Waiting for your input...", "approval");
       renderMessages();
     }
@@ -920,6 +1137,22 @@ function handlePacket(packet) {
     state.isCancelling = false;
     clearActivity();
   }
+  else if (packet.type === "input_required") {
+    // Authoritative list of every still-unanswered question — replaces
+    // whatever the per-question stream events accumulated.
+    state.pendingInputs = (packet.pending_questions || []).map((q) => ({
+      question: q.question || "",
+      options: q.options || null,
+      tool_call_id: q.tool_call_id || null,
+      multiSelect: Boolean(q.multi_select),
+      selected: new Set(),
+      customOpen: false,
+    }));
+    state.isRunning = false;
+    state.isCancelling = false;
+    clearActivity();
+    pushActivity("Waiting for your input...", "approval");
+  }
   else if (packet.type === "cancelled") {
     state.messages.forEach((msg) => {
       if (msg.role === "assistant" && msg.streaming) msg.streaming = false;
@@ -930,6 +1163,15 @@ function handlePacket(packet) {
     state.compactionRunning = false;
     clearActivity();
     pushActivity(packet.message || "Turn cancelled.", "approval");
+  }
+  else if (packet.type === "bash_started") {
+    pushActivity(`${packet.description} (intención declarada: ${packet.declared_action})`, "tool");
+  }
+  else if (packet.type === "bash_finished") {
+    pushActivity(packet.timed_out ? "Bash: tiempo agotado" : `Bash terminado · exit ${packet.exit_code}`, packet.timed_out || packet.exit_code !== 0 ? "error" : "tool");
+  }
+  else if (packet.type === "bash_failed" || packet.type === "bash_cancelled") {
+    pushActivity(packet.error || packet.reason, "error");
   }
   else if (packet.type === "tool_call") {
     state.runningTools[packet.tool_call_id] = {
@@ -976,6 +1218,7 @@ function renderAttachmentPreview() {
       updateSendBtn();
     });
   });
+  syncChatPadding();
 }
 
 function readImageFile(file) {
@@ -1093,36 +1336,108 @@ async function handleStop() {
   }
 }
 
-window.submitUserInputFromForm = function (event) {
+window.submitUserInputFromForm = function (event, cardIndex = 0) {
   const input = event.target.querySelector(".input-req-text");
   const value = input ? input.value.trim() : "";
-  if (value) window.submitUserInput(value);
+  if (value) window.submitUserInput(value, cardIndex);
 };
 
-window.submitUserInput = async function (answer) {
-  if (!state.pendingInput || !state.sessionId) return;
-  // Clear the prompt immediately; the original chat stream is still open and
-  // will resume on its own once the server resolves the input.
-  state.pendingInput = null;
+// Reveal the free-text field on one question card.
+window.openCustomInput = function (cardIndex = 0) {
+  const pending = state.pendingInputs[cardIndex];
+  if (!pending) return;
+  pending.customOpen = true;
+  renderMessages();
+  const field = document.querySelector(
+    `.input-req-card[data-card-index="${cardIndex}"] .input-req-text`
+  );
+  if (field) field.focus();
+};
+
+// Skip one question — sends an empty answer so the run resumes.
+window.skipUserInput = function (cardIndex = 0) {
+  if (!state.pendingInputs[cardIndex]) return;
+  window.submitUserInput("", cardIndex);
+};
+
+// Toggle one option in a multi-select question (no submit yet).
+window.toggleMultiInput = function (cardIndex, index) {
+  const pending = state.pendingInputs[cardIndex];
+  if (!pending) return;
+  if (!(pending.selected instanceof Set)) pending.selected = new Set();
+  if (pending.selected.has(index)) pending.selected.delete(index);
+  else pending.selected.add(index);
+  renderMessages();
+};
+
+// Submit the accumulated selections of a multi-select question.
+window.confirmMultiInput = function (cardIndex = 0) {
+  const pending = state.pendingInputs[cardIndex];
+  if (!pending) return;
+  const opts = Array.isArray(pending.options) ? pending.options : [];
+  const chosen = [...(pending.selected || [])]
+    .sort((a, b) => a - b)
+    .map((i) => parseOption(opts[i]).label);
+  if (chosen.length === 0) return;
+  window.submitUserInput(chosen.join(", "), cardIndex);
+};
+
+// Pick a single option by its list index.
+window.pickInputOption = function (cardIndex, index) {
+  const pending = state.pendingInputs[cardIndex];
+  if (!pending) return;
+  const opts = Array.isArray(pending.options) ? pending.options : [];
+  const raw = opts[index];
+  if (raw === undefined) return;
+  window.submitUserInput(parseOption(raw).label, cardIndex);
+};
+
+window.submitUserInput = async function (answer, cardIndex = 0) {
+  const pending = state.pendingInputs[cardIndex];
+  if (!pending || !state.sessionId) return;
+  if (state.isRunning) return;
+  // The previous stream ended with finish_reason='input_needed'; answering
+  // applies the answer to the run's tool state on the server and resumes it
+  // as a new stream segment, which we consume here (same shape as approvals).
+  // With a batch of questions the server only resumes the model once the
+  // LAST one is answered — until then it replies with the remaining list.
+  state.pendingInputs = state.pendingInputs.filter((p) => p !== pending);
+  state.isRunning = true;
+  state.isCancelling = false;
+  state.currentAbortController = new AbortController();
   clearActivity();
   pushActivity("Input sent.", "approval");
   renderMessages();
+  renderStatusArea();
   logEvent("info", "User input provided", { answer });
 
   try {
     const res = await fetch("/api/chat/input", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: state.currentAbortController.signal,
       body: JSON.stringify({
         session_id: state.sessionId,
         agent_name: state.selectedAgent,
         answer,
+        tool_call_id: pending.tool_call_id || null,
       }),
     });
     if (!res.ok) throw new Error("Input failed");
+    await readSseStream(res);
   } catch (err) {
-    logEvent("error", "User input failed", { error: String(err) });
-    pushActivity("Failed to send input.", "error");
+    if (err?.name !== "AbortError" || !state.isCancelling) {
+      state.pendingInputs = [pending, ...state.pendingInputs];
+      logEvent("error", "User input failed", { error: String(err) });
+      pushActivity("Failed to send input.", "error");
+    }
+  } finally {
+    state.isRunning = false;
+    state.isCancelling = false;
+    state.currentAbortController = null;
+    state.compactionRunning = false;
+    renderStatusArea();
+    updateSendBtn();
   }
 };
 
@@ -1184,7 +1499,7 @@ async function handleNewChat() {
     state.isCancelling = false;
     state.currentAbortController = null;
     state.currentPlan = null;
-    state.pendingInput = null;
+    state.pendingInputs = [];
     clearActivity();
     $("#messagesContainer").innerHTML = "";
     renderAttachmentPreview();
@@ -1260,10 +1575,45 @@ async function initApp() {
     event.preventDefault();
     toggleThinkingPanel(summary.closest(".thinking-block"));
   });
+  // Question-card option rows: single-select submits, multi-select toggles.
+  messagesContainer.addEventListener("click", (event) => {
+    const option = event.target.closest(".input-req-option");
+    if (!option) return;
+    const cardIndex = Number(option.dataset.inputCard || 0);
+    const index = Number(option.dataset.inputIndex);
+    if (Number.isNaN(index)) return;
+    if (option.dataset.inputMulti === "1") window.toggleMultiInput(cardIndex, index);
+    else window.pickInputOption(cardIndex, index);
+  });
+  // Number keys 1-9 answer the FIRST pending question of a batch.
+  document.addEventListener("keydown", (event) => {
+    if (state.pendingInputs.length === 0 || state.isRunning) return;
+    if (event.target.closest("input, textarea")) return;
+    if (!/^[1-9]$/.test(event.key)) return;
+    const pending = state.pendingInputs[0];
+    const opts = Array.isArray(pending.options) ? pending.options : [];
+    const index = Number(event.key) - 1;
+    if (index === opts.length && opts.length) {
+      event.preventDefault();
+      window.openCustomInput(0);
+      return;
+    }
+    if (index < 0 || index >= opts.length) return;
+    event.preventDefault();
+    if (pending.multiSelect) window.toggleMultiInput(0, index);
+    else window.pickInputOption(0, index);
+  });
   $("#themeToggle").addEventListener("click", toggleTheme);
   $("#workspaceToggle").addEventListener("click", () => {
     state.showWorkspace = !state.showWorkspace;
     renderWorkspace();
+  });
+  $("#workspaceRefresh").addEventListener("click", () => refreshWorkspace(true));
+  $("#workspaceUpload").addEventListener("click", () => $("#workspaceUploadInput").click());
+  $("#workspaceUploadInput").addEventListener("change", (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    uploadWorkspaceFile(file);
   });
   $("#eventsToggle").addEventListener("click", () => {
     state.showEvents = !state.showEvents;
@@ -1303,7 +1653,10 @@ async function initApp() {
     updateSendBtn();
     e.target.style.height = 'auto';
     e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px';
+    syncChatPadding();
   });
+  window.addEventListener("resize", syncChatPadding);
+  syncChatPadding();
   $("#chatInput").addEventListener("keydown", (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(e); }
   });

@@ -14,6 +14,7 @@ from jsonschema import Draft202012Validator
 from ..errors.tools import DockerToolReferenceError
 from ..termination import CancellationToken
 from .component import ComponentBase
+from .environment import Environment
 from ..types.tool_call import ToolCallRecord, ToolResult
 from ..types.tools import (
     ToolApprovalMode,
@@ -26,7 +27,7 @@ from ..types.tools import (
 class ToolContext:
     """Runtime context available to tools."""
 
-    __slots__ = ("user_id", "session_id", "run_id", "retry_count", "deps")
+    __slots__ = ("user_id", "session_id", "run_id", "retry_count", "deps", "emit_event", "environment")
 
     def __init__(
         self,
@@ -35,12 +36,16 @@ class ToolContext:
         user_id: str = "runtime",
         retry_count: int = 0,
         deps: dict[str, t.Any] | None = None,
+        emit_event: t.Callable[[t.Any], None] | None = None,
+        environment: Environment | None = None,
     ):
         self.run_id = run_id
         self.user_id = user_id
         self.session_id = session_id
         self.retry_count = retry_count
         self.deps = deps or {}
+        self.emit_event = emit_event
+        self.environment = environment
 
 
 class CoreTool(ComponentBase[BaseModel], ABC):

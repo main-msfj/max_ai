@@ -1,107 +1,81 @@
-"""Core contract for agent Workspace."""
+"""The native workspace shared by every agent for a given user."""
 
 from __future__ import annotations
 
-import logging
-import typing as t
+import os
 from pathlib import Path
-from abc import ABC, abstractmethod
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from ..config import setting
-from ..loggers import ScopedLogger
 from ..types.workspace import WorkspaceDirectory
 from .capability import CoreAgentCapabilities
 
 
-logger = logging.getLogger(__name__)
-log = ScopedLogger(logger, scope=["Workspace"])
+class WorkspaceConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    root: str | None = None
 
 
-class WorkSpaceRegistry(CoreAgentCapabilities[BaseModel], ABC):
-    """Abstract base for workspace registries.
+class Workspace(CoreAgentCapabilities[WorkspaceConfig]):
+    """Own ``.agents/<user>/skills`` and ``.agents/<user>/<conversation>``.
 
-    Layout contract — the host and container share the same subdirectory
-    names so paths translate cleanly across the bind mount:
-
-        HOST                                  CONTAINER
-        <root>/<user_id>/             ──►     /mnt/
-        <root>/<user_id>/tools/       ──►     /mnt/tools/
-        <root>/<user_id>/skills/      ──►     /mnt/skills/
-        <root>/<user_id>/artifacts/   ──►     /mnt/artifacts/
-
-    The user_id segment exists only on the host (multi-tenant filesystem).
-    The container is single-tenant per session, so the mount drops the
-    user_id and exposes the subdirectories directly under /mnt.
+    User and conversation identifiers come from the run context. Files remain
+    on disk between runs; agents using the same root share the same workspace.
     """
 
-    CATEGORIES = {"tools", "skills", "artifacts"}
+    component_schema = WorkspaceConfig
+    component_type = "workspace"
 
-    def __init__(self, tag: str, root: str | Path | None = None) -> None:
+    def __init__(self, root: str | Path | None = None) -> None:
         super().__init__()
-        self.tag = tag
-        self.base_root = Path(root).expanduser().resolve() if root else setting.root_dir
-        self.root: Path | None = None
-        self.skills_dir: Path | None = None
-        self.tool_dir: Path | None = None
-        self.artifacts_dir: Path | None = None
+        self.base_root = Path(root if root is not None else setting.root_dir / ".agents").expanduser().resolve()
+        self.base_root.mkdir(parents=True, exist_ok=True)
+        self._filesystem = None
 
-    def materialize(self, user_id: str) -> WorkspaceDirectory:
-        """Create and return the per-user runtime directories.
+    def _to_config(self) -> WorkspaceConfig:
+        return WorkspaceConfig(root=str(self.base_root))
 
-        Default implementation defers to get_or_create_dirs. Subclasses
-        that need to do additional work (uploading to remote storage,
-        seeding files, etc.) can override.
-        """
-        return self.get_or_create_dirs(user_id, self.base_root)
+    @classmethod
+    def _from_config(cls, config: WorkspaceConfig) -> Workspace:
+        return cls(root=config.root)
 
-    def map_directory(
-        self, user_id: str, root: Path | str | None = None
-    ) -> WorkspaceDirectory:
-        """Compute the per-user runtime layout on the host."""
-        user_id = user_id
-        base = self.base_root
+    def get_filesystem(self):
+        from ..workspace.filesystem import UserFileSystem
 
-        runtime_root = base / user_id
+        if self._filesystem is None:
+            self._filesystem = UserFileSystem(self.base_root)
+        return self._filesystem
 
-        directory = WorkspaceDirectory(
-            root=runtime_root,
-            tool_dir=runtime_root / setting.tool_dir,
-            skill_dir=runtime_root / setting.skill_dir,
-            artifacts_dir=runtime_root / setting.artifacts_dir,
+    def materialize(self, user_id: str, conversation_id: str | None = None) -> WorkspaceDirectory:
+        """Create a user's directories without clearing existing files."""
+        filesystem = self.get_filesystem()
+        filesystem._safe_id(user_id, "user_id")
+        if conversation_id is not None:
+            filesystem._safe_session_id(conversation_id)
+        root = filesystem.user_root(user_id)
+        user_fd = filesystem._open_user_fd(user_id)
+        try:
+            skills_fd = filesystem._open_dir_at(user_fd, "skills", create=True)
+            os.close(skills_fd)
+        finally:
+            os.close(user_fd)
+        conversation = (
+            filesystem.conversation_root(user_id, conversation_id)
+            if conversation_id is not None else None
+        )
+        scratch = (
+            filesystem.scratchpad_root(user_id, conversation_id)
+            if conversation_id is not None else None
+        )
+        return WorkspaceDirectory(
+            root=root,
+            skill_dir=root / "skills",
+            conversation_dir=conversation,
+            scratch_dir=scratch,
+            artifacts_dir=conversation or root / "artifacts",
         )
 
-        # Cache the last layout for convenience accessors.
-        self.root = directory.root
-        self.tool_dir = directory.tool_dir
-        self.skills_dir = directory.skill_dir
-        self.artifacts_dir = directory.artifacts_dir
-        return directory
 
-    def get_or_create_dirs(
-        self, user_id: str, root: str | Path | None = None
-    ) -> WorkspaceDirectory:
-        """Compute the layout and ensure all directories exist."""
-        base = self.map_directory(user_id, root)
-        kwargs = dict(parents=True, exist_ok=True)
-        base.root.mkdir(**kwargs)
-        base.tool_dir.mkdir(**kwargs)
-        base.skill_dir.mkdir(**kwargs)
-        base.artifacts_dir.mkdir(**kwargs)
-        return base
-
-    @abstractmethod
-    def save_or_upload(self, user_id: str, file_path: str | Path) -> str:
-        """Persist a local file into the user's artifacts area."""
-        ...
-
-    @abstractmethod
-    def get_or_download(self, user_id: str, filename: str) -> t.Any:
-        """Retrieve an artifact by filename."""
-        ...
-
-    @abstractmethod
-    def list_files(self, user_id: str) -> list[str]:
-        """List the user's artifact filenames."""
-        ...
+# Import compatibility only: there is one concrete workspace implementation.
+WorkSpaceRegistry = Workspace

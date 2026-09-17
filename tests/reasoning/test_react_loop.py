@@ -1,4 +1,10 @@
-"""ReActLoop integration tests with fake client/executor/middleware."""
+"""Core ReAct-cycle integration tests with fake client/executor/middleware.
+
+Runs against ``ReActLoopSelfDirected`` — the framework's single loop —
+exercising the canonical cycle (iterations, tool dispatch, approval
+pauses, retries), not the planning extras (those live in
+test_self_directed.py).
+"""
 
 from __future__ import annotations
 
@@ -7,8 +13,8 @@ import typing as t
 import pytest
 
 from max_ai.base.reasoning import BaseLoopState
-from max_ai.reasoning.react_simple import (
-    ReActLoop,
+from max_ai.reasoning.react_self_directed import (
+    ReActLoopSelfDirected as ReActLoop,
     ReActLoopState,
 )
 

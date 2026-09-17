@@ -1,13 +1,14 @@
-"""Tests for mid-loop compaction in both ReAct loops."""
+"""Tests for mid-loop compaction in the ReAct loop."""
 
 from __future__ import annotations
 
 import pytest
 import typing as t
 
-from max_ai.reasoning.react_simple import ReActLoop as SimpleReActLoop, ReActLoopState as SimpleLoopState
-from max_ai.reasoning.react_planning import ReActLoopPlanning as PlanningReActLoop, ReActLoopPlanningState as PlanningLoopState
-from max_ai.reasoning.plan import AgentPlan
+from max_ai.reasoning.react_self_directed import (
+    ReActLoopSelfDirected as ReActLoop,
+    ReActLoopState,
+)
 from max_ai.core.messages import AssistantMessage, ToolMessage, UserMessage
 from max_ai.core.event_type import ReasoningCompleteEvent, CompactionEvent
 from max_ai.core.models import ModelConfig
@@ -63,7 +64,8 @@ class FakeMiddlewareChain:
 
 
 class FakeCompaction(CoreCompaction):
-    """Compaction that records how many times it ran and trims ctx.messages to last N."""
+    """Pure compaction that records how many times it ran and returns the
+    last N messages as the recent window (the caller applies the split)."""
 
     keep_last: int = 1
     call_count: int = 0
@@ -112,21 +114,8 @@ def make_tool_call_result(call_id: str = "c1"):
     )
 
 
-def make_simple_loop(client, compaction=None, max_context_tokens=0):
-    loop = SimpleReActLoop(max_loop_iterations=5)
-    loop.bind(
-        name="test_agent",
-        client=client,
-        tool_executor=FakeToolExecutor(),
-        middleware_chain=FakeMiddlewareChain(),
-        compaction=compaction,
-        max_context_tokens=max_context_tokens,
-    )
-    return loop
-
-
-def make_planning_loop(client, compaction=None, max_context_tokens=0):
-    loop = PlanningReActLoop(max_loop_iterations=5)
+def make_loop(client, compaction=None, max_context_tokens=0):
+    loop = ReActLoop(max_loop_iterations=5)
     loop.bind(
         name="test_agent",
         client=client,
@@ -156,19 +145,19 @@ async def collect(gen) -> list:
 def test_should_compact_returns_false_without_compaction(ctx):
     """No compaction object → _should_compact always returns False."""
     client = FakeChatClient(results=[], max_context_window=1000)
-    loop = make_simple_loop(client, compaction=None, max_context_tokens=1000)
+    loop = make_loop(client, compaction=None, max_context_tokens=1000)
     assert loop._should_compact(ctx) is False
 
 
 def test_should_compact_returns_false_without_context_window(ctx):
     """max_context_tokens=0 → _should_compact always returns False."""
-    loop = make_simple_loop(FakeChatClient(results=[]), compaction=FakeCompaction(), max_context_tokens=0)
+    loop = make_loop(FakeChatClient(results=[]), compaction=FakeCompaction(), max_context_tokens=0)
     assert loop._should_compact(ctx) is False
 
 
 def test_should_compact_returns_false_when_under_threshold(ctx):
     """Few messages → under threshold → no compaction needed."""
-    loop = make_simple_loop(
+    loop = make_loop(
         FakeChatClient(results=[], max_context_window=200_000),
         compaction=FakeCompaction(),
         max_context_tokens=200_000,
@@ -179,7 +168,7 @@ def test_should_compact_returns_false_when_under_threshold(ctx):
 
 def test_should_compact_returns_true_when_over_threshold(ctx):
     """Many large messages → over threshold → compaction needed."""
-    loop = make_simple_loop(
+    loop = make_loop(
         FakeChatClient(results=[], max_context_window=10_000),
         compaction=FakeCompaction(),
         max_context_tokens=10_000,
@@ -195,7 +184,7 @@ def test_should_compact_returns_true_when_over_threshold(ctx):
 async def test_run_mid_loop_compaction_emits_event(ctx, prompts):
     """_run_mid_loop_compaction yields a CompactionEvent."""
     compaction = FakeCompaction(keep_last=1)
-    loop = make_simple_loop(
+    loop = make_loop(
         FakeChatClient(results=[], max_context_window=200_000),
         compaction=compaction,
         max_context_tokens=200_000,
@@ -217,7 +206,7 @@ async def test_run_mid_loop_compaction_emits_event(ctx, prompts):
 async def test_run_mid_loop_compaction_trims_messages(ctx, prompts):
     """_run_mid_loop_compaction replaces ctx.messages with recent_messages."""
     compaction = FakeCompaction(keep_last=1)
-    loop = make_simple_loop(
+    loop = make_loop(
         FakeChatClient(results=[], max_context_window=200_000),
         compaction=compaction,
         max_context_tokens=200_000,
@@ -235,7 +224,7 @@ async def test_run_mid_loop_compaction_trims_messages(ctx, prompts):
 @pytest.mark.asyncio
 async def test_run_mid_loop_compaction_no_op_without_compactor(ctx, prompts):
     """Without a compactor, _run_mid_loop_compaction yields nothing."""
-    loop = make_simple_loop(FakeChatClient(results=[]), compaction=None)
+    loop = make_loop(FakeChatClient(results=[]), compaction=None)
     ctx.messages = [UserMessage(source="user", content="x")]
 
     events = [ev async for ev in loop._run_mid_loop_compaction(ctx, prompts)]
@@ -244,41 +233,41 @@ async def test_run_mid_loop_compaction_no_op_without_compactor(ctx, prompts):
     assert len(ctx.messages) == 1  # untouched
 
 
-# -------- Integration: simple ReActLoop ---------------------------------------
+# -------- Integration: ReAct loop ----------------------------------------------
 @pytest.mark.asyncio
-async def test_simple_loop_no_compaction_event_when_not_configured(ctx, prompts):
+async def test_loop_no_compaction_event_when_not_configured(ctx, prompts):
     """Without compaction configured, no CompactionEvent is emitted."""
     client = FakeChatClient(results=[make_result("done")])
-    loop = make_simple_loop(client)
+    loop = make_loop(client)
 
-    events = await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=SimpleLoopState()))
+    events = await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=ReActLoopState()))
 
     assert not any(isinstance(e, CompactionEvent) for e in events)
 
 
 @pytest.mark.asyncio
-async def test_simple_loop_no_compaction_when_under_threshold(ctx, prompts):
+async def test_loop_no_compaction_when_under_threshold(ctx, prompts):
     """Compaction configured but context is small → compact() never called."""
     compaction = FakeCompaction()
     client = FakeChatClient(results=[make_result("done")], max_context_window=200_000)
-    loop = make_simple_loop(client, compaction=compaction, max_context_tokens=200_000)
+    loop = make_loop(client, compaction=compaction, max_context_tokens=200_000)
 
-    await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=SimpleLoopState()))
+    await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=ReActLoopState()))
 
     assert compaction.call_count == 0
 
 
 @pytest.mark.asyncio
-async def test_simple_loop_emits_compaction_event_when_over_threshold(ctx, prompts):
+async def test_loop_emits_compaction_event_when_over_threshold(ctx, prompts):
     """Loop emits CompactionEvent when context exceeds threshold before an iteration."""
     compaction = FakeCompaction(keep_last=1)
     client = FakeChatClient(results=[make_result("done")], max_context_window=10_000)
-    loop = make_simple_loop(client, compaction=compaction, max_context_tokens=10_000)
+    loop = make_loop(client, compaction=compaction, max_context_tokens=10_000)
 
     big_msg = UserMessage(source="user", content="word " * 300)
     ctx.messages = [big_msg] * 10
 
-    events = await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=SimpleLoopState()))
+    events = await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=ReActLoopState()))
 
     compaction_events = [e for e in events if isinstance(e, CompactionEvent)]
     assert len(compaction_events) >= 1
@@ -287,67 +276,31 @@ async def test_simple_loop_emits_compaction_event_when_over_threshold(ctx, promp
 
 
 @pytest.mark.asyncio
-async def test_simple_loop_compaction_trims_messages_before_llm(ctx, prompts):
+async def test_loop_compaction_trims_messages_before_llm(ctx, prompts):
     """After compaction fires, ctx.messages is trimmed before the LLM call."""
     compaction = FakeCompaction(keep_last=1)
     client = FakeChatClient(results=[make_result("done")], max_context_window=10_000)
-    loop = make_simple_loop(client, compaction=compaction, max_context_tokens=10_000)
+    loop = make_loop(client, compaction=compaction, max_context_tokens=10_000)
 
     big_msg = UserMessage(source="user", content="word " * 300)
     ctx.messages = [big_msg] * 10
 
-    await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=SimpleLoopState()))
+    await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=ReActLoopState()))
 
     assert compaction.call_count >= 1
 
 
 @pytest.mark.asyncio
-async def test_simple_loop_still_completes_after_compaction(ctx, prompts):
+async def test_loop_still_completes_after_compaction(ctx, prompts):
     """Loop reaches finish_reason='stop' even when compaction fires mid-loop."""
     compaction = FakeCompaction(keep_last=1)
     client = FakeChatClient(results=[make_result("final answer")], max_context_window=500)
-    loop = make_simple_loop(client, compaction=compaction, max_context_tokens=500)
+    loop = make_loop(client, compaction=compaction, max_context_tokens=500)
 
     big_msg = UserMessage(source="user", content="word " * 300)
     ctx.messages = [big_msg] * 5
 
-    events = await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=SimpleLoopState()))
-
-    complete = next(e for e in events if isinstance(e, ReasoningCompleteEvent))
-    assert complete.finish_reason == "stop"
-
-
-# -------- Integration: planning ReActLoop ------------------------------------
-@pytest.mark.asyncio
-async def test_planning_loop_emits_compaction_event(ctx, prompts):
-    """Planning loop also emits CompactionEvent when threshold exceeded."""
-    ctx.plan = AgentPlan(steps=[], rationale="no steps")  # skip planning step
-    compaction = FakeCompaction(keep_last=1)
-    client = FakeChatClient(results=[make_result("done")], max_context_window=10_000)
-    loop = make_planning_loop(client, compaction=compaction, max_context_tokens=10_000)
-
-    big_msg = UserMessage(source="user", content="word " * 300)
-    ctx.messages = [big_msg] * 10
-
-    events = await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=PlanningLoopState()))
-
-    compaction_events = [e for e in events if isinstance(e, CompactionEvent)]
-    assert len(compaction_events) >= 1
-    assert compaction_events[0].changed is True
-
-
-@pytest.mark.asyncio
-async def test_planning_loop_completes_after_compaction(ctx, prompts):
-    """Planning loop finishes correctly after mid-loop compaction."""
-    ctx.plan = AgentPlan(steps=[], rationale="no steps")  # skip planning step
-    compaction = FakeCompaction(keep_last=1)
-    client = FakeChatClient(results=[make_result("answer")], max_context_window=500)
-    loop = make_planning_loop(client, compaction=compaction, max_context_tokens=500)
-
-    big_msg = UserMessage(source="user", content="word " * 300)
-    ctx.messages = [big_msg] * 5
-
-    events = await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=PlanningLoopState()))
+    events = await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=ReActLoopState()))
 
     complete = next(e for e in events if isinstance(e, ReasoningCompleteEvent))
     assert complete.finish_reason == "stop"

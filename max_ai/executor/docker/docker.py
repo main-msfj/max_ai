@@ -2,7 +2,7 @@
 
 This executor runs ONLY runtime tools — i.e. ``bash`` — inside a Docker
 container. Ordinary tools (FunctionAsTool / ``@tool`` wrappers,
-WorkspaceTool, knowledge tools, …) are developer-authored and run
+knowledge tools, …) are developer-authored and run
 in-process; the ``RoutingExecutor`` keeps them local and sends only
 ``CoreRuntimeTool`` instances here. The variable, model-driven surface
 that actually needs isolation is the skill scripts the LLM chooses to
@@ -12,20 +12,19 @@ It uses the Docker CLI directly (no Compose) so the runtime boundary
 stays easy to reason about:
 
 Host workspace:
-    <workspace_root>/<user_id>/tools
-    <workspace_root>/<user_id>/skills
-    <workspace_root>/<user_id>/artifacts
+    Legacy: <workspace_root>/<user_id>/{tools,skills,artifacts}
+    Session: <filesystem_root>/<user_id>/{tools,skills,<session>}
 
 Container workspace:
-    /mnt/tools
-    /mnt/skills
-    /mnt/artifacts
+    Legacy: /mnt/{tools,skills,artifacts}
+    Session: /mnt/{tools,skills,<session>}
 
 Docker never needs to know the user id. The executor resolves the host
 runtime directory for the user, then bind-mounts that directory as /mnt.
-Because the bind mount is shared with the host, files the container
-writes under /mnt/artifacts are immediately visible to the local
-WorkspaceTool — no copy-back round trip is needed.
+In the legacy layout, artifacts live under /mnt/artifacts. With a
+filesystem_root dependency, the conversation directory is the container
+working directory and artifact directory at /mnt/<session>. Both layouts
+share their bind mount with host tools, so writes are immediately visible.
 
 Bash runs in a short-lived persistent container so a skill can issue
 several commands against the same runtime state; idle bash containers
@@ -35,6 +34,7 @@ are removed after ``bash_ttl_seconds``.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import re
 import time
@@ -48,6 +48,7 @@ from ...base.tools import CoreTool, ToolContext
 from ...termination import CancellationToken
 from ...types.tool_call import ToolCallRecord, ToolResult
 from ...core.primitives import FailureReason
+from ...workspace.filesystem import UserFileSystem
 
 
 # Strict form: exactly `read_skill <name>` with no extra arguments.
@@ -135,10 +136,11 @@ class DockerExecutor(CoreExecutor):
         failed result rather than executed.
         """
         try:
+            host_runtime, container_cwd, container_artifacts = (
+                self._runtime_layout_for_context(tool_context)
+            )
             await self._ensure_connected()
             await self._prune_expired_bash_sessions()
-            host_runtime = self._host_runtime(tool_context.user_id)
-            self._ensure_runtime_layout(host_runtime)
 
             if tool.name in {"bash", "skill_bash"}:
                 return await self._run_bash_direct(
@@ -146,6 +148,8 @@ class DockerExecutor(CoreExecutor):
                     record=record,
                     tool_context=tool_context,
                     host_runtime=host_runtime,
+                    container_cwd=container_cwd,
+                    container_artifacts=container_artifacts,
                     cancellation_token=cancellation_token,
                 )
 
@@ -219,8 +223,54 @@ class DockerExecutor(CoreExecutor):
         for name in (setting.tool_dir, setting.skill_dir, setting.artifacts_dir):
             (host_runtime / name).mkdir(parents=True, exist_ok=True)
 
-    def _docker_env_args(self) -> list[str]:
+    def _runtime_layout_for_context(
+        self, tool_context: ToolContext
+    ) -> tuple[Path, str, str]:
+        """Resolve the legacy runtime or the session-scoped filesystem layout."""
+        if "filesystem_root" not in tool_context.deps:
+            host_runtime = self._host_runtime(tool_context.user_id)
+            self._ensure_runtime_layout(host_runtime)
+            legacy_artifacts = self._container_path(setting.artifacts_dir)
+            return host_runtime, self.CONTAINER_WORKSPACE, legacy_artifacts
+
+        filesystem_root = tool_context.deps["filesystem_root"]
+        if filesystem_root is None:
+            raise ValueError("filesystem_root dependency must be a path.")
+        filesystem = (
+            filesystem_root
+            if isinstance(filesystem_root, UserFileSystem)
+            else UserFileSystem(filesystem_root)
+        )
+        if self.workspace_root is not None and self.workspace_root != filesystem.root:
+            raise ValueError(
+                "Docker workspace root must match the filesystem_root dependency."
+            )
+
+        # conversation_root validates both IDs and safely creates both
+        # directories through UserFileSystem's dir-fd/no-follow API.
+        conversation_root = filesystem.conversation_root(
+            tool_context.user_id, tool_context.session_id
+        )
+        user_root = conversation_root.parent
+        configured_artifacts = tool_context.deps.get("artifacts_dir")
+        if configured_artifacts is not None:
+            artifacts_path = Path(configured_artifacts).expanduser().resolve()
+            if artifacts_path != conversation_root.resolve():
+                raise ValueError(
+                    "Docker artifacts_dir must match the conversation_root."
+                )
+
+        for name in (setting.tool_dir, setting.skill_dir):
+            (user_root / name).mkdir(parents=True, exist_ok=True)
+
+        # The single /mnt bind is the validated user's root. Runtime tools
+        # stay at its root while artifacts live in the current conversation.
+        container_session = self._container_path(conversation_root.name)
+        return user_root, container_session, container_session
+
+    def _docker_env_args(self, artifacts_dir: str | None = None) -> list[str]:
         runtime_root = self.CONTAINER_WORKSPACE
+        artifacts_root = artifacts_dir or self._container_path(setting.artifacts_dir)
         return [
             "-e",
             f"RUNTIME_DIR={runtime_root}",
@@ -229,9 +279,9 @@ class DockerExecutor(CoreExecutor):
             "-e",
             f"SKILLS_DIR={self._container_path(setting.skill_dir)}",
             "-e",
-            f"ARTIFACTS_DIR={self._container_path(setting.artifacts_dir)}",
+            f"ARTIFACTS_DIR={artifacts_root}",
             "-e",
-            f"WORKSPACE_DIR={self._container_path(setting.artifacts_dir)}",
+            f"WORKSPACE_DIR={artifacts_root}",
         ]
 
     def _docker_mount_args(self, host_runtime: Path) -> list[str]:
@@ -284,6 +334,8 @@ class DockerExecutor(CoreExecutor):
         record: ToolCallRecord,
         tool_context: ToolContext,
         host_runtime: Path,
+        container_cwd: str,
+        container_artifacts: str,
         cancellation_token: CancellationToken | None,
     ) -> ToolResult:
         validation = tool.validate_parameters(record)
@@ -310,12 +362,14 @@ class DockerExecutor(CoreExecutor):
         container_name = await self._get_or_create_bash_container(
             tool_context=tool_context,
             host_runtime=host_runtime,
+            container_cwd=container_cwd,
+            container_artifacts=container_artifacts,
         )
         proc = await asyncio.create_subprocess_exec(
             self.docker_bin,
             "exec",
             "--workdir",
-            self.CONTAINER_WORKSPACE,
+            container_cwd,
             container_name,
             "bash",
             "-lc",
@@ -355,7 +409,7 @@ class DockerExecutor(CoreExecutor):
             "exit_code": proc.returncode,
             "stdout": stdout,
             "stderr": stderr,
-            "cwd": self.CONTAINER_WORKSPACE,
+            "cwd": container_cwd,
             "command": shell_command,
             "stdout_truncated": stdout_truncated,
             "stderr_truncated": stderr_truncated,
@@ -384,6 +438,8 @@ class DockerExecutor(CoreExecutor):
         self,
         tool_context: ToolContext,
         host_runtime: Path,
+        container_cwd: str,
+        container_artifacts: str,
     ) -> str:
         key = self._bash_session_key(tool_context)
         session = self._bash_sessions.get(key)
@@ -405,9 +461,9 @@ class DockerExecutor(CoreExecutor):
             "--network",
             "none",
             "--workdir",
-            self.CONTAINER_WORKSPACE,
+            container_cwd,
             *self._docker_mount_args(host_runtime),
-            *self._docker_env_args(),
+            *self._docker_env_args(container_artifacts),
             self.image,
             "sleep",
             "infinity",
@@ -508,19 +564,41 @@ class DockerExecutor(CoreExecutor):
 
     @staticmethod
     def _clean_user_id(user_id: str) -> str:
-        if not re.fullmatch(r"[A-Za-z0-9_.-]+", user_id):
+        if user_id in {".", ".."} or not re.fullmatch(r"[A-Za-z0-9_.-]+", user_id):
             raise ValueError(
                 "user_id must contain only letters, numbers, underscore, dot, or dash."
             )
         return user_id
 
     def _bash_session_key(self, tool_context: ToolContext) -> str:
-        return tool_context.session_id or tool_context.run_id or tool_context.user_id
+        filesystem_root = tool_context.deps.get("filesystem_root")
+        if isinstance(filesystem_root, UserFileSystem):
+            canonical_root = filesystem_root.root
+        elif "filesystem_root" in tool_context.deps:
+            if filesystem_root is None:
+                raise ValueError("filesystem_root dependency must be a path.")
+            canonical_root = Path(filesystem_root).expanduser().resolve()
+        else:
+            canonical_root = (
+                self.workspace_root or setting.root_dir
+            ).expanduser().resolve()
+
+        if tool_context.session_id:
+            scope, identifier = "session", tool_context.session_id
+        elif tool_context.run_id:
+            scope, identifier = "run", tool_context.run_id
+        else:
+            scope, identifier = "user", tool_context.user_id
+
+        digest = hashlib.sha256()
+        for value in (str(canonical_root), tool_context.user_id, scope, identifier):
+            encoded = value.encode("utf-8")
+            digest.update(len(encoded).to_bytes(8, "big"))
+            digest.update(encoded)
+        return digest.hexdigest()
 
     def _bash_container_name(self, tool_context: ToolContext) -> str:
-        raw = self._bash_session_key(tool_context)
-        clean = re.sub(r"[^a-z0-9_.-]+", "-", raw.lower()).strip(".-")
-        return f"maxai-bash-{clean or 'runtime'}"
+        return f"maxai-bash-{self._bash_session_key(tool_context)}"
 
     def _container_path(self, name: str) -> str:
         return f"{self.CONTAINER_WORKSPACE.rstrip('/')}/{name.strip('/')}"

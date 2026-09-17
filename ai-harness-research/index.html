@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="es">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>AI Coding Agent Harness Research</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="shell">
+        <aside class="side">
+            <div class="brand">AI Harness Research</div>
+            <nav><a href="index.html">Overview</a><small>Systems</small><a href="01-claude-code.html">01 · Claude
+                    Code</a><a href="02-grok-build.html">02 · Grok Build</a><a href="03-openai-agents-sdk.html">03 ·
+                    Agents SDK</a><a href="04-codex-cli.html">04 · Codex CLI</a><small>Synthesis</small><a
+                    href="05-comparison.html">05 · Comparison</a><a href="06-canonical-harness.html">06 · Canonical
+                    Harness</a><a href="07-ralph-loop.html">07 · Ralph Loop</a></nav>
+        </aside>
+        <main class="main">
+            <section class="hero">
+                <div class="eyebrow">Primary-source technical research · 11 Sep 2026</div>
+                <h1>AI CODING AGENT<br>HARNESS RESEARCH</h1>
+                <p class="lede">Reconstrucción arquitectónica de runtimes de coding agents: qué está documentado, qué
+                    aparece en código, qué se puede inferir y qué pertenece al modelo o a la API.</p>
+                <div class="meta"><span class="badge v">VERIFIED evidence first</span><span class="badge">HTML · CSS ·
+                        SVG · vanilla JS</span><span class="badge">No external frameworks</span></div>
+            </section>
+            <div class="callout"><strong>Scope.</strong> La lista inicial menciona también “CopilotCode”, pero los
+                cuatro entregables individuales obligatorios son Claude Code, Grok Build, OpenAI Agents SDK y Codex CLI.
+                La investigación y la comparación siguen esos cuatro sistemas; no se atribuyen propiedades a
+                CopilotCode.</div>
+            <h2>Research map</h2>
+            <div class="navcards"><a href="01-claude-code.html"><span class="num">01</span>
+                    <h3>Claude Code</h3>
+                    <p>CLI cerrado de Anthropic con permisos, CLAUDE.md, skills, hooks, MCP y subagents.</p>
+                </a><a href="02-grok-build.html"><span class="num">02</span>
+                    <h3>Grok Build</h3>
+                    <p>Harness y TUI Rust de xAI/SpaceXAI con runtime y tool layer publicados.</p>
+                </a><a href="03-openai-agents-sdk.html"><span class="num">03</span>
+                    <h3>OpenAI Agents SDK</h3>
+                    <p>Runtime Python generalista: Runner, tools, handoffs, sessions, guardrails y tracing.</p>
+                </a><a href="04-codex-cli.html"><span class="num">04</span>
+                    <h3>Codex CLI</h3>
+                    <p>Agente local Rust con sandbox, approval policy, workspace y dispatch de herramientas.</p>
+                </a><a href="05-comparison.html"><span class="num">05</span>
+                    <h3>Component Comparison</h3>
+                    <p>Matriz comparativa con ✓, ~, ? y —.</p>
+                </a><a href="06-canonical-harness.html"><span class="num">06</span>
+                    <h3>Canonical Harness</h3>
+                    <p>Arquitectura derivada, no atribuida a una empresa.</p>
+                </a><a href="07-ralph-loop.html"><span class="num">07</span>
+                    <h3>Ralph Loop</h3>
+                    <p>Qué cubre el bucle observe–act–verify–persist y qué deja fuera.</p>
+                </a></div>
+            <h2>Reading the evidence</h2>
+            <div class="grid">
+                <div class="card layer">
+                    <h3>VERIFIED</h3>
+                    <p>Hay documentación oficial, código fuente público o una API oficial que demuestra el componente.
+                    </p>
+                </div>
+                <div class="card verify">
+                    <h3>INFERRED</h3>
+                    <p>La relación arquitectónica se deduce de varios hechos, pero no está descrita literalmente por el
+                        proyecto.</p>
+                </div>
+                <div class="card security">
+                    <h3>UNKNOWN</h3>
+                    <p>No hay suficiente información pública para afirmarlo. “No identificado” no significa que no
+                        exista.</p>
+                </div>
+            </div>
+            <div class="foot">Research date: 2026-09-11 · Sources are linked inline and repeated in each page’s Sources
+                section.</div>
+        </main>
+    </div>
+</body>
+
+</html>

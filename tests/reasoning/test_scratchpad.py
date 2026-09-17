@@ -1,12 +1,13 @@
-"""Tests for ScratchpadTool and ScratchpadUpdateEvent in both ReAct loops."""
+"""Tests for ScratchpadTool and ScratchpadUpdateEvent in the ReAct loop."""
 
 from __future__ import annotations
 
 import pytest
 
-from max_ai.reasoning.react_simple import ReActLoop as SimpleReActLoop, ReActLoopState as SimpleLoopState
-from max_ai.reasoning.react_planning import ReActLoopPlanning as PlanningReActLoop, ReActLoopPlanningState as PlanningLoopState
-from max_ai.reasoning.plan import AgentPlan
+from max_ai.reasoning.react_self_directed import (
+    ReActLoopSelfDirected as ReActLoop,
+    ReActLoopState,
+)
 from max_ai.core.messages import AssistantMessage, ToolMessage
 from max_ai.core.event_type import ReasoningCompleteEvent, ScratchpadUpdateEvent
 from max_ai.core.models import ModelConfig
@@ -98,19 +99,8 @@ def make_todo_call(id: str, description: str, status: str, call_id: str = "call_
     )
 
 
-def make_simple_loop(client, tool: ScratchpadTool | None = None):
-    loop = SimpleReActLoop(max_loop_iterations=5)
-    loop.bind(
-        name="test_agent",
-        client=client,
-        tool_executor=FakeToolExecutor(tool=tool),
-        middleware_chain=FakeMiddlewareChain(),
-    )
-    return loop
-
-
-def make_planning_loop(client, tool: ScratchpadTool | None = None):
-    loop = PlanningReActLoop(max_loop_iterations=5)
+def make_loop(client, tool: ScratchpadTool | None = None):
+    loop = ReActLoop(max_loop_iterations=5)
     loop.bind(
         name="test_agent",
         client=client,
@@ -194,7 +184,7 @@ async def test_scratchpad_tool_sets_updated_flag():
 
 @pytest.mark.asyncio
 async def test_scratchpad_tool_does_not_pause():
-    """ScratchpadTool returns immediately — no Future, no blocking."""
+    """ScratchpadTool returns immediately — no pause, finish_reason untouched."""
     loop_state = BaseLoopState()
     tool = ScratchpadTool(loop_state=loop_state)
 
@@ -207,7 +197,7 @@ async def test_scratchpad_tool_does_not_pause():
     result = await tool.execute(record)
 
     assert result.success is True
-    assert loop_state.pending_user_input is None  # no Future created
+    assert loop_state.finish_reason == "unknown"  # no pause requested
 
 
 @pytest.mark.asyncio
@@ -227,18 +217,18 @@ async def test_scratchpad_tool_result_message():
     assert "done" in result.result
 
 
-# -------- Integration: simple ReActLoop ---------------------------------------
+# -------- Integration: ReAct loop ----------------------------------------------
 @pytest.mark.asyncio
-async def test_simple_loop_emits_scratchpad_event(ctx, prompts):
+async def test_loop_emits_scratchpad_event(ctx, prompts):
     """LLM calls update_todo → loop yields ScratchpadUpdateEvent and continues."""
-    loop_state = SimpleLoopState()
+    loop_state = ReActLoopState()
     tool = ScratchpadTool(loop_state=loop_state)
 
     client = FakeChatClient(results=[
         make_todo_call(id="step_1", description="Gather data", status="in_progress"),
         make_result(content="All done"),
     ])
-    loop = make_simple_loop(client, tool=tool)
+    loop = make_loop(client, tool=tool)
 
     events = await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=loop_state))
 
@@ -249,16 +239,16 @@ async def test_simple_loop_emits_scratchpad_event(ctx, prompts):
 
 
 @pytest.mark.asyncio
-async def test_simple_loop_continues_after_scratchpad(ctx, prompts):
+async def test_loop_continues_after_scratchpad(ctx, prompts):
     """Loop does NOT stop after ScratchpadUpdateEvent — finish_reason is 'stop'."""
-    loop_state = SimpleLoopState()
+    loop_state = ReActLoopState()
     tool = ScratchpadTool(loop_state=loop_state)
 
     client = FakeChatClient(results=[
         make_todo_call(id="step_1", description="Gather data", status="in_progress"),
         make_result(content="Final answer"),
     ])
-    loop = make_simple_loop(client, tool=tool)
+    loop = make_loop(client, tool=tool)
 
     events = await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=loop_state))
 
@@ -267,9 +257,9 @@ async def test_simple_loop_continues_after_scratchpad(ctx, prompts):
 
 
 @pytest.mark.asyncio
-async def test_simple_loop_multiple_scratchpad_updates(ctx, prompts):
+async def test_loop_multiple_scratchpad_updates(ctx, prompts):
     """Multiple update_todo calls → multiple ScratchpadUpdateEvents."""
-    loop_state = SimpleLoopState()
+    loop_state = ReActLoopState()
     tool = ScratchpadTool(loop_state=loop_state)
 
     client = FakeChatClient(results=[
@@ -277,7 +267,7 @@ async def test_simple_loop_multiple_scratchpad_updates(ctx, prompts):
         make_todo_call(id="step_1", description="Step 1", status="done", call_id="c2"),
         make_result(content="Finished"),
     ])
-    loop = make_simple_loop(client, tool=tool)
+    loop = make_loop(client, tool=tool)
 
     events = await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=loop_state))
 
@@ -285,27 +275,3 @@ async def test_simple_loop_multiple_scratchpad_updates(ctx, prompts):
     assert len(scratchpad_events) == 2
     assert scratchpad_events[0].scratchpad.items[0].status == "in_progress"
     assert scratchpad_events[1].scratchpad.items[0].status == "done"
-
-
-# -------- Integration: planning ReActLoop ------------------------------------
-@pytest.mark.asyncio
-async def test_planning_loop_emits_scratchpad_event(ctx, prompts):
-    """Planning loop also emits ScratchpadUpdateEvent correctly."""
-    # Inert plan so the loop doesn't run its planning step (this test is
-    # about scratchpad events, not planning).
-    ctx.plan = AgentPlan(steps=[], rationale="no steps")
-    loop_state = PlanningLoopState()
-    tool = ScratchpadTool(loop_state=loop_state)
-
-    client = FakeChatClient(results=[
-        make_todo_call(id="research", description="Research topic", status="done"),
-        make_result(content="Report ready"),
-    ])
-    loop = make_planning_loop(client, tool=tool)
-
-    events = await collect(loop.execute_reasoning_loop(ctx=ctx, prompts=prompts, loop_state=loop_state))
-
-    scratchpad_events = [e for e in events if isinstance(e, ScratchpadUpdateEvent)]
-    assert len(scratchpad_events) == 1
-    assert scratchpad_events[0].scratchpad.items[0].id == "research"
-    assert scratchpad_events[0].scratchpad.items[0].status == "done"

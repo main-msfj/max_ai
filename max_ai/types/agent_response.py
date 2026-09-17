@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..core.messages import CoreMessage, AssistantMessage
 from .completions import Usage
+from ..base.completion_gate import CompletionDecision
 from .run_context import RunContext
 from .tool_call import ToolCallRecord
 
@@ -26,6 +27,7 @@ FinishReason = t.Literal[
     "error",  # uncaught exception in the run
     "cancelled",  # cancellation token was triggered
     "input_needed",  # run paused waiting for additional input from the user
+    "incomplete",  # completion gate did not accept the proposed final response
 ]
 
 
@@ -60,6 +62,10 @@ class AgentResponse(BaseModel):
         ...,
         description="Why the agent stopped this run.",
     )
+    completion: CompletionDecision | None = Field(
+        default=None,
+        description="Harness completion decision; independent of workspace publication.",
+    )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         description="When this response was assembled.",
@@ -84,11 +90,24 @@ class AgentResponse(BaseModel):
 
     @property
     def final_message(self) -> AssistantMessage | None:
-        """The last assistant message produced this run, if any."""
+        """The user-facing final assistant message of this run, if any.
+
+        Skips guard-vetoed drafts (``interim``) and prefers a message
+        with text over a text-less tool-call shell (e.g. the trailing
+        ``update_plan`` call that closes out a plan). Falls back to the
+        last non-interim assistant message when none has text.
+        """
+        if self.completion is not None and self.completion.status != "completed":
+            return None
+        fallback: AssistantMessage | None = None
         for msg in reversed(self.messages):
-            if isinstance(msg, AssistantMessage):
+            if not isinstance(msg, AssistantMessage) or msg.interim:
+                continue
+            if msg.text().strip():
                 return msg
-        return None
+            if fallback is None:
+                fallback = msg
+        return fallback
 
     @property
     def final_text(self) -> str:
@@ -110,6 +129,23 @@ class AgentResponse(BaseModel):
         if self.context is None:
             return []
         return self.context.tool_state.pending_approvals
+
+    # -------- ELICITATION FLOW -----------------------------------------------------------
+    @property
+    def needs_input(self) -> bool:
+        """``True`` if the run paused waiting for the user to answer a question."""
+        if self.context is None:
+            return False
+        return self.context.tool_state.waiting_for_input
+
+    @property
+    def pending_questions(self) -> list[ToolCallRecord]:
+        """Records in ``INPUT_NEEDED`` — each carries ``input_question`` /
+        ``input_options``; answer via
+        ``context.tool_state.apply_user_answer(record.id, answer)``."""
+        if self.context is None:
+            return []
+        return self.context.tool_state.pending_user_input
 
     # -------- DUNDERS -----------------------------------------------------------
     def __str__(self) -> str:

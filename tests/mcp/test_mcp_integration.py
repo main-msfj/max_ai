@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import typing as t
+from contextlib import AsyncExitStack
 
 import pytest
 from mcp.types import (
@@ -176,12 +177,15 @@ async def test_manager_connect_discovers_tools_and_resources(monkeypatch: pytest
     import max_ai.mcp.client_manager as client_manager_module
 
     class FakeTransport:
-        read = object()
-        write = object()
-        closed = False
+        def __init__(self) -> None:
+            self.read = object()
+            self.write = object()
+            self.closed = False
+            self.exit_stack = AsyncExitStack()
 
         async def close(self) -> None:
             self.closed = True
+            await self.exit_stack.aclose()
 
     class FakeClientSession:
         def __init__(self, read: object, write: object) -> None:

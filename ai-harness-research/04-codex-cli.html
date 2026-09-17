@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="es">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>OpenAI Codex CLI · Harness Architecture</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="shell">
+        <aside class="side">
+            <div class="brand">Codex CLI</div>
+            <nav><a href="index.html">← Research index</a><small>Sections</small><a href="#overview">Overview</a><a
+                    href="#architecture">Architecture</a><a href="#components">Components</a><a href="#flow">Flow</a><a
+                    href="#code">Code</a><a href="#sources">Sources</a></nav>
+        </aside>
+        <main class="main">
+            <section class="hero" id="overview">
+                <div class="eyebrow">04 · OpenAI · 2026-09-11</div>
+                <h1>OpenAI Codex CLI</h1>
+                <p class="lede">Open-source Rust coding agent that runs locally in the terminal. Its distinctive public
+                    architecture is the tight coupling of agent turns with a platform sandbox, approval policy,
+                    workspace trust, command execution and streamed event state.</p>
+                <div class="meta"><span class="badge v">VERIFIED: public Rust source</span><span
+                        class="badge v">Apache-2.0</span><span class="badge">Rust-first</span><span class="badge">TUI /
+                        CLI / SDK</span></div>
+                <div class="grid">
+                    <div class="card">
+                        <h3>Official repository</h3>
+                        <p><a href="https://github.com/openai/codex">openai/codex</a></p>
+                    </div>
+                    <div class="card">
+                        <h3>Purpose</h3>
+                        <p>Inspect and modify a local repository through model-generated commands and patches, with
+                            sandbox and approval boundaries.</p>
+                    </div>
+                    <div class="card">
+                        <h3>Model boundary</h3>
+                        <p>The model/API generates responses, reasoning and tool calls. Codex owns thread lifecycle,
+                            tool execution, approvals, sandboxing and event delivery.</p>
+                    </div>
+                </div>
+            </section>
+            <section id="architecture">
+                <h2>2. Architecture overview</h2>
+                <div class="diagram"><svg viewBox="0 0 1100 580">
+                        <defs>
+                            <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+                                <path d="M0,0 L8,4 L0,8 Z" fill="#8997ad" />
+                            </marker>
+                        </defs>
+                        <rect class="node purple" x="410" y="20" width="280" height="54" rx="10" /><text x="550" y="53"
+                            text-anchor="middle">TUI / CLI / SDK thread</text>
+                        <path class="arrow" d="M550 74v40" />
+                        <rect class="node purple" x="350" y="114" width="400" height="62" rx="10" /><text x="550"
+                            y="143" text-anchor="middle">Codex core / turn lifecycle</text><text class="muted" x="550"
+                            y="163" text-anchor="middle">thread · turn · interrupt · steer · stream</text>
+                        <path class="arrow" d="M550 176v40" />
+                        <rect class="node blue" x="310" y="216" width="480" height="62" rx="10" /><text x="550" y="245"
+                            text-anchor="middle">instructions + history + workspace context</text><text class="muted"
+                            x="550" y="265" text-anchor="middle">AGENTS.md / config / tool outputs</text>
+                        <path class="arrow" d="M550 278v40" />
+                        <rect class="node" x="430" y="318" width="240" height="54" rx="10" /><text x="550" y="351"
+                            text-anchor="middle">OpenAI model transport</text>
+                        <path class="arrow" d="M670 345h100" />
+                        <rect class="node orange" x="770" y="304" width="270" height="82" rx="10" /><text x="905"
+                            y="337" text-anchor="middle">tool dispatch</text><text class="muted" x="905" y="361"
+                            text-anchor="middle">shell · patch · read · MCP</text>
+                        <path class="arrow" d="M905 386v54" />
+                        <rect class="node red" x="770" y="440" width="270" height="62" rx="10" /><text x="905" y="469"
+                            text-anchor="middle">approval + sandbox policy</text>
+                        <path class="arrow" d="M770 471H640" />
+                        <rect class="node green" x="370" y="440" width="270" height="62" rx="10" /><text x="505" y="469"
+                            text-anchor="middle">workspace / OS executor</text><text class="muted" x="550" y="550"
+                            text-anchor="middle">events → thread state → next turn or final result</text>
+                    </svg></div>
+            </section>
+            <section id="components">
+                <h2>3. Component map</h2>
+                <div class="grid">
+                    <div class="card layer">
+                        <h3>A · Agent runtime <span class="badge v">VERIFIED</span></h3>
+                        <p>Public SDK exposes thread_start/thread_resume and turn run/stream/interrupt/steer. Core CLI
+                            iterates model output and tool calls; sandbox/approval failures feed back as events/results.
+                            Exact internal stopping classifier is <span class="badge u">UNKNOWN</span>.</p>
+                    </div>
+                    <div class="card context">
+                        <h3>B/C · Model + context <span class="badge v">VERIFIED</span></h3>
+                        <p>Codex builds instructions/history/tool input around a thread. Repository instructions use
+                            AGENTS.md conventions in the source/docs. Context compaction details are <span
+                                class="badge u">UNKNOWN</span> in the public top-level docs; do not assume a summarizer.
+                        </p>
+                    </div>
+                    <div class="card tools">
+                        <h3>D/E · Tools / dispatch <span class="badge v">VERIFIED</span></h3>
+                        <p>Terminal/shell execution, patch/editing and file inspection are core. MCP is configured
+                            through CLI/config. Model tool requests are converted into typed notifications and
+                            dispatched through the core; tool names and internal module boundaries are
+                            version-sensitive.</p>
+                    </div>
+                    <div class="card security">
+                        <h3>G · Sandbox / permissions <span class="badge v">VERIFIED</span></h3>
+                        <p>Modes include read-only, workspace-write and full-access; approval policies include
+                            on-request, never and related presets. Trusting a workspace changes defaults. YOLO bypasses
+                            approvals and sandbox and is explicitly dangerous.</p>
+                    </div>
+                    <div class="card env">
+                        <h3>F · Environment <span class="badge v">VERIFIED</span></h3>
+                        <p>Current directory and configured writable roots form the workspace; shell processes run under
+                            a platform-dependent sandbox. Network is disabled by default in workspace-write unless
+                            enabled.</p>
+                    </div>
+                    <div class="card verify">
+                        <h3>H · Verification <span class="badge i">INFERRED</span></h3>
+                        <p>Command output and tests are returned to the model; repository correctness is generally
+                            verified by commands the agent runs. No universal independent verifier is established by the
+                            public CLI contract.</p>
+                    </div>
+                    <div class="card memory">
+                        <h3>I · State <span class="badge v">VERIFIED</span></h3>
+                        <p>Threads, turn IDs, streamed notifications, resume and steer/interrupt state are explicit.
+                            Filesystem, git and configuration are external/persistent state. Long-term memory database
+                            is <span class="badge u">UNKNOWN</span>.</p>
+                    </div>
+                    <div class="card layer">
+                        <h3>J · Subagents <span class="badge u">UNKNOWN</span></h3>
+                        <p>The public repository has active development and SDK surfaces, but this page makes no claim
+                            of a stable subagent API without a version-pinned official source reference.</p>
+                    </div>
+                    <div class="card tools">
+                        <h3>K/L · Hooks / extensions <span class="badge v">VERIFIED</span></h3>
+                        <p>Configuration, MCP and hooks are present in the repository/CLI surface. Skills and custom
+                            agents are <span class="badge u">UNKNOWN</span> as core Codex CLI primitives; do not borrow
+                            Claude terminology.</p>
+                    </div>
+                    <div class="card obs">
+                        <h3>M/N · Observability / human</h3>
+                        <p><span class="badge v">VERIFIED</span> Streamed notifications expose turn/tool lifecycle; TUI
+                            shows progress, approvals and errors. Human approval is a first-class branch before risky
+                            execution.</p>
+                    </div>
+                </div>
+                <h3>Sandbox / permission evidence</h3>
+                <div class="table-wrap">
+                    <table>
+                        <tr>
+                            <th>Operation</th>
+                            <th>Read-only</th>
+                            <th>Workspace-write</th>
+                            <th>Full access</th>
+                            <th>Evidence</th>
+                        </tr>
+                        <tr>
+                            <td>Read files</td>
+                            <td>allowed</td>
+                            <td>allowed</td>
+                            <td>allowed</td>
+                            <td><span class="badge v">VERIFIED</span></td>
+                        </tr>
+                        <tr>
+                            <td>Write workspace</td>
+                            <td>approval/blocked by policy</td>
+                            <td>allowed in workspace</td>
+                            <td>allowed</td>
+                            <td><span class="badge v">VERIFIED</span></td>
+                        </tr>
+                        <tr>
+                            <td>Shell</td>
+                            <td>approval or blocked</td>
+                            <td>sandboxed; on-request outside boundary</td>
+                            <td>allowed</td>
+                            <td><span class="badge v">VERIFIED</span></td>
+                        </tr>
+                        <tr>
+                            <td>Network</td>
+                            <td>restricted</td>
+                            <td>disabled by default; config can enable</td>
+                            <td>OS/network policy</td>
+                            <td><span class="badge v">VERIFIED</span></td>
+                        </tr>
+                        <tr>
+                            <td>Destructive command</td>
+                            <td>approval/blocked</td>
+                            <td>approval policy + sandbox</td>
+                            <td>possible</td>
+                            <td><span class="badge v">VERIFIED</span> policy surface; exact command defaults vary</td>
+                        </tr>
+                    </table>
+                </div>
+            </section>
+            <section id="flow">
+                <h2>4. Complete execution flow + 5. data flow</h2>
+                <div class="diagram"><svg viewBox="0 0 1100 310">
+                        <defs>
+                            <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+                                <path d="M0,0 L8,4 L0,8 Z" fill="#8997ad" />
+                            </marker>
+                        </defs><text x="25" y="45">thread_start / resume</text>
+                        <path class="arrow" d="M170 40h90" /><text x="275" y="45">build instructions + state</text>
+                        <path class="arrow" d="M470 40h90" /><text x="575" y="45">model turn</text>
+                        <path class="arrow" d="M650 60v80" /><text x="660" y="170">final → notification</text>
+                        <path class="arrow" d="M650 185v75" /><text x="25" y="265">tool call → approval policy → sandbox
+                            → executor → result</text>
+                        <path class="arrow" d="M700 260h130" /><text x="845" y="265">thread state → next turn</text>
+                        <path class="arrow" d="M930 240V60" />
+                    </svg></div>
+                <pre>user input + config + AGENTS.md → core thread/turn → model transport; tool call → approval policy → platform sandbox → shell/patch/MCP; stdout/stderr/diff → event stream + thread history → next turn; final → TUI/SDK result.</pre>
+            </section>
+            <section id="code">
+                <h2>6. Code structure</h2>
+                <div class="grid">
+                    <div class="card layer">
+                        <h3><code>codex-rs/core</code></h3>
+                        <p>Core agent lifecycle, turn state, model interaction and notifications; exact file names
+                            evolve with releases.</p>
+                    </div>
+                    <div class="card tools">
+                        <h3><code>codex-rs/exec</code> / tools</h3>
+                        <p>Shell/command execution and tool dispatch paths.</p>
+                    </div>
+                    <div class="card security">
+                        <h3><code>codex-rs/sandboxing</code></h3>
+                        <p>Platform-specific sandbox backends and policy integration.</p>
+                    </div>
+                    <div class="card env">
+                        <h3><code>codex-rs/utils</code></h3>
+                        <p>CLI options, config, environment policies and shared types such as sandbox/approval enums.
+                        </p>
+                    </div>
+                    <div class="card">
+                        <h3><code>codex-rs/tui</code></h3>
+                        <p>Interactive terminal UI and event rendering.</p>
+                    </div>
+                    <div class="card obs">
+                        <h3><code>sdk/</code></h3>
+                        <p>Python/other SDK surfaces for threads, turns, streaming and sandbox overrides.</p>
+                    </div>
+                </div>
+            </section>
+            <section id="sources">
+                <h2>Sources</h2>
+                <ol class="sources">
+                    <li><a href="https://github.com/openai/codex">Official Codex repository</a> — README, license and
+                        language split.</li>
+                    <li><a href="https://github.com/openai/codex/blob/main/docs/sandbox.md">Sandbox & approvals</a> —
+                        official repository documentation.</li>
+                    <li><a href="https://github.com/openai/codex/blob/main/codex-rs/utils/cli/src/shared_options.rs">CLI
+                            shared options</a> — sandbox/approval flags and hooks.</li>
+                    <li><a href="https://github.com/openai/codex/tree/main/codex-rs">codex-rs source tree</a> — Rust
+                        implementation surface.</li>
+                    <li><a href="https://github.com/openai/codex/tree/main/sdk">Codex SDK source</a> and <a
+                            href="https://github.com/openai/codex/blob/main/sdk/python/docs/api-reference.md">API
+                            reference</a> — thread/turn/sandbox lifecycle.</li>
+                    <li><a href="https://developers.openai.com/codex">OpenAI Codex documentation</a> — official product
+                        documentation.</li>
+                </ol>
+            </section>
+            <div class="foot">Codex’s differentiator in this set is the explicit local execution boundary: model output
+                enters a policy-controlled sandbox before it reaches the OS.</div>
+        </main>
+    </div>
+</body>
+
+</html>

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 import typing as t
-from dataclasses import dataclass
+from contextlib import AsyncExitStack
+from dataclasses import dataclass, field
 
 import httpx
 from mcp import StdioServerParameters
@@ -25,15 +26,14 @@ class MCPTransportConnection:
 
     read: t.Any
     write: t.Any
-    client_ctx: t.Any
-    http_client: httpx.AsyncClient | None = None
+    exit_stack: AsyncExitStack = field(default_factory=AsyncExitStack)
 
     async def close(self) -> None:
-        try:
-            await self.client_ctx.__aexit__(None, None, None)
-        finally:
-            if self.http_client is not None:
-                await self.http_client.aclose()
+        # AsyncExitStack unwinds every entered context in LIFO order, in the
+        # same task that entered them. This is required for the anyio
+        # task-group-backed transport contexts; unwinding out of order or in a
+        # different task triggers "Cancelled via cancel scope" errors.
+        await self.exit_stack.aclose()
 
 
 async def _connect_stdio_server(config: StdioMCPServerConfig) -> MCPTransportConnection:
@@ -42,33 +42,42 @@ async def _connect_stdio_server(config: StdioMCPServerConfig) -> MCPTransportCon
         args=config.args,
         env=config.env or None,
     )
-    client_ctx = stdio_client(params)
-    read, write = await client_ctx.__aenter__()
-    return MCPTransportConnection(read=read, write=write, client_ctx=client_ctx)
+    stack = AsyncExitStack()
+    try:
+        read, write = await stack.enter_async_context(stdio_client(params))
+        return MCPTransportConnection(read=read, write=write, exit_stack=stack)
+    except BaseException:
+        await stack.aclose()
+        raise
 
 
 async def _connect_streamable_http_server(
     config: HTTPServerConfig,
 ) -> MCPTransportConnection:
-    http_client = httpx.AsyncClient(headers=config.headers)
-    client_ctx = streamable_http_client(url=config.url, http_client=http_client)
+    stack = AsyncExitStack()
     try:
-        read, write, _get_session_id = await client_ctx.__aenter__()
-        return MCPTransportConnection(
-            read=read,
-            write=write,
-            client_ctx=client_ctx,
-            http_client=http_client,
+        http_client = await stack.enter_async_context(
+            httpx.AsyncClient(headers=config.headers)
         )
-    except Exception:
-        await http_client.aclose()
+        read, write, _get_session_id = await stack.enter_async_context(
+            streamable_http_client(url=config.url, http_client=http_client)
+        )
+        return MCPTransportConnection(read=read, write=write, exit_stack=stack)
+    except BaseException:
+        await stack.aclose()
         raise
 
 
 async def _connect_sse_server(config: HTTPServerConfig) -> MCPTransportConnection:
-    client_ctx = sse_client(url=config.url, headers=config.headers)
-    read, write = await client_ctx.__aenter__()
-    return MCPTransportConnection(read=read, write=write, client_ctx=client_ctx)
+    stack = AsyncExitStack()
+    try:
+        read, write = await stack.enter_async_context(
+            sse_client(url=config.url, headers=config.headers)
+        )
+        return MCPTransportConnection(read=read, write=write, exit_stack=stack)
+    except BaseException:
+        await stack.aclose()
+        raise
 
 
 async def connect_to_mcp_server(config: MCPServerConfig) -> MCPTransportConnection:

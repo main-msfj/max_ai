@@ -101,7 +101,7 @@ class CoreSkillRegistry(CoreAgentCapabilities[BaseModel], ABC):
         return list(self._skill_blocks)
 
     def materialize(self, directory: WorkspaceDirectory) -> Path:
-        """Copy prepared selected skills into the runtime skill directory.
+        """Install missing selected skills into the runtime skill directory.
 
         Copies all prepared skills from the cache into the specified workspace
         directory, making them available for runtime execution.
@@ -125,7 +125,8 @@ class CoreSkillRegistry(CoreAgentCapabilities[BaseModel], ABC):
             target_dir = directory.skill_dir / skill_name
 
             if target_dir.exists():
-                shutil.rmtree(target_dir)
+                # Workspace copies may have been edited by the user or agent.
+                continue
 
             shutil.copytree(source_dir, target_dir)
 

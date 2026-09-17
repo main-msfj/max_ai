@@ -105,14 +105,29 @@ def live_message_capacity_tokens(
     max_context_tokens: int,
     *,
     max_output_tokens: int,
+    prompt_tokens: int | None = None,
 ) -> int:
+    """Tokens available for live messages.
+
+    ``prompt_tokens`` is the *actual* rendered system-prompt size when the
+    caller knows it (``PromptCtx.prompt_tokens``); the configured
+    ``compaction_prompt_budget_tokens`` constant is only a fallback for
+    callers without a prompt context. Using the real number matters: a fat
+    memory/knowledge prompt can dwarf the fixed budget and silently blow
+    the window.
+    """
     if max_context_tokens <= 0:
         return 0
 
+    prompt_budget = (
+        prompt_tokens
+        if prompt_tokens is not None and prompt_tokens > 0
+        else setting.compaction_prompt_budget_tokens
+    )
     safety_margin = int(max_context_tokens * setting.compaction_safety_margin_ratio)
     live_tokens = (
         max_context_tokens
-        - setting.compaction_prompt_budget_tokens
+        - prompt_budget
         - max_output_tokens
         - safety_margin
     )
@@ -123,10 +138,12 @@ def live_message_threshold_tokens(
     max_context_tokens: int,
     *,
     max_output_tokens: int,
+    prompt_tokens: int | None = None,
 ) -> int:
     capacity = live_message_capacity_tokens(
         max_context_tokens,
         max_output_tokens=max_output_tokens,
+        prompt_tokens=prompt_tokens,
     )
     if capacity <= 0:
         return 0
@@ -191,8 +208,15 @@ def split_recent_messages(
     groups: list[MessageGroup],
     *,
     max_tokens: int,
+    min_keep_groups: int = 1,
 ) -> tuple[list[CoreMessage], list[CoreMessage]]:
-    """Split atomic groups into old messages and newest messages within budget."""
+    """Split atomic groups into old messages and newest messages within budget.
+
+    ``min_keep_groups`` recent groups always survive, budget or not: a
+    group is an assistant message plus its tool results, and evicting the
+    ones the model is actively working from makes it re-call the same
+    tools (the data literally disappeared from its context).
+    """
 
     if not groups:
         return [], []
@@ -203,13 +227,14 @@ def split_recent_messages(
     for group in reversed(groups):
         next_total = used_tokens + group.token_count
 
-        if next_total > max_tokens and kept_groups:
-            break
+        if len(kept_groups) >= min_keep_groups:
+            if next_total > max_tokens:
+                break
 
         kept_groups.append(group)
         used_tokens = next_total
 
-        if used_tokens >= max_tokens:
+        if len(kept_groups) >= min_keep_groups and used_tokens >= max_tokens:
             break
 
     kept_groups.reverse()
@@ -227,7 +252,15 @@ def split_recent_messages(
 
 
 class CoreCompaction(BaseModel, ABC):
-    """Abstract base for strategies that keep a run within context budget."""
+    """Abstract base for strategies that keep a run within context budget.
+
+    Contract: ``compact`` is **pure with respect to ``ctx.messages``** —
+    it must never reassign or mutate the transcript. It returns a
+    ``CompactionResult`` and the *caller* applies
+    ``ctx.messages[:] = result.recent_messages`` when ``result.changed``.
+    Strategies may still write derived state (e.g. the summary) into
+    ``ctx.runtime_state`` and inject prompt blocks into ``prompts``.
+    """
 
     @abstractmethod
     async def compact(
@@ -238,7 +271,7 @@ class CoreCompaction(BaseModel, ABC):
         max_context_tokens: int,
         client: CoreChatCompletionClient,
     ) -> CompactionResult:
-        """Apply compaction to the provided runtime context."""
+        """Compute compaction for the provided runtime context."""
         ...
 
 

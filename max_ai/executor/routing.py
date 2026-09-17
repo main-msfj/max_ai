@@ -6,7 +6,7 @@ Splits tool execution across two backends by tool *type*:
   - ``CoreRuntimeTool`` instances (e.g. ``BashTool``) — and therefore the
     skill scripts they run — go to the ``sandbox`` executor (Docker).
   - Every other ``CoreTool`` (FunctionAsTool / ``@tool`` wrappers,
-    WorkspaceTool, knowledge tools, …) runs in-process via the ``local``
+    knowledge tools, …) runs in-process via the ``local``
     executor.
 
 Rationale: ordinary tools are developer-authored code, trusted at the

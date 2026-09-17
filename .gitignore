@@ -1,8 +1,12 @@
 .env
 # Per-user runtime workspaces (e.g. user_001/, user123/)
 user*/
+Workspace/
+tmp/
 # Runtime/state dir (skills staging, pytest artifacts)
 var/
+# Local model weights
+llm-models/
 .vscode/
 .venv
 .pytest_cache/

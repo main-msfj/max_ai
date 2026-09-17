@@ -24,5 +24,6 @@ class ToolCallStatus(str, Enum):
     APPROVED = "approved"
     AUTO_APPROVED = "auto_approved"
     REJECTED = "rejected"
-    EXECUTING = "executing"    
+    INPUT_NEEDED = "input_needed"
+    EXECUTING = "executing"
     CONSUMED = "consumed"

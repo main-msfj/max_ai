@@ -66,6 +66,16 @@ class ToolState(BaseModel):
         return [r for r in self.records.values() if r.is_rejected]
 
     @property
+    def waiting_for_input(self) -> bool:
+        """True if any record is paused waiting for a user answer."""
+        return any(r.is_awaiting_input for r in self.records.values())
+
+    @property
+    def pending_user_input(self) -> list[ToolCallRecord]:
+        """Records in ``INPUT_NEEDED`` — questions the user hasn't answered."""
+        return [r for r in self.records.values() if r.is_awaiting_input]
+
+    @property
     def executing_calls(self) -> list[ToolCallRecord]:
         """Records currently mid-execution within this process."""
         return [r for r in self.records.values() if r.is_executing]
@@ -127,6 +137,26 @@ class ToolState(BaseModel):
             approved=approved,
             reason=record.approval_reason,
         )
+        return record
+
+    def apply_user_answer(self, tool_call_id: str, answer: str) -> ToolCallRecord:
+        """Apply the user's answer to a pending question. Returns the record.
+
+        The record moves ``INPUT_NEEDED`` → ``APPROVED`` with the answer
+        stored, so the resumed run's executor completes the call from
+        ``user_answer`` without executing anything.
+
+        Raises:
+            KeyError: If no record exists with that id.
+            ValueError: If the record is not in INPUT_NEEDED state.
+        """
+        record = self.records.get(tool_call_id)
+        if record is None:
+            raise KeyError(
+                f"Cannot apply user answer — no tool call {tool_call_id} tracked."
+            )
+        record.apply_user_answer(answer)
+        log.child(tool_call_id=tool_call_id).info("User answer applied")
         return record
 
     def consume(self, tool_call_id: str, result: ToolResult) -> ToolCallRecord:

@@ -16,7 +16,7 @@ class EvalCheck(BaseModel):
 class EvalResult(BaseModel):
     """Represents the result of an evaluation of the reasoning process"""
 
-    checks: list[EvalCheck] = Field(description="One check per criteriont")
+    checks: list[EvalCheck] = Field(description="One check per criterion")
     issues: t.List[str] = Field(
         default_factory=list, description="Specific problems found"
     )

@@ -1,34 +1,33 @@
 {% if loaded_skills %}
 <SKILLS>
 <purpose>
-Skills are private workflow capabilities available through the sandbox.
-They are NOT callable tool names — each one is engaged by reading its
-instructions and following them. The only tool that starts a skill is
-`bash`.
+Skills are workflow instructions stored under $WORKSPACE/skills in the configured execution environment.
+They are NOT callable tool names. Engage one by reading its instructions,
+following them, and using `bash` only when the skill needs command execution.
 </purpose>
 
 <available_skills>
 {% for skill in loaded_skills %}
 - `{{ skill.name }}` — {{ skill.description }}
+  Instructions: `$WORKSPACE/skills/{{ skill.name }}/SKILL.md`
 {% endfor %}
 </available_skills>
 
 <workflow>
 When a user's request matches one of the skills above:
-1. Run `bash` with the command `read_skill <skill-name>` to load the
-   skill's instructions, passing the capability name above as
-   `<skill-name>`.
+1. Read `skills/<skill-name>/SKILL.md` with `read_file`. Replace
+   `<skill-name>` with the exact name from the catalog above.
 2. Follow the workflow described in those instructions, using `bash` and
    any other tools as the skill directs.
-3. Reply with only the final result and any user-facing artifact names.
+3. Keep generated files in the current conversation folder within $WORKSPACE,
+   using the conversation path supplied in context; do not guess its identifier.
+4. Reply with the result and the names of the generated files.
 </workflow>
 
 <rules>
-- `bash` is the ONLY way to engage a skill. Never treat a skill name as a
-  callable tool, and never write a `bash` command as plain text instead of
-  actually invoking the tool.
+- Never treat a skill name as a callable tool.
 - Don't invent skill contents. If you haven't loaded a skill via
-  `read_skill`, you don't know what it does — load it first.
+  a successful file read, you don't know what it does — load it first.
 - Never expose implementation details to the user: no skill paths,
   environment variables, filenames, script paths, workspace mount names,
   or the shell commands you ran. Describe only the user-facing result.

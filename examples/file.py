@@ -62,7 +62,7 @@ def build_client_openai() -> OpenAIChatCompletionClient:
         model="gpt-5.4-nano",  # gpt-5-nano gpt-4.1-nano
         api_key=os.getenv("OPENAI_KEY"),
         config=ModelConfig(
-            max_context_window=15000,
+            max_context_window=40000,
             supports_function_calling=True,
             # supports_vision=True,
         ),
@@ -131,7 +131,7 @@ def build_agent(
         name="Sara",
         description="Example Max AI agent.",
         instructions=("You are a helpful assistant. Be concise and useful. "),
-        client=build_client_ollama(),
+        client=build_client_openai(),
         memory=build_memory(),
         # routines=build_routines(),
         logbook=build_context(),

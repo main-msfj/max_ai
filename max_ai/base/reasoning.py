@@ -7,8 +7,8 @@ any tool calls, and decide whether to call the LLM again.
 Lifecycle from the user's perspective:
 
   1. User constructs the loop with config-only kwargs (e.g.
-     ``ReActLoop(max_loop_iterations=5)``). No client, no executor,
-     no middleware — those don't exist yet at config time.
+     ``ReActLoopSelfDirected(max_loop_iterations=5)``). No client, no
+     executor, no middleware — those don't exist yet at config time.
   2. The agent calls ``loop.bind(name, client, tool_executor,
      middleware_chain)`` inside ``run()`` to wire the runtime context.
   3. The agent calls ``loop.execute_reasoning_loop(...)`` to drive the
@@ -43,7 +43,7 @@ from ..base.tools import CoreTool
 from ..base.scratchpad import Scratchpad
 from ..base.clients import CoreChatCompletionClient
 
-from ..reasoning.plan import AgentPlan
+from ..tools.plan import AgentPlan
 
 from ..core.messages import AssistantMessage
 from ..core.messages import CoreMessage
@@ -107,11 +107,6 @@ class BaseLoopState(BaseModel):
     # and finish_reason after an LLM call returns.
     last_result: ChatCompletionResult | None = Field(default=None)
 
-    # strucure human in the loop
-    pending_user_input: asyncio.Future[str] | None = Field(default=None, exclude=True)
-    pending_user_input_question: str | None = Field(default=None, exclude=True)
-    pending_user_input_options: list[str] | None = Field(default=None, exclude=True)
-
     # scratchpad
     scratchpad: Scratchpad = Field(default_factory=Scratchpad)
     scratchpad_updated: bool = Field(default=False)
@@ -120,6 +115,10 @@ class BaseLoopState(BaseModel):
     # loop syncs plan_draft -> ctx.plan and emits a PlanningEvent when set.
     plan_draft: AgentPlan | None = Field(default=None)
     plan_updated: bool = Field(default=False)
+
+    # Turn-scoped scratch space for loop guards (repetition counters,
+    # fired-once flags). Fresh per turn because the loop state is.
+    guard_state: dict[str, t.Any] = Field(default_factory=dict)
 
     @property
     def retries(self) -> int:
@@ -137,6 +136,30 @@ class BaseLoopState(BaseModel):
         """Capture a result and accumulate its usage."""
         self.last_result = result
         self.record_usage(result.usage)
+
+    # Fields carried across a pause/resume boundary so a resumed run
+    # keeps its iteration budget and usage accounting instead of
+    # starting from zero every segment.
+    _METRIC_FIELDS: t.ClassVar[tuple[str, ...]] = (
+        "iteration",
+        "llm_calls",
+        "tool_calls",
+        "attempts_to_call_api",
+        "tokens_input",
+        "tokens_output",
+        "tokens_cached",
+    )
+
+    def metrics_snapshot(self) -> dict[str, int]:
+        """Serializable counters to stash on the RunContext at a pause."""
+        return {name: getattr(self, name) for name in self._METRIC_FIELDS}
+
+    def apply_metrics(self, snapshot: dict[str, t.Any]) -> None:
+        """Restore counters captured by ``metrics_snapshot``."""
+        for name in self._METRIC_FIELDS:
+            value = snapshot.get(name)
+            if isinstance(value, int) and value >= 0:
+                setattr(self, name, value)
 
 
 # -------- BASE REASONING -----------------------------------------------------------
@@ -206,13 +229,11 @@ class BaseReasoning(ABC):
         Native to every loop. Subclasses override to ADD more (e.g.
         self-directed adds update_plan), calling super() first.
         """
-        from ..tools.structure_human_in_loop import UserInputTool
+        from ..tools.ask_user import AskUserTool
         if not self.enable_human_input:
             return
-        if UserInputTool.TOOL_NAME not in self.tool_executor.tools:
-            self.tool_executor.tools[UserInputTool.TOOL_NAME] = UserInputTool(
-                loop_state
-            )
+        if AskUserTool.TOOL_NAME not in self.tool_executor.tools:
+            self.tool_executor.tools[AskUserTool.TOOL_NAME] = AskUserTool()
 
     # -------- BIND -----------------------------------------------------------
     def bind(
@@ -243,16 +264,25 @@ class BaseReasoning(ABC):
         self._max_context_tokens = max_context_tokens
         return self
 
-    def _should_compact(self, ctx: RunContext) -> bool:
+    @property
+    def _compaction_token_counter(self) -> TokenCounter:
+        """Lazily built, cached per loop instance (tiktoken lookup isn't free)."""
+        counter = getattr(self, "_cached_token_counter", None)
+        if counter is None:
+            counter = TokenCounter(tokenizer_base=self.client.config.tokenizer_base)
+            self._cached_token_counter = counter
+        return counter
+
+    def _should_compact(self, ctx: RunContext, prompts: PromptCtx | None = None) -> bool:
         from .compaction import live_message_threshold_tokens, client_max_output_tokens
 
         if self._compaction is None or self._max_context_tokens <= 0:
             return False
-        counter = TokenCounter(tokenizer_base=self.client.config.tokenizer_base)
-        live_tokens = counter.count_messages(ctx.messages)
+        live_tokens = self._compaction_token_counter.count_messages(ctx.messages)
         threshold = live_message_threshold_tokens(
             self._max_context_tokens,
             max_output_tokens=client_max_output_tokens(self.client),
+            prompt_tokens=(prompts.prompt_tokens or None) if prompts else None,
         )
         return threshold > 0 and live_tokens > threshold
 
@@ -261,6 +291,13 @@ class BaseReasoning(ABC):
         ctx: RunContext,
         prompts: PromptCtx,
     ) -> t.AsyncGenerator[CoreEvent, None]:
+        from .compaction import (
+            client_max_output_tokens,
+            live_message_budget_tokens,
+            live_message_capacity_tokens,
+            live_message_threshold_tokens,
+        )
+
         if self._compaction is None:
             return
 
@@ -271,8 +308,15 @@ class BaseReasoning(ABC):
             client=self.client,
         )
 
-        ctx.messages[:] = result.recent_messages
+        # The strategy is pure w.r.t. ctx.messages — the loop applies it.
+        # Evicted messages are gone from the agent's state by design (the
+        # model gets the summary); a UI that wants to keep showing them
+        # must keep its own display transcript (see max_ai/ui/server.py).
+        if result.changed:
+            ctx.messages[:] = result.recent_messages
 
+        max_output_tokens = client_max_output_tokens(self.client)
+        prompt_tokens = prompts.prompt_tokens or None
         yield CompactionEvent(
             source=self.name,
             phase="end",
@@ -283,8 +327,18 @@ class BaseReasoning(ABC):
             old_token_count=result.old_token_count,
             recent_token_count=result.recent_token_count,
             total_token_count=result.total_token_count,
-            live_message_threshold_tokens=0,
-            live_message_budget_tokens=0,
+            live_message_threshold_tokens=live_message_threshold_tokens(
+                self._max_context_tokens,
+                max_output_tokens=max_output_tokens,
+                prompt_tokens=prompt_tokens,
+            ),
+            live_message_budget_tokens=live_message_budget_tokens(
+                live_message_capacity_tokens(
+                    self._max_context_tokens,
+                    max_output_tokens=max_output_tokens,
+                    prompt_tokens=prompt_tokens,
+                )
+            ),
         )
 
     # -------- RUNTIME ACCESSORS -----------------------------------------------------------
@@ -343,8 +397,20 @@ class BaseReasoning(ABC):
             cleaned.append(message)
         return cleaned
 
-    def _model_context(self, ctx: RunContext) -> RunContext:
-        """Return a copy safe to hand to chat-completion clients."""
+    def _model_context(
+        self,
+        ctx: RunContext,
+        transient_messages: t.Sequence[CoreMessage] | None = None,
+    ) -> RunContext:
+        """Return a copy safe to hand to chat-completion clients.
+
+        ``transient_messages`` are appended for THIS call only — they are
+        never written to ``ctx.messages``, so per-iteration steering
+        (plan nudges, guard hints) doesn't pollute the durable transcript.
+        """
+        messages = self._without_assistant_thinking(ctx.messages)
+        if transient_messages:
+            messages = [*messages, *transient_messages]
         return ctx.model_copy(
             update={
                 "message_history": ChatHistory(
@@ -352,7 +418,7 @@ class BaseReasoning(ABC):
                         list(ctx.message_history.iter_messages())
                     )
                 ),
-                "messages": self._without_assistant_thinking(ctx.messages),
+                "messages": messages,
             }
         )
 
@@ -379,14 +445,6 @@ class BaseReasoning(ABC):
         return counted
 
     # -------- NON-STREAMING LLM CALL -----------------------------------------------------------
-    def resume(self, answer: str) -> None:
-        if self._current_loop_state is None:
-            raise RuntimeError("No active reasoning loop to resume.")
-        future = self._current_loop_state.pending_user_input
-        if future is None or future.done():
-            raise RuntimeError("No pending user input to resume.")
-        future.set_result(answer)
-
     async def _call_llm(
         self,
         ctx: RunContext,
@@ -394,6 +452,7 @@ class BaseReasoning(ABC):
         loop_state: BaseLoopState,
         cancellation_token: CancellationToken | None = None,
         output_format: t.Type[BaseModel] | None = None,
+        transient_messages: t.Sequence[CoreMessage] | None = None,
         **kwargs: t.Any,
     ) -> t.AsyncGenerator[CoreEvent, None]:
         """Make one non-streaming LLM call through middleware.
@@ -425,7 +484,7 @@ class BaseReasoning(ABC):
         async def _single_call(_ctx: RunContext) -> ChatCompletionResult:
             task = asyncio.create_task(
                 self.client.run(
-                    ctx=self._model_context(_ctx),
+                    ctx=self._model_context(_ctx, transient_messages),
                     prompts=prompts,
                     tools=self._tools,
                     output_format=output_format,
@@ -509,6 +568,7 @@ class BaseReasoning(ABC):
         loop_state: BaseLoopState,
         cancellation_token: CancellationToken | None = None,
         output_format: t.Type[BaseModel] | None = None,
+        transient_messages: t.Sequence[CoreMessage] | None = None,
         **kwargs: t.Any,
     ) -> t.AsyncGenerator[CoreEvent, None]:
         """Make one streaming LLM call through middleware.
@@ -542,7 +602,7 @@ class BaseReasoning(ABC):
             _ctx: RunContext,
         ) -> t.AsyncGenerator[ChatCompletionChunk, None]:
             stream = await self.client.run(
-                ctx=self._model_context(_ctx),
+                ctx=self._model_context(_ctx, transient_messages),
                 prompts=prompts,
                 tools=self._tools,
                 output_format=output_format,

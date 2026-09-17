@@ -17,7 +17,7 @@ from .messages import CoreMessage
 from ..types.completions import Usage
 from ..types.tool_call import ToolResult
 
-from ..reasoning.plan import AgentPlan
+from ..tools.plan import AgentPlan
 from ..reasoning.eval import EvalResult
 from ..base.scratchpad import Scratchpad
 
@@ -233,9 +233,20 @@ class EvalEvent(ReasoningEvent):
 
 
 class UserInputRequestEvent(ReasoningEvent):
+    """The agent asked the user a question; the turn pauses until answered.
+
+    Mirrors ``ToolApprovalEvent``: emitted by the executor *instead of*
+    executing the ask-the-user tool. The consumer answers via
+    ``ctx.tool_state.apply_user_answer(tool_call_id, answer)`` and resumes.
+    """
+
     EVENT_TYPE = "user_input_request"
-    question: str = Field(description="Questsion ask to user")
+    question: str = Field(description="Question asked to the user")
     options: list[str] | None = Field(default=None)
+    tool_call_id: str | None = Field(
+        default=None,
+        description="Record id to answer via tool_state.apply_user_answer().",
+    )
 
 class ScratchpadUpdateEvent(ReasoningEvent):
     EVENT_TYPE = "scratchpad_update"
@@ -315,6 +326,103 @@ class CompactionEvent(AgentEvent):
 # -------- -----------------------------------------------------------
 #  Tool Events
 # -------- -----------------------------------------------------------
+class BashStartedEvent(ToolEvent):
+    """Execution requested; declared_action describes model intent only."""
+
+    EVENT_TYPE = "bash_started"
+    tool_call_id: str
+    command: str
+    declared_action: str
+    description: str
+
+
+class BashFinishedEvent(ToolEvent):
+    EVENT_TYPE = "bash_finished"
+    tool_call_id: str
+    exit_code: int | None
+    duration_ms: int
+    timed_out: bool = False
+    truncated: bool = False
+
+
+class BashFailedEvent(ToolEvent):
+    EVENT_TYPE = "bash_failed"
+    tool_call_id: str
+    error: str
+
+
+class BashCancelledEvent(ToolEvent):
+    EVENT_TYPE = "bash_cancelled"
+    tool_call_id: str
+    reason: str
+
+
+class FileReadEvent(ToolEvent):
+    """A workspace file was read successfully."""
+
+    EVENT_TYPE = "file_read"
+    tool_call_id: str
+    path: str
+    root_dir: str
+    content_hash: str
+
+
+class DirectoryListedEvent(ToolEvent):
+    """A workspace directory was listed successfully."""
+
+    EVENT_TYPE = "directory_listed"
+    tool_call_id: str
+    path: str
+    root_dir: str
+    entry_count: int
+
+
+class FileWrittenEvent(ToolEvent):
+    """A workspace file was created or edited successfully."""
+
+    EVENT_TYPE = "file_written"
+    tool_call_id: str
+    operation: t.Literal["write_file", "edit_file"]
+    path: str
+    root_dir: str
+    content_hash: str
+
+
+class FilesSearchedEvent(ToolEvent):
+    """A workspace search completed successfully."""
+
+    EVENT_TYPE = "files_searched"
+    tool_call_id: str
+    operation: t.Literal["find_files", "search_text"]
+    path: str
+    root_dir: str
+    match_count: int
+    truncated: bool = False
+
+
+class DirectoryCreatedEvent(ToolEvent):
+    EVENT_TYPE = "directory_created"
+    tool_call_id: str
+    path: str
+    root_dir: str
+
+
+class FileDeletedEvent(ToolEvent):
+    EVENT_TYPE = "file_deleted"
+    tool_call_id: str
+    path: str
+    root_dir: str
+    content_hash: str
+
+
+class FileInfoEvent(ToolEvent):
+    EVENT_TYPE = "file_info"
+    tool_call_id: str
+    path: str
+    root_dir: str
+    file_type: t.Literal["file", "directory"]
+
+
 class ToolCallEvent(ToolEvent):
     """Emitted when a tool is about to be called."""
 
@@ -465,6 +573,17 @@ AgentEvents = Annotated[
         ToolApprovalEvent,
         ToolValidationEvent,
         ToolProgressEvent,
+        BashStartedEvent,
+        BashFinishedEvent,
+        BashFailedEvent,
+        BashCancelledEvent,
+        FileReadEvent,
+        DirectoryListedEvent,
+        FileWrittenEvent,
+        FilesSearchedEvent,
+        DirectoryCreatedEvent,
+        FileDeletedEvent,
+        FileInfoEvent,
         CompactionEvent,
         MemoryUpdateEvent,
         MemoryRetrievalEvent,

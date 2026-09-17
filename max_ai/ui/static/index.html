@@ -79,7 +79,12 @@
     <aside id="workspacePanel" class="workspace-panel" aria-label="Artifacts">
       <div class="panel-header">
         <h3>Artifacts</h3>
-        <span style="font-size: 11px; color: var(--text-muted);" id="workspaceMeta">0 files</span>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <button id="workspaceRefresh" class="modal-close" type="button" aria-label="Sync workspace" title="Sync workspace">↻</button>
+          <button id="workspaceUpload" class="modal-close" type="button" aria-label="Upload file" title="Upload file">＋</button>
+          <input id="workspaceUploadInput" type="file" hidden />
+          <span style="font-size: 11px; color: var(--text-muted);" id="workspaceMeta">0 files</span>
+        </div>
       </div>
       <div id="workspaceSidebarFiles" class="workspace-sidebar-files" role="list"></div>
     </aside>
@@ -96,8 +101,6 @@
         <div id="statusArea" class="status-indicator"></div>
       </header>
 
-      <div id="planPanel" class="plan-panel" hidden></div>
-
       <section id="chatScroll" class="chat-scroll" aria-live="polite">
         <div id="emptyState" class="empty-state">
           <div class="empty-inner">
@@ -109,6 +112,7 @@
       </section>
 
       <footer class="input-area">
+        <div id="planPanel" class="plan-panel" hidden></div>
         <form id="chatForm" class="input-card" autocomplete="off">
           <textarea id="chatInput" placeholder="Message agent..." rows="1"></textarea>
           <div id="attachmentPreview" class="attachment-preview" aria-live="polite"></div>

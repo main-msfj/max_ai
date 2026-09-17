@@ -74,7 +74,14 @@ async def test_core_agent_run_returns_response():
 
 
 @pytest.mark.asyncio
-async def test_agent_applies_default_compaction_when_model_context_window_is_known():
+async def test_agent_applies_default_compaction_when_model_context_window_is_known(
+    monkeypatch,
+):
+    # This test exercises eviction with a 2-message transcript; the
+    # production min-keep floor (3 atomic groups) would keep both.
+    from max_ai.config import setting
+
+    monkeypatch.setattr(setting, "compaction_min_keep_groups", 1)
     agent = Agent(
         name="runner",
         description="test agent",
@@ -83,7 +90,10 @@ async def test_agent_applies_default_compaction_when_model_context_window_is_kno
     )
     ctx = RunContext(
         messages=[
-            UserMessage(source="user", content="old", token_count=20_000),
+            # Must exceed the live-message threshold, which is now derived
+            # from the agent's real rendered prompt size (small for this
+            # bare test agent), so use a clearly oversized transcript.
+            UserMessage(source="user", content="old", token_count=30_000),
             UserMessage(source="user", content="recent", token_count=1),
         ]
     )
@@ -95,6 +105,34 @@ async def test_agent_applies_default_compaction_when_model_context_window_is_kno
         "recent",
         "done",
     ]
+
+
+@pytest.mark.asyncio
+async def test_final_message_skips_interim_and_toolcall_shells():
+    """AgentResponse.final_message must surface the user-facing answer:
+    not a guard-vetoed interim draft, not a text-less tool-call shell."""
+    from max_ai.core.messages import ToolCall
+
+    ctx = RunContext(
+        messages=[
+            UserMessage(source="user", content="hi"),
+            AssistantMessage(source="a", content="draft answer", interim=True),
+            AssistantMessage(source="a", content="real answer"),
+            AssistantMessage(
+                source="a",
+                content="",
+                tool_calls=[
+                    ToolCall(id="c1", tool_name="update_plan", parameters={})
+                ],
+            ),
+        ]
+    )
+    from max_ai.types.agent_response import AgentResponse
+
+    response = AgentResponse(
+        source="a", usage=Usage(), finish_reason="stop", context=ctx
+    )
+    assert response.final_text == "real answer"
 
 
 @pytest.mark.asyncio
@@ -174,3 +212,58 @@ async def test_agent_refreshes_memory_layer_before_each_run(tmp_path):
     await agent.run("hello")
 
     assert "User is Marin and works on NASA." in agent.rendered_layers[MemoryLayer]
+
+
+class QuestionClient(RunClient):
+    """Emits an ask_user call, then a plain answer."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.turn = 0
+
+    async def complete(self, messages, tools, output_format, **kwargs):
+        from max_ai.core.messages import ToolCall
+
+        self.turn += 1
+        if self.turn == 1:
+            return ChatCompletionResult(
+                message=AssistantMessage(
+                    source="run-client",
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            id="q1",
+                            tool_name="ask_user",
+                            parameters={"question": "Which one?"},
+                        )
+                    ],
+                ),
+                usage=Usage(llm_calls=1, attempts_to_call_api=1),
+                model="run-client",
+                finish_reason="tool_calls",
+            )
+        return await super().complete(messages, tools, output_format, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_agent_run_reports_input_needed_finish_reason():
+    """A paused-for-input turn must surface finish_reason='input_needed',
+    not be coerced to 'error' by the response whitelist."""
+    agent = Agent(
+        name="asker",
+        description="test agent",
+        instructions="be concise",
+        client=QuestionClient(),
+    )
+
+    response = await agent.run("hello")
+
+    assert response.finish_reason == "input_needed"
+    assert response.needs_input is True
+    assert len(response.pending_questions) == 1
+
+    ctx = response.context
+    ctx.tool_state.apply_user_answer(response.pending_questions[0].id, "that one")
+    resumed = await agent.resume(run_context=ctx)
+    assert resumed.finish_reason == "stop"
+    assert resumed.final_text == "done"

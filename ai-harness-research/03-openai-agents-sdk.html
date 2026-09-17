@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="es">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>OpenAI Agents SDK · Harness Architecture</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="shell">
+        <aside class="side">
+            <div class="brand">Agents SDK</div>
+            <nav><a href="index.html">← Research index</a><small>Sections</small><a href="#overview">Overview</a><a
+                    href="#architecture">Architecture</a><a href="#components">Components</a><a href="#flow">Runner
+                    loop</a><a href="#code">Code</a><a href="#sources">Sources</a></nav>
+        </aside>
+        <main class="main">
+            <section class="hero" id="overview">
+                <div class="eyebrow">03 · OpenAI · 2026-09-11</div>
+                <h1>OpenAI Agents SDK</h1>
+                <p class="lede">Python-first framework for building agent workflows. Unlike a coding CLI, it is a
+                    general runtime: the application supplies the workspace tools and policy, while the SDK supplies
+                    turn management, tool execution, handoffs, sessions, guardrails, human interruptions and tracing.
+                </p>
+                <div class="meta"><span class="badge v">VERIFIED: docs + source</span><span class="badge v">open
+                        source</span><span class="badge">Python</span><span class="badge">Responses API by
+                        default</span></div>
+                <div class="grid">
+                    <div class="card">
+                        <h3>Official repository</h3>
+                        <p><a href="https://github.com/openai/openai-agents-python">openai/openai-agents-python</a></p>
+                    </div>
+                    <div class="card">
+                        <h3>Model boundary</h3>
+                        <p>OpenAI Responses API is the default model transport; model reasoning, streaming and tool-call
+                            emission are model/API capabilities. Runner owns orchestration.</p>
+                    </div>
+                    <div class="card">
+                        <h3>Coding relevance</h3>
+                        <p>Function tools, local/hosted tools, shell, apply patch, MCP and Sandbox agents can form a
+                            coding harness, but the SDK does not prescribe one repository or CLI.</p>
+                    </div>
+                </div>
+            </section>
+            <section id="architecture">
+                <h2>2. Architecture overview</h2>
+                <div class="diagram"><svg viewBox="0 0 1100 540">
+                        <defs>
+                            <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+                                <path d="M0,0 L8,4 L0,8 Z" fill="#8997ad" />
+                            </marker>
+                        </defs>
+                        <rect class="node purple" x="420" y="20" width="260" height="54" rx="10" /><text x="550" y="53"
+                            text-anchor="middle">Application input / goal</text>
+                        <path class="arrow" d="M550 74v40" />
+                        <rect class="node purple" x="350" y="114" width="400" height="62" rx="10" /><text x="550"
+                            y="143" text-anchor="middle">Runner.run / run_sync / streamed</text><text class="muted"
+                            x="550" y="163" text-anchor="middle">max_turns · cancellation · session</text>
+                        <path class="arrow" d="M550 176v40" />
+                        <rect class="node blue" x="320" y="216" width="460" height="64" rx="10" /><text x="550" y="245"
+                            text-anchor="middle">Agent + RunState + Session</text><text class="muted" x="550" y="265"
+                            text-anchor="middle">instructions · history · model input filters</text>
+                        <path class="arrow" d="M550 280v40" />
+                        <rect class="node" x="430" y="320" width="240" height="54" rx="10" /><text x="550" y="353"
+                            text-anchor="middle">Model provider / Responses</text>
+                        <path class="arrow" d="M670 347h100" />
+                        <rect class="node orange" x="770" y="312" width="260" height="72" rx="10" /><text x="900"
+                            y="341" text-anchor="middle">tool calls / handoffs</text><text class="muted" x="900" y="363"
+                            text-anchor="middle">guardrails · approval · execution</text>
+                        <path class="arrow" d="M900 384v50" />
+                        <rect class="node green" x="770" y="434" width="260" height="54" rx="10" /><text x="900" y="467"
+                            text-anchor="middle">tools / MCP / sandbox</text>
+                        <path class="arrow" d="M770 461H660" /><text class="muted" x="550" y="520"
+                            text-anchor="middle">RunResult + trace spans + persisted session items</text>
+                    </svg></div>
+            </section>
+            <section id="components">
+                <h2>3. Component map</h2>
+                <div class="grid">
+                    <div class="card layer">
+                        <h3>A · Runner loop <span class="badge v">VERIFIED</span></h3>
+                        <p>Runner calls the LLM, classifies final output, handoff or tool calls, executes tools, appends
+                            results and loops. <code>max_turns</code> raises <code>MaxTurnsExceeded</code>; streaming is
+                            a separate Runner path.</p>
+                    </div>
+                    <div class="card context">
+                        <h3>B/C · Model + context <span class="badge v">VERIFIED</span></h3>
+                        <p>Agent instructions, input items, session history, handoff filters and
+                            <code>call_model_input_filter</code> shape the model input. Sessions persist working
+                            context; optional nested handoff history compacts/rewrites history. Context-window
+                            management beyond those documented hooks is <span class="badge u">UNKNOWN</span>.</p>
+                    </div>
+                    <div class="card tools">
+                        <h3>D/E · Tools / dispatch <span class="badge v">VERIFIED</span></h3>
+                        <p>Function tools have schemas and validation; hosted tools include web search/file search/code
+                            interpreter/image generation; built-ins include computer, shell, apply patch and local
+                            shell; MCP exposes remote tools. Runner handles tool calls and tool errors.</p>
+                    </div>
+                    <div class="card security">
+                        <h3>G · Guardrails / approval <span class="badge v">VERIFIED</span></h3>
+                        <p>Input/output guardrails and tool input/output guardrails can tripwire and stop runs.
+                            Human-in-the-loop uses interruptions and resumable <code>RunState</code>; approval is a
+                            tool/workflow concern, not a universal OS sandbox.</p>
+                    </div>
+                    <div class="card env">
+                        <h3>F · Environment <span class="badge v">VERIFIED</span></h3>
+                        <p>SDK can call application-defined tools and Sandbox agents with isolated workspaces. The
+                            OS/container boundary is delegated to the selected tool/sandbox client.</p>
+                    </div>
+                    <div class="card verify">
+                        <h3>H · Verification <span class="badge v">VERIFIED</span></h3>
+                        <p>Guardrails are explicit validators. Tests/builds are application tools. The Runner verifies
+                            tool/guardrail protocol outcomes, not arbitrary repository correctness.</p>
+                    </div>
+                    <div class="card memory">
+                        <h3>I · State <span class="badge v">VERIFIED</span></h3>
+                        <p>Sessions persist working context; RunState enables pause/resume; server-managed conversations
+                            may use <code>conversation_id</code> or <code>previous_response_id</code>. External
+                            files/git are application state.</p>
+                    </div>
+                    <div class="card layer">
+                        <h3>J · Subagents <span class="badge v">VERIFIED</span></h3>
+                        <p>Handoffs transfer control to another Agent; Agents as tools delegate without changing the
+                            main agent. They receive configured input/history and return results through the Runner
+                            pipeline.</p>
+                    </div>
+                    <div class="card obs">
+                        <h3>K/M/N · Hooks / tracing / human</h3>
+                        <p><span class="badge v">VERIFIED</span> Model input filters and lifecycle callbacks shape
+                            calls; built-in tracing records runs, agents, tools and handoffs with sensitive-data
+                            controls. Interruptions support human feedback and resume.</p>
+                    </div>
+                    <div class="card tools">
+                        <h3>L · Extensions</h3>
+                        <p><span class="badge v">VERIFIED</span> Function tools, hosted tools, MCP servers,
+                            agents-as-tools, handoffs and sandbox clients are extension seams. Plugins/skills are not a
+                            named core primitive in the SDK docs.</p>
+                    </div>
+                </div>
+            </section>
+            <section id="flow">
+                <h2>4. Runner loop + 5. data flow</h2>
+                <div class="diagram"><svg viewBox="0 0 1100 300">
+                        <defs>
+                            <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+                                <path d="M0,0 L8,4 L0,8 Z" fill="#8997ad" />
+                            </marker>
+                        </defs><text x="30" y="45">input / RunState</text>
+                        <path class="arrow" d="M150 40h100" /><text x="270" y="45">Runner builds agent input</text>
+                        <path class="arrow" d="M470 40h100" /><text x="590" y="45">LLM</text>
+                        <path class="arrow" d="M640 60v80" /><text x="650" y="170">final → result</text>
+                        <path class="arrow" d="M640 185v70" /><text x="30" y="260">tool call → guardrail/approval → tool
+                            or handoff → append output → session</text>
+                        <path class="arrow" d="M900 245V60" />
+                    </svg></div>
+                <pre>Agent + instructions + session history → model adapter → Responses API; output classification → final | handoff | tool; tool call → guardrails/approval → executor; output items → Session/RunState → next Runner turn; spans → tracing backend.</pre>
+            </section>
+            <section id="code">
+                <h2>6. Code structure</h2>
+                <div class="grid">
+                    <div class="card layer">
+                        <h3><code>src/agents/run.py</code> and runner modules</h3>
+                        <p>Public Runner lifecycle, run results, streaming and turn control.</p>
+                    </div>
+                    <div class="card">
+                        <h3><code>src/agents/agent.py</code></h3>
+                        <p>Agent definition: instructions, tools, handoffs, guardrails and model settings.</p>
+                    </div>
+                    <div class="card context">
+                        <h3><code>src/agents/memory</code> / sessions</h3>
+                        <p>Session and conversation-state abstractions for persistent working context.</p>
+                    </div>
+                    <div class="card tools">
+                        <h3><code>src/agents/tools</code> and MCP</h3>
+                        <p>Function tools, hosted/built-in tools and MCP server adapters.</p>
+                    </div>
+                    <div class="card security">
+                        <h3>guardrails / interruptions</h3>
+                        <p>Tripwire validators and human-in-the-loop pause/resume state.</p>
+                    </div>
+                    <div class="card obs">
+                        <h3>tracing</h3>
+                        <p>Built-in spans and exporters for workflow observability.</p>
+                    </div>
+                </div>
+            </section>
+            <section id="sources">
+                <h2>Sources</h2>
+                <ol class="sources">
+                    <li><a href="https://openai.github.io/openai-agents-python/">Official Agents SDK docs</a> —
+                        primitives and boundaries.</li>
+                    <li><a href="https://openai.github.io/openai-agents-python/running_agents/">Running agents</a> —
+                        exact Runner loop, max turns, sessions and filters.</li>
+                    <li><a href="https://openai.github.io/openai-agents-python/tools/">Tools</a> — function, hosted,
+                        shell, patch and MCP tools.</li>
+                    <li><a href="https://openai.github.io/openai-agents-python/guardrails/">Guardrails</a> — pre/post
+                        execution and tripwires.</li>
+                    <li><a href="https://openai.github.io/openai-agents-python/handoffs/">Handoffs</a> and <a
+                            href="https://openai.github.io/openai-agents-python/agents-as-tools/">agents as tools</a> —
+                        subagent routing.</li>
+                    <li><a href="https://openai.github.io/openai-agents-python/tracing/">Tracing</a> and <a
+                            href="https://openai.github.io/openai-agents-python/human-in-the-loop/">human in the
+                            loop</a>.</li>
+                    <li><a href="https://github.com/openai/openai-agents-python">Official source repository</a> —
+                        visible Python layout.</li>
+                </ol>
+            </section>
+            <div class="foot">Key distinction: Agents SDK is a reusable runtime. Filesystem, shell policy, repository
+                verification and OS isolation are supplied by the application/tool/sandbox configuration.</div>
+        </main>
+    </div>
+</body>
+
+</html>

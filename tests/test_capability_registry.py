@@ -74,7 +74,17 @@ def test_empty_registry_constructs():
     assert cr.has_skills is False
     assert cr.has_logbook is False
     assert cr.has_tools is False
-    assert {tool.name for tool in cr._all_tools_sync()} == {"workspace"}
+    assert {tool.name for tool in cr._all_tools_sync()} == {
+        "workspace",
+        "list_files",
+        "find_files",
+        "search_text",
+        "read_file",
+        "write_file",
+        "edit_file",
+    }
+    assert cr.requires_workspace is True
+    assert cr.requires_sandbox_executor is False
 
 
 def test_explicit_tools_normalized():

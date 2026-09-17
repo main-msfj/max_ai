@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="es">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Grok Build · Harness Architecture</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="shell">
+        <aside class="side">
+            <div class="brand">Grok Build</div>
+            <nav><a href="index.html">← Research index</a><small>Sections</small><a href="#overview">Overview</a><a
+                    href="#architecture">Architecture</a><a href="#components">Components</a><a href="#flow">Flow</a><a
+                    href="#code">Code</a><a href="#sources">Sources</a></nav>
+        </aside>
+        <main class="main">
+            <section class="hero" id="overview">
+                <div class="eyebrow">02 · SpaceXAI / xAI · 2026-09-11</div>
+                <h1>Grok Build</h1>
+                <p class="lede">Open-source Rust coding-agent harness and fullscreen TUI. The repository exposes much
+                    more of the runtime than the other closed CLIs: composition root, agent shell, tools,
+                    workspace/VCS/execution, configuration, MCP, sandbox and extensions.</p>
+                <div class="meta"><span class="badge v">VERIFIED: public Rust source</span><span
+                        class="badge v">Apache-2.0 first-party</span><span class="badge">Rust</span><span
+                        class="badge">CLI / TUI / headless / ACP</span></div>
+                <div class="grid">
+                    <div class="card">
+                        <h3>Purpose</h3>
+                        <p>Understand a codebase, edit files, execute shell commands, search the web and manage
+                            long-running coding tasks.</p>
+                    </div>
+                    <div class="card">
+                        <h3>Official repository</h3>
+                        <p><a href="https://github.com/xai-org/grok-build">xai-org/grok-build</a>; docs at <a
+                                href="https://docs.x.ai/build/overview">docs.x.ai/build</a>.</p>
+                    </div>
+                    <div class="card">
+                        <h3>Model boundary</h3>
+                        <p>Grok Build is the harness. The Grok model/API supplies generation, reasoning and tool-call
+                            decisions; the Rust runtime executes tools.</p>
+                    </div>
+                </div>
+            </section>
+            <section id="architecture">
+                <h2>2. Architecture overview</h2>
+                <p>The repository README names the runtime and its crate boundaries. This diagram follows those
+                    published boundaries and marks extension points around the loop.</p>
+                <div class="diagram"><svg viewBox="0 0 1100 540">
+                        <defs>
+                            <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+                                <path d="M0,0 L8,4 L0,8 Z" fill="#8997ad" />
+                            </marker>
+                        </defs>
+                        <rect class="node purple" x="400" y="20" width="300" height="54" rx="10" /><text x="550" y="53"
+                            text-anchor="middle">TUI / CLI / headless / ACP</text>
+                        <path class="arrow" d="M550 74v40" />
+                        <rect class="node purple" x="350" y="114" width="400" height="62" rx="10" /><text x="550"
+                            y="143" text-anchor="middle">xai-grok-shell</text><text class="muted" x="550" y="163"
+                            text-anchor="middle">agent runtime · leader · stdio</text>
+                        <path class="arrow" d="M550 176v40" />
+                        <rect class="node blue" x="330" y="216" width="440" height="62" rx="10" /><text x="550" y="245"
+                            text-anchor="middle">context / history / instructions</text><text class="muted" x="550"
+                            y="265" text-anchor="middle">workspace state · skills · plugins · MCP</text>
+                        <path class="arrow" d="M550 278v40" />
+                        <rect class="node" x="430" y="318" width="240" height="54" rx="10" /><text x="550" y="351"
+                            text-anchor="middle">Grok model API</text>
+                        <path class="arrow" d="M670 345h100" />
+                        <rect class="node orange" x="770" y="310" width="260" height="72" rx="10" /><text x="900"
+                            y="339" text-anchor="middle">tool registry / dispatch</text><text class="muted" x="900"
+                            y="361" text-anchor="middle">terminal · edit · search · web · MCP</text>
+                        <path class="arrow" d="M900 382v50" />
+                        <rect class="node green" x="770" y="432" width="260" height="54" rx="10" /><text x="900" y="465"
+                            text-anchor="middle">workspace / VCS / sandbox</text>
+                        <path class="arrow" d="M770 459H660" /><text class="muted" x="545" y="520"
+                            text-anchor="middle">results and checkpoints re-enter agent context</text>
+                    </svg></div>
+            </section>
+            <section id="components">
+                <h2>3. Component map</h2>
+                <div class="grid">
+                    <div class="card layer">
+                        <h3>A · Runtime <span class="badge v">VERIFIED</span></h3>
+                        <p><code>xai-grok-shell</code> is explicitly “agent runtime + leader/stdio/headless entry
+                            points”. Long-running tasks and headless modes are documented. Exact stop/retry policy is
+                            <span class="badge u">UNKNOWN</span> unless read from a specific current source file.</p>
+                    </div>
+                    <div class="card context">
+                        <h3>B/C · Model + context <span class="badge v">VERIFIED</span></h3>
+                        <p>Rust runtime assembles repository/workspace context, conversation state, tool definitions,
+                            skills, plugins and MCP. Model capability (reasoning, streaming and function/tool calling)
+                            belongs to the xAI API; dispatch and context are harness work. Public docs do not prove an
+                            internal semantic index.</p>
+                    </div>
+                    <div class="card tools">
+                        <h3>D/E · Tools / dispatch <span class="badge v">VERIFIED</span></h3>
+                        <p>Repository names terminal, file edit and search tools, with a tool crate and MCP support. The
+                            model call produces a tool request; Rust resolves a registry entry, applies policy and
+                            invokes the tool. Exact parser traits and error-retry rules are <span
+                                class="badge u">UNKNOWN</span>.</p>
+                    </div>
+                    <div class="card env">
+                        <h3>F · Environment <span class="badge v">VERIFIED</span></h3>
+                        <p><code>xai-grok-workspace</code> covers host filesystem, VCS, execution and checkpoints. The
+                            runtime also has sandbox documentation. OS controls and released sandbox mechanisms depend
+                            on platform.</p>
+                    </div>
+                    <div class="card security">
+                        <h3>G · Security <span class="badge v">VERIFIED</span></h3>
+                        <p>Sandboxing, configuration and permission surfaces are part of the published CLI closure.
+                            Exact default approval matrix and command classifier are <span
+                                class="badge u">UNKNOWN</span> from the top-level README; inspect the crate/docs version
+                            used in deployment.</p>
+                    </div>
+                    <div class="card verify">
+                        <h3>H · Verification <span class="badge i">INFERRED</span></h3>
+                        <p>Command outputs, tests and checkpoints are available to the agent. No public README claim
+                            establishes a universal independent verifier; verification is likely tool/workflow driven.
+                        </p>
+                    </div>
+                    <div class="card memory">
+                        <h3>I · State <span class="badge v">VERIFIED</span></h3>
+                        <p>Workspace/VCS state and checkpoints are explicit. Conversation/session persistence is part of
+                            the runtime surface; durable long-term memory beyond repo state is <span
+                                class="badge u">UNKNOWN</span>.</p>
+                    </div>
+                    <div class="card layer">
+                        <h3>J · Subagents <span class="badge u">UNKNOWN</span></h3>
+                        <p>The repository layout mentions extension support and the user guide names
+                            skills/plugins/hooks/MCP, but the top-level primary sources reviewed here do not establish a
+                            subagent API. Treat subagents as unknown until the exact docs/source path is inspected.</p>
+                    </div>
+                    <div class="card tools">
+                        <h3>K/L · Hooks / extensions <span class="badge v">VERIFIED</span></h3>
+                        <p>User guide ships with configuration, slash commands, MCP servers, skills, plugins, hooks,
+                            headless mode and sandboxing. These are first-class extension surfaces around the core
+                            runtime.</p>
+                    </div>
+                    <div class="card obs">
+                        <h3>M/N · Observability / human</h3>
+                        <p><span class="badge v">VERIFIED</span> TUI, stdio, headless and ACP provide
+                            interaction/transport. Logging and event details are <span class="badge u">UNKNOWN</span> at
+                            repository top level. Human approval is <span class="badge i">INFERRED</span> where
+                            sandbox/permission prompts are active.</p>
+                    </div>
+                </div>
+            </section>
+            <section id="flow">
+                <h2>4. Execution loop + 5. data flow</h2>
+                <div class="diagram"><svg viewBox="0 0 1100 330">
+                        <defs>
+                            <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+                                <path d="M0,0 L8,4 L0,8 Z" fill="#8997ad" />
+                            </marker>
+                        </defs><text x="30" y="45">TUI prompt</text>
+                        <path class="arrow" d="M120 40h90" /><text x="220" y="45">leader/runtime</text>
+                        <path class="arrow" d="M330 40h100" /><text x="440" y="45">context + workspace</text>
+                        <path class="arrow" d="M590 40h90" /><text x="690" y="45">Grok API</text>
+                        <path class="arrow" d="M750 60v90" /><text x="770" y="180">tool call?</text>
+                        <path class="arrow" d="M750 195v75" /><text x="30" y="275">registry → permission/sandbox →
+                            executor</text>
+                        <path class="arrow" d="M400 270h150" /><text x="570" y="275">stdout/patch/checkpoint</text>
+                        <path class="arrow" d="M760 270h120" /><text x="895" y="275">context → next turn</text>
+                        <path class="arrow" d="M920 245V60" />
+                    </svg></div>
+                <pre>prompt + workspace metadata + instructions → agent runtime → xAI model API; tool call → tool registry → sandbox/permission → tool executor; tool result + checkpoint → session/workspace state → next model input; final response → TUI, headless stdout or ACP.</pre>
+            </section>
+            <section id="code">
+                <h2>6. Code structure</h2>
+                <div class="grid">
+                    <div class="card layer">
+                        <h3><code>crates/codegen/xai-grok-pager-bin</code></h3>
+                        <p>Composition-root package that builds the released <code>grok</code> binary.</p>
+                    </div>
+                    <div class="card layer">
+                        <h3><code>crates/codegen/xai-grok-pager</code></h3>
+                        <p>Fullscreen TUI: scrollback, prompt, modals and rendering.</p>
+                    </div>
+                    <div class="card layer">
+                        <h3><code>crates/codegen/xai-grok-shell</code></h3>
+                        <p>Agent runtime and leader/stdio/headless entry points; central connection between UI and
+                            tools.</p>
+                    </div>
+                    <div class="card tools">
+                        <h3><code>crates/codegen/xai-grok-tools</code></h3>
+                        <p>Tool implementations: terminal, file edit, search and related tool-layer code.</p>
+                    </div>
+                    <div class="card env">
+                        <h3><code>crates/codegen/xai-grok-workspace</code></h3>
+                        <p>Host filesystem, VCS, execution and checkpoints.</p>
+                    </div>
+                    <div class="card">
+                        <h3>Remaining closure</h3>
+                        <p>Config, MCP, markdown, sandbox and other <code>crates/codegen/...</code> packages.
+                            <code>third_party/</code> includes vendored dependencies and source ports; do not attribute
+                            those ports to xAI architecture without inspection.</p>
+                    </div>
+                </div>
+            </section>
+            <section id="sources">
+                <h2>Sources</h2>
+                <ol class="sources">
+                    <li><a href="https://github.com/xai-org/grok-build">Official xai-org/grok-build repository</a> —
+                        README, license, layout and runtime claims.</li>
+                    <li><a href="https://docs.x.ai/build/overview">xAI Grok Build documentation</a> — official
+                        product/runtime guide.</li>
+                    <li><a href="https://x.ai/news/grok-build-open-source">SpaceXAI open-source announcement</a> —
+                        official description of harness and tools.</li>
+                    <li><a href="https://github.com/xai-org/grok-build/tree/main/crates/codegen/xai-grok-shell">xai-grok-shell
+                            source directory</a> — runtime evidence.</li>
+                    <li><a href="https://github.com/xai-org/grok-build/tree/main/crates/codegen/xai-grok-tools">xai-grok-tools
+                            source directory</a> — tool evidence.</li>
+                    <li><a href="https://github.com/xai-org/grok-build/tree/main/crates/codegen/xai-grok-workspace">xai-grok-workspace
+                            source directory</a> — environment/checkpoint evidence.</li>
+                </ol>
+            </section>
+            <div class="foot">Primary-source caution: repository layout and README establish the crate boundaries; exact
+                runtime semantics require version-pinned source inspection.</div>
+        </main>
+    </div>
+</body>
+
+</html>

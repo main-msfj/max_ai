@@ -127,11 +127,21 @@ def test_docker_env_args_expose_runtime_directories() -> None:
     ]
 
 
-def test_bash_container_name_is_stable_and_prefixed(tmp_path: Path) -> None:
+def test_bash_container_name_is_stable_prefixed_and_collision_resistant(
+    tmp_path: Path,
+) -> None:
     executor = DockerExecutor(repo_root=_repo_fixture(tmp_path))
     context = ToolContext(run_id="Run 1", session_id="Session 1", user_id="u1")
+    normalized_collision = ToolContext(
+        run_id="Run 1", session_id="session-1", user_id="u1"
+    )
 
-    assert executor._bash_container_name(context) == "maxai-bash-session-1"
+    name = executor._bash_container_name(context)
+
+    assert name.startswith("maxai-bash-")
+    assert name == f"maxai-bash-{executor._bash_session_key(context)}"
+    assert name == executor._bash_container_name(context)
+    assert name != executor._bash_container_name(normalized_collision)
 
 
 def test_docker_executor_expands_read_skill_alias_to_container_path(tmp_path: Path) -> None:

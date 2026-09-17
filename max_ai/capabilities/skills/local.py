@@ -9,11 +9,10 @@ This is the simplest backend and the one used in dev environments
 where you keep skills next to your code, or as the destination of a
 ``git clone`` you manage outside the registry.
 
-Caching behavior: skills are copied from ``source`` to the shared
-cache (``SKILLS_CACHE_DIR``) on first use. Subsequent registries
-pointing at the same source skip the copy. To pick up changes from
-source after editing, clear the cache directory manually — the
-registry treats cache as authoritative once populated.
+Skills are copied from ``source`` to the registry cache during preparation.
+Before each agent run, Workspace installs missing selected prepared packages into
+``.agents/<user_id>/skills/<skill_name>/``. The cache is staging storage;
+the per-user workspace is the runtime destination. Existing workspace edits are preserved.
 """
 
 from __future__ import annotations

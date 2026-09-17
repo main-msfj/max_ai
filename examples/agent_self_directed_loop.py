@@ -1,9 +1,9 @@
 """Serve an agent that uses the self-directed ReAct loop, on Ollama, in the Web UI.
 
-``ReActLoopSelfDirected`` lets the *model* manage its own plan via the
-``update_plan`` tool (planning-as-tool), rather than being steered by the
-loop the way ``ReActLoopPlanning`` does. The loop auto-registers the
-``update_plan`` tool for each run, so you only have to pass the loop in.
+``ReActLoopSelfDirected`` — the framework's single loop — lets the *model*
+manage its own plan via the ``update_plan`` tool (planning-as-tool). The
+loop auto-registers the ``update_plan`` tool for each run, so you only
+have to pass the loop in.
 
 The plan the model builds is streamed to the Web UI as ``PlanningEvent``s
 and rendered in the live plan panel above the chat (and in the trace panel
@@ -37,6 +37,7 @@ from max_ai.mcp import (
     StdioMCPServerConfig,
     create_mcp_tools,
 )
+from demo_tools import DEMO_TOOLS
 
 
 EXAMPLE_DIR = Path(__file__).parent
@@ -117,14 +118,15 @@ def build_agent(
         name="Pathfinder",
         description="Agent that plans its own work via the update_plan tool.",
         instructions=(
-            "You are a helpful assistant with internet access. For any "
-            "multi-step task, call the update_plan tool first to lay out your "
-            "plan, then work through it, using web search when you need facts, "
-            "and calling update_plan again to mark steps done as you go."
+            "You are a helpful assistant with internet access and tools for "
+            "weather, stock prices, booking a hotel, and sending email. For a "
+            "multi-step task, use update_plan to lay out your plan, then work "
+            "through it with the right tool for each step and web search when "
+            "you need facts."
         ),
-        client=build_client_openai(),
+        client=build_client_ollama(),
         reasoning=ReActLoopSelfDirected(max_loop_iterations=12),
-        toolset=list(mcp_tools or []),
+        toolset=[*DEMO_TOOLS, *(mcp_tools or [])],
         middlewares=[ConsoleTraceMiddleware()],
     )
 

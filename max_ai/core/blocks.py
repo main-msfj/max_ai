@@ -2,7 +2,7 @@ import typing as t
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 
-from .messages import CoreMessage
+from .messages import CoreMessage, Message
 
 if t.TYPE_CHECKING:
     from ..types.routines import RoutineSummary
@@ -31,9 +31,16 @@ class RunTimeBlock(BaseModel):
 
 
 class ChatHistoryBlock(BaseModel):
-    """Single block of chat history."""
+    """Single block of chat history.
 
-    message_history: list[CoreMessage] = Field(default_factory=list)  # type: ignore
+    Typed as the discriminated ``Message`` union (not the ``CoreMessage``
+    base) so deserialization restores the concrete subtypes — an
+    ``AssistantMessage`` keeps its ``tool_calls``, a ``ToolMessage`` its
+    ``tool_call_id``. With the base class, ``model_validate_json`` would
+    silently collapse every entry into a bare ``CoreMessage``.
+    """
+
+    message_history: list[Message] = Field(default_factory=list)  # type: ignore
 
     def iter_messages(self) -> t.Iterator[CoreMessage]:
         """Iterate over the messages in chronological order."""

@@ -1,9 +1,10 @@
 """Tests for the terminal REPL (max_ai.cli.repl).
 
-The riskiest part is the concurrent human-input handshake: the agent blocks
-on a future before emitting the input event, so the REPL drives the stream in
-a background task and answers from the foreground. These tests use a fake
-agent that mimics that exact ordering to prove the handshake doesn't deadlock.
+Elicitation is durable state: a question ends the stream segment with
+``finish_reason='input_needed'`` and an ``INPUT_NEEDED`` record on the
+context. The REPL prompts between segments, applies the answer via
+``tool_state.apply_user_answer``, and resumes — the same shape as the
+approval flow. No polling, no background task.
 """
 
 from __future__ import annotations
@@ -36,13 +37,28 @@ def _chunk(text: str) -> ModelStreamChunkEvent:
     return ModelStreamChunkEvent(source="fake", chunk=text, is_final=False)
 
 
-def _response(finish_reason: str = "stop") -> AgentResponse:
+def _response(
+    finish_reason: str = "stop", ctx: RunContext | None = None
+) -> AgentResponse:
     return AgentResponse(
-        context=RunContext(),
+        context=ctx if ctx is not None else RunContext(),
         source="fake",
         usage=Usage(),
         finish_reason=finish_reason,
     )
+
+
+def _question_record(
+    record_id: str, question: str, options: list[str] | None = None
+) -> ToolCallRecord:
+    record = ToolCallRecord(
+        id=record_id,
+        tool_name="ask_user",
+        parameters={"question": question, "options": options},
+        session_id="s",
+    )
+    record.await_user_input(question, options)
+    return record
 
 
 class FakePlainAgent:
@@ -58,55 +74,81 @@ class FakePlainAgent:
             yield _response("stop")
         return _gen()
 
-    # No pending question ever.
-    pending_user_input = None
-    pending_user_input_options = None
-
 
 class FakeAskingAgent:
-    """Mimics the real blocking order: the stream sets a pending question and
-    waits on a future *before* emitting UserInputRequestEvent — exactly what
-    the real loop does. provide_user_input resolves the future."""
+    """Pauses with an INPUT_NEEDED record; the resumed segment reads the
+    applied answer off the context — exactly how the durable flow works."""
 
     name = "fake"
 
     def __init__(self) -> None:
-        self._future: asyncio.Future[str] | None = None
-        self._question: str | None = None
-        self._options: list[str] | None = None
+        self._ctx = RunContext()
+        self._record = _question_record("call_q", "Which format?", ["JSON", "CSV"])
+        self._ctx.tool_state.add(self._record)
         self.answered: str | None = None
 
     def run_stream_events(self, task=None, run_context=None, stream_tokens=False, **kw):
         async def _gen():
             yield _chunk("let me check… ")
-            # Pause: set the pending question and block, like the real tool.
-            self._future = asyncio.get_running_loop().create_future()
-            self._question = "Which format?"
-            self._options = ["JSON", "CSV"]
-            answer = await self._future
-            self.answered = answer
-            # Only now does the event surface (post-answer), as in production.
-            yield UserInputRequestEvent(source="fake", question="Which format?", options=["JSON", "CSV"])
-            yield _chunk(f"using {answer}")
-            yield ReasoningCompleteEvent(source="fake", finish_reason="stop", total_iterations=2)
+            yield UserInputRequestEvent(
+                source="fake",
+                question="Which format?",
+                options=["JSON", "CSV"],
+                tool_call_id="call_q",
+            )
+            yield AgentResponse(
+                context=self._ctx, source="fake", usage=Usage(),
+                finish_reason="input_needed",
+            )
+        return _gen()
+
+    def resume_stream_events(self, run_context=None, stream_tokens=False, **kw):
+        async def _gen():
+            record = self._ctx.tool_state.records["call_q"]
+            assert record.user_answer is not None, "resumed without an answer"
+            self.answered = record.user_answer
+            yield _chunk(f"using {record.user_answer}")
             yield _response("stop")
         return _gen()
 
-    @property
-    def pending_user_input(self) -> str | None:
-        if self._future is None or self._future.done():
-            return None
-        return self._question
 
-    @property
-    def pending_user_input_options(self) -> list[str] | None:
-        if self._future is None or self._future.done():
-            return None
-        return self._options
+class FakeTwoQuestionAgent:
+    """Asks TWO questions across two pauses in one turn: the first segment
+    pauses on question 1; the resumed segment pauses on question 2; the
+    second resume finishes. Each question must be prompted exactly once."""
 
-    def provide_user_input(self, answer: str) -> None:
-        assert self._future is not None and not self._future.done()
-        self._future.set_result(answer)
+    name = "fake"
+
+    def __init__(self) -> None:
+        self._ctx = RunContext()
+        self._q1 = _question_record("call_q1", "Which email?", ["a@x.com", "b@x.com"])
+        self._ctx.tool_state.add(self._q1)
+        self.answers: list[str] = []
+
+    def run_stream_events(self, task=None, run_context=None, stream_tokens=False, **kw):
+        async def _gen():
+            yield _chunk("ok… ")
+            yield AgentResponse(
+                context=self._ctx, source="fake", usage=Usage(),
+                finish_reason="input_needed",
+            )
+        return _gen()
+
+    def resume_stream_events(self, run_context=None, stream_tokens=False, **kw):
+        async def _gen():
+            if len(self.answers) == 0:
+                self.answers.append(self._ctx.tool_state.records["call_q1"].user_answer)
+                q2 = _question_record("call_q2", "Which format?", ["short", "long"])
+                self._ctx.tool_state.add(q2)
+                yield AgentResponse(
+                    context=self._ctx, source="fake", usage=Usage(),
+                    finish_reason="input_needed",
+                )
+                return
+            self.answers.append(self._ctx.tool_state.records["call_q2"].user_answer)
+            yield _chunk(f"sent to {self.answers[0]} as {self.answers[1]}")
+            yield _response("stop")
+        return _gen()
 
 
 def _renderer() -> CliRenderer:
@@ -127,11 +169,33 @@ async def test_plain_turn_streams_and_returns_context():
 
 
 @pytest.mark.asyncio
-async def test_human_input_handshake_does_not_deadlock(monkeypatch):
-    """The REPL must answer the agent's question and let the turn finish.
+async def test_two_questions_each_answered_once(monkeypatch):
+    """Two questions across two pauses must each be prompted exactly once.
+    Answers are fed in order and mapped by option number."""
+    agent = FakeTwoQuestionAgent()
+    renderer = _renderer()
 
-    Patches the input read so no real stdin is needed; asserts the answer
-    reached the agent and the post-answer text streamed."""
+    answers = iter(["1", "2"])  # email -> a@x.com (opt 1), format -> long (opt 2)
+
+    async def fake_ainput(_renderer, _prompt):
+        return next(answers)
+
+    monkeypatch.setattr("max_ai.cli.repl._ainput", fake_ainput)
+
+    await asyncio.wait_for(
+        _run_one_turn(agent, "send jokes", None, renderer), timeout=5.0
+    )
+
+    # Exactly two answers consumed (no duplicate prompting), mapped by option.
+    assert agent.answers == ["a@x.com", "long"]
+    out = renderer.console.export_text()
+    assert "sent to a@x.com as long" in out
+
+
+@pytest.mark.asyncio
+async def test_question_pause_answer_resume(monkeypatch):
+    """The REPL prompts on the input pause, applies the answer to the run's
+    tool state, and resumes the turn to completion."""
     agent = FakeAskingAgent()
     renderer = _renderer()
 
@@ -216,8 +280,6 @@ class FakeErroringAgent:
     how a provider 400 surfaces (ErrorEvent emitted, then the exception)."""
 
     name = "fake"
-    pending_user_input = None
-    pending_user_input_options = None
 
     def run_stream_events(self, task=None, run_context=None, stream_tokens=False, **kw):
         async def _gen():
@@ -255,8 +317,6 @@ class FakeApprovalAgent:
     finishes. Mirrors how an ASK_APPROVED MCP tool (e.g. Tavily) behaves."""
 
     name = "fake"
-    pending_user_input = None
-    pending_user_input_options = None
 
     def __init__(self) -> None:
         self._ctx = RunContext()

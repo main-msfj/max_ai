@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     root_dir: Path = Field(
         default_factory=Path.cwd,
         validation_alias="HOST_WORKSPACE",
-        description="Rolt Directory for the host Server",
+        description="Root directory for the host server",
     )
 
     # Default Folder
@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     artifacts_dir: str = Field(default="artifacts")
 
     # Allowed artifact extensions.
-    files: list[str] = Field(default=[".json", ".pdf", ".docx", ".xlsl", ".pptx"])
+    files: list[str] = Field(default=[".json", ".pdf", ".docx", ".xlsx", ".pptx"])
 
     # Context compaction budgets. Environment overrides use the uppercase
     # field names, e.g. COMPACTION_PROMPT_BUDGET_TOKENS=6000.
@@ -47,6 +47,21 @@ class Settings(BaseSettings):
     compaction_live_message_threshold: float = Field(default=0.8, gt=0, lt=1)
     compaction_live_message_keep_ratio: float = Field(default=0.2, gt=0, lt=1)
     compaction_min_output_tokens: int = Field(default=1024, gt=0)
+    # Compaction always keeps at least this many recent atomic message
+    # groups (an assistant message + its tool results), even when they
+    # exceed the token budget. Guarantees the current working set — the
+    # tool results the model is actively reasoning over — survives a
+    # mid-loop compaction; evicting them makes the model deterministically
+    # re-call the same tools because the data vanished from its context.
+    compaction_min_keep_groups: int = Field(default=3, ge=1)
+    # Below this many tokens of live-message capacity the agent logs a
+    # loud warning: the window/prompt/max_tokens configuration leaves so
+    # little room for conversation that compaction will thrash.
+    compaction_capacity_warning_tokens: int = Field(default=2000, ge=0)
+    # Per-message cap when building the summarization transcript. Giant
+    # tool outputs are truncated to this many tokens so the summary
+    # request itself cannot blow the context window.
+    compaction_summary_message_cap_tokens: int = Field(default=2000, gt=0)
 
     @field_validator("root_dir")
     @classmethod

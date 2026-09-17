@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import textwrap
 import typing as t
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -146,7 +147,9 @@ def _setup_memory_source(tmp_path: Path) -> None:
         "user_identity": {
             "category": "user_identity",
             "content": "Software engineer in Buenos Aires.",
-            "last_updated": "2026-05-25T10:00:00+00:00",
+            # Dynamic: get_context() drops facts older than context_days (30),
+            # so a hardcoded date makes the test expire with time.
+            "last_updated": datetime.now(timezone.utc).isoformat(),
         },
     }))
 

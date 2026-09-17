@@ -1,3 +1,3 @@
-from .local import WorkspaceLocal, WorkspaceLocal
+from .local import Workspace, WorkspaceConfig, WorkspaceLocal, WorkspaceLocalConfig
 
-__all__ = ["WorkspaceLocal", "WorkspaceLocal"]
+__all__ = ["Workspace", "WorkspaceConfig", "WorkspaceLocal", "WorkspaceLocalConfig"]

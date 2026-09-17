@@ -132,6 +132,17 @@ class ToolCallRecord(BaseModel):
                            reject()──►       REJECTED                                     (stays here if process crashes)
                           ╲
                            auto_approve()──► AUTO_APPROVED ─start_execution()─►  EXECUTING ─mark_consumed()─► CONSUMED
+                          ╲
+                           await_user_input()──► INPUT_NEEDED ─apply_user_answer()─► APPROVED (answer stored)
+
+    Elicitation (the native ask-the-user tool) is pure state, exactly
+    like approvals: the executor never runs the tool. A fresh record
+    moves to ``INPUT_NEEDED`` (carrying the question/options) and the
+    turn pauses; ``apply_user_answer()`` stores the answer and moves the
+    record back to ``APPROVED`` so the resumed run picks it up and the
+    executor synthesizes the ``ToolResult`` from ``user_answer``. A
+    pending question therefore serializes with the run and survives
+    process death.
 
     Records left in ``EXECUTING`` after a process crash or connection
     drop are visible via ``ToolState.stale_executions``. The agent
@@ -170,6 +181,24 @@ class ToolCallRecord(BaseModel):
         description="True if approval was granted automatically (tool didn't require user action).",
     )
 
+    # -------- ELICITATION (ask-the-user) -----------------------------------------------------------
+    input_question: str | None = Field(
+        default=None,
+        description="Question shown to the user while status is INPUT_NEEDED.",
+    )
+    input_options: list[str] | None = Field(
+        default=None,
+        description="Optional choices offered with the question.",
+    )
+    user_answer: str | None = Field(
+        default=None,
+        description=(
+            "The user's answer, set by apply_user_answer(). The executor "
+            "returns it as the tool's result instead of executing anything."
+        ),
+    )
+    answered_at: datetime | None = Field(default=None)
+
     # -------- EXECUTION -----------------------------------------------------------
     started_at: datetime | None = Field(
         default=None,
@@ -200,6 +229,11 @@ class ToolCallRecord(BaseModel):
     @property
     def is_rejected(self) -> bool:
         return self.status == ToolCallStatus.REJECTED
+
+    @property
+    def is_awaiting_input(self) -> bool:
+        """Paused waiting for the user to answer a question."""
+        return self.status == ToolCallStatus.INPUT_NEEDED
 
     @property
     def is_executing(self) -> bool:
@@ -251,6 +285,45 @@ class ToolCallRecord(BaseModel):
         self.status = ToolCallStatus.REJECTED
         self.approval_reason = reason or "Rejected from UI."
         self.approval_decided_at = datetime.now(timezone.utc)
+        return self
+
+    def await_user_input(
+        self, question: str, options: list[str] | None = None
+    ) -> t.Self:
+        """Move ``PENDING_APPROVAL`` → ``INPUT_NEEDED``. Returns self.
+
+        Used by the executor when it meets a fresh ask-the-user record:
+        instead of executing anything, the record itself becomes the
+        pending question. The turn then ends with
+        ``finish_reason='input_needed'`` and the question survives
+        serialization / process death.
+        """
+        if not self.is_pending_approval:
+            raise ValueError(
+                f"Tool call {self.id} cannot await user input from status "
+                f"{self.status}."
+            )
+        self.status = ToolCallStatus.INPUT_NEEDED
+        self.input_question = question
+        self.input_options = list(options) if options else None
+        return self
+
+    def apply_user_answer(self, answer: str) -> t.Self:
+        """Move ``INPUT_NEEDED`` → ``APPROVED``, storing the answer. Returns self.
+
+        The record becomes actionable again; on resume the executor sees
+        ``user_answer`` set and completes the call by returning the answer
+        as its ``ToolResult`` — the tool itself never runs.
+        """
+        if not self.is_awaiting_input:
+            raise ValueError(
+                f"Tool call {self.id} cannot accept a user answer from status "
+                f"{self.status} (must be INPUT_NEEDED)."
+            )
+        self.status = ToolCallStatus.APPROVED
+        self.user_answer = answer
+        self.answered_at = datetime.now(timezone.utc)
+        self.approval_decided_at = self.answered_at
         return self
 
     def start_execution(self) -> t.Self:

@@ -31,7 +31,7 @@ from ..core.event_type import (
     UserInputRequestEvent,
     ReasoningCompleteEvent,
 )
-from ..reasoning.plan import AgentPlan
+from ..tools.plan import AgentPlan
 
 
 # Status glyphs for plan steps — kept ASCII-ish so they render anywhere.

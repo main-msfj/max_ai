@@ -3,7 +3,7 @@ Tool executor for agent runs.
 
 Resolves, approves, validates and executes tool calls. The executor is
 side-effect-free with respect to the LLM transcript — it never appends
-to ``llm_messages``. The caller (``ReActLoop`` or ``Agent``)
+to ``llm_messages``. The caller (``ReActLoopSelfDirected`` or ``Agent``)
 collects ``ToolMessage`` instances from this generator and decides
 where they go.
 
@@ -12,6 +12,10 @@ Tool calls flow as ``ToolCallRecord`` instances (already tracked in
 
 - ``PENDING_APPROVAL`` + tool requires approval → emit
   ``ToolApprovalEvent`` and return; caller pauses the run.
+- the native ask-the-user tool → never executed: fresh records move to
+  ``INPUT_NEEDED`` + emit ``UserInputRequestEvent`` (caller pauses);
+  answered records (``apply_user_answer``) complete from the stored
+  answer.
 - ``PENDING_APPROVAL`` + tool is auto-approve → ``auto_approve()``
   the record, then proceed.
 - ``APPROVED`` / ``AUTO_APPROVED`` → ``start_execution()`` then run.
@@ -44,6 +48,7 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 
 from .executor import CoreExecutor
+from .environment import Environment
 from ..base.tools import CoreRuntimeTool, CoreTool, ToolContext
 from ..base.middleware import CoreMiddleware
 from ..middleware.chain import MiddlewareChain
@@ -56,6 +61,8 @@ from ..types.run_context import RunContext
 from ..types.tools import ToolApprovalMode
 from ..types.tool_call import ToolCallRecord, ToolResult
 
+from ..core.primitives import FailureReason
+
 from ..core.messages import ToolMessage
 from ..core.event_type import (
     CoreEvent,
@@ -63,6 +70,7 @@ from ..core.event_type import (
     ToolApprovalEvent,
     ToolCallResponseEvent,
     ToolProgressEvent,
+    UserInputRequestEvent,
 )
 
 
@@ -72,6 +80,52 @@ log = ScopedLogger(logger, scope=["ToolExecutor"])
 
 # What the executor yields back to the caller.
 ToolExecutorYield = t.Union[ToolMessage, CoreEvent]
+
+# Name of the native ask-the-user tool. Kept as a string constant (not an
+# import of AskUserTool) to avoid a tools -> base -> tools import cycle;
+# a test asserts it matches AskUserTool.TOOL_NAME. The legacy set covers
+# records persisted before the rename so paused runs still resume.
+USER_INPUT_TOOL_NAME = "ask_user"
+USER_INPUT_TOOL_NAMES = frozenset({USER_INPUT_TOOL_NAME, "structure_human_in_loop"})
+
+
+def _frame_user_answer(record: ToolCallRecord) -> str:
+    """Turn a stored ask_user answer into a self-describing tool result.
+
+    A raw answer like ``"Vuelo"`` arrives at the model as a bare tool
+    message with no framing; small models then misread free-form replies
+    as invalid ("your answer blocks me") or forget which question it
+    answered. Deterministic framing fixes that: the result restates the
+    question, and a reply that is not one of the offered options is
+    explicitly labeled as a valid free-form answer to interpret.
+    """
+    answer = (record.user_answer or "").strip()
+    question = (
+        record.input_question
+        or str(record.parameters.get("question") or "")
+    ).strip()
+    q_part = f" to your question {question!r}" if question else ""
+
+    if not answer:
+        return (
+            f"[framework] The user skipped this question"
+            f"{f' ({question!r})' if question else ''} without answering. "
+            "Do not re-ask it — proceed using your best judgment and the "
+            "context you already have."
+        )
+
+    options = record.input_options or []
+    # Options render as "Label — description"; the UI submits the label.
+    labels = {o.strip() for o in options}
+    labels |= {o.split("—", 1)[0].strip() for o in options}
+    if options and answer not in labels:
+        return (
+            f"The user replied in their own words{q_part}: {answer!r}\n"
+            "[framework] This free-form reply IS the answer. Interpret it "
+            "in context and continue the task — do not treat it as "
+            "invalid, do not say it blocks you, and do not re-ask."
+        )
+    return f"The user's answer{q_part}: {answer!r}"
 
 
 # -------- INTERNAL OUTCOMES -----------------------------------------------------------
@@ -105,6 +159,7 @@ class ToolExecutor:
         executor: CoreExecutor | None = None,
         runtime_executor: CoreExecutor | None = None,
         runtime_deps: dict[str, t.Any] | None = None,
+        environment: Environment | None = None,
     ) -> None:
         """Initialize the executor.
 
@@ -120,6 +175,7 @@ class ToolExecutor:
             runtime_executor: Strategy for ``CoreRuntimeTool`` instances
                 such as bash. Defaults to ``executor``.
         """
+        self.environment = environment
         self.tools: dict[str, CoreTool] = {t.name: t for t in (tools or [])}
         self.mw_chain = MiddlewareChain(middlewares=middlewares or [])
         self.agent_name = agent_name
@@ -198,6 +254,17 @@ class ToolExecutor:
                 yield item
             return
 
+        # 3b. Native ask-the-user tool — elicitation is state, never
+        # execution (mirrors the approval pause). Fresh record → mark
+        # INPUT_NEEDED + emit UserInputRequestEvent and pause; answered
+        # record (post apply_user_answer) → synthesize the result from
+        # the stored answer. The tool's execute() is never invoked, so
+        # no executor timeout can kill a waiting question.
+        if record.tool_name in USER_INPUT_TOOL_NAMES:
+            async for item in self._handle_user_input_record(record):
+                yield item
+            return
+
         coerced_skill_name = self._coerce_bash_skill_name_to_read_skill(record)
         if coerced_skill_name is not None:
             _log.info(
@@ -240,7 +307,9 @@ class ToolExecutor:
         if not validation.is_tool_valid:
             err = f"Parameter validation failed: {validation.msg_error}"
             _log.error(err)
-            async for item in self._yield_failure(record, error=err):
+            async for item in self._yield_failure(
+                record, error=err, reason=FailureReason.INVALID_PARAMETERS
+            ):
                 yield item
             return
 
@@ -388,40 +457,47 @@ class ToolExecutor:
 
         # Build the per-call ToolContext once. The executor never sees
         # the full RunContext — it only gets what tools legitimately need.
+        events: asyncio.Queue = asyncio.Queue()
         tool_ctx = ToolContext(
             run_id=ctx.run_id,
             user_id=ctx.user_id,
             session_id=ctx.session_id or "",
             deps=dict(self.runtime_deps),
+            emit_event=events.put_nowait,
+            environment=self.environment,
         )
 
         async def func(rec: ToolCallRecord) -> ToolResult:
             executor = self._executor_for(tool)
             return await executor.run(tool, rec, tool_ctx, cancellation_token)
 
+        async def produce():
+            try:
+                async for item in self.mw_chain.execute(
+                    action=self._ACTION, ctx=ctx, data=record, func=func,
+                ):
+                    events.put_nowait(item)
+            except Exception as error:
+                events.put_nowait(ToolResult.execution_error(
+                    record.id, f"Middleware chain failure: {error}"
+                ))
+            finally:
+                events.put_nowait(None)
+
         result: ToolResult | None = None
+        producer = asyncio.create_task(produce())
         try:
-            async for item in self.mw_chain.execute(
-                action=self._ACTION,
-                ctx=ctx,
-                data=record,
-                func=func,
-            ):
+            while (item := await events.get()) is not None:
                 if isinstance(item, CoreEvent):
                     yield item
-                    continue
-                if isinstance(item, ToolResult):
+                elif isinstance(item, ToolResult):
                     result = item
-                    continue
-                _log.warning(
-                    "Middleware chain yielded unexpected item type",
-                    item_type=type(item).__name__,
-                )
-        except Exception as e:
-            _log.error("Middleware chain failed", err=str(e))
-            result = ToolResult.execution_error(
-                record.id, f"Middleware chain failure: {e}"
-            )
+                else:
+                    _log.warning("Unexpected tool stream item", item_type=type(item).__name__)
+        finally:
+            if not producer.done():
+                producer.cancel()
+            await asyncio.gather(producer, return_exceptions=True)
 
         if result is None:
             _log.error("Middleware chain produced no result")
@@ -444,26 +520,44 @@ class ToolExecutor:
     ) -> AsyncGenerator[ToolExecutorYield, None]:
         """Run multiple records in parallel with bounded concurrency.
 
-        Each task buffers its yielded items so the overall stream stays
-        ordered by the input ``records`` list — UI / LLM never sees
-        events from tool B interleaved into tool A's lifecycle.
+        UI events stream as they occur and carry call IDs. Tool messages stay
+        ordered by the input records so the model transcript is deterministic.
 
         The timeout for each tool starts when it acquires the semaphore.
         Time spent waiting for a slot does NOT consume the timeout.
         """
         semaphore = asyncio.Semaphore(self.max_concurrent_tools)
+        live_events: asyncio.Queue = asyncio.Queue()
 
         async def runner(rec: ToolCallRecord) -> list[ToolExecutorYield]:
             buffer: list[ToolExecutorYield] = []
             async with semaphore:
                 async for item in self._process_record(ctx, rec, cancellation_token):
-                    buffer.append(item)
+                    if isinstance(item, CoreEvent):
+                        live_events.put_nowait(item)
+                    else:
+                        buffer.append(item)
             return buffer
 
         tasks = [asyncio.create_task(runner(r)) for r in records]
-        results: list[list[ToolExecutorYield] | BaseException] = await asyncio.gather(
-            *tasks, return_exceptions=True
-        )
+        async def collect():
+            try:
+                return await asyncio.gather(*tasks, return_exceptions=True)
+            finally:
+                live_events.put_nowait(None)
+
+        collector = asyncio.create_task(collect())
+        try:
+            while (event := await live_events.get()) is not None:
+                yield event
+            results = await collector
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if not collector.done():
+                collector.cancel()
+            await asyncio.gather(collector, *tasks, return_exceptions=True)
 
         for record, outcome in zip(records, results):
             if isinstance(outcome, BaseException):
@@ -488,11 +582,76 @@ class ToolExecutor:
             for item in outcome:
                 yield item
 
+    # -------- ELICITATION (ask-the-user) -----------------------------------------------------------
+    async def _handle_user_input_record(
+        self,
+        record: ToolCallRecord,
+    ) -> AsyncGenerator[ToolExecutorYield, None]:
+        """Resolve an ask-the-user record without executing anything.
+
+        Three cases:
+
+        - **Answered** (``user_answer`` set by ``apply_user_answer``):
+          complete the call — the answer *is* the tool result. Emits the
+          normal ``ToolMessage`` + ``ToolCallResponseEvent`` pair.
+        - **Fresh** (``PENDING_APPROVAL``): transition to ``INPUT_NEEDED``
+          with the question/options from the call parameters and emit
+          ``UserInputRequestEvent``. The caller pauses the turn.
+        - **Still waiting** (``INPUT_NEEDED``, re-dispatched without an
+          answer): re-emit the event — idempotent pause.
+        """
+        if record.user_answer is not None:
+            if record.is_pending_approval:
+                # Defensive: answer arrived through a path that never went
+                # through INPUT_NEEDED (e.g. pre-seeded). Approve so
+                # start_execution() holds.
+                record.auto_approve()
+            record.start_execution()
+            result = ToolResult.success_result(
+                record.id, _frame_user_answer(record)
+            )
+            async for item in self._consume_and_yield(record, result):
+                yield item
+            return
+
+        if record.is_pending_approval:
+            # Accept legacy strings or {label, description} objects,
+            # rendered as "label — description"; malformed entries drop.
+            raw_options = record.parameters.get("options")
+            options = None
+            if isinstance(raw_options, list):
+                sanitized: list[str] = []
+                for o in raw_options:
+                    if isinstance(o, str):
+                        if o.strip():
+                            sanitized.append(o.strip())
+                    elif isinstance(o, dict):
+                        label = o.get("label")
+                        if isinstance(label, str) and label.strip():
+                            text = label.strip()
+                            description = o.get("description")
+                            if isinstance(description, str) and description.strip():
+                                text = f"{text} — {description.strip()}"
+                            sanitized.append(text)
+                options = sanitized or None
+            record.await_user_input(
+                question=str(record.parameters.get("question") or ""),
+                options=options,
+            )
+
+        yield UserInputRequestEvent(
+            source=self.agent_name,
+            tool_call_id=record.id,
+            question=record.input_question or "",
+            options=record.input_options,
+        )
+
     # -------- HELPERS -----------------------------------------------------------
     async def _yield_failure(
         self,
         record: ToolCallRecord,
         error: str,
+        reason: FailureReason = FailureReason.EXECUTION_ERROR,
     ) -> AsyncGenerator[ToolExecutorYield, None]:
         """Emit a failure for a record that never reached execution.
 
@@ -502,7 +661,7 @@ class ToolExecutor:
         a failure ``ToolResult`` so it lands in a terminal state and
         doesn't leak back into ``actionable_calls`` or ``pending_approvals``.
         """
-        result = ToolResult.tool_failure(record.id, error=error)
+        result = ToolResult.tool_failure(record.id, error=error, reason=reason)
 
         if record.is_executing:
             record.mark_consumed(result)
@@ -529,7 +688,8 @@ class ToolExecutor:
         """Handle a model calling a skill capability id as a tool or shell command."""
         message = (
             "This skill capability was not executed. Retry by calling the bash "
-            f"tool with command: read_skill {skill_name}. Do not mention "
+            f'tool with command: cat "$WORKSPACE/skills/{skill_name}/SKILL.md", '
+            "action: read_file, and a short description. Do not mention "
             "this retry instruction to the user."
         )
         result = ToolResult.execution_error(

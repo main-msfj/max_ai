@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import re
 import typing as t
 
 from pydantic import Field
 
 from ..config import setting
-from ..types.stacks import PromptCtx
+from ..types.stacks import PromptCtx, PromptLayerUsage
 from ..core.messages import UserMessage
 from ..types.run_context import RunContext
 from ..core.compaction import CompactionOutput, CompactionResult
@@ -33,6 +34,13 @@ SUMMARY_PROMPT = (
     "</COMPACTION_SUMMARY>"
 )
 
+# Matches a previously injected summary block so re-injection REPLACES it.
+# Stacking blocks would show the model multiple contradictory summaries
+# and grow the prompt without bound.
+_SUMMARY_BLOCK_RE = re.compile(
+    r"\n*<COMPACTION_SUMMARY>.*?</COMPACTION_SUMMARY>", re.S
+)
+
 SUMMARY_TASK = (
     "Create an updated compact conversation summary.\n"
     "Combine the previous summary with the messages below. The messages "
@@ -51,6 +59,13 @@ class SlidingWindowCompaction(CoreCompaction):
     Older messages are merged with the previous compaction summary using the
     configured chat completion client. Newer raw messages win over stale
     summary details when there is a conflict.
+
+    Scope: this strategy manages ``ctx.messages`` only. A populated
+    ``ctx.message_history`` is the caller's responsibility to budget — it
+    is neither counted against the threshold nor summarized here.
+
+    Per the ``CoreCompaction`` contract, ``compact`` never mutates
+    ``ctx.messages`` — the caller applies ``result.recent_messages``.
     """
 
     token_counter: TokenCounter = Field(default_factory=TokenCounter)
@@ -66,13 +81,16 @@ class SlidingWindowCompaction(CoreCompaction):
         previous_summary = self._load_previous_summary(ctx)
 
         max_output_tokens = client_max_output_tokens(client)
+        prompt_tokens = prompts.prompt_tokens or None
         live_message_capacity = live_message_capacity_tokens(
             max_context_tokens,
             max_output_tokens=max_output_tokens,
+            prompt_tokens=prompt_tokens,
         )
         live_message_threshold = live_message_threshold_tokens(
             max_context_tokens,
             max_output_tokens=max_output_tokens,
+            prompt_tokens=prompt_tokens,
         )
         live_message_budget = live_message_budget_tokens(live_message_capacity)
         total_tokens = self.token_counter.count_messages(ctx.messages)
@@ -91,6 +109,7 @@ class SlidingWindowCompaction(CoreCompaction):
         old_messages, recent_messages = split_recent_messages(
             groups,
             max_tokens=live_message_budget,
+            min_keep_groups=setting.compaction_min_keep_groups,
         )
 
         summary = None
@@ -99,13 +118,13 @@ class SlidingWindowCompaction(CoreCompaction):
                 client=client,
                 previous_summary=previous_summary,
                 old_messages=old_messages,
+                max_context_tokens=max_context_tokens,
             )
             summary = summary_output.model_dump_json(exclude_none=True)
             ctx.runtime_state.shared_state["compaction_summary"] = (
                 summary_output.model_dump(exclude_none=True)
             )
             self._inject_summary(prompts, summary_output)
-            ctx.messages = recent_messages
 
         return CompactionResult(
             changed=bool(old_messages),
@@ -141,14 +160,27 @@ class SlidingWindowCompaction(CoreCompaction):
             from ..stacks.context_layer import ContextLayer
 
             existing = prompts.rendered_layers.get(ContextLayer, "")
-            prompts.rendered_layers[ContextLayer] = (
-                f"{existing.rstrip()}\n\n{block}" if existing else block
-            )
+            # Replace any previously injected block — never stack them.
+            base = _SUMMARY_BLOCK_RE.sub("", existing).rstrip()
+            rendered = f"{base}\n\n{block}" if base else block
+            prompts.rendered_layers[ContextLayer] = rendered
+            self._refresh_prompt_usage(prompts, ContextLayer.__name__, rendered)
         except Exception:
             # Prompt injection should never break the run. If the concrete
             # context layer is unavailable, the summary still remains in
             # runtime_state for the next compaction pass.
             return
+
+    def _refresh_prompt_usage(
+        self, prompts: PromptCtx, layer_name: str, rendered: str
+    ) -> None:
+        """Keep PromptCtx token accounting honest after injection."""
+        prompts.layer_usage[layer_name] = PromptLayerUsage(
+            layer_name=layer_name,
+            chars=len(rendered),
+            tokens=self.token_counter.count_text(rendered),
+        )
+        prompts.prompt_tokens = sum(u.tokens for u in prompts.layer_usage.values())
 
     def _summary_prompt_block(self, summary: CompactionOutput) -> str:
         payload = summary.model_dump_json(exclude_none=True)
@@ -162,8 +194,64 @@ class SlidingWindowCompaction(CoreCompaction):
         client: CoreChatCompletionClient,
         previous_summary: CompactionOutput | None,
         old_messages: list[t.Any],
+        max_context_tokens: int = 0,
     ) -> CompactionOutput:
-        task = self._summary_task(previous_summary, old_messages)
+        """Fold old messages into an updated summary, chunking when needed.
+
+        Each message is truncated to a per-message token cap first (a giant
+        evicted tool output must not blow the summarization request). If the
+        combined transcript still exceeds the input budget, messages are
+        split into chunks and folded left-to-right: chunk N's summary
+        becomes chunk N+1's "previous summary".
+        """
+        input_budget = self._summary_input_budget(max_context_tokens)
+        rows = [self._message_row(m) for m in old_messages]
+
+        chunks: list[list[str]] = []
+        current: list[str] = []
+        current_tokens = 0
+        for row in rows:
+            row_tokens = self.token_counter.count_text(row)
+            if current and current_tokens + row_tokens > input_budget:
+                chunks.append(current)
+                current, current_tokens = [], 0
+            current.append(row)
+            current_tokens += row_tokens
+        if current:
+            chunks.append(current)
+
+        summary = previous_summary
+        for chunk in chunks:
+            summary = await self._summarize_transcript(
+                client=client,
+                previous_summary=summary,
+                transcript="\n".join(chunk),
+            )
+        return summary if summary is not None else CompactionOutput()
+
+    def _summary_input_budget(self, max_context_tokens: int) -> int:
+        """Token budget for one summarization request's transcript."""
+        if max_context_tokens <= 0:
+            return 8000
+        reserved = (
+            setting.compaction_summary_budget_tokens  # structured output
+            + setting.compaction_prompt_budget_tokens  # task scaffold + prev summary
+        )
+        return max(1000, int(max_context_tokens * 0.5) - reserved)
+
+    async def _summarize_transcript(
+        self,
+        *,
+        client: CoreChatCompletionClient,
+        previous_summary: CompactionOutput | None,
+        transcript: str,
+    ) -> CompactionOutput:
+        previous = (
+            previous_summary.model_dump_json(exclude_none=True)
+            if previous_summary is not None
+            else "No previous summary."
+        )
+        task = SUMMARY_TASK.format(previous=previous, transcript=transcript)
         summary_ctx = RunContext(
             messages=[UserMessage(source="compaction", content=task)]
         )
@@ -191,30 +279,26 @@ class SlidingWindowCompaction(CoreCompaction):
             return CompactionOutput(summary=result.message.text().strip())
         return CompactionOutput()
 
-    def _summary_task(
-        self,
-        previous_summary: CompactionOutput | None,
-        old_messages: list[t.Any],
-    ) -> str:
-        previous = (
-            previous_summary.model_dump_json(exclude_none=True)
-            if previous_summary is not None
-            else "No previous summary."
+    def _message_row(self, message: t.Any) -> str:
+        role = getattr(message, "role", "message")
+        source = getattr(message, "source", "unknown")
+        text = (
+            message.text()
+            if callable(getattr(message, "text", None))
+            else str(message)
         )
-        transcript = self._messages_transcript(old_messages)
-        return SUMMARY_TASK.format(previous=previous, transcript=transcript)
+        if not text and getattr(message, "tool_calls", None):
+            text = f"tool_calls={message.tool_calls}"
+        text = self._truncate_to_tokens(
+            text, setting.compaction_summary_message_cap_tokens
+        )
+        return f"[{role}/{source}] {text}"
 
-    def _messages_transcript(self, messages: list[t.Any]) -> str:
-        rows: list[str] = []
-        for message in messages:
-            role = getattr(message, "role", "message")
-            source = getattr(message, "source", "unknown")
-            text = (
-                message.text()
-                if callable(getattr(message, "text", None))
-                else str(message)
-            )
-            if not text and getattr(message, "tool_calls", None):
-                text = f"tool_calls={message.tool_calls}"
-            rows.append(f"[{role}/{source}] {text}")
-        return "\n".join(rows)
+    def _truncate_to_tokens(self, text: str, cap: int) -> str:
+        if not text or cap <= 0:
+            return text
+        encoder = self.token_counter._encoder
+        tokens = encoder.encode(text)
+        if len(tokens) <= cap:
+            return text
+        return encoder.decode(tokens[:cap]) + " …[truncated]"

@@ -28,6 +28,7 @@ from pydantic import (
     ConfigDict,
     Discriminator,
     Field,
+    SerializeAsAny,
     TypeAdapter,
     model_validator,
 )
@@ -278,7 +279,47 @@ class AssistantMessage(CoreMessage):
 
     tool_calls: list[ToolCall] = Field(default_factory=list)
     thinking: str | None = Field(default=None, description="Reasoning")
-    structured_output: BaseModel | None = Field(default=None)
+    # A final answer that a loop guard vetoed (e.g. the model stopped
+    # mid-plan and was steered to continue). It stays in the transcript
+    # so the model keeps its own context, but UIs should hide or collapse
+    # it — the model's NEXT answer supersedes it.
+    interim: bool = Field(default=False)
+    # SerializeAsAny: dump the runtime class's fields, not the empty
+    # ``BaseModel`` schema the annotation would otherwise imply.
+    structured_output: SerializeAsAny[BaseModel] | None = Field(default=None)
+    # Dotted import path of the structured_output class. Maintained
+    # automatically so a persisted message can revalidate its structured
+    # output into the right model on rehydration (a bare ``BaseModel``
+    # annotation would otherwise deserialize into an empty model).
+    structured_output_type: str | None = Field(default=None)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _hydrate_structured_output(cls, data: t.Any) -> t.Any:
+        if not isinstance(data, dict):
+            return data
+        so = data.get("structured_output")
+        if isinstance(so, BaseModel):
+            from .type_ref import type_ref
+
+            data = {**data, "structured_output_type": type_ref(type(so))}
+            return data
+        if isinstance(so, dict):
+            from .type_ref import load_type_ref
+
+            ref = data.get("structured_output_type")
+            try:
+                model_cls = load_type_ref(ref)
+            except Exception:
+                model_cls = None
+            data = dict(data)
+            if model_cls is not None:
+                data["structured_output"] = model_cls.model_validate(so)
+            else:
+                # No usable type reference — drop rather than silently
+                # producing an empty BaseModel that lies about its content.
+                data["structured_output"] = None
+        return data
 
     def _format_tool_calls(self) -> str:
         if not self.tool_calls:

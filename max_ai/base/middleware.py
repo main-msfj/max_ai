@@ -18,8 +18,12 @@ import typing as t
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator
 
-from ..core.event_type import CoreEvent
 from ..types.middleware import MiddlewareCtx
+
+if t.TYPE_CHECKING:
+    # Annotation-only: importing eagerly creates the cycle
+    # base/__init__ -> middleware -> core.event_type -> base.scratchpad.
+    from ..core.event_type import CoreEvent
 
 
 class CoreMiddleware(ABC):

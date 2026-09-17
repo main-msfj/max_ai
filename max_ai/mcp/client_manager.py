@@ -58,10 +58,15 @@ class MCPClientManager:
         logger_for_server = log.child(server_id=server_id)
         logger_for_server.info("Connecting MCP server")
         transport = await connect_to_mcp_server(server.config)
-        session = ClientSession(transport.read, transport.write)
 
         try:
-            await session.__aenter__()
+            # Enter the session context into the transport's exit stack so the
+            # session and transport unwind together, LIFO, in this same task.
+            # Splitting __aenter__/__aexit__ across call sites corrupts anyio's
+            # cancel-scope stack and surfaces as CancelledError in initialize().
+            session = await transport.exit_stack.enter_async_context(
+                ClientSession(transport.read, transport.write)
+            )
             await session.initialize()
             server.transport = transport
             server.session = session
@@ -73,8 +78,6 @@ class MCPClientManager:
             )
             return session
         except Exception:
-            with suppress(Exception):
-                await session.__aexit__(None, None, None)
             with suppress(Exception):
                 await transport.close()
             server.transport = None
@@ -101,15 +104,14 @@ class MCPClientManager:
 
     async def disconnect(self, server_id: str) -> None:
         server = self._get_server(server_id)
-        session, transport = server.session, server.transport
+        transport = server.transport
         server.session = None
         server.transport = None
         server.connected = False
         server.tools = []
 
-        if session is not None:
-            with suppress(Exception):
-                await session.__aexit__(None, None, None)
+        # The session was entered into the transport's exit stack, so closing
+        # the transport unwinds both together in LIFO order in this task.
         if transport is not None:
             with suppress(Exception):
                 await transport.close()

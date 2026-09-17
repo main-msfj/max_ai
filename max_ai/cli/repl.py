@@ -4,22 +4,18 @@
 
   * reads a line from the user,
   * streams the agent's events through ``CliRenderer``,
-  * answers the agent's own questions inline (the native
-    ``structure_human_in_loop`` tool) without ending the turn,
+  * resolves the agent's pauses between segments — tool approvals *and*
+    the agent's own questions (the native ``ask_user``
+    tool) are both pure record state on ``ctx.tool_state``, so the flow
+    is identical: the segment ends, we prompt the user, apply the
+    decision/answer, and ``resume`` the same context,
   * threads the run's ``RunContext`` into the next turn so the agent
     remembers the conversation.
 
-Concurrency note — why this is not a plain ``async for`` over the stream:
-the reasoning loop blocks on ``await future`` *inside* the human-input tool
-*before* it emits ``UserInputRequestEvent``. A single-process consumer that
-just iterates the stream would deadlock: it can't read the question (the
-event hasn't been yielded) and it can't answer (it's awaiting the next
-event). So we drive the event stream in a background task and, in the
-foreground, watch ``agent.pending_user_input``; when a question appears we
-prompt the user and call ``agent.provide_user_input`` to unblock the loop.
-
-All rendering lives in ``CliRenderer``; this module owns only the loop and
-the human-input handshake.
+There is no polling and no background task: the executor emits
+``UserInputRequestEvent`` *instead of* executing the ask-the-user tool,
+so the stream simply ends with ``finish_reason='input_needed'`` and the
+question is waiting on the terminal ``AgentResponse``.
 """
 
 from __future__ import annotations
@@ -29,7 +25,6 @@ import typing as t
 
 from rich.console import Console
 from rich.text import Text
-from rich.panel import Panel
 
 from ..base.agent import Agent
 from ..core.messages import AssistantMessage, ToolMessage
@@ -39,10 +34,6 @@ from .renderer import CliRenderer
 
 
 _EXIT_COMMANDS = {"/exit", "/quit", "/q"}
-
-# How often the foreground checks for a pending agent question while the
-# event stream runs in the background.
-_POLL_INTERVAL = 0.05
 
 
 async def run_repl(
@@ -105,11 +96,10 @@ async def _run_one_turn(
 
     Returns the terminal ``RunContext`` to thread into the next turn.
 
-    A turn can pause twice over: for a human-input question (handled inline
-    while the stream runs, see ``_drive_stream``) and for tool approval (the
-    stream ends with ``finish_reason='approval_needed'``; we prompt y/n, apply
-    the decisions, and resume). The approval loop repeats until the turn
-    finishes for real or the user rejects everything.
+    A turn can pause for tool approval and for the agent's own questions.
+    Both end the stream segment; we resolve whatever is pending on the
+    terminal response and resume the same context until the turn finishes
+    for real (or the user rejects everything).
     """
     renderer.begin_turn()
 
@@ -120,12 +110,12 @@ async def _run_one_turn(
         renderer,
     )
 
-    # Approval loop: while the turn paused for tool approval, resolve it and
-    # resume the same context until the turn completes.
-    while response is not None and response.needs_approval:
-        resolved = await _resolve_approvals(response, renderer)
+    # Pause loop: while the turn paused for approvals or questions, resolve
+    # them and resume the same context until the turn completes.
+    while response is not None and (response.needs_approval or response.needs_input):
+        resolved = await _resolve_pauses(response, renderer)
         if not resolved:
-            break  # nothing got approved and we can't make progress
+            break  # nothing got approved/answered and we can't make progress
         response = await _drive_stream(
             agent,
             agent.resume_stream_events(
@@ -143,68 +133,58 @@ async def _drive_stream(
     stream: t.AsyncGenerator[t.Any, None],
     renderer: CliRenderer,
 ) -> AgentResponse | None:
-    """Consume one event-stream segment, answering human-input questions inline.
+    """Consume one event-stream segment.
 
-    The stream is drained in a background task while this coroutine polls
-    ``agent.pending_user_input`` (the loop blocks on a future *before* emitting
-    the input event, so we can't learn of a question from the stream itself —
-    see the module docstring). Returns the segment's terminal ``AgentResponse``
-    (``None`` if the stream raised before producing one).
+    Returns the segment's terminal ``AgentResponse`` (``None`` if the
+    stream raised before producing one). The loop already emits an
+    ErrorEvent for any failure (rendered inline), so a raised exception
+    is swallowed after showing a readable error line — the REPL keeps
+    the conversation going.
     """
     response: AgentResponse | None = None
-
-    async def _consume() -> None:
-        nonlocal response
+    try:
         async for item in stream:
             if isinstance(item, AgentResponse):
                 response = item
                 continue
             renderer.handle(item)
-
-    consumer = asyncio.create_task(_consume())
-
-    # Track questions we've already answered so we prompt once per question.
-    answered_question: str | None = None
-    while not consumer.done():
-        question = agent.pending_user_input
-        if question is not None and question != answered_question:
-            options = agent.pending_user_input_options
-            answer = await _ask_user(renderer, question, options)
-            agent.provide_user_input(answer)
-            answered_question = question
-        await asyncio.sleep(_POLL_INTERVAL)
-
-    # Drain the finished task. The loop already emits an ErrorEvent for any
-    # failure (rendered above), so a raised exception here would be a duplicate
-    # crashing the whole REPL with a raw traceback. Swallow it and keep the
-    # conversation going — the user saw the readable error line already.
-    exc = consumer.exception()
-    if exc is not None and not isinstance(exc, asyncio.CancelledError):
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
         renderer.show_error(str(exc))
 
     return response
 
 
-async def _resolve_approvals(
+async def _resolve_pauses(
     response: AgentResponse,
     renderer: CliRenderer,
 ) -> bool:
-    """Prompt the user to approve/reject each pending tool call.
+    """Prompt the user for every pending approval and question.
 
-    Applies every decision to ``response.context.tool_state`` so the resumed
-    run sees them. Returns ``True`` if at least one tool was approved (i.e.
-    there is work to resume), ``False`` if the user rejected everything.
+    Applies every decision/answer to ``response.context.tool_state`` so the
+    resumed run sees them. Returns ``True`` if there is work to resume (at
+    least one approval granted or question answered), ``False`` otherwise.
     """
     ctx = response.context
     if ctx is None:
         return False
 
-    any_approved = False
+    made_progress = False
+
     for record in response.pending_approvals:
         approved = await _ask_approval(renderer, record.tool_name, record.parameters)
         ctx.tool_state.apply_approval(record.id, approved=approved)
-        any_approved = any_approved or approved
-    return any_approved
+        made_progress = made_progress or approved
+
+    for record in response.pending_questions:
+        answer = await _ask_user(
+            renderer, record.input_question or "", record.input_options
+        )
+        ctx.tool_state.apply_user_answer(record.id, answer)
+        made_progress = True
+
+    return made_progress
 
 
 def _sanitize_orphan_tool_calls(ctx: RunContext) -> None:
@@ -215,6 +195,11 @@ def _sanitize_orphan_tool_calls(ctx: RunContext) -> None:
     before the result was recorded). Replaying that transcript to a provider
     is an immediate 400. We remove only the orphaned assistant messages (and
     keep everything else), so the conversation continues with clean context.
+
+    Records still pending on ``ctx.tool_state`` (approvals, questions) are
+    resolved between segments, never across user turns — by the time a new
+    user turn starts they are either consumed or their assistant message is
+    an orphan handled here.
 
     Mutates ``ctx.messages`` in place.
     """
@@ -271,6 +256,6 @@ async def _ainput(renderer: CliRenderer, prompt: t.Any) -> str:
     """Read one line of input without blocking the event loop.
 
     ``console.input`` is blocking; running it in a thread keeps the
-    background event stream alive while the user types.
+    rest of the terminal responsive while the user types.
     """
     return await asyncio.to_thread(renderer.console.input, prompt)

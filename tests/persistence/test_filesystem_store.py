@@ -168,3 +168,69 @@ async def test_round_trip_preserves_tool_state(store):
     assert loaded.tool_state.has(record.id)
     assert loaded.tool_state.get(record.id).tool_name == "get_weather"
     assert loaded.tool_state.get(record.id).is_pending_approval
+
+# -------- ROUND-TRIP FIDELITY -----------------------------------------------------------
+async def test_round_trip_preserves_message_history_subtypes(store):
+    """A persisted context with populated ChatHistory must rehydrate with
+    concrete message subtypes intact (regression: the old validator
+    rejected the raw dicts json loading produces)."""
+    from max_ai.core.messages import AssistantMessage, ToolCall, ToolMessage
+    from max_ai.types.chat_history import ChatHistory
+
+    ctx = RunContext(
+        run_id="roundtrip1",
+        messages=[
+            AssistantMessage(
+                source="a",
+                content="",
+                tool_calls=[ToolCall(id="c1", tool_name="t", parameters={"x": 1})],
+            ),
+            ToolMessage(
+                source="a", tool_call_id="c1", tool_name="t", success=True, content="ok"
+            ),
+        ],
+        message_history=ChatHistory(
+            message_history=[
+                UserMessage(source="u", content="previous turn"),
+                AssistantMessage(
+                    source="a",
+                    content="did it",
+                    tool_calls=[ToolCall(id="h1", tool_name="z")],
+                ),
+            ]
+        ),
+    )
+    await store.save(ctx.run_id, ctx)
+    loaded = await store.load(ctx.run_id)
+
+    assert loaded is not None
+    hist = list(loaded.message_history.iter_messages())
+    assert [type(m).__name__ for m in hist] == ["UserMessage", "AssistantMessage"]
+    assert hist[1].tool_calls[0].tool_name == "z"
+    assert isinstance(loaded.messages[1], ToolMessage)
+    assert loaded.messages[1].tool_call_id == "c1"
+
+
+async def test_round_trip_preserves_structured_output(store):
+    """structured_output must revalidate into its original class."""
+    from max_ai.core.compaction import CompactionOutput
+    from max_ai.core.messages import AssistantMessage
+
+    ctx = RunContext(
+        run_id="roundtrip2",
+        messages=[
+            AssistantMessage(
+                source="a",
+                content="",
+                structured_output=CompactionOutput(summary="s1", pending=["p"]),
+            )
+        ],
+    )
+    await store.save(ctx.run_id, ctx)
+    loaded = await store.load(ctx.run_id)
+
+    assert loaded is not None
+    out = loaded.messages[0].structured_output
+    assert type(out) is CompactionOutput
+    assert out.summary == "s1"
+    assert out.pending == ["p"]

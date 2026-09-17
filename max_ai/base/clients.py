@@ -45,6 +45,7 @@ if t.TYPE_CHECKING:
 
 T = t.TypeVar("T")
 
+
 class CoreChatCompletionClient(ComponentBase[BaseModel], ABC):
     """Abstract base class for all MaxAI chat completion clients.
 

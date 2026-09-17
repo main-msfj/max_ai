@@ -29,12 +29,10 @@ from ..base.knowledge import CoreKnowledgeRegistry
 from ..base.memory import CoreMemoryRegistry
 from ..base.routines import CoreRoutineRegistry
 from ..base.skills import CoreSkillRegistry
-from ..base.tools import CoreTool
+from ..base.tools import CoreRuntimeTool, CoreTool
 from ..base.workspace import WorkSpaceRegistry
-from ..tools.bash import BashTool
 from ..tools.function_as_tool import FunctionAsTool
-from ..tools.workspace import WorkspaceTool
-from ..types.tools import ToolApprovalMode
+from ..tools.file_system import FileSystem
 
 logger = logging.getLogger(__name__)
 log = ScopedLogger(logger, prefix="[AgentCapabilities]")
@@ -145,9 +143,7 @@ class AgentCapabilities:
         return normalized
 
     def get_native_tools(self) -> list[CoreTool]:
-        tools: list[CoreTool] = [WorkspaceTool()]
-        if self.skills is not None:
-            tools.append(BashTool(approval_mode=ToolApprovalMode.AUTO_APPROVED))
+        tools: list[CoreTool] = [*FileSystem().get_toolset().tools]
         return tools
 
     def collect_tools(self) -> list[CoreTool]:
@@ -232,12 +228,14 @@ class AgentCapabilities:
     @property
     def requires_workspace(self) -> bool:
         """Return True when runtime files are needed."""
-        return self.has_tools or self.has_skills
+        return self.has_tools or self.has_skills or bool(self.get_native_tools())
 
     @property
     def requires_sandbox_executor(self) -> bool:
-        """Return True when local execution should not be allowed."""
-        return self.has_skills
+        """Return True when any registered runtime tool needs isolation."""
+        return any(
+            isinstance(tool, CoreRuntimeTool) for tool in self._all_tools_sync()
+        )
 
     @property
     def has_memory(self) -> bool:
