@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from abc import ABC, abstractmethod
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
@@ -17,7 +18,7 @@ class WorkspaceConfig(BaseModel):
     root: str | None = None
 
 
-class Workspace(CoreAgentCapabilities[WorkspaceConfig]):
+class WorkspaceBase(CoreAgentCapabilities[WorkspaceConfig], ABC):
     """Own ``.agents/<user>/skills`` and ``.agents/<user>/<conversation>``.
 
     User and conversation identifiers come from the run context. Files remain
@@ -29,7 +30,11 @@ class Workspace(CoreAgentCapabilities[WorkspaceConfig]):
 
     def __init__(self, root: str | Path | None = None) -> None:
         super().__init__()
-        self.base_root = Path(root if root is not None else setting.root_dir / ".agents").expanduser().resolve()
+        self.base_root = (
+            Path(root if root is not None else setting.root_dir / ".agents")
+            .expanduser()
+            .resolve()
+        )
         self.base_root.mkdir(parents=True, exist_ok=True)
         self._filesystem = None
 
@@ -37,17 +42,19 @@ class Workspace(CoreAgentCapabilities[WorkspaceConfig]):
         return WorkspaceConfig(root=str(self.base_root))
 
     @classmethod
-    def _from_config(cls, config: WorkspaceConfig) -> Workspace:
+    def _from_config(cls, config: WorkspaceConfig) -> WorkspaceBase:
         return cls(root=config.root)
 
     def get_filesystem(self):
-        from ..workspace.filesystem import UserFileSystem
+        from ..workspace_copy.filesystem import UserFileSystem
 
         if self._filesystem is None:
             self._filesystem = UserFileSystem(self.base_root)
         return self._filesystem
 
-    def materialize(self, user_id: str, conversation_id: str | None = None) -> WorkspaceDirectory:
+    def materialize(
+        self, user_id: str, conversation_id: str | None = None
+    ) -> WorkspaceDirectory:
         """Create a user's directories without clearing existing files."""
         filesystem = self.get_filesystem()
         filesystem._safe_id(user_id, "user_id")
@@ -62,11 +69,13 @@ class Workspace(CoreAgentCapabilities[WorkspaceConfig]):
             os.close(user_fd)
         conversation = (
             filesystem.conversation_root(user_id, conversation_id)
-            if conversation_id is not None else None
+            if conversation_id is not None
+            else None
         )
         scratch = (
             filesystem.scratchpad_root(user_id, conversation_id)
-            if conversation_id is not None else None
+            if conversation_id is not None
+            else None
         )
         return WorkspaceDirectory(
             root=root,
@@ -76,6 +85,15 @@ class Workspace(CoreAgentCapabilities[WorkspaceConfig]):
             artifacts_dir=conversation or root / "artifacts",
         )
 
+    @abstractmethod
+    async def download(self, user_id: str, conversation_id: str | None = None) -> None:
+        """Pull this backend's remote content into the local working tree."""
 
-# Import compatibility only: there is one concrete workspace implementation.
-WorkSpaceRegistry = Workspace
+    @abstractmethod
+    async def upload(self, user_id: str, conversation_id: str | None = None) -> None:
+        """Push local working-tree changes back to this backend's store."""
+
+    async def sync(self, user_id: str, conversation_id: str | None = None) -> None:
+        """Download then upload. Override if a backend needs a different order."""
+        await self.download(user_id, conversation_id)
+        await self.upload(user_id, conversation_id)

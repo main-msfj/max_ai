@@ -128,7 +128,7 @@ class CoreRoutineRegistry(CoreAgentCapabilities[BaseModel], ABC):
 
     # -------- TOOL FACTORIES -----------------------------------------------------------
     def _build_search_tool(self) -> CoreTool:
-        from ..tools import FunctionAsTool
+        from ..capabilities.tools import FunctionAsTool
         """Tool: semantic search over the routine catalog."""
 
         async def search_routines(query: str, limit: int = 5) -> list[dict[str, t.Any]]:
@@ -160,7 +160,7 @@ class CoreRoutineRegistry(CoreAgentCapabilities[BaseModel], ABC):
         )
 
     def _build_get_tool(self) -> CoreTool:
-        from ..tools import FunctionAsTool
+        from ..capabilities.tools import FunctionAsTool
         """Tool: load the full routine instructions by name."""
 
         async def get_routine(name: str) -> str:

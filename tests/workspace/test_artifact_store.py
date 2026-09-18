@@ -3,8 +3,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from max_ai.workspace.artifacts import Artifact, ArtifactConflict, LocalArtifactStore
-from max_ai.workspace.filesystem import UserFileSystem
+from max_ai.workspace_copy.artifacts import Artifact, ArtifactConflict, LocalArtifactStore
+from max_ai.workspace_copy.filesystem import UserFileSystem
 
 
 def test_artifact_revisions_survive_store_restart_and_are_integrity_checked(tmp_path):

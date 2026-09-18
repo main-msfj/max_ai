@@ -30,9 +30,9 @@ from ..base.memory import CoreMemoryRegistry
 from ..base.routines import CoreRoutineRegistry
 from ..base.skills import CoreSkillRegistry
 from ..base.tools import CoreRuntimeTool, CoreTool
-from ..base.workspace import WorkSpaceRegistry
-from ..tools.function_as_tool import FunctionAsTool
-from ..tools.file_system import FileSystem
+from ..base.workspace import WorkspaceBase
+from ..capabilities.tools.function_as_tool import FunctionAsTool
+from ..capabilities.tools.file_system import FileSystem
 
 logger = logging.getLogger(__name__)
 log = ScopedLogger(logger, prefix="[AgentCapabilities]")
@@ -83,7 +83,7 @@ class AgentCapabilities:
         self.skills: CoreSkillRegistry | None = None
         self.logbook: CoreLogBookRegistry | None = None
         self.routines: CoreRoutineRegistry | None = None
-        self.workspace: WorkSpaceRegistry | None = None
+        self.workspace: WorkspaceBase | None = None
         self.priority_tools: list[str] = list(priority_tools or [])
         self.knowledge: list[CoreKnowledgeRegistry] = []
         self.toolset: list[CoreTool] = self._normalize_tools(toolset or [])
@@ -125,7 +125,7 @@ class AgentCapabilities:
             self.routines = cap
         elif isinstance(cap, CoreKnowledgeRegistry) and cap not in self.knowledge:
             self.knowledge.append(cap)
-        elif isinstance(cap, WorkSpaceRegistry) and self.workspace is None:
+        elif isinstance(cap, WorkspaceBase) and self.workspace is None:
             self.workspace = cap
 
     @staticmethod

@@ -290,7 +290,7 @@ class CoreMemoryRegistry(CoreAgentCapabilities[BaseModel], ABC):
         return self.as_tools()
 
     def _build_list_tool(self) -> CoreTool:
-        from ..tools import FunctionAsTool
+        from ..capabilities.tools import FunctionAsTool
 
         async def list_memories() -> list[dict[str, t.Any]]:
             """List every fact currently stored about the user."""
@@ -305,7 +305,7 @@ class CoreMemoryRegistry(CoreAgentCapabilities[BaseModel], ABC):
         )
 
     def _build_search_tool(self) -> CoreTool:
-        from ..tools import FunctionAsTool
+        from ..capabilities.tools import FunctionAsTool
 
         async def search_memories(
             query: str, limit: int = 5, category: str | None = None
@@ -326,7 +326,7 @@ class CoreMemoryRegistry(CoreAgentCapabilities[BaseModel], ABC):
         )
 
     def _build_update_tool(self) -> CoreTool:
-        from ..tools import FunctionAsTool
+        from ..capabilities.tools import FunctionAsTool
 
         async def update_memory(
             key: str, category: str, content: str, confidence: float = 1.0
@@ -361,7 +361,7 @@ class CoreMemoryRegistry(CoreAgentCapabilities[BaseModel], ABC):
         )
 
     def _build_delete_tool(self) -> CoreTool:
-        from ..tools import FunctionAsTool
+        from ..capabilities.tools import FunctionAsTool
 
         async def delete_memory(key: str) -> str:
             """Delete a previously stored fact about the user."""

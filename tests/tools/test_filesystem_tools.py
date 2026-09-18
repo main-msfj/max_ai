@@ -9,10 +9,10 @@ import pytest
 from max_ai.base.tools import ToolContext
 from max_ai.capabilities.workspace.local import WorkspaceLocal
 from max_ai.config import setting
-from max_ai.tools.file_system import FileSystemTools
+from max_ai.capabilities.tools.file_system import FileSystemTools
 from max_ai.types.tool_call import ToolCallRecord
 from max_ai.types.tools import ToolApprovalMode
-from max_ai.workspace.filesystem import UserFileSystem
+from max_ai.workspace_copy.filesystem import UserFileSystem
 
 
 def context(user_id: str, session_id: str, **deps: object) -> ToolContext:

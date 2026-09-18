@@ -4,8 +4,8 @@ from types import SimpleNamespace
 import pytest
 from azure.core import MatchConditions
 
-from max_ai.workspace.artifacts import ArtifactConflict
-from max_ai.workspace.azure_artifacts import AzureBlobArtifactStore
+from max_ai.workspace_copy.artifacts import ArtifactConflict
+from max_ai.workspace_copy.azure_artifacts import AzureBlobArtifactStore
 
 
 class AzureFailure(Exception):

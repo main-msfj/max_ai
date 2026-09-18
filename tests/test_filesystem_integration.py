@@ -15,7 +15,7 @@ from max_ai.tools import FileSystemTools
 from max_ai.types.completions import ChatCompletionResult, Usage
 from max_ai.types.run_context import RunContext
 from max_ai.types.tool_call import ToolCallRecord
-from max_ai.workspace.system import LocalWorkSpace
+from max_ai.workspace_copy.system import LocalWorkSpace
 
 
 async def _collect(generator) -> list[t.Any]:

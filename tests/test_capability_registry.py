@@ -11,7 +11,7 @@ import pytest
 from max_ai.capabilities.context import LocalContextRegistry
 from max_ai.capabilities.knowledge import LocalKnowledgeRegistry
 from max_ai.capabilities.memory import LocalMemoryRegistry
-from max_ai.capabilities.routines import LocalRoutineRegistry
+from max_ai.legacy.routines import LocalRoutineRegistry
 from max_ai.capabilities.skills import LocalSkillRegistry
 from max_ai.errors.capabilities import CapabilityError
 from max_ai.manager import AgentCapabilities

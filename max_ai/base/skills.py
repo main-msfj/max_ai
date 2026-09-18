@@ -22,7 +22,7 @@ from ..types.workspace import WorkspaceDirectory
 _VALID_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
-class CoreSkillRegistry(CoreAgentCapabilities[BaseModel], ABC):
+class CoreSkillBase(CoreAgentCapabilities[BaseModel], ABC):
     """Abstract base class for skill registries.
 
     A registry is bound to one source and a selected list of skills.
@@ -43,11 +43,11 @@ class CoreSkillRegistry(CoreAgentCapabilities[BaseModel], ABC):
 
         Args:
             source: Source location (file path or URL) where skills are stored.
-            skills: List of skill names to fetch. Must be non-empty with valid names.
+            skills: List of skill names to fetch. May be empty; selected names must be valid.
 
         Raises:
             TypeError: If source is not a string/Path or skills is not a list.
-            ValueError: If skills list is empty, contains invalid names, or has duplicates.
+            ValueError: If skills contains invalid names or duplicates.
         """
         super().__init__()
         self.source: str = self._validate_source(source)
@@ -167,7 +167,7 @@ class CoreSkillRegistry(CoreAgentCapabilities[BaseModel], ABC):
         """Validate the list of skill names.
 
         Checks that:
-        - skills is a non-empty list of strings
+        - skills is a list of strings (an empty registry is allowed)
         - Each skill name contains only allowed characters (letters, digits, _, -)
         - No duplicate skill names exist
 
@@ -179,12 +179,10 @@ class CoreSkillRegistry(CoreAgentCapabilities[BaseModel], ABC):
 
         Raises:
             TypeError: If skills is not a list.
-            ValueError: If skills is empty, contains invalid names, or has duplicates.
+            ValueError: If skills contains invalid names or duplicates.
         """
         if not isinstance(skills, list):
             raise TypeError(f"skills must be a list, got {type(skills).__name__}")
-        if not skills:
-            raise ValueError("skills list cannot be empty")
         if not all(isinstance(s, str) and s for s in skills):
             raise ValueError("skills must be a list of non-empty strings")
 
@@ -302,3 +300,7 @@ class CoreSkillRegistry(CoreAgentCapabilities[BaseModel], ABC):
         """
         source_key = re.sub(r"[^A-Za-z0-9_.-]+", "-", self.source).strip("-")
         return f"{type(self).__name__}-{source_key or 'default'}"
+
+
+# Compat alias while callers migrate to CoreSkillBase.
+CoreSkillRegistry = CoreSkillBase

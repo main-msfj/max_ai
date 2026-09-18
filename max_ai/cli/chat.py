@@ -29,7 +29,7 @@ from max_ai.core.event_type import (
 )
 from max_ai.core.models import ModelConfig
 from max_ai.middleware.logging import LoggingMiddleware  # adjust if path differs
-from max_ai.tools.function_as_tool import FunctionAsTool  # adjust if path differs
+from max_ai.capabilities.tools.function_as_tool import FunctionAsTool  # adjust if path differs
 from max_ai.types.agent_response import AgentResponse
 from max_ai.types.run_context import RunContext
 from max_ai.types.tools import ToolApprovalMode

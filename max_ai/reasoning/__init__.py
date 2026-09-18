@@ -8,7 +8,7 @@ in while it is still initializing (circular import).
 
 import typing as t
 
-from ..tools.plan import AgentPlan, PlanStep
+from ..capabilities.tools.plan import AgentPlan, PlanStep
 
 if t.TYPE_CHECKING:
     from .react_self_directed import ReActLoopSelfDirected, ReActLoopState

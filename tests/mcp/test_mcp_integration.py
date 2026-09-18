@@ -19,7 +19,7 @@ from mcp.types import (
 from pydantic import AnyUrl
 
 from max_ai.base.tools import CoreTool
-from max_ai.mcp import (
+from max_ai.capabilities.mcp import (
     HTTPServerConfig,
     MCPClientManager,
     MCPResourceTool,
@@ -174,7 +174,7 @@ async def test_create_mcp_tools_can_register_without_connecting() -> None:
 
 @pytest.mark.asyncio
 async def test_manager_connect_discovers_tools_and_resources(monkeypatch: pytest.MonkeyPatch) -> None:
-    import max_ai.mcp.client_manager as client_manager_module
+    import max_ai.capabilities.mcp.client_manager as client_manager_module
 
     class FakeTransport:
         def __init__(self) -> None:

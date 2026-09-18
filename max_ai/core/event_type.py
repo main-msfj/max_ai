@@ -17,9 +17,8 @@ from .messages import CoreMessage
 from ..types.completions import Usage
 from ..types.tool_call import ToolResult
 
-from ..tools.plan import AgentPlan
+from ..capabilities.tools.plan import AgentPlan
 from ..reasoning.eval import EvalResult
-from ..base.scratchpad import Scratchpad
 
 
 # -------- -----------------------------------------------------------
@@ -214,6 +213,14 @@ class ReasoningCompleteEvent(ReasoningEvent):
     total_iterations: int = Field(..., description="How many iterations were executed")
 
 
+class LastMessageResponseEvent(ReasoningEvent):
+    """The model responded with no tool calls — this response is the
+    proposed end of the turn, about to be checked by the completion gate."""
+
+    EVENT_TYPE = "last_message_response"
+    response: str = Field(..., description="The model's proposed final text")
+
+
 class PlanningEvent(ReasoningEvent):
     """Event emitted when a plan is generated."""
 
@@ -247,10 +254,6 @@ class UserInputRequestEvent(ReasoningEvent):
         default=None,
         description="Record id to answer via tool_state.apply_user_answer().",
     )
-
-class ScratchpadUpdateEvent(ReasoningEvent):
-    EVENT_TYPE = "scratchpad_update"
-    scratchpad: Scratchpad
 
 
 # -------- -----------------------------------------------------------
@@ -564,8 +567,8 @@ AgentEvents = Annotated[
         ModelStreamChunkEvent,
         ReasoningIterationEvent,
         ReasoningCompleteEvent,
+        LastMessageResponseEvent,
         PlanningEvent,
-        ScratchpadUpdateEvent,
         UserInputRequestEvent,
         EvalEvent,
         ToolCallEvent,

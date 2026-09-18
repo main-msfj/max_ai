@@ -38,7 +38,7 @@ from max_ai.stacks.priority_tools_layer import PriorityToolsLayer
 from max_ai.capabilities.memory import LocalMemoryRegistry
 from max_ai.capabilities.context import LocalContextRegistry
 from max_ai.capabilities.knowledge import LocalKnowledgeRegistry
-from max_ai.capabilities.routines import LocalRoutineRegistry
+from max_ai.legacy.routines import LocalRoutineRegistry
 from max_ai.capabilities.skills.local import LocalSkillRegistry
 from max_ai.capabilities.workspace import WorkspaceLocal
 

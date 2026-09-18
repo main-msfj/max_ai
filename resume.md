@@ -10,6 +10,47 @@ por ahora un override host para tools personalizadas; no asumir que clientes MCP
 vivos se pueden enviar a un proveedor remoto. Referencias a agent.registry en
 secciones históricas deben leerse como anteriores a este cambio.
 
+## Decisión de arquitectura: scratchpad (2026-09-18, cerrada)
+
+Se comparó cómo Claude Code/Codex manejan scratch (efímero, fuera del
+proyecto, muere con el proceso) contra lo que necesita este framework
+(pluggable, sesiones pueden pausar/expirar sin que la tarea haya terminado).
+Decisión: `scratchpad/<conversation_id>/` vive **dentro** del Workspace
+persistente (hermano de `skills/`), no en la copia efímera de
+`ExecutionWorkspace`. Sobrevive `idle_timeout` (que solo mata la sesión de
+cómputo, ya lo hacía `EnvironmentManager._disconnect`, sin tocar los
+archivos) y sobrevive `discard()`. Sin TTL/GC automático — el propio agente
+decide cuándo borrar. Verificado que la sincronización Local/Docker/Modal ya
+cubre `scratchpad/` sin código nuevo (`runtime/sync.py::snapshot()` camina
+el árbol completo, no una lista de carpetas conocida).
+
+**Implementado, verificado con pruebas funcionales reales (sin pytest)**:
+
+1. `types/workspace.py` — `WorkspaceDirectory.scratch_dir`.
+2. `workspace/filesystem.py` — `scratchpad_root()`, `"scratchpad"` reservado
+   y oculto de listados (`_HIDDEN_ROOT_DIRS`), pero explícitamente resoluble
+   por ruta (`_BLOCKED_PATH_ROOTS`, un set nuevo y más chico que
+   `_HIDDEN_ROOT_DIRS` — separa "oculto de listar" de "bloqueado de
+   resolver", antes eran el mismo set y bloqueaban `scratchpad` por
+   completo). `create_text_file`/`create_directory` reconocen
+   `scratchpad/...` como prefijo que no debe re-prefijarse con la sesión.
+3. `tools/file_system/_toolset.py` — `_conversation_path` resuelve
+   `scratchpad/...` igual que ya hacía con `skills/...` (para
+   read/edit/delete/file_info/list); nuevo helper `_write_target` para
+   `write_file`/`create_directory` (que usan una convención de firma
+   distinta, session_id separado en vez de path ya resuelto).
+4. `base/agent.py::_drive` — `deps["scratch_dir"]`; `_prompts` le explica al
+   modelo la convención `scratchpad/...` y que Bash ve lo mismo vía
+   `$SCRATCHPAD`.
+5. `runtime/binding.py::SessionEnvironment.variables` — expone `SCRATCHPAD`.
+
+**Verificado end-to-end**: `write_file`/`read_file`/`create_directory` contra
+`scratchpad/notes.txt` con `FileSystemTools` real; `list_directory` en la
+raíz NO muestra `scratchpad/` pero navegarlo explícito sí funciona; los
+mismos archivos aparecen en el path exacto que usaría `$SCRATCHPAD` para
+Bash (mismo `Workspace`, confirmado leyendo disco directo); `tools/` y
+`artifacts/` siguen completamente bloqueados (no se aflojó esa protección).
+
 ## Aviso para quien retome esto
 
 Este archivo ha sido reescrito varias veces por sesiones distintas (el usuario

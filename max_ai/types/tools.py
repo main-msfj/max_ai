@@ -7,9 +7,9 @@ from pydantic import BaseModel, Field
 # -------- TOOLS BASE MODEL -----------------------------------------------------------
 class RuntimeDirs(t.NamedTuple):
     root: Path
-    tools: Path
     skills: Path
-    artifacts: Path
+    scratch: Path
+    cwd: Path
 
 
 class ToolApprovalMode(str, Enum):

@@ -31,7 +31,7 @@ from max_ai.types.stacks import PromptCtx
 from max_ai.types.completions import ChatCompletionResult, Usage
 from max_ai.types.tool_call import ToolCallRecord, ToolResult
 from max_ai.types.tools import ToolApprovalMode, CoreToolParameters
-from max_ai.tools.ask_user import AskUserTool
+from max_ai.capabilities.tools.ask_user import AskUserTool
 from max_ai.base.tools import CoreTool, ToolContext
 from max_ai.termination import CancellationToken
 
@@ -553,7 +553,7 @@ async def test_disable_human_input_skips_registration(ctx, prompts):
 
 @pytest.mark.asyncio
 async def test_loop_registers_both_runtime_tools(ctx, prompts):
-    from max_ai.tools.plan import UpdatePlanTool
+    from max_ai.capabilities.tools.plan import UpdatePlanTool
 
     executor = ToolExecutor(agent_name="t")
     loop = make_loop(FakeChatClient([make_result("hi")]), executor)

@@ -53,7 +53,7 @@ from max_ai.termination import CancellationToken
 from max_ai.types.agent_response import AgentResponse
 from max_ai.types.run_context import RunContext
 from max_ai.types.tool_call import ToolCallRecord
-from max_ai.workspace.artifacts import ArtifactConflict
+from max_ai.workspace_copy.artifacts import ArtifactConflict
 
 
 STATIC_DIR = Path(__file__).parent / "static"

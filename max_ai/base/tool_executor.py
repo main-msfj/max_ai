@@ -47,8 +47,8 @@ import typing as t
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 
-from .executor import CoreExecutor
-from .environment import Environment
+from .executor_legacy import CoreExecutor
+from ..legacy.environment.environment import Environment
 from ..base.tools import CoreRuntimeTool, CoreTool, ToolContext
 from ..base.middleware import CoreMiddleware
 from ..middleware.chain import MiddlewareChain
@@ -181,7 +181,7 @@ class ToolExecutor:
         self.agent_name = agent_name
         self.max_concurrent_tools = max_concurrent_tools
         self.executor: CoreExecutor = executor or LocalExecutor()
-        self.runtime_executor: CoreExecutor = runtime_executor or self.executor
+        self.executor: CoreExecutor = runtime_executor or self.executor
         self.runtime_deps = dict(runtime_deps or {})
 
     # -------- PUBLIC ENTRY POINT -----------------------------------------------------------
@@ -508,7 +508,7 @@ class ToolExecutor:
 
     def _executor_for(self, tool: CoreTool) -> CoreExecutor:
         if isinstance(tool, CoreRuntimeTool):
-            return self.runtime_executor
+            return self.executor
         return self.executor
 
     # -------- PARALLEL EXECUTION -----------------------------------------------------------

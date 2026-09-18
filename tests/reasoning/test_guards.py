@@ -377,7 +377,7 @@ async def test_loop_with_guards_disabled_finishes_on_empty_answer(ctx, prompts):
 
 # -------- PlanCompletionGuard --------------------------------------------------
 def _plan(statuses: list[str]):
-    from max_ai.tools.plan import AgentPlan, PlanStep
+    from max_ai.capabilities.tools.plan import AgentPlan, PlanStep
 
     return AgentPlan(
         steps=[

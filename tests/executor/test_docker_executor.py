@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from max_ai.base.executor import CoreExecutor
+from max_ai.base.executor_legacy import CoreExecutor
 from max_ai.base.tools import CoreTool, ToolContext
 from max_ai.executor.docker.docker import DockerExecutor, _BashSession
 from max_ai.types.tool_call import ToolCallRecord, ToolResult

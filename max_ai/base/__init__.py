@@ -15,7 +15,7 @@ from .embeddings import (
     get_lightweight_embeddings,
 )
 from .skills import CoreSkillRegistry
-from .workspace import Workspace
+from .workspace import WorkspaceBase
 from .completion_gate import CompletionCheck, CompletionDecision, CompletionGate
 
 __all__ = [
@@ -39,7 +39,7 @@ __all__ = [
     "ToolContext",
     "CoreSkillRegistry",
     "ObservationRecord",
-    "Workspace",
+    "WorkspaceBase",
     "CompletionCheck",
     "CompletionDecision",
     "CompletionGate",

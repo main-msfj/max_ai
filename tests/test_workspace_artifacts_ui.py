@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from max_ai.base.agent import Agent
 from max_ai.ui.server import create_app
-from max_ai.workspace.system import LocalWorkSpace
+from max_ai.workspace_copy.system import LocalWorkSpace
 from tests.test_agent_run import RunClient
 
 

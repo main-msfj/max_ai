@@ -15,7 +15,7 @@ from max_ai.types.run_context import RunContext
 from max_ai.types.stacks import PromptCtx
 from max_ai.types.completions import ChatCompletionResult, Usage
 from max_ai.types.tool_call import ToolCallRecord, ToolResult
-from max_ai.tools.scratchpad import ScratchpadTool
+from max_ai.capabilities.tools.scratchpad import ScratchpadTool
 from max_ai.base.scratchpad import Scratchpad, TodoItem
 from max_ai.base.reasoning import BaseLoopState
 

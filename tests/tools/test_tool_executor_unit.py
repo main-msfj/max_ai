@@ -17,7 +17,7 @@ import typing as t
 import pytest
 
 from max_ai.base.tool_executor import ToolExecutor
-from max_ai.base.executor import CoreExecutor
+from max_ai.base.executor_legacy import CoreExecutor
 from max_ai.base.tools import CoreRuntimeTool, CoreTool, ToolContext
 from max_ai.core.event_type import (
     ToolApprovalEvent,

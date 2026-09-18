@@ -20,8 +20,8 @@ from max_ai.middleware import ConsoleTraceMiddleware
 from max_ai.capabilities.skills.local import LocalSkillRegistry
 from max_ai.capabilities.memory import SQLiteMemoryRegistry
 from max_ai.capabilities.context import SQLiteContextRegistry
-from max_ai.capabilities.routines import SQLiteRoutineRegistry
-from max_ai.mcp import (
+from max_ai.legacy.routines import SQLiteRoutineRegistry
+from max_ai.capabilities.mcp import (
     HTTPServerConfig,
     MCPClientManager,
     StdioMCPServerConfig,

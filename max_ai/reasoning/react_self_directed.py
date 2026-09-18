@@ -32,13 +32,14 @@ import json
 import logging
 import typing as t
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..loggers import ScopedLogger
 from ..termination import CancellationToken
 from ..base.reasoning import BaseReasoning, BaseLoopState
 from ..base.tool_executor import USER_INPUT_TOOL_NAMES
 from ..base.tools import CoreRuntimeTool
+from ..capabilities.tools.plan import AgentPlan
 from .guards import GuardContext, LoopGuard, default_guards
 
 from ..core.messages import CoreMessage, SystemMessage, ToolMessage
@@ -46,7 +47,6 @@ from ..core.event_type import (
     CoreEvent,
     PlanningEvent,
     ToolApprovalEvent,
-    ScratchpadUpdateEvent,
     UserInputRequestEvent,
     ReasoningCompleteEvent,
     ReasoningIterationEvent,
@@ -75,11 +75,13 @@ _PLAN_NUDGE = (
 class ReActLoopState(BaseLoopState):
     """Loop state for the self-directed ReAct loop.
 
-    Currently identical to ``BaseLoopState``. Reserved as the extension
-    point for loop-specific fields without bleeding into custom loops.
+    Adds the self-directed plan bookkeeping: the model edits this via the
+    ``update_plan`` tool, and the loop syncs ``plan_draft`` -> ``ctx.plan``
+    and emits a ``PlanningEvent`` when it changes.
     """
 
-    pass
+    plan_draft: AgentPlan | None = Field(default=None)
+    plan_updated: bool = Field(default=False)
 
 
 # -------- LOOP -----------------------------------------------------------
@@ -480,13 +482,6 @@ class ReActLoopSelfDirected(BaseReasoning):
                 self._guard_steering(ctx, loop_state, guard_ctx, phase="round")
             )
 
-            if loop_state.scratchpad_updated:
-                loop_state.scratchpad_updated = False
-                yield ScratchpadUpdateEvent(
-                    source=self.name,
-                    scratchpad=loop_state.scratchpad.model_copy(deep=True),
-                )
-
         else:
             loop_state.finish_reason = "max_iterations_exceeded"
             _log.warning(
@@ -511,7 +506,7 @@ class ReActLoopSelfDirected(BaseReasoning):
         """
         super()._register_runtime_tools(loop_state)
 
-        from ..tools.plan import UpdatePlanTool
+        from ..capabilities.tools.plan import UpdatePlanTool
 
         if UpdatePlanTool.TOOL_NAME not in self.tool_executor.tools:
             self.tool_executor.tools[UpdatePlanTool.TOOL_NAME] = UpdatePlanTool(

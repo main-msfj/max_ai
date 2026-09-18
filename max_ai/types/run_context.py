@@ -10,7 +10,7 @@ import uuid
 from pydantic import BaseModel, Field
 
 from ..core.messages import Message
-from ..tools.plan import AgentPlan
+from ..capabilities.tools.plan import AgentPlan
 from ..core.tool_state import ToolState
 
 from .runtime import RuntimeState

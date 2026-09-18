@@ -8,7 +8,7 @@ from max_ai.reasoning.react_self_directed import (
     ReActLoopSelfDirected,
     ReActLoopState,
 )
-from max_ai.tools.plan import AgentPlan, UpdatePlanTool
+from max_ai.capabilities.tools.plan import AgentPlan, UpdatePlanTool
 from max_ai.base.reasoning import BaseLoopState
 from max_ai.core.messages import AssistantMessage, ToolMessage, ToolCall, SystemMessage
 from max_ai.core.event_type import PlanningEvent

@@ -1,8 +1,29 @@
-"""Compatibility imports for the native Workspace capability."""
+"""Local-disk WorkspaceBase implementation."""
 
-from ...base.workspace import Workspace, WorkspaceConfig
+from __future__ import annotations
 
-WorkspaceLocal = Workspace
+from ...base.workspace import WorkspaceBase, WorkspaceConfig
+
+
+class LocalWorkspace(WorkspaceBase):
+    """Local disk is the source of truth — nothing to move."""
+
+    async def download(self, user_id: str, conversation_id: str | None = None) -> None:
+        return None
+
+    async def upload(self, user_id: str, conversation_id: str | None = None) -> None:
+        return None
+
+
+# Compat aliases for older call sites.
+Workspace = LocalWorkspace
+WorkspaceLocal = LocalWorkspace
 WorkspaceLocalConfig = WorkspaceConfig
 
-__all__ = ["Workspace", "WorkspaceConfig", "WorkspaceLocal", "WorkspaceLocalConfig"]
+__all__ = [
+    "LocalWorkspace",
+    "Workspace",
+    "WorkspaceLocal",
+    "WorkspaceConfig",
+    "WorkspaceLocalConfig",
+]

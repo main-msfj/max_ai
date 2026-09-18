@@ -39,11 +39,8 @@ from ..loggers import ScopedLogger
 from ..termination import CancellationToken
 from ..middleware.chain import MiddlewareChain
 
-from ..base.tools import CoreTool
-from ..base.scratchpad import Scratchpad
+from ..base.tools import CoreTool, ToolContext
 from ..base.clients import CoreChatCompletionClient
-
-from ..tools.plan import AgentPlan
 
 from ..core.messages import AssistantMessage
 from ..core.messages import CoreMessage
@@ -64,9 +61,12 @@ from ..types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
 
 from ..errors.client import ClientError
 
+from ..core.events_bus import EventBus
+
 if t.TYPE_CHECKING:
     from .compaction import CoreCompaction
     from .tool_executor import ToolExecutor
+    from ..core.tool.dispatcher import ToolDispatcher
     from ..core.messages import ToolCall
 
 
@@ -107,18 +107,9 @@ class BaseLoopState(BaseModel):
     # and finish_reason after an LLM call returns.
     last_result: ChatCompletionResult | None = Field(default=None)
 
-    # scratchpad
-    scratchpad: Scratchpad = Field(default_factory=Scratchpad)
-    scratchpad_updated: bool = Field(default=False)
-
-    # self-directed plan: the model edits this via the update_plan tool; the
-    # loop syncs plan_draft -> ctx.plan and emits a PlanningEvent when set.
-    plan_draft: AgentPlan | None = Field(default=None)
-    plan_updated: bool = Field(default=False)
-
     # Turn-scoped scratch space for loop guards (repetition counters,
     # fired-once flags). Fresh per turn because the loop state is.
-    guard_state: dict[str, t.Any] = Field(default_factory=dict)
+    # guard_state: dict[str, t.Any] = Field(default_factory=dict) (Por ahora deacivated)
 
     @property
     def retries(self) -> int:
@@ -214,9 +205,12 @@ class BaseReasoning(ABC):
         self._name: str | None = None
         self._client: CoreChatCompletionClient | None = None
         self._tool_executor: ToolExecutor | None = None
+        self._dispatcher: ToolDispatcher | None = None
+        self._tool_context: ToolContext | None = None
         self._middleware_chain: MiddlewareChain | None = None
         self._compaction: CoreCompaction | None = None
         self._max_context_tokens: int = 0
+        self._completion_bus: EventBus | None = None
 
         self._current_loop_state: BaseLoopState | None = None
 
@@ -229,7 +223,10 @@ class BaseReasoning(ABC):
         Native to every loop. Subclasses override to ADD more (e.g.
         self-directed adds update_plan), calling super() first.
         """
-        from ..tools.ask_user import AskUserTool
+        from ..capabilities.tools.ask_user import AskUserTool
+
+        if self._dispatcher is not None:
+            return  # Agent owns registration in the dispatcher stack.
         if not self.enable_human_input:
             return
         if AskUserTool.TOOL_NAME not in self.tool_executor.tools:
@@ -240,10 +237,14 @@ class BaseReasoning(ABC):
         self,
         name: str,
         client: CoreChatCompletionClient,
-        tool_executor: ToolExecutor,
-        middleware_chain: MiddlewareChain,
+        tool_executor: ToolExecutor | None = None,
+        middleware_chain: MiddlewareChain | None = None,
         compaction: CoreCompaction | None = None,
         max_context_tokens: int = 0,
+        *,
+        dispatcher: ToolDispatcher | None = None,
+        tool_context: ToolContext | None = None,
+        completion_bus: EventBus | None = None,
     ) -> t.Self:
         """Wire runtime dependencies. Called by the agent inside ``run()``.
 
@@ -256,12 +257,19 @@ class BaseReasoning(ABC):
         concurrent ``agent.run()`` calls is unsafe — to be revisited
         when concurrent runs become a concern.
         """
+        if dispatcher is None and tool_executor is None:
+            raise ValueError("A tool dispatcher is required")
+        if dispatcher is not None and tool_context is None:
+            raise ValueError("Dispatcher binding requires a ToolContext")
+        self._dispatcher = dispatcher
+        self._tool_context = tool_context
         self._name = name
         self._client = client
         self._tool_executor = tool_executor
-        self._middleware_chain = middleware_chain
+        self._middleware_chain = middleware_chain if middleware_chain is not None else MiddlewareChain()
         self._compaction = compaction
         self._max_context_tokens = max_context_tokens
+        self._completion_bus = completion_bus if completion_bus is not None else EventBus()
         return self
 
     @property
@@ -273,7 +281,9 @@ class BaseReasoning(ABC):
             self._cached_token_counter = counter
         return counter
 
-    def _should_compact(self, ctx: RunContext, prompts: PromptCtx | None = None) -> bool:
+    def _should_compact(
+        self, ctx: RunContext, prompts: PromptCtx | None = None
+    ) -> bool:
         from .compaction import live_message_threshold_tokens, client_max_output_tokens
 
         if self._compaction is None or self._max_context_tokens <= 0:
@@ -367,6 +377,12 @@ class BaseReasoning(ABC):
         return self._middleware_chain
 
     @property
+    def completion_bus(self) -> EventBus:
+        if self._completion_bus is None:
+            raise RuntimeError(f"{type(self).__name__} not bound — call .bind() first.")
+        return self._completion_bus
+
+    @property
     def _tools(self) -> list[CoreTool]:
         """Tools currently available to the agent.
 
@@ -374,7 +390,28 @@ class BaseReasoning(ABC):
         skill registry that mutates the catalog after ``prepare()`` is
         reflected in subsequent calls.
         """
-        return list(self.tool_executor.tools.values())
+        return list(self.tool_catalog.values())
+
+    @property
+    def tool_catalog(self) -> dict[str, CoreTool]:
+        if self._dispatcher is not None:
+            return {tool.name: tool for tool in self._dispatcher.registry.all_tools()}
+        return self.tool_executor.tools
+
+    async def _execute_tools(self, ctx: RunContext, records, cancellation_token=None):
+        if self._dispatcher is not None:
+            from contextlib import aclosing
+
+            async with aclosing(self._dispatcher.dispatch_many(
+                records, self._tool_context, cancellation_token
+            )) as stream:
+                async for item in stream:
+                    yield item
+        else:
+            async for item in self.tool_executor.execute_tool_call(
+                ctx=ctx, records=records, cancellation_token=cancellation_token
+            ):
+                yield item
 
     @staticmethod
     def _conversation_messages(ctx: RunContext) -> list[CoreMessage]:

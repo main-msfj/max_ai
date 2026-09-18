@@ -28,7 +28,7 @@ from max_ai.core.models import ModelConfig
 from max_ai.clients.ollama import OllamaChatCompletionClient
 from max_ai.clients.openai import OpenAIChatCompletionClient
 from max_ai.reasoning.react_self_directed import ReActLoopSelfDirected
-from max_ai.mcp import (
+from max_ai.capabilities.mcp import (
     HTTPServerConfig,
     MCPClientManager,
     StdioMCPServerConfig,

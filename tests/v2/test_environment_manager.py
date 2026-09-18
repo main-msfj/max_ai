@@ -5,8 +5,8 @@ import pytest
 import pytest_asyncio
 
 from max_ai.base.environment import ExecutionResult
-from max_ai.base.runtime_executor import ExecutionSession
-from max_ai.environment.session_manager import EnvironmentManager
+from max_ai.base.executor import ExecutionSession
+from max_ai.core.environment.manager import EnvironmentManager
 
 
 @pytest_asyncio.fixture

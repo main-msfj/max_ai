@@ -4,11 +4,11 @@ import hashlib
 
 import pytest
 
-from max_ai.workspace.artifacts import Artifact, ArtifactConflict
-from max_ai.workspace.artifacts import LocalArtifactStore
-from max_ai.workspace.filesystem import UserFileSystem
-from max_ai.workspace.managed import ManagedFileSystem
-from max_ai.workspace.sync import WorkspaceSync
+from max_ai.workspace_copy.artifacts import Artifact, ArtifactConflict
+from max_ai.workspace_copy.artifacts import LocalArtifactStore
+from max_ai.workspace_copy.filesystem import UserFileSystem
+from max_ai.workspace_copy.managed import ManagedFileSystem
+from max_ai.workspace_copy.sync import WorkspaceSync
 
 
 class MemoryArtifactStore:

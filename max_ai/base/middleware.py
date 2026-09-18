@@ -21,8 +21,8 @@ from collections.abc import AsyncGenerator
 from ..types.middleware import MiddlewareCtx
 
 if t.TYPE_CHECKING:
-    # Annotation-only: importing eagerly creates the cycle
-    # base/__init__ -> middleware -> core.event_type -> base.scratchpad.
+    # Annotation-only: importing eagerly here risks a cycle through
+    # core.event_type's own imports (e.g. capabilities.tools.plan -> base.reasoning).
     from ..core.event_type import CoreEvent
 
 

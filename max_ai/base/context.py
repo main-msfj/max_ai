@@ -34,7 +34,7 @@ from .capability import CoreAgentCapabilities
 from .tools import CoreTool
 from .observation import ObservationRecord
 from ..loggers import ScopedLogger
-from ..tools.function_as_tool import FunctionAsTool
+from ..capabilities.tools.function_as_tool import FunctionAsTool
 from ..types.tools import ToolApprovalMode
 from ..core.blocks import ContextBlock
 

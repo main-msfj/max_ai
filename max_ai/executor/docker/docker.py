@@ -48,7 +48,7 @@ from ...base.tools import CoreTool, ToolContext
 from ...termination import CancellationToken
 from ...types.tool_call import ToolCallRecord, ToolResult
 from ...core.primitives import FailureReason
-from ...workspace.filesystem import UserFileSystem
+from ...workspace_copy.filesystem import UserFileSystem
 
 
 # Strict form: exactly `read_skill <name>` with no extra arguments.

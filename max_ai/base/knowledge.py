@@ -32,7 +32,7 @@ from pydantic import BaseModel
 
 from .capability import CoreAgentCapabilities
 from .tools import CoreTool
-from ..tools.function_as_tool import FunctionAsTool
+from ..capabilities.tools.function_as_tool import FunctionAsTool
 from ..types.tools import ToolApprovalMode
 from ..core import KnowledgeBlock
 from ..loggers import ScopedLogger

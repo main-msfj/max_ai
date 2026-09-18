@@ -17,12 +17,13 @@ from typing import Any
 from pydantic import BaseModel
 
 from .clients import CoreChatCompletionClient
-from .runtime_executor import Executor
+from .executor import ExecutorBase
 from .skills import CoreSkillRegistry
-from .tool_dispatcher import ToolDispatcher
-from .tool_registry import ToolRegistry
+from ..core.tool.dispatcher import ToolDispatcher
+from ..core.tool.registry import ToolRegistry
 from .tools import CoreTool, ToolContext
-from .workspace import Workspace
+from .workspace import WorkspaceBase
+from ..capabilities.workspace.local import LocalWorkspace
 from ..config import setting
 from ..core.event_type import CoreEvent, ModelResponseEvent, ModelStreamChunkEvent
 from ..core.messages import (
@@ -32,15 +33,15 @@ from ..core.messages import (
     ToolMessage,
     UserMessage,
 )
-from ..environment.session_manager import EnvironmentManager
+from ..core.environment.manager import EnvironmentManager
 from ..manager.stacks import LayerContainer
-from ..runtime.local import LocalExecutor
-from ..runtime.reference import ToolReference
+from ..capabilities.executor.local import LocalExecutor
+from ..capabilities.executor.reference import ToolReference
 from ..stacks.agent_policy_layer import AgentPolicyLayer
 from ..termination import CancellationToken
-from ..tools.ask_user import AskUserTool
-from ..tools.file_system import FileSystem
-from ..tools.plan import AgentUpdatePlanTool
+from ..capabilities.tools.ask_user import AskUserTool
+from ..capabilities.tools.file_system import FileSystem
+from ..capabilities.tools.plan import AgentUpdatePlanTool
 from ..types.agent_response import AgentResponse
 from ..types.completions import ChatCompletionResult, Usage
 from ..types.run_context import RunContext
@@ -63,8 +64,8 @@ class Agent:
         client: CoreChatCompletionClient,
         toolset: Sequence[CoreTool | Callable[..., Any]] | None = None,
         *,
-        executor: Executor | None = None,
-        workspace: Workspace | None = None,
+        executor: ExecutorBase | None = None,
+        workspace: WorkspaceBase | None = None,
         skills: CoreSkillRegistry | None = None,
         max_iterations: int = 20,
         idle_timeout: float = 300,
@@ -74,20 +75,26 @@ class Agent:
             raise ValueError("max_iterations must be positive")
         self.name, self.description, self.instructions = name, description, instructions
         self.client = client
-        self.workspace = workspace or Workspace(root=setting.root_dir / ".agents")
+        self.workspace = workspace or LocalWorkspace(root=setting.root_dir / ".agents")
         self.executor = executor or LocalExecutor()
-        if not isinstance(self.executor, Executor):
-            raise TypeError("Use an executor from max_ai.runtime")
+        if not isinstance(self.executor, ExecutorBase):
+            raise TypeError("Use an executor from max_ai.capabilities.executor")
         self._registry = ToolRegistry()
         for tool in toolset or ():
             self._registry.register(tool)
         # host=True: touches the persistent Workspace, not Bash's sandbox.
         for tool in FileSystem().get_toolset().tools:
             if self._registry.get(tool.name) is None:
-                self._registry.register(tool, host=True, reference=ToolReference(
-                    module="max_ai.tools.file_system", qualname="FileSystemTools",
-                    kind="factory", tool_name=tool.name,
-                ))
+                self._registry.register(
+                    tool,
+                    host=True,
+                    reference=ToolReference(
+                        module="max_ai.capabilities.tools.file_system",
+                        qualname="FileSystemTools",
+                        kind="factory",
+                        tool_name=tool.name,
+                    ),
+                )
         # host=True: pure ToolCallRecord state, no I/O.
         if self._registry.get(AskUserTool.TOOL_NAME) is None:
             self._registry.register(AskUserTool(), host=True)
@@ -258,7 +265,9 @@ class Agent:
                 )
                 if result is None:
                     finish_reason = (
-                        "input_needed" if record.is_awaiting_input else "approval_needed"
+                        "input_needed"
+                        if record.is_awaiting_input
+                        else "approval_needed"
                     )
                     break
                 usage.tool_calls += 1

@@ -12,10 +12,10 @@ from max_ai.core.messages import AssistantMessage, ToolCall
 from max_ai.core.models import ModelConfig
 from max_ai.types.completions import ChatCompletionResult, Usage
 from max_ai.types.run_context import RunContext
-from max_ai.workspace.artifacts import LocalArtifactStore
-from max_ai.workspace.azure_artifacts import AzureBlobArtifactStore
-from max_ai.workspace.system import LocalWorkSpace
-from max_ai.tools.file_system import FileSystemTools
+from max_ai.workspace_copy.artifacts import LocalArtifactStore
+from max_ai.workspace_copy.azure_artifacts import AzureBlobArtifactStore
+from max_ai.workspace_copy.system import LocalWorkSpace
+from max_ai.capabilities.tools.file_system import FileSystemTools
 
 
 class ApprovalClient(CoreChatCompletionClient):

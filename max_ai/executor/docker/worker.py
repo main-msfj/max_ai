@@ -19,7 +19,7 @@ import typing as t
 from pathlib import Path
 
 from max_ai.base.tools import CoreTool, ToolContext
-from max_ai.tools.function_as_tool import FunctionAsTool
+from max_ai.capabilities.tools.function_as_tool import FunctionAsTool
 from max_ai.types.tool_call import ToolCallRecord, ToolResult
 from max_ai.types.tools import DockerToolRef
 
@@ -297,7 +297,7 @@ class _WorkerBashTool(CoreTool):
 def _build_worker_bash_tool(tool_ref: DockerToolRef) -> CoreTool | None:
     if tool_ref.kind != "class":
         return None
-    if tool_ref.module != "max_ai.tools.bash" or tool_ref.qualname not in {
+    if tool_ref.module != "max_ai.capabilities.tools.bash" or tool_ref.qualname not in {
         "BashTool",
         "SkillBashTool",
     }:

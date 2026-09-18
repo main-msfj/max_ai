@@ -19,7 +19,7 @@ import pytest
 
 from max_ai.base.agent import Agent
 from max_ai.clients.ollama.client import OllamaChatCompletionClient
-from max_ai.tools.function_as_tool import FunctionAsTool
+from max_ai.capabilities.tools.function_as_tool import FunctionAsTool
 from max_ai.persistence.filesystem import FileSystemRunContextStore
 from max_ai.core.models import ModelConfig
 from max_ai.core.messages import AssistantMessage, ToolMessage, UserMessage

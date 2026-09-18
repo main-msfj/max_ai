@@ -334,3 +334,354 @@ se usa para `tools`/`artifacts`, pero no corrí ese caso específico end-to-end
 — mi prueba tropezó con un detalle de la API de `list_directory` no
 relacionado, no insistí porque no era el objetivo). Si alguien lo revisita,
 vale la pena confirmarlo con un test real de `list_directory`.
+
+---
+
+## 2026-09-18 01:06 UTC
+
+**Qué se hizo**: conectado `scratchpad/` a `FileSystemTools` — hasta este
+punto los archivos existían en disco pero ninguna tool del modelo (aparte de
+Bash vía `$SCRATCHPAD`) podía llegar ahí.
+
+**El problema encontrado**: `scratchpad` se había marcado ayer como
+"oculto" (`_HIDDEN_ROOT_DIRS`), pero ese mismo set también se usaba para
+**bloquear la resolución de rutas** (`_visible_parts` lanzaba
+`ValueError` para cualquier intento de `scratchpad/...`, igual que ya hacía
+con `tools`/`artifacts`). Hacía falta separar "oculto de listar" de
+"bloqueado de resolver" — antes eran el mismo mecanismo.
+
+**Archivos**:
+
+1. `workspace/filesystem.py`:
+   - Nuevo `_BLOCKED_PATH_ROOTS = _RESERVED_ROOT_DIRS - {"skills", "scratchpad"}`
+     (antes `_visible_parts` usaba `_HIDDEN_ROOT_DIRS` para bloquear; ahora
+     usa este set más chico — `tools`/`artifacts` siguen bloqueados,
+     `scratchpad` ya no).
+   - `create_text_file`/`create_directory`: si `parts[0] == "scratchpad"`,
+     no vuelven a prefijar con `session_id` (el path ya viene completo).
+2. `tools/file_system/_toolset.py`:
+   - `_conversation_path` — rama nueva para `scratchpad`, mismo patrón que
+     ya existía para `skills` (cubre read_file/edit_file/delete_file/
+     file_info/list_directory gratis, porque esos ya pasan el path resuelto
+     completo al backend).
+   - Nuevo `_write_target(context, path)` — solo para `write_file`/
+     `create_directory`, que usan una convención de firma distinta
+     (`session_id` separado + path relativo, con prefijo automático en el
+     backend) y por eso no bastaba con arreglar `_conversation_path`.
+3. `base/agent.py::_prompts` — le explica al modelo la convención
+   `scratchpad/notas.txt`, que no se limpia solo, y que Bash ve los mismos
+   archivos vía `$SCRATCHPAD`.
+
+**Verificación real, sin pytest** (todo con `FileSystemTools` real, no
+mocks): `write_file`/`read_file`/`create_directory` contra
+`scratchpad/notes.txt`/`scratchpad/subdir` funcionan; escritura normal
+(`real.txt`) sin cambios; `list_directory` en la raíz del usuario **no**
+muestra `scratchpad` pero navegarlo explícito sí lista su contenido;
+confirmado por lectura directa de disco que el archivo que escribió
+`write_file` está exactamente en el path que usaría `$SCRATCHPAD` para
+Bash — mismo `Workspace`, mismos archivos, dos puntos de entrada. Repetí
+el chequeo de `tools/`/`artifacts` bloqueados para confirmar que no se
+aflojó esa protección al separar los dos sets.
+
+**Con esto, el diseño de scratchpad que se discutió ayer y hoy queda
+completamente implementado** — ubicación, persistencia, sincronización
+entre executors, y ahora también accesible desde ambos tipos de tool
+(host y sandbox). Ver `resume.md` para el resumen de la decisión completa.
+
+---
+
+## 2026-09-18 (sesión larga, reorganización Día 2 completa)
+
+**Contexto**: continuación de la reorganización `core/`/`base/`/`capabilities/`/
+`legacy/` iniciada antes del checkpoint `fa4aa0b`. Resumen agrupado por tema,
+no cronológico estricto — la sesión fue larga y con mucha discusión de diseño
+intercalada.
+
+### 1. Bug de sed corregido (import corruption)
+
+Un `sed` de la sesión anterior (`s/^(\s*from \.+)tools\b/\1capabilities.tools/`)
+sobre-escribió imports de un solo punto (`from .tools import CoreTool` →
+`base/tools.py`, nada que ver con el paquete movido) convirtiéndolos en
+`from .capabilities.tools import CoreTool` (ruta inexistente). Corregido en
+`base/{routines,tool_dispatcher,agent,tool_registry,knowledge,memory,context}.py`
+y `base/memory copy.py`. De paso, `capabilities/tools/__init__.py` tenía su
+`_LAZY_EXPORTS` apuntando a las rutas viejas `max_ai.tools.*` (strings, el sed
+no las tocó) — corregido a `max_ai.capabilities.tools.*`.
+
+### 2. `Executor` → `ExecutorBase`, contrato completo restaurado
+
+`base/executor.py` es ahora el único ABC de ejecución (`connect`/`sync`/
+`disconnect`/`clean`/`rebuild`/`run_tool`/`execute`/`execute_argv`), renombrado
+`Executor` → `ExecutorBase` (regla: "Base" para todo lo abstracto/pluggable).
+`LocalExecutor` (`capabilities/executor/local/_executor.py`) reexpandido para
+implementar el contrato completo (session tracking `_sessions`/`_closed`/
+`_check`). Referencias corregidas en 8 archivos (`agent.py`,
+`capabilities/executor/{__init__,remote,local/_executor}.py`,
+`core/environment/manager.py`, `legacy/environment/{binding,session_manager}.py`).
+
+### 3. `EnvironmentManager` movido a `core/environment/manager.py`, sin copia de trabajo
+
+La versión completa que ya existía en `max_ai/environment/session_manager.py`
+se migró a `core/environment/manager.py` (ubicación canónica). Decisión de
+diseño importante: **se eliminó `ExecutionWorkspace`** (copia de trabajo
+intermedia) del flujo de `acquire()` — Local y Docker ya comparten filesystem
+(bind mount), copiar ahí no protege nada; solo un backend remoto de verdad
+(Modal) necesitaría staging, y eso le toca a su propio `sync()`, no al manager
+genérico. `execution_workspace.py` → `legacy/execution_workspace.py`.
+`base/environment.py` (el `Environment` ABC viejo, con `SessionEnvironment`
+en `capabilities/executor/binding.py`) también se confirmó sin uso real
+(nada leía `context.environment`) y se movió completo a `legacy/environment/`
+junto con `manager.py`/`docker.py`/`session_manager.py` (generación vieja,
+factory-based). `ToolContext` (`base/tools.py`) perdió el campo `environment`.
+
+### 4. `core/tool/` nuevo — `ToolRegistry` + `ToolDispatcher` salen de `base/`
+
+Por no tener `abstractmethod` (fijos, no pluggable): `base/tool_registry.py` →
+`core/tool/registry.py`, `base/tool_dispatcher.py` → `core/tool/dispatcher.py`.
+Referencias corregidas en `base/agent.py`, `tests/v2/test_tools_and_bash.py`.
+
+### 5. Colisión de `base/` resuelta
+
+Una sesión concurrente dejó `max_ai/base/` casi vacío (solo `__init__.py`) y
+copió el contenido real a `max_ai/base copy/` (backup deliberado del usuario,
+no limpieza). Los 26 archivos reales se restauraron en `base/` (más los 4
+`_copy`: `agent_copy.py`, `memory copy.py`, `skills copy.py`,
+`tool_executor_copy.py`, recuperados de git `fa4aa0b` sin pérdida). Luego se
+recreó `base copy/` como snapshot del `base/` restaurado, para no perder el
+backup del usuario. **Aprendizaje**: no asumir que una carpeta `X copy/` es
+limpieza a borrar — puede ser backup intencional; preguntar antes de tocar.
+
+### 6. `$SCRATCHPAD` cableado hasta Bash
+
+`RuntimeDirs` (`types/tools.py`) ganó el campo `scratch`. `BashTool`
+(`capabilities/tools/bash/_tool.py`) ahora expone **tanto** `$WORKSPACE` como
+`$SCRATCHPAD` al subprocess — `$WORKSPACE` tampoco se seteaba antes pese a que
+el prompt ya lo prometía. `AgentPolicyLayer.j2` actualizado para que el modelo
+sepa que existe `$SCRATCHPAD`.
+
+### 7. `Loop` separado de `Agent`, generación vieja limpiada
+
+Por decisión del usuario, el loop de razonamiento no vive dentro de
+`Agent._drive()` — es un componente pluggable separado (mismo patrón que
+`ExecutorBase`/`WorkspaceBase`), para que otra estrategia de loop se pueda
+escribir sin tocar `Agent`. Como paso hacia eso:
+
+- `base/reasoning.py` (`BaseLoopState`/`BaseReasoning`): quitados
+  `plan_draft`/`plan_updated` (movidos a `ReActLoopState`, específicos de esa
+  estrategia) y el import de `AgentPlan`. `guard_state` se queda por ahora
+  (explícitamente diferido, no analizado todavía).
+- `reasoning/react.py` → `reasoning/react/loop.py` (carpeta nueva). Los tres
+  métodos que accedían a `plan_draft`/`plan_updated` se retiparon
+  `ReActLoopState` en vez de `BaseLoopState`.
+- **`plan_draft`/`plan_updated` eliminados por completo** (no solo movidos):
+  ese staging existía porque la `UpdatePlanTool` vieja no tenía acceso al
+  `RunContext`, solo a `ToolContext`. La `AgentUpdatePlanTool` nueva (la que ya
+  usa `Agent`) escribe `ctx.plan` directo vía `deps["run_context"]` — sin
+  staging. `_sync_plan()` se eliminó; "¿se tocó el plan este round?" ahora se
+  deriva de `assistant_msg.tool_calls`/`pending` en vez de un flag de estado.
+  `_register_runtime_tools` registra `AgentUpdatePlanTool` en vez de
+  `UpdatePlanTool(loop_state=...)`.
+- Identificado (no resuelto): el nudge de plan (`_PLAN_NUDGE`, hardcodeado en
+  el cuerpo del loop) debería ser un `LoopGuard` más, igual que
+  `RepetitionGuard`/`BudgetGuard` — no lógica ad-hoc en `execute_reasoning_loop`.
+  Pendiente para la próxima sesión de diseño del Loop nuevo.
+- Middleware/hooks: `MiddlewareChain` (`middleware/chain.py`) es genérica
+  (parametrizada por `action: str`), así que un solo `MiddlewareChain`
+  compartido puede cubrir tanto `action="model_call"` (ya lo hace el Loop) como
+  `action="tool_call"` (falta agregarlo a `ToolDispatcher`, que hoy no toca
+  middleware para nada). Decidido conceptualmente, no implementado todavía.
+
+### 8. `agents/agent.py` — copia paralela para pruebas
+
+`max_ai/agents/agent.py` creado como copia de `base/agent.py` (imports
+ajustados a la nueva profundidad de carpeta), para empezar a probar sin tocar
+el archivo activo. `base/agent.py` queda intacto.
+
+**Pendiente confirmado y NO tocado en esta sesión** (decisión explícita del
+usuario, limpieza manual): `base/tool_executor.py` (`ToolExecutor`, generación
+vieja) tiene el import roto `from .executor_legacy import CoreExecutor`
+(`executor_legacy.py` fue borrado manualmente) y también construye
+`ToolContext(..., environment=self.environment)`, kwarg que ya no existe tras
+el punto 3. Este archivo, `reasoning/react_self_directed.py`,
+`reasoning/guards.py` y el paquete `max_ai/executor/` (viejo, distinto de
+`capabilities/executor/`) forman el stack completo de la generación anterior —
+su destino final (legacy/, reescritura, o borrado) sigue sin decidir.
+
+**Verificación**: cada paso de esta sesión se verificó con `py_compile` +
+pruebas funcionales reales (sin pytest, sin mocks) construyendo los objetos
+reales — `LocalExecutor`+`EnvironmentManager` conectando/ejecutando/
+sincronizando de punta a punta, `BashTool` real confirmando `$WORKSPACE`/
+`$SCRATCHPAD` en el subprocess, `Agent`/`max_ai.agents.agent.Agent`
+importando completos. Ningún test nuevo agregado ni ejecutado.
+
+---
+
+## 2026-09-18 — Agent conectado al ReactLoop y componentes locales
+
+Por petición del usuario, se trabajó en `max_ai/agents/agent.py`, sin editar
+`base/agent.py` ni `base copy/agent_copy.py`.
+
+- `Agent` acepta `reasoning` y `environment`, además de `skills`, `workspace`
+  y `executor`. Defaults: ReactLoop, LocalWorkspace, LocalExecutor,
+  LocalSkillRegistry vacío y EnvironmentManager creado por Agent.
+- `environment` significa el EnvironmentManager actual, NO el Environment
+  legacy. Si se proporciona, se usan su workspace/executor; configuraciones
+  explícitas contradictorias se rechazan. Agent solo cierra el manager propio.
+  LocalExecutor no ofrece aislamiento de sandbox.
+- `_drive` prepara workspace/skills/ToolContext y delega a
+  `reasoning.bind(...).execute_reasoning_loop(...)`. Eliminado el ciclo LLM
+  duplicado y su acumulador de streaming de este Agent.
+- Bash registrado por defecto (permite override por nombre en toolset).
+  Filesystem, ask_user y plan siguen host; registry permanece interno.
+  Metadata y rutas SKILL.md se incluyen en el prompt tras prepare().
+- BaseReasoning admite dispatcher + ToolContext en bind; mantiene el argumento
+  ToolExecutor anterior para no romper sus otros consumidores. El catálogo y
+  `_execute_tools` seleccionan el backend conectado, sin importar legacy en runtime.
+- ToolDispatcher.dispatch_many transmite eventos en vivo y ToolMessages en orden.
+  ReactLoop usa ese recorrido; ya no importa USER_INPUT_TOOL_NAMES desde el
+  ToolExecutor roto, ni duplica registros/eventos de plan en el stack nuevo.
+- ReactLoop drena pendientes antes de comprobar el límite de iteraciones,
+  incluyendo preguntas y aprobaciones aún sin resolver. Agent conserva métricas,
+  duración y guard_state al pausar. Se agregó guard_state a ReActLoopState porque
+  los guards actuales lo requieren. APIs resume, resume_stream y
+  resume_stream_events disponibles.
+- CoreSkillRegistry ahora permite una lista vacía para el default local sin
+  paquetes seleccionados. No hay descubrimiento automático de skills.
+- `from max_ai.agents import Agent` exporta este Agent nuevo. No se cambió la
+  exportación principal del framework ni se migraron otros consumidores.
+
+Verificación: py_compile de archivos modificados, importación de Agent,
+ReactLoop y EnvironmentManager usando `.venv/bin/python`, git diff --check OK.
+No tests ni ejecución end-to-end. El Python global no tiene pydantic; usar .venv.
+Pendiente: middleware tool_call, compaction/store y demás capacidades de la
+copia antigua no fueron incorporadas en este cambio. No compartir una instancia
+de reasoning entre agentes concurrentes: bind almacena dependencias mutables.
+
+## 2026-09-18 — Ejemplo OpenAI local, ejecución bloqueada por credenciales
+
+Nuevo `examples/agent_local_openai.py`, ejecutable con
+`.venv/bin/python -m examples.agent_local_openai`. Usa `max_ai.agents.Agent`,
+defaults locales y `gpt-5.6-luna`, reasoning_effort="low" (menor esfuerzo
+con razonamiento activo según documentación oficial; "min" no figura).
+Lee OPENAI_KEY / OPENAI_API_KEY / OPENA_KEY sin imprimir secretos.
+Tarea inicial: ejecutar únicamente pwd con Bash y responder en español.
+
+Se ejecutó realmente, sin pytest. Tras autorizar escritura al workspace .agents
+(protegido en el entorno de Codex), alcanzó OpenAI pero devolvió HTTP 401,
+`not_authorized_invalid_project`: el proyecto solicitado está archivado.
+No hubo respuesta del modelo ni ejecución de Bash. Hace falta configurar una
+clave/proyecto activo antes de continuar la comprobación end-to-end.
+
+---
+
+## 2026-09-18 — Verificación end-to-end + bugs de workspace encontrados probando con modelo real
+
+Retomando el wiring `Agent`/`ReactLoop`/`ToolDispatcher` que dejó la sesión
+anterior (entradas de arriba): se verificó funcionando de punta a punta con
+`FakeClient` (tool call → approval_needed → aprobar → respuesta final) y
+luego el usuario lo probó de verdad con `gpt-5.6-luna` vía
+`examples/agent_local_openai.py`. De ahí salieron varios bugs reales.
+
+**`guard_state` silenciosamente roto**: los 4 guards en `reasoning/guards.py`
+(`RepetitionGuard`, `BudgetGuard`, `NoProgressGuard`, nudge de plan) leen
+`state.guard_state`, que había quedado comentado en `BaseLoopState`
+(`base/reasoning.py`) por decisión explícita del usuario en una sesión
+anterior ("no lo necesitamos ahorita"). `_guard_steering` atrapa el
+`AttributeError` y sigue de largo — de ahí el "Loop guard failed; skipping"
+en cada iteración. Confirmado, no arreglado — decisión pendiente del usuario
+(reactivarlo o no).
+
+**Directorios sueltos que no debían existir** (`.agents/user_001/tools`,
+`.agents/user_001/artifacts`): `RuntimeDirs`/`BashTool._runtime_dirs()`
+(`capabilities/tools/bash/_tool.py`) creaba `tools/` y `artifacts/` como
+fallback cuando `deps` no traía esas claves — nadie las traía nunca. `tools`
+resultó ser un concepto exclusivo del paquete viejo `max_ai/executor/docker/`
+(no compartido con `bash/_tool.py`); `artifacts` era redundante con la
+carpeta de conversación (`WorkspaceDirectory.artifacts_dir` ya colapsa a
+`conversation_dir` cuando hay conversación). Se quitaron ambos campos de
+`RuntimeDirs` (`types/tools.py`) y de `_runtime_dirs()`/`execute()` por
+completo — ya no se crean.
+
+**Conversaciones sueltas en la raíz del usuario, no anidadas**: el usuario
+pidió `conversation/<id>/` en vez de `<user_root>/<id>/` directo. Cambio
+coordinado (si se cambia solo un lado, `write_file` y `materialize()`
+divergen y el traversal-check se rompe):
+- `workspace_copy/filesystem.py`: `_RESERVED_ROOT_DIRS` ganó `"conversation"`
+  (reservado pero **visible** — a diferencia de `tools`/`artifacts` — para
+  que `find_files`/`search_text` sigan atravesando todas las conversaciones;
+  ocultarlo habría roto "buscar en todas mis conversaciones" en silencio).
+  `conversation_root()` anida bajo `conversation/<id>/` (mismo patrón dir-fd
+  que `scratchpad_root()`). `create_text_file`/`create_directory` prependen
+  `("conversation", session, ...)`. `_conversation_file_parts` exige y valida
+  ese prefijo de 3 segmentos.
+- `capabilities/tools/file_system/_toolset.py::_conversation_path()`:
+  construye el mismo prefijo `"conversation/<id>/..."`.
+- Verificado con las tools reales: write/read/edit/delete/list/find sobre la
+  estructura nueva, traversal (`..`) y bloqueo de `tools/` intactos.
+
+**Bash no coincidía con dónde escriben los file tools** — el bug más
+importante, encontrado porque el modelo bajó un `.html` y aseguró (mal) que
+había quedado "en el workspace de la conversación": `BashTool` corría con
+`cwd` = raíz del usuario (`session.workspace_path`, fijado en
+`LocalExecutor.connect()`), NO la carpeta de conversación. Fix quirúrgico en
+`capabilities/tools/bash/_tool.py` (sin tocar `ExecutionSession.workspace_path`,
+que también usan Docker/Modal): `RuntimeDirs` ganó un campo `cwd` separado de
+`root` — `root` sigue siendo la raíz de seguridad para el chequeo
+`relative_to` (skills/scratchpad viven fuera de `conversation/<id>/`); `cwd`
+= `deps["conversation_dir"]` (fallback a `root`), y ahí arranca el
+subprocess; `$WORKSPACE` también apunta a `cwd` ahora. Verificado en vivo:
+un archivo escrito por `bash` aterriza en el mismo lugar que `write_file`.
+
+**Prompt actualizado** (`agents/agent.py::_prompts`):
+- El texto viejo ("file tools usan rutas user-relative, excepto write_file")
+  ya no era cierto tras el fix de nesting — corregido para explicar que los
+  file tools son conversation-relative por defecto y que `find_files`/
+  `search_text` buscan en todas las conversaciones.
+- Regla scratchpad-vs-conversación explícita con ejemplo: artefactos
+  intermedios (descargas, datos scrapeados, scripts descartables) →
+  `$SCRATCHPAD`; si no se necesita después, ni guardarlo (procesar al
+  vuelo); solo lo que el usuario pidió o va a revisar → la conversación.
+- Instrucción de autonomía: seguir al siguiente paso solo tras un tool call
+  en vez de parar a reportar y esperar; solo detenerse si está realmente
+  bloqueado (aprobación, falta info, o tarea completa). Se confirmó con el
+  usuario que esto NO era un bug del loop — `ReactLoop` seguía llamando al
+  modelo mientras hubiera tool calls; era el modelo el que decidía devolver
+  control. El fix es enteramente de prompt, no de mecanismo.
+
+**Tool calls con descripción, no parámetros crudos** — a pedido del usuario,
+replicando cómo funciona el propio Claude Code:
+- `BashTool.parameters` (`capabilities/tools/bash/_tool.py`) ganó un campo
+  `description` (string, obligatorio junto a `command`).
+- `core/tool/dispatcher.py::_dispatch()`: `reason_for_approval` ahora usa
+  `record.parameters.get("description")` genéricamente (cualquier tool con
+  ese campo se beneficia, no solo bash), con fallback al mensaje genérico
+  anterior para tools sin ese campo.
+- `examples/agent_local_openai.py`: tanto la línea `Tool: ...` como el
+  prompt de aprobación muestran la descripción en vez del dict de parámetros
+  cuando está disponible.
+
+**`examples/agent_local_openai.py` reescrito** para conversación continua
+(reutiliza el mismo `RunContext` entre turnos de `input()`), con
+`BashTool()`, `get_weather` (`AUTO_APPROVED`) y `send_email`
+(`ASK_APPROVED`) en el toolset — demuestra ambos modos de aprobación. El
+helper `_drive()` consume el stream de eventos, y cuando la respuesta queda
+en `needs_approval`/`needs_input`, pregunta y/n (o la pregunta de
+`ask_user`) en la terminal, aplica la decisión, y llama
+`agent.resume_stream_events(...)` recursivamente — soporta varias pausas
+seguidas en un mismo turno.
+
+**Verificación**: cada fix de esta entrada se probó en vivo (sin pytest):
+`py_compile` en todos los archivos tocados, `LocalExecutor`+`EnvironmentManager`
+conectando/ejecutando, `FileSystemTools` reales sobre `conversation/<id>/`,
+`BashTool` real confirmando `cwd`/`$WORKSPACE` = conversación, y el `Agent`
+completo con `FakeClient` reproduciendo el flujo de aprobación con
+descripción de principio a fin. El usuario también lo corrió con
+`gpt-5.6-luna` real — así se encontraron los bugs de directorios y el de
+autonomía documentados arriba.
+
+**Pendiente, no tocado esta vez**: `guard_state` sigue desactivado (decisión
+del usuario). Stack viejo (`tool_executor.py`, `max_ai/executor/`,
+`reasoning/react_self_directed.py`, `reasoning/guards.py`) sigue con el
+import roto (`executor_legacy.py` borrado manualmente) — destino sin
+decidir. `CompletionGate`/middleware de `tool_call` siguen huérfanos, sin
+conectar a `ToolDispatcher`.
