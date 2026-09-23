@@ -48,7 +48,7 @@ def test_executor_components_restore_from_serialized_config():
 
     for original in (DockerExecutor(image="example:latest"),
                      ModalExecutor(image="example:latest")):
-        restored = type(original).load_component(original.dump_component())
+        restored = type(original).deserialize(original.serialize())
         assert restored._to_config() == original._to_config()
 
 

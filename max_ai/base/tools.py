@@ -48,6 +48,8 @@ class ToolContext:
 class CoreTool(ComponentBase[BaseModel], ABC):
     """Base class for all agent tools."""
 
+    component_type = "tool"
+
     _JSON_TYPE_MAP: t.ClassVar[dict[str, type | tuple[type, ...]]] = {
         "string": str,
         "number": (int, float),

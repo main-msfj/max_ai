@@ -9,6 +9,7 @@ from ._model import LocalWorkspaceConfig
 class LocalWorkspace(WorkspaceBase):
     """Local disk is the source of truth — nothing to move."""
 
+    component_provider_override = "max_ai.capabilities.workspace.local.LocalWorkspace"
     component_schema = LocalWorkspaceConfig
 
     def _to_config(self) -> LocalWorkspaceConfig:

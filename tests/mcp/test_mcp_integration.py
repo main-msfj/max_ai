@@ -27,6 +27,7 @@ from max_ai.capabilities.mcp import (
     deserialize_mcp_servers,
     serialize_mcp_servers,
 )
+from max_ai.errors.mcp import MCPServerConfigError
 from max_ai.types.tool_call import ToolCallRecord
 from max_ai.types.tools import ToolApprovalMode
 
@@ -237,16 +238,41 @@ async def test_manager_connect_discovers_tools_and_resources(monkeypatch: pytest
     assert client.closed
 
 
-def test_server_configs_round_trip_as_json() -> None:
+def test_server_configs_round_trip_as_json(monkeypatch) -> None:
+    monkeypatch.setenv("DOCS_TOKEN", "secret")
+    monkeypatch.setenv("DOCS_KEY", "key-123")
+    monkeypatch.setenv("CRM_KEY", "crm-456")
     stdio = StdioMCPServerConfig(
         server_id="local", command="python", args=["-m", "server"],
-        env={"MODE": "test"}, tool_approval_modes={"search": "auto_approval"},
+        env={"MODE": "test"}, env_from={"API_KEY": "CRM_KEY"},
+        tool_approval_modes={"search": "auto_approval"},
     )
     http = HTTPServerConfig(
-        server_id="remote", url="https://example.com/mcp", token="secret",
-        headers={"X-Test": "yes"},
+        server_id="remote", url="https://example.com/mcp", token_env="DOCS_TOKEN",
+        headers={"X-Test": "yes"}, headers_env={"X-Api-Key": "DOCS_KEY"},
     )
     assert StdioMCPServerConfig.model_validate_json(stdio.model_dump_json()) == stdio
     assert HTTPServerConfig.model_validate_json(http.model_dump_json()) == http
-    assert deserialize_mcp_servers(serialize_mcp_servers([stdio, http])) == [stdio, http]
+    payload = serialize_mcp_servers([stdio, http])
+    assert deserialize_mcp_servers(payload) == [stdio, http]
+    # Stored config names the env vars; secrets appear only once resolved.
+    assert not any(secret in payload for secret in ("secret", "key-123", "crm-456"))
+    assert http.request_headers == {
+        "X-Test": "yes", "X-Api-Key": "key-123", "Authorization": "Bearer secret",
+    }
+    assert stdio.process_env == {"MODE": "test", "API_KEY": "crm-456"}
+
+
+def test_a_literal_token_works_in_code_but_is_never_stored() -> None:
+    http = HTTPServerConfig(server_id="remote", url="https://example.com/mcp", token="secret")
     assert http.request_headers["Authorization"] == "Bearer secret"
+    assert "secret" not in http.model_dump_json() and "secret" not in repr(http)
+    with pytest.raises(MCPServerConfigError, match="use token_env"):
+        serialize_mcp_servers([http])
+
+
+def test_a_missing_env_var_fails_when_connecting(monkeypatch) -> None:
+    monkeypatch.delenv("NOPE_TOKEN", raising=False)
+    http = HTTPServerConfig(server_id="remote", url="https://example.com/mcp", token_env="NOPE_TOKEN")
+    with pytest.raises(MCPServerConfigError, match="needs env var NOPE_TOKEN"):
+        http.request_headers

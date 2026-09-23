@@ -20,10 +20,12 @@ import asyncio
 import logging
 import typing as t
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ....base.completion_gate import CompletionDecision
-from ....base.reasoning import BaseLoopState, BaseReasoning
+from ....base.reasoning import BaseLoopState, BaseReasoning, ReasoningConfig
+from ....core.compaction.budget import client_max_output_tokens
+from ....core.harness import messages as harness
 from ....core.event_type import (
     CompletionRejectedEvent,
     CoreEvent,
@@ -35,6 +37,7 @@ from ....core.event_type import (
 )
 from ....core.messages import (
     HARNESS_SOURCE,
+    AssistantMessage,
     SystemMessage,
     ToolCall,
     ToolMessage,
@@ -43,6 +46,7 @@ from ....core.messages import (
 from ....core.primitives import FailureReason
 from ....core.runtime import runtime_status
 from ....core.termination import CancellationToken
+from ....core.type_ref import type_ref
 from ....loggers import ScopedLogger
 from ....types.run_context import RunContext
 from ....types.stacks import PromptCtx
@@ -62,8 +66,18 @@ APPROVAL_NEEDED = "approval_needed"
 ASK_USER = "input_needed"
 TOOL_DENIED = "tool_denied"
 MAX_ITERATIONS = "max_iterations"
-MAX_ITERATIONS_REACHED = "max_iterations_reached"
+OUTPUT_LIMIT = "output_limit"
+MAX_CUT_OFFS = 2  # in a row; then the limit is too small for the task
 HARNESS = HARNESS_SOURCE
+
+def _without_broken_calls(message: AssistantMessage) -> AssistantMessage:
+    """Drop tool calls whose arguments could not be parsed."""
+    calls = [c for c in message.tool_calls if not c.parameters.get("parsing_error")]
+    if len(calls) == len(message.tool_calls):
+        return message
+    return message.model_copy(update={"tool_calls": calls})
+
+
 NO_LLM_RESULT = "no_result"
 COMPLETED = "completed"
 WAITING = "waiting"
@@ -81,6 +95,13 @@ class ReActLoopState(BaseLoopState):
 
 
 # -------- LOOP -----------------------------------------------------------
+class ReactLoopConfig(ReasoningConfig):
+    max_loop_iterations: int = Field(default=10, ge=1)
+    guards: list[dict[str, t.Any]] | None = Field(
+        default=None, description="Serialized guards; None = the loop's defaults.",
+    )
+
+
 class ReactLoop(BaseReasoning):
     """ReAct loop: call the model, run any tool calls, repeat.
 
@@ -90,6 +111,8 @@ class ReactLoop(BaseReasoning):
     """
 
     LOOP_STATE_CLS: t.ClassVar[type[BaseLoopState]] = ReActLoopState
+    component_schema = ReactLoopConfig
+    component_provider_override = "maxai.reasoning.ReactLoop"
 
     def __init__(
         self,
@@ -119,10 +142,33 @@ class ReactLoop(BaseReasoning):
         if max_loop_iterations < 1:
             raise ValueError("max_loop_iterations must be positive")
         self.max_loop_iterations = max_loop_iterations
+        # None keeps "the defaults": a stored agent picks up improved defaults.
+        self._custom_guards = guards is not None
         self.guards: list[LoopGuard] = (
             [SchemaRetryGuard(), RepetitionGuard(), BudgetGuard()]
             if guards is None
             else list(guards)
+        )
+
+    def _to_config(self) -> ReactLoopConfig:
+        return ReactLoopConfig(
+            max_loop_iterations=self.max_loop_iterations,
+            max_connection_retries=self.max_connection_retries,
+            guards=(
+                [guard.serialize().model_dump(exclude_none=True) for guard in self.guards]
+                if self._custom_guards else None
+            ),
+        )
+
+    @classmethod
+    def _from_config(cls, config: ReactLoopConfig) -> "ReactLoop":
+        guards = None
+        if config.guards is not None:
+            guards = [LoopGuard.deserialize(guard) for guard in config.guards]
+        return cls(
+            max_loop_iterations=config.max_loop_iterations,
+            max_connection_retries=config.max_connection_retries,
+            guards=guards,
         )
 
     def _register_tool_calls(
@@ -242,8 +288,10 @@ class ReactLoop(BaseReasoning):
             stream_tokens: If True, use ``_call_llm_stream``; otherwise
                 ``_call_llm``.
             cancellation_token: External cancellation signal.
-            output_format: Optional structured-output schema; forwarded
-                to the client untouched.
+            output_format: Optional schema of the final answer. The loop
+                works in free text; once the gates accept the answer, one
+                extra call without tools shapes it into this schema and
+                attaches it as the final message's ``structured_output``.
             **kwargs: Provider-specific overrides forwarded to
                 ``client.run()``.
 
@@ -264,6 +312,7 @@ class ReactLoop(BaseReasoning):
         # ctx.messages. tools_override likewise applies to that one call.
         pending_steering: list[SystemMessage] | None = None
         tools_override: list[t.Any] | None = None
+        cut_offs = 0  # consecutive replies cut at the output limit
 
         # Resume preamble: finish whatever was left pending from a previous
         # pause, before the model sees anything new. Only ever has content
@@ -306,7 +355,7 @@ class ReactLoop(BaseReasoning):
             if loop_state.iteration >= self.max_loop_iterations:
                 loop_state.finish_reason = MAX_ITERATIONS
                 _log.warning("Max iterations reached", iteration=loop_state.iteration)
-                msg = UserMessage(source=HARNESS, content=MAX_ITERATIONS_REACHED)
+                msg = UserMessage(source=HARNESS, content=harness.MAX_ITERATIONS_REACHED)
                 ctx.messages.append(msg)
                 break
 
@@ -331,7 +380,6 @@ class ReactLoop(BaseReasoning):
                 prompts=prompts,
                 loop_state=loop_state,
                 cancellation_token=cancellation_token,
-                output_format=output_format,
                 transient_messages=pending_steering,
                 tools_override=tools_override,
                 **kwargs,
@@ -361,6 +409,24 @@ class ReactLoop(BaseReasoning):
 
             # 3. Tracked assistant messages
             assistant_msg = result.message
+            if result.finish_reason == "length":
+                # Cut off at the output limit: a half-written tool call must not
+                # run, and the model must learn why, or it retries the same way.
+                assistant_msg = _without_broken_calls(assistant_msg)
+                if not assistant_msg.tool_calls:
+                    cut_offs += 1
+                    _log.warning("Output cut off", iteration=loop_state.iteration, in_a_row=cut_offs)
+                    if assistant_msg.text().strip():
+                        ctx.messages.append(assistant_msg)
+                    if cut_offs >= MAX_CUT_OFFS:
+                        loop_state.finish_reason = OUTPUT_LIMIT
+                        break
+                    limit = client_max_output_tokens(self.client)
+                    pending_steering = [SystemMessage(
+                        source=HARNESS, content=harness.output_cut_off(limit),
+                    )]
+                    continue
+            cut_offs = 0
             ctx.messages.append(assistant_msg)
 
             # 4. Check if the LLM produced any tool calls. If so, register them and execute them.
@@ -392,6 +458,11 @@ class ReactLoop(BaseReasoning):
             )
 
             if gate_result.status == COMPLETED:
+                if output_format is not None:
+                    async for event in self._format_final_answer(
+                        ctx, prompts, loop_state, output_format, cancellation_token, **kwargs
+                    ):
+                        yield event
                 yield TaskCompleteEvent(source=self.name, decision=gate_result)
                 break
 
@@ -411,6 +482,48 @@ class ReactLoop(BaseReasoning):
             finish_reason=loop_state.finish_reason,
         )
         yield self._reasoning_complete(loop_state)
+
+    async def _format_final_answer(
+        self,
+        ctx: RunContext,
+        prompts: PromptCtx,
+        loop_state: ReActLoopState,
+        output_format: type[BaseModel],
+        cancellation_token: CancellationToken | None,
+        **kwargs: t.Any,
+    ) -> t.AsyncGenerator[CoreEvent, None]:
+        """Shape the accepted answer into ``output_format`` with one call
+        without tools. The transcript keeps the prose answer (the model's
+        context for later turns); the object goes on its ``structured_output``."""
+        index = next(
+            (i for i in range(len(ctx.messages) - 1, -1, -1)
+             if isinstance(ctx.messages[i], AssistantMessage)),
+            None,
+        )
+        if index is None:
+            return
+        accepted_result = loop_state.last_result
+        instruction = SystemMessage(source=HARNESS, content=harness.FORMAT_FINAL_ANSWER)
+        async for event in self._call_llm(
+            ctx=ctx,
+            prompts=prompts,
+            loop_state=loop_state,
+            cancellation_token=cancellation_token,
+            output_format=output_format,
+            transient_messages=[instruction],
+            tools_override=[],
+            **kwargs,
+        ):
+            yield event
+        shaped = loop_state.last_result
+        loop_state.last_result = accepted_result
+        if shaped is None or shaped.message.structured_output is None:
+            log.warning("Final answer not shaped", output_format=output_format.__name__)
+            return
+        shape = shaped.message.structured_output
+        ctx.messages[index] = ctx.messages[index].model_copy(
+            update={"structured_output": shape, "structured_output_type": type_ref(type(shape))}
+        )
 
     async def _check_completion(
         self,
@@ -498,16 +611,7 @@ class ReactLoop(BaseReasoning):
             for name in self._TOOL_DENIED_FOLLOWUP_TOOLS
             if name in catalog
         ]
-        denial_list = ", ".join(
-            f"{r.tool_name} ({r.approval_reason or 'denied'})" for r in denied
-        )
-        text = (
-            f"The user denied: {denial_list}. Assess how much this blocks the "
-            "task. Explain to the user what happened and why, then call "
-            "ask_user with exactly one of: (1) cancel the remaining task, "
-            "(2) retry the tool, or (3) other instructions on how to proceed."
-        )
-        return [SystemMessage(source=HARNESS, content=text)], tools
+        return [SystemMessage(source=HARNESS, content=harness.tool_denied(denied))], tools
 
     def _reasoning_complete(self, loop_state: ReActLoopState) -> ReasoningCompleteEvent:
         """Build the terminal event for the current turn."""

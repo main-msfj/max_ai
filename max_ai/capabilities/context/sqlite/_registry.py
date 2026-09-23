@@ -16,6 +16,7 @@ from ._model import SQLiteContextRegistryConfig
 
 
 class SQLiteContextRegistry(CoreLogBookRegistry):
+    component_provider_override = "max_ai.capabilities.context.sqlite.SQLiteContextRegistry"
     component_schema = SQLiteContextRegistryConfig
     component_type = "context"
 

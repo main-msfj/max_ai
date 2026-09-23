@@ -12,6 +12,8 @@ import importlib
 
 from pydantic import BaseModel
 
+from ..base.component import _check_allowed
+
 
 def type_ref(value: type[BaseModel] | None) -> str | None:
     """Return the dotted import path for a model class, or None."""
@@ -34,6 +36,8 @@ def load_type_ref(value: str | None) -> type[BaseModel] | None:
     module_name, _, attr = value.rpartition(".")
     if not module_name or not attr:
         raise ValueError(f"Invalid type reference: {value!r}")
+    # Stored sessions name this path; importing runs code, so allowlist it.
+    _check_allowed(value)
     loaded = getattr(importlib.import_module(module_name), attr)
     if not isinstance(loaded, type) or not issubclass(loaded, BaseModel):
         raise TypeError(f"Type reference must be a Pydantic model: {value!r}")

@@ -101,9 +101,9 @@ async def test_knowledge_rejects_unbounded_or_invalid_limits(limit):
 ])
 def test_component_roundtrip_does_not_serialize_credentials(registry, monkeypatch):
     monkeypatch.setenv("TEST_MONGO_URI", "mongodb://secret:password@host/")
-    config = registry.dump_component()
+    config = registry.serialize()
     assert "password" not in config.model_dump_json()
-    restored = type(registry).load_component(config)
+    restored = type(registry).deserialize(config)
     assert restored._to_config() == registry._to_config()
     assert not restored._connected
 

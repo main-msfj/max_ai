@@ -109,6 +109,6 @@ def test_bound_mongo_copies_share_one_client():
 
 
 def test_the_serialized_agent_memory_has_no_user(tmp_path):
-    config = LocalMemoryRegistry(base_path=tmp_path).dump_component().config
+    config = LocalMemoryRegistry(base_path=tmp_path).serialize().config
     assert config["base_path"] == str(Path(tmp_path).resolve())
     assert "user_id" not in config and "session_id" not in config  # None values are dropped

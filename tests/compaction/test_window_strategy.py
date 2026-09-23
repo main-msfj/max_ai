@@ -90,5 +90,5 @@ async def test_harness_messages_do_not_count_as_turns():
 
 def test_serializes_with_its_turn_limit():
     window = SlidingWindowCompaction(max_turns=4, threshold=0.7)
-    restored = SlidingWindowCompaction.load_component(window.dump_component())
+    restored = SlidingWindowCompaction.deserialize(window.serialize())
     assert (restored.config.max_turns, restored.config.threshold) == (4, 0.7)

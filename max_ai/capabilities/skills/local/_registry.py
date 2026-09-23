@@ -25,6 +25,7 @@ from ._model import LocalSkillRegistryConfig
 
 
 class LocalSkillRegistry(CoreSkillRegistry):
+    component_provider_override = "max_ai.capabilities.skills.local.LocalSkillRegistry"
     component_schema = LocalSkillRegistryConfig
     component_type = "skills"
 

@@ -311,7 +311,9 @@ class CompactionEvent(AgentEvent):
     )
     tokens_before: int = Field(default=0, description="Live tokens before compacting")
     tokens_after: int = Field(default=0, description="Live tokens after compacting")
-    kept_message_count: int = Field(default=0, description="Messages left in the window")
+    kept_message_count: int = Field(
+        default=0, description="Messages left in the window"
+    )
     old_messages: list[Message] = Field(  # type: ignore[valid-type]
         default_factory=list, description="Messages that left the window"
     )
@@ -545,7 +547,7 @@ class MemoryRetrievalEvent(MemoryEvent):
 # -------- -----------------------------------------------------------
 # Union types Orchestration
 # -------- -----------------------------------------------------------
-OrchestrationEvent = Annotated[
+OrchestrationEvents = Annotated[
     t.Union[
         OrchestrationStartEvent,
         OrchestrationCompleteEvent,

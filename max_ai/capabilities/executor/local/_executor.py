@@ -14,6 +14,7 @@ from ._model import LocalExecutorConfig
 
 
 class LocalExecutor(ExecutorBase):
+    component_provider_override = "max_ai.capabilities.executor.local.LocalExecutor"
     component_schema = LocalExecutorConfig
 
     def __init__(self, *, max_output_bytes: int = 1 << 20) -> None:

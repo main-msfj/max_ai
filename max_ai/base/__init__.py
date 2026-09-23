@@ -5,7 +5,7 @@ from .completion_gate import (
     CompletionCheck,
     CompletionDecision,
 )
-from .component import Component, ComponentBase, CoreLifecycleComponent
+from .component import Component, ComponentBase, CoreLifecycleComponent, allow_providers
 from .context import CoreLogBookRegistry
 from .knowledge import CoreKnowledgeRegistry
 from .layer import CoreLayer
@@ -18,6 +18,7 @@ from .workspace import WorkspaceBase
 __all__ = [
     "CoreLayer",
     "Component",
+    "allow_providers",
     "ComponentBase",
     "CoreLifecycleComponent",
     "CompactionResult",

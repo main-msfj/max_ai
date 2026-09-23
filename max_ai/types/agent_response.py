@@ -21,6 +21,7 @@ from .tool_call import ToolCallRecord
 FinishReason = t.Literal[
     "stop",  # LLM emitted no tool calls; conversation done
     "max_iterations",  # ReActLoop hit max_loop_iterations
+    "output_limit",  # replies kept being cut at the client's max_tokens
     "approval_needed",  # paused waiting for user approval on a tool
     "tool_denied",  # paused because a tool call was denied (rejected or blocked by policy)
     "tool_direct_return",  # a tool with return_control_to_llm=False finished

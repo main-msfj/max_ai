@@ -8,6 +8,10 @@ var/
 # Local model weights
 llm-models/
 .vscode/
+.codex/
+.claude/
+.ruff_cache/
+.agents/
 .venv
 .pytest_cache/
 .docker-runtime
@@ -21,4 +25,4 @@ __pycache__/
 *.db
 *.bak
 *.backup
-*.swp   
+*.swp

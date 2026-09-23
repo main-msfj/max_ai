@@ -9,7 +9,12 @@ from max_ai.base.memory import MemoryToolMode
 from max_ai.capabilities.knowledge.local import LocalKnowledgeRegistry
 from max_ai.capabilities.memory.local import LocalMemoryRegistry
 from max_ai.capabilities.skills.local import LocalSkillRegistry
-from max_ai.capabilities.stacks import KnowledgeLayer, MemoryLayer, SessionStateLayer, SkillsLayer
+from max_ai.capabilities.stacks import (
+    KnowledgeLayer,
+    MemoryLayer,
+    SessionStateLayer,
+    SkillsLayer,
+)
 from max_ai.capabilities.workspace.local import LocalWorkspace
 from max_ai.core.messages import AssistantMessage, ToolCall
 from max_ai.types.completions import ChatCompletionResult, Usage

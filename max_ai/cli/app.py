@@ -25,6 +25,8 @@ from textual.widget import Widget
 from textual.widgets import Button, DirectoryTree, Static, TextArea
 
 from ..agents.agent import Agent
+from ..base.session_store import CoreSessionStore
+from ..core.compaction import client_max_output_tokens, live_message_threshold_tokens
 from ..core.event_type import (
     CompactionEvent,
     CoreEvent,
@@ -36,19 +38,15 @@ from ..core.event_type import (
     ToolCallEvent,
     ToolCallResponseEvent,
 )
-from ..core.compaction import client_max_output_tokens, live_message_threshold_tokens
-from ..core.termination.cancellation import CancellationToken
-from ..base.session_store import CoreSessionStore
 from ..core.messages import HARNESS_SOURCE
 from ..core.model.session import SessionInfo
+from ..core.termination.cancellation import CancellationToken
+from ..ids import short_id
 from ..types.agent_response import AgentResponse
 from ..types.run_context import RunContext
-from ..ids import short_id
 from ..types.tool_call import ToolResult
 from .blocks import (
     ACCENT,
-    _k,
-    context_bar,
     SPINNER,
     AssistantBlock,
     CompactionBlock,
@@ -61,6 +59,8 @@ from .blocks import (
     ToolBlock,
     UserBlock,
     WelcomeBox,
+    _k,
+    context_bar,
     time_ago,
     tool_summary,
 )
@@ -125,7 +125,7 @@ class MaxAIApp(App[None]):
     #composer:focus-within {{ border: round {ACCENT}; }}
     #caret {{ width: 2; color: {ACCENT}; text-style: bold; }}
     #prompt {{ height: auto; min-height: 1; max-height: 10; border: none; background: #0b0b0c; padding: 0; }}
-    #usage {{ height: 1; padding: 0 1; color: #71717a; }}
+    #usage {{ height: 2; padding: 0 1 1 1; color: #71717a; }}
     """
     BINDINGS = [
         Binding("escape", "interrupt", "Interrupt", priority=True),
@@ -783,15 +783,16 @@ class MaxAIApp(App[None]):
         await self._mount(self._plan)
 
     async def _write_turn_summary(self, response: AgentResponse) -> None:
-        """One line per turn: outcome, time, finish reason and anything the
-        completion gate said (retries, closing notes, blocking reasons)."""
+        """One line per turn: outcome, time, finish reason and what the gate
+        says to the user. Its retries are steering for the model: only shown
+        in verbose mode (ctrl+o)."""
         await self._finish_assistant()
         elapsed = int(time.monotonic() - (self._turn_started_at or time.monotonic()))
         decision = response.completion
         status = decision.status if decision is not None else None
         reasons = list(decision.reasons) if decision is not None else []
         closed = response.finish_reason == "stop" and status in (None, "completed")
-        warn = bool(reasons or self._gate_retries)
+        warn = bool(reasons)
         if closed:
             icon, head = ("⚠", "Done") if warn else ("✓", "Done")
             color = "#fbbf24" if warn else "#4ade80"
@@ -800,12 +801,15 @@ class MaxAIApp(App[None]):
             color = "#f87171" if response.finish_reason in ("error", "cancelled") else "#fbbf24"
             line = Text(f"■ Stopped after {elapsed}s", style=f"bold {color}")
         line.append(f" · {response.finish_reason}", style="#a1a1aa")
-        if status is not None and status != "completed":
-            line.append(f" · gate {status}", style=color)
-        if self._gate_retries:
+        if self._gate_retries and self.verbose:
             count = len(self._gate_retries)
             line.append(f" · gate retried {count}×: ", style="#fbbf24")
             line.append(" | ".join(self._gate_retries)[:200], style="#a1a1aa")
+        if response.finish_reason == "output_limit":
+            line.append(
+                " · the model's replies kept hitting its output limit (max_tokens): "
+                "raise it or ask for smaller steps", style="#a1a1aa",
+            )
         if reasons:
             line.append(" · gate: ", style=color)
             line.append("; ".join(reasons)[:300], style="#a1a1aa")
@@ -1157,7 +1161,7 @@ class MaxAIApp(App[None]):
             input_widget.placeholder = PLACEHOLDER
 
 
-async def run_repl(
+async def run_cli(
     agent: Agent,
     *,
     show_thinking: bool = True,

@@ -96,9 +96,9 @@ async def test_delete_and_no_temp_files_left(tmp_path):
 
 def test_store_is_a_serializable_component(tmp_path):
     store = LocalSessionStore(tmp_path)
-    component = store.dump_component()
+    component = store.serialize()
     assert component.provider == "maxai.session_store.LocalSessionStore"
-    assert LocalSessionStore.load_component(component).base_path == Path(tmp_path)
+    assert LocalSessionStore.deserialize(component).base_path == Path(tmp_path)
 
 
 # -------- the production flow: load → run → save, across "processes" ------------------

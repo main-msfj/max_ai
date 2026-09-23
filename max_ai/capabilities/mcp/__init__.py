@@ -5,6 +5,7 @@ from ._model import (
     MCPServerConfig,
     StdioMCPServerConfig,
     deserialize_mcp_servers,
+    ensure_serializable,
     serialize_mcp_servers,
 )
 from .client_manager import MCPClientManager
@@ -20,5 +21,6 @@ __all__ = [
     "StdioMCPServerConfig",
     "deserialize_mcp_servers",
     "serialize_mcp_servers",
+    "ensure_serializable",
     "create_mcp_tools",
 ]

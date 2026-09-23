@@ -33,7 +33,7 @@ from ....core.messages import (
     ToolMessage,
     UserMessage,
 )
-from ....core.model.llm import ModelConfig
+from ....core.model.llm import ModelConfig, output_token_limit
 from ....errors.client import ClientError
 from ....loggers import ScopedLogger
 from ....types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
@@ -68,6 +68,7 @@ class OpenAIChatCompletionClient(
 
     DEFAULT_BASE_URL = "https://api.openai.com/v1"
     PROVIDER_NAME = "OpenAI"
+    API_KEY_ENV = "OPENAI_API_KEY"
     SYSTEM_LAYER_SEPARATOR = "\n\n"
     SYSTEM_SOURCE = "system"
 
@@ -80,16 +81,22 @@ class OpenAIChatCompletionClient(
         project: str | None = None,
         config: ModelConfig | None = None,
         max_tokens: int | None = None,
+        api_key_env: str | None = None,
         **kwargs: t.Any,
     ) -> None:
-        super().__init__(model=model, api_key=api_key, config=config, **kwargs)
+        super().__init__(
+            model=model, api_key=api_key, config=config, api_key_env=api_key_env, **kwargs,
+        )
+        if self.api_key is None:
+            raise ValueError(
+                f"{self.PROVIDER_NAME} needs an API key: pass api_key or set "
+                f"${self.api_key_env}."
+            )
         self.base_url = base_url
         self.organization = organization
         self.project = project
         self.generation_options: dict[str, t.Any] = dict(kwargs)
-        output_limit = max_tokens
-        if output_limit is None and self.config.max_output_tokens:
-            output_limit = self.config.max_output_tokens
+        output_limit = output_token_limit(max_tokens or self.config.max_output_tokens)
         if output_limit is not None:
             self.generation_options["max_tokens"] = output_limit
 
@@ -107,7 +114,7 @@ class OpenAIChatCompletionClient(
     def _to_config(self) -> OpenAIChatCompletionClientConfig:
         return OpenAIChatCompletionClientConfig(
             model=self.model,
-            api_key=self.api_key,
+            api_key_env=self.api_key_env,
             base_url=self.base_url,
             organization=self.organization,
             project=self.project,
@@ -123,7 +130,7 @@ class OpenAIChatCompletionClient(
         model_config = ModelConfig(**config.config) if config.config else None
         return cls(
             model=config.model,
-            api_key=config.api_key,
+            api_key_env=config.api_key_env,
             base_url=config.base_url,
             organization=config.organization,
             project=config.project,
@@ -395,6 +402,7 @@ class OpenAIChatCompletionClient(
         content_parts: list[str] = []
         tool_parts: dict[int, dict[str, t.Any]] = {}
         final_usage = Usage()
+        finish_reason: str | None = None
 
         async for chunk in raw_stream:
             usage = self._get(chunk, "usage", None)
@@ -406,6 +414,7 @@ class OpenAIChatCompletionClient(
                 continue
 
             choice = choices[0]
+            finish_reason = self._get(choice, "finish_reason", None) or finish_reason
             delta = self._get(choice, "delta", None)
             if delta is None:
                 continue
@@ -469,6 +478,7 @@ class OpenAIChatCompletionClient(
             is_complete=True,
             usage=final_usage,
             structured_output=structured_output,
+            finish_reason=finish_reason,
         )
 
     def _parse_tool_calls(self, raw_tool_calls: t.Any) -> list[ToolCall]:

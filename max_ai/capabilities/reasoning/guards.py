@@ -29,6 +29,10 @@ import math
 import typing as t
 from dataclasses import dataclass, field
 
+from pydantic import BaseModel, Field
+
+from ...base.component import ComponentBase
+from ...core.harness import messages as harness
 from ...core.messages import AssistantMessage, ToolMessage
 from ...core.primitives import FailureReason
 from ...types.run_context import RunContext
@@ -46,8 +50,27 @@ class GuardContext:
     max_loop_iterations: int = 10
 
 
-class LoopGuard:
-    """Base guard: override one or both hooks; return steering text or None."""
+class GuardConfig(BaseModel):
+    """A guard's settings. Guards with options extend it."""
+
+
+class LoopGuard(ComponentBase[GuardConfig]):
+    """Base guard: override one or both hooks; return steering text or None.
+
+    Serializable: each guard declares its settings as a ``component_schema``
+    whose fields match its attributes, so config round-trips generically.
+    """
+
+    component_type = "guard"
+    component_schema: t.ClassVar[type[BaseModel]] = GuardConfig
+
+    def _to_config(self) -> BaseModel:
+        schema = self.component_schema
+        return schema(**{name: getattr(self, name) for name in schema.model_fields})
+
+    @classmethod
+    def _from_config(cls, config: BaseModel) -> t.Self:
+        return cls(**config.model_dump())
 
     def after_tool_round(
         self,
@@ -85,6 +108,19 @@ def _last_assistant(ctx: RunContext) -> AssistantMessage | None:
     return None
 
 
+class RepetitionGuardConfig(GuardConfig):
+    max_repeats: int = Field(default=2, ge=1)
+    result_preview_chars: int = Field(default=200, ge=0)
+
+
+class BudgetGuardConfig(GuardConfig):
+    threshold: float = Field(default=0.75, gt=0, le=1)
+
+
+class PlanCompletionGuardConfig(GuardConfig):
+    max_nudges: int = Field(default=3, ge=1)
+
+
 class SchemaRetryGuard(LoopGuard):
     """On a parameter-validation failure, echo the expected schema.
 
@@ -92,6 +128,9 @@ class SchemaRetryGuard(LoopGuard):
     small models recover far more reliably when the retry prompt also
     shows the exact JSON schema they must satisfy.
     """
+
+    component_provider_override = "maxai.guards.SchemaRetryGuard"
+
 
     def after_tool_round(self, ctx, state, guard_ctx):
         failures: list[str] = []
@@ -109,12 +148,7 @@ class SchemaRetryGuard(LoopGuard):
             if tool is None:
                 continue
             schema = json.dumps(tool.parameters, indent=None, default=str)
-            failures.append(
-                f"Your call to '{record.tool_name}' had invalid parameters "
-                f"({record.result.error}). The expected JSON schema is: "
-                f"{schema}. Retry the call with parameters matching this "
-                "schema exactly."
-            )
+            failures.append(harness.invalid_parameters(record.tool_name, record.result.error, schema))
         if failures:
             return " ".join(failures)
         return None
@@ -129,6 +163,10 @@ class RepetitionGuard(LoopGuard):
     and echo the result it already has, so re-calling stops looking
     useful (the model re-fetches when it thinks it "lost" the data).
     """
+
+    component_provider_override = "maxai.guards.RepetitionGuard"
+    component_schema = RepetitionGuardConfig
+
 
     def __init__(self, max_repeats: int = 2, result_preview_chars: int = 200) -> None:
         self.max_repeats = max_repeats
@@ -161,14 +199,7 @@ class RepetitionGuard(LoopGuard):
             repeated.append(entry)
 
         if repeated:
-            listing = "; ".join(repeated)
-            return (
-                "You are re-calling tools with arguments identical to calls "
-                f"you already made this turn. You already have the results: "
-                f"{listing}. Do not call these tools again with the same "
-                "arguments — use the results above and move on to the next "
-                "plan step, or answer the user with what you have."
-            )
+            return harness.repeated_calls("; ".join(repeated))
         return None
 
 
@@ -180,6 +211,10 @@ class BudgetGuard(LoopGuard):
     how many iterations remain and to check in with the user instead of
     silently running out.
     """
+
+    component_provider_override = "maxai.guards.BudgetGuard"
+    component_schema = BudgetGuardConfig
+
 
     def __init__(self, threshold: float = 0.75) -> None:
         self.threshold = threshold
@@ -193,16 +228,7 @@ class BudgetGuard(LoopGuard):
         state.guard_state["budget_warned"] = True
         remaining = max(0, max_iter - state.iteration)
         pct_used = min(100, round(100 * state.iteration / max_iter))
-        ask_hint = (
-            " Call ask_user to ask them whether to continue,"
-            if "ask_user" in guard_ctx.tools
-            else " Tell the user"
-        )
-        return (
-            f"You have {remaining} reasoning iteration(s) left (~{pct_used}% of "
-            f"this turn's budget used).{ask_hint} or give them a summary of what "
-            "you have so far, before the budget runs out."
-        )
+        return harness.budget_running_out(remaining, pct_used, "ask_user" in guard_ctx.tools)
 
 
 class NoProgressGuard(LoopGuard):
@@ -214,6 +240,9 @@ class NoProgressGuard(LoopGuard):
     can never live-lock.
     """
 
+    component_provider_override = "maxai.guards.NoProgressGuard"
+
+
     def on_final_answer(self, ctx, state, guard_ctx):
         result = state.last_result
         if result is None:
@@ -224,11 +253,7 @@ class NoProgressGuard(LoopGuard):
         if state.guard_state.get("no_progress_fired"):
             return None
         state.guard_state["no_progress_fired"] = True
-        tool_names = ", ".join(sorted(guard_ctx.tools)) or "none available"
-        return (
-            "Your last response was empty. Either call one of your tools "
-            f"({tool_names}) or answer the user directly in plain text."
-        )
+        return harness.empty_response(", ".join(sorted(guard_ctx.tools)) or "none available")
 
 
 class PlanCompletionGuard(LoopGuard):
@@ -243,6 +268,10 @@ class PlanCompletionGuard(LoopGuard):
     spelled out in the steering so an actually-finished model can
     self-correct on the first nudge instead of burning the whole cap.
     """
+
+    component_provider_override = "maxai.guards.PlanCompletionGuard"
+    component_schema = PlanCompletionGuardConfig
+
 
     def __init__(self, max_nudges: int = 3) -> None:
         self.max_nudges = max_nudges
@@ -264,26 +293,7 @@ class PlanCompletionGuard(LoopGuard):
         # in plain text, we veto, it asks again... Point it at the
         # ask-the-user tool on the FIRST veto so it pauses properly
         # instead of looping.
-        ask_hint = ""
-        if "ask_user" in guard_ctx.tools:
-            ask_hint = (
-                " If you are blocked because you need information or a "
-                "decision from the user, do NOT repeat the request in "
-                "plain text — call ask_user to ask them "
-                "right now."
-            )
-        return (
-            "Do not stop yet — your plan still has unfinished steps: "
-            f"{listing}. Continue executing the next step NOW instead of "
-            "announcing it. If the remaining steps are already covered by "
-            "work you have done, call update_plan marking them done. If "
-            "the reply you just wrote already consolidates the results of "
-            "ALL plan steps, send ONLY that update_plan call — do NOT "
-            "retype the answer; it will be delivered to the user as-is. "
-            "If that reply was incomplete, include the full consolidated "
-            "final answer as text in the same message as the update_plan "
-            "call." + ask_hint
-        )
+        return harness.plan_unfinished(listing, "ask_user" in guard_ctx.tools)
 
 
 def default_guards() -> list[LoopGuard]:

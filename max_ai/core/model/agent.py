@@ -17,19 +17,36 @@ class AgentConfig(BaseModel):
     exponential_backoff_base: float = Field(default=1.0)
 
 
-class AgentComponentConfig(BaseModel):
-    """Portable constructor configuration for an ``Agent``."""
+class AgentSpec(BaseModel):
+    """An Agent as storable data: ``Agent.serialize()`` builds it and
+    ``Agent.deserialize()`` rebuilds the agent from it.
+
+    Every component is a ``ComponentModel`` dict (provider + config). It holds
+    no secrets (only env var names) and no code: tools written as Python
+    functions cannot be stored, expose them through an MCP server instead.
+    """
 
     name: str
     description: str
     instructions: str
     client: dict[str, t.Any]
-    config: AgentConfig = Field(default_factory=AgentConfig)
-    toolset: list[dict[str, t.Any]] = Field(default_factory=list)
-    capabilities: list[dict[str, t.Any]] = Field(default_factory=list)
+    max_iterations: int = Field(default=20, ge=1)
+    idle_timeout: float = 300
+    reasoning: dict[str, t.Any] | None = None
     workspace: dict[str, t.Any] | None = None
-    middlewares: list[dict[str, t.Any]] = Field(default_factory=list)
-    framework_layers: list[dict[str, t.Any]] = Field(default_factory=list)
     executor: dict[str, t.Any] | None = None
-    output_format: str | None = None
-    priority_tools: list[str] = Field(default_factory=list)
+    memory: dict[str, t.Any] | None = None
+    skills: dict[str, t.Any] | None = None
+    knowledge: list[dict[str, t.Any]] = Field(default_factory=list)
+    compaction: dict[str, t.Any] | None = None
+    toolset: list[dict[str, t.Any]] = Field(default_factory=list)
+    mcp_servers: list[dict[str, t.Any]] = Field(default_factory=list)
+    completion: dict[str, t.Any] = Field(
+        default_factory=dict, description="RuntimeGateConfig options of the framework's gate.",
+    )
+    completion_handlers: list[dict[str, t.Any]] = Field(
+        default_factory=list, description="The developer's own gates, as components.",
+    )
+    output_format: dict[str, t.Any] | None = Field(
+        default=None, description="JSON Schema of the final answer.",
+    )

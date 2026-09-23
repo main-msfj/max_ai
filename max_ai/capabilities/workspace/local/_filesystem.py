@@ -491,7 +491,7 @@ class UserFileSystem:
             raise ValueError("expected_sha256 must be a 64-character SHA-256 digest")
         if not isinstance(old_text, str) or not old_text:
             raise ValueError("old_text must be a non-empty string")
-        replacement = self._text_bytes(new_text)
+        self._text_bytes(new_text)
         user = self._safe_id(user_id, "user_id")
         lock = _path_lock((str(self.root), user, "/".join(parts)))
         with lock:

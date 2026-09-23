@@ -2854,3 +2854,94 @@ Tests `tests/cli/test_sessions.py` (7): guardar por turno + reabrir con
 primero), esc cancela, /new conserva la anterior, resumen al retomar sesión
 compactada, sin store no guarda. Suite 321 passed, sin regresiones; 10
 scripts CLI OK (`verify_cli_blocks` actualizado: /clear = sesión nueva).
+
+## 2026-09-23 — Agent serializable, paso 1: ningún componente guarda secretos
+
+Regla (decisión de marvin): un componente serializable guarda el NOMBRE de la
+variable de entorno, nunca el secreto (la config del agente irá a una base).
+- Bug encontrado: los 3 clientes LLM guardaban `api_key` como SecretStr → en
+  JSON "**********" y al deserializar quedaban con esa clave literal (401
+  confuso en la primera llamada).
+- Clientes: `CoreChatCompletionClient.API_KEY_ENV` + parámetro `api_key_env`;
+  la clave es `api_key` (código) o `os.environ[api_key_env]`. Configs:
+  `api_key_env` en vez de `api_key` (OpenAI "OPENAI_API_KEY", OpenRouter
+  "OPENROUTER_API_KEY", Ollama "OLLAMA_API_KEY", opcional). OpenAI/OpenRouter
+  sin clave → "OpenAI needs an API key: pass api_key or set $X".
+- MCP: `token_env`, `headers_env` (header → var) y `env_from` (var del hijo →
+  var del host), resueltos al conectar (`request_headers`, `process_env`);
+  var faltante → "MCP server 'x' needs env var Y". `token` literal: solo en
+  código (`exclude=True`, fuera de repr) y `serialize_mcp_servers` lo rechaza
+  (`ensure_serializable`). Aprobación por tool ya existía
+  (`tool_approval_modes`).
+- Ejemplos: 01 pasa `api_key_env` con la variable que exista (OPENAI_KEY…);
+  02 deja que el cliente lea OPENROUTER_API_KEY.
+- Tests: `tests/test_no_secrets_in_configs.py` (7, guardia: ningún secreto ni
+  "*****" en el JSON y el componente restaurado sigue usable) y 2 nuevos en
+  `test_mcp_integration.py`; el round-trip de MCP ya no acepta token literal.
+Verificado con OpenAI real: cliente → JSON (sin clave) → load_component →
+respuesta "ok". Suite 330 passed, sin regresiones; scripts OK.
+
+## 2026-09-23 — Agent serializable, puntos 1-3: reasoning, gate y lista blanca
+
+Nombres (pedido de marvin): `dump_component`/`load_component` → `serialize()`
+/ `deserialize()` en TODOS los componentes; `deserialize` acepta el
+ComponentModel, su dict o el JSON (str/bytes), p. ej. directo de una fila.
+`FunctionAsTool.serialize()` falla con "exponela vía MCP".
+
+1. Reasoning y guards son componentes (marvin: quien use otro loop pasa el
+   suyo, con su config):
+   - `BaseReasoning(ComponentBase[ReasoningConfig])`, component_type
+     "reasoning". `ReactLoop` → `ReactLoopConfig(max_loop_iterations,
+     max_connection_retries, guards)`; `guards=None` = "los defaults" (un
+     agente guardado recibe defaults mejorados), `[]` = sin guards.
+   - `LoopGuard(ComponentBase[GuardConfig])` con serialización genérica desde
+     su `component_schema`; configs para RepetitionGuard, BudgetGuard y
+     PlanCompletionGuard. Proveedores `maxai.reasoning.ReactLoop` y
+     `maxai.guards.*` en KNOWN_PROVIDERS.
+2. `RuntimeCompletionGate(workspace, config=RuntimeGateConfig(...))`: opciones
+   `enabled`, `plan_must_close`, `check_bash_outputs`, `nudge_bash_failures`
+   (todas True por defecto). El workspace sigue inyectándolo el Agent (es
+   runtime, no config). Gates propios: componentes por proveedor.
+3. Lista blanca de proveedores en `ComponentBase.deserialize` (antes importaba
+   cualquier clase que dijera el JSON): siempre `max_ai.`; más
+   `allow_providers("mi_empresa.", ...)`, `MAXAI_ALLOWED_PROVIDERS`
+   (comma-separated) o `"*"` para desarrollo. Se chequea antes del import.
+Tests `tests/test_serializable_runtime.py` (7): loop por defecto/guards
+propios/sin guards, loop y guard de terceros rechazados hasta permitirlos,
+env y wildcard, proveedor falsificado `os.system` rechazado, opciones del
+gate. Suite sin regresiones.
+Pendiente: Agent.serialize()/deserialize() (juntar todo, gate options y
+gates propios en el Agent, error con tools de función), output_format como
+JSON Schema (punto 4), test con MCP real.
+
+## Agent.serialize() / Agent.deserialize()
+- `Agent` es ahora un `ComponentBase[AgentSpec]` (provider `maxai.agents.Agent`). `AgentSpec` (core/model/agent.py) reemplaza al viejo `AgentComponentConfig`: client, reasoning, workspace, executor, memory, skills, knowledge, compaction, toolset, mcp_servers, completion (RuntimeGateConfig), completion_handlers (gates propios, por provider) y output_format.
+- Nuevo parámetro `Agent(completion=RuntimeGateConfig(...))`.
+- Tools: las built-in no se guardan (el Agent las recrea). Las del desarrollador se guardan solo si son componentes; una función Python da `TypeError` indicando usar MCP. Un gate propio sin `_to_config` da un error igual de claro.
+- output_format se guarda como JSON Schema y se reconstruye con `core/model/json_schema.model_from_schema` (misma forma y validación de tipos/required/enums/anidados; se pierden validators y métodos propios).
+- Providers públicos (`component_provider_override`) para LocalWorkspace, LocalExecutor, LocalMemoryRegistry, LocalSkillRegistry, LocalKnowledgeRegistry y los context registries; `RuntimeCompletionGate` registrado en KNOWN_PROVIDERS; `CoreTool.component_type = "tool"`.
+- Tests: tests/agents/test_agent_serialization.py (6).
+- Pendiente: decidir cuándo aplica output_format (hoy va en cada llamada del loop), test con MCP real.
+
+## output_format solo en la respuesta final
+- Antes: `output_format` iba como response_format/format en CADA llamada del loop.
+- Ahora: el loop trabaja sin formato; cuando los gates aceptan la respuesta, `ReactLoop._format_final_answer` hace UNA llamada extra sin tools con el formato (instrucción `FORMAT_FINAL_ANSWER`, transitoria) y pone el objeto en `structured_output` del mensaje final. El transcript conserva la prosa. Sin output_format no hay llamada extra.
+- Seguridad: `load_type_ref` (rehidratación de structured_output al cargar una sesión) ahora pasa por la lista blanca de providers antes de importar.
+- Tests: tests/agents/test_output_format_final_only.py (2). Prueba real pendiente: .env sin OPENAI_API_KEY, OpenRouter sin créditos y los modelos :free con rate limit.
+
+## Respuestas cortadas por max_tokens, tope de 32K, CLI y ejemplos
+- Bug (capturas del Snake): con `max_tokens=1500` el `write_file` del HTML se cortaba (`finish_reason: length`). En streaming, `_build_tool_calls_from_chunks` descartaba en silencio la llamada rota → mensaje vacío → el gate decía "no answer was generated" → el modelo repetía → `waiting`. Reproducido con la API real.
+- Fix: `ChatCompletionChunk.finish_reason` (OpenAI y Ollama lo reportan en streaming). En `ReactLoop`, si `finish_reason == "length"`: se descartan las tool calls rotas y se le dice al modelo el límite concreto (`OUTPUT_CUT_OFF`, "~1,500 tokens"). Al segundo corte seguido el turno termina con `finish_reason="output_limit"` y la CLI se lo explica al usuario. Prueba real: con 1500 el modelo repetía el intento completo hasta max_iterations aunque se le avisara → por eso el corte a los 2.
+- `MAX_OUTPUT_TOKENS = 32_000` (core/model/llm.py, `output_token_limit()`): lo aplican los clientes OpenAI/Ollama (OpenRouter hereda), `ModelConfig.max_output_tokens` y `client_max_output_tokens` (budget de compactación, también para clientes propios). Con la ventana mínima (128K) quedan ~81K para mensajes y la compactación salta en ~65K.
+- Ejemplos: `max_tokens=32_000`; prueba real con gpt-5.6-luna: `write_file` de 19,362 caracteres en una sola llamada.
+- CLI: "gate retried N×" (steering para el modelo) solo en modo verbose (ctrl+o); se quitó "gate waiting"; la barra de métricas tiene padding abajo.
+- Ejemplos 01/02: cada uno arma su `Agent` completo a la vista y llama `run_repl(agent, store=..., user_id=..., session_id=...)`. `examples/cli_agent.py` eliminado; lo compartido (rutas, get_weather, send_email, `session_arg`) quedó en `examples/shared.py`.
+- Tests: test_output_cut_off.py (2), test_output_token_limit.py (2).
+- Propuesta pendiente: `write_file(append=True)` para escribir archivos grandes por partes.
+
+## core/harness, run_cli y revisión de event_type
+- Nuevo `max_ai/core/harness/messages.py`: todos los textos que el harness le manda al modelo (loop: max iterations, output cortado, formato final, tool denegada; gate del framework; guards). Constantes para textos fijos y funciones para los que dependen del run. Loop, gate y guards importan `from ...core.harness import messages as harness` y solo deciden cuándo hablar.
+- Arreglado: al llegar a max_iterations el loop metía el texto literal "max_iterations_reached" como mensaje de usuario; ahora es una instrucción real (contar dónde quedó antes de empezar algo nuevo).
+- Los prompts de compactación (SUMMARY_TASK, MEMORY_TASK) quedan en su estrategia: son de la estrategia, no del harness.
+- `run_repl` → `run_cli` (cli/__init__, app, README, ejemplos). README de la CLI al día (sesiones, /resume /new /session, run_cli con store/user_id/session_id).
+- Revisado el cambio de otro agente en core/event_type.py: correcto. La unión se llamaba igual que la clase base `OrchestrationEvent` y la pisaba; ahora es `OrchestrationEvents` (como `AgentEvents`).

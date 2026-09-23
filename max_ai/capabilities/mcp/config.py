@@ -5,10 +5,11 @@ from ._model import (
     MCPServerConfig,
     StdioMCPServerConfig,
     deserialize_mcp_servers,
+    ensure_serializable,
     serialize_mcp_servers,
 )
 
 __all__ = [
     "HTTPServerConfig", "MCPServerConfig", "StdioMCPServerConfig",
-    "serialize_mcp_servers", "deserialize_mcp_servers",
+    "serialize_mcp_servers", "ensure_serializable", "deserialize_mcp_servers",
 ]

@@ -36,6 +36,7 @@ class LocalMemoryRegistry(CoreMemoryRegistry):
     no separate index is maintained.
     """
 
+    component_provider_override = "max_ai.capabilities.memory.local.LocalMemoryRegistry"
     component_schema = LocalMemoryRegistryConfig
     component_type = "memory"
 

@@ -2,14 +2,15 @@
 
 import typing as t
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field
 
 
 class OpenRouterChatCompletionClientConfig(BaseModel):
     """Configuration for OpenRouterChatCompletionClient serialization."""
 
     model: str
-    api_key: SecretStr | None = None
+    # The env var name, never the key: the config may be stored anywhere.
+    api_key_env: str | None = "OPENROUTER_API_KEY"
     base_url: str | None = None
     fallback_models: list[str] = Field(default_factory=list)
     reasoning: dict[str, t.Any] | None = None

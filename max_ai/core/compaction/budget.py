@@ -11,19 +11,17 @@ from __future__ import annotations
 import typing as t
 
 from ...config import setting
+from ..model.llm import output_token_limit
 
 
 def client_max_output_tokens(client: t.Any) -> int:
+    """The reply room to reserve in the window: the client's output limit
+    (capped at ``MAX_OUTPUT_TOKENS``, also for custom clients)."""
     options = getattr(client, "generation_options", None)
-    if isinstance(options, dict) and options.get("max_tokens") is not None:
-        return int(options["max_tokens"])
-
-    config = getattr(client, "config", None)
-    max_output = getattr(config, "max_output_tokens", 0) or 0
-    if max_output:
-        return int(max_output)
-
-    return setting.compaction_min_output_tokens
+    limit = options.get("max_tokens") if isinstance(options, dict) else None
+    if not limit:
+        limit = getattr(getattr(client, "config", None), "max_output_tokens", 0)
+    return output_token_limit(limit) or setting.compaction_min_output_tokens
 
 
 def live_message_capacity_tokens(

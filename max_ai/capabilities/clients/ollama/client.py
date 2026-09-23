@@ -32,7 +32,7 @@ from ....core.messages import (
     ToolMessage,
     UserMessage,
 )
-from ....core.model.llm import ModelConfig
+from ....core.model.llm import ModelConfig, output_token_limit
 from ....errors.client import ClientError
 from ....loggers import ScopedLogger
 from ....types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
@@ -63,6 +63,7 @@ class OllamaChatCompletionClient(
     component_schema = OllamaChatCompletionClientConfig
     component_type = "client"
     component_provider_override = "maxai.llm.OllamaChatCompletionClient"
+    API_KEY_ENV = "OLLAMA_API_KEY"  # optional: local Ollama needs no key
 
     DEFAULT_HOST = "http://localhost:11434"
     SYSTEM_LAYER_SEPARATOR = "\n\n"
@@ -78,6 +79,7 @@ class OllamaChatCompletionClient(
         think: OllamaThink | None = None,
         keep_alive: str | int | None = None,
         max_tokens: int | None = None,
+        api_key_env: str | None = None,
         **kwargs: t.Any,
     ) -> None:
         """Initialize the Ollama client.
@@ -103,14 +105,14 @@ class OllamaChatCompletionClient(
             **kwargs: Reserved for future provider-specific defaults
                 (e.g. ``temperature``, ``top_p``).
         """
-        super().__init__(model=model, api_key=api_key, config=config, **kwargs)
+        super().__init__(
+            model=model, api_key=api_key, config=config, api_key_env=api_key_env, **kwargs,
+        )
         self.host: str = self._require_type(host, str, "host")
         self.think: OllamaThink | None = self._validate_think(think)
         self.keep_alive: str | int | None = keep_alive
         self.generation_options: dict[str, t.Any] = dict(kwargs)
-        output_limit = max_tokens
-        if output_limit is None and self.config.max_output_tokens:
-            output_limit = self.config.max_output_tokens
+        output_limit = output_token_limit(max_tokens or self.config.max_output_tokens)
         if output_limit is not None:
             self.generation_options["max_tokens"] = output_limit
 
@@ -137,7 +139,7 @@ class OllamaChatCompletionClient(
         return OllamaChatCompletionClientConfig(
             model=self.model,
             host=self.host,
-            api_key=self.api_key,
+            api_key_env=self.api_key_env,
             think=self.think,
             keep_alive=self.keep_alive,
             options=self.generation_options,
@@ -153,7 +155,7 @@ class OllamaChatCompletionClient(
         return cls(
             model=config.model,
             host=config.host,
-            api_key=config.api_key,
+            api_key_env=config.api_key_env,
             config=model_config,
             think=config.think,
             keep_alive=config.keep_alive,
@@ -827,4 +829,5 @@ class OllamaChatCompletionClient(
             is_complete=True,
             usage=usage,
             structured_output=structured_output,
+            finish_reason=getattr(final_response, "done_reason", None),
         )

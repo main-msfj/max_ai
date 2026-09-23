@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import logging
 import typing as t
 
@@ -14,7 +13,6 @@ from ....errors.client import ClientError
 from ....types.completions import ChatCompletionChunk, ChatCompletionResult
 from ..openai.client import OpenAIChatCompletionClient
 from ._model import OpenRouterChatCompletionClientConfig
-
 
 logger = logging.getLogger(__name__)
 
@@ -58,13 +56,15 @@ class OpenRouterChatCompletionClient(OpenAIChatCompletionClient):
         app_url: str | None = None,
         config: ModelConfig | None = None,
         max_tokens: int | None = None,
+        api_key_env: str | None = None,
         **kwargs: t.Any,
     ) -> None:
         """
         Args:
             model: OpenRouter model id, e.g. ``"qwen/qwen3.8-27b:free"``.
-            api_key: Defaults to ``$OPENROUTER_API_KEY``. Never falls back
-                to ``OPENAI_API_KEY`` — that key must not reach OpenRouter.
+            api_key: Defaults to ``$OPENROUTER_API_KEY`` (or ``api_key_env``).
+                Never falls back to ``OPENAI_API_KEY`` — that key must not
+                reach OpenRouter.
             fallback_models: Tried in order when ``model`` fails
                 (rate limit, downtime, context too small).
             reasoning: OpenRouter reasoning config, e.g.
@@ -74,14 +74,10 @@ class OpenRouterChatCompletionClient(OpenAIChatCompletionClient):
             app_name / app_url: Optional attribution headers
                 (``X-Title`` / ``HTTP-Referer``).
         """
-        api_key = api_key or os.getenv(self.API_KEY_ENV)
-        if not api_key:
-            raise ValueError(
-                f"OpenRouter needs an API key: pass api_key or set ${self.API_KEY_ENV}."
-            )
         super().__init__(
             model=model,
             api_key=api_key,
+            api_key_env=api_key_env,
             base_url=base_url or self.DEFAULT_BASE_URL,
             config=config,
             max_tokens=max_tokens,
@@ -125,7 +121,7 @@ class OpenRouterChatCompletionClient(OpenAIChatCompletionClient):
     def _to_config(self) -> OpenRouterChatCompletionClientConfig:  # type: ignore[override]
         return OpenRouterChatCompletionClientConfig(
             model=self.model,
-            api_key=self.api_key,
+            api_key_env=self.api_key_env,
             base_url=self.base_url,
             fallback_models=self.fallback_models,
             reasoning=self.reasoning,
@@ -144,7 +140,7 @@ class OpenRouterChatCompletionClient(OpenAIChatCompletionClient):
         model_config = ModelConfig(**config.config) if config.config else None
         return cls(
             model=config.model,
-            api_key=config.api_key,
+            api_key_env=config.api_key_env,
             base_url=config.base_url,
             fallback_models=config.fallback_models,
             reasoning=config.reasoning,

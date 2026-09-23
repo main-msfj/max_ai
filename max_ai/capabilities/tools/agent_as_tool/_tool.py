@@ -77,14 +77,14 @@ class AgentAsTool(Component[AgentAsToolConfig], CoreTool):
         if callable(self.strategy):
             raise TypeError("AgentAsTool callable strategies cannot be serialized.")
         return AgentAsToolConfig(
-            agent=self.agent.dump_component().model_dump(exclude_none=True),
+            agent=self.agent.serialize().model_dump(exclude_none=True),
             input_name=self.input_name,
             strategy=self.strategy,
         )
 
     @classmethod
     def _from_config(cls, config: AgentAsToolConfig) -> "AgentAsTool":
-        agent = Agent.load_component(config.agent, expected=Agent)
+        agent = Agent.deserialize(config.agent, expected=Agent)
         return cls(agent=agent, input_name=config.input_name, strategy=config.strategy)
 
     # -------- STRATEGY -----------------------------------------------------------

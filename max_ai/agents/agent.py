@@ -7,6 +7,7 @@ base/agent.py is left untouched.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import aclosing
@@ -18,6 +19,7 @@ from pydantic import BaseModel
 from ..base.clients import CoreChatCompletionClient
 from ..base.compaction import CoreCompaction
 from ..base.completion_gate import CompletionDecision
+from ..base.component import ComponentBase
 from ..base.executor import ExecutorBase
 from ..base.knowledge import CoreKnowledgeRegistry
 from ..base.layer import CoreLayer
@@ -26,9 +28,10 @@ from ..base.reasoning import BaseReasoning
 from ..base.skills import CoreSkillRegistry
 from ..base.tools import CoreTool, ToolContext
 from ..base.workspace import WorkspaceBase
-from ..capabilities.completion_gate import RuntimeCompletionGate
+from ..capabilities.completion_gate import RuntimeCompletionGate, RuntimeGateConfig
 from ..capabilities.executor.local import LocalExecutor
 from ..capabilities.mcp import MCPClientManager, MCPServerConfig
+from ..capabilities.mcp._model import deserialize_mcp_servers, serialize_mcp_servers
 from ..capabilities.reasoning.react import ReactLoop
 from ..capabilities.stacks import (
     KnowledgeLayer,
@@ -54,6 +57,8 @@ from ..core.messages import (
     CoreMessage,
     UserMessage,
 )
+from ..core.model.agent import AgentSpec
+from ..core.model.json_schema import model_from_schema, schema_of
 from ..core.stacks.container import LayerContainer
 from ..core.termination import CancellationToken
 from ..core.tool.dispatcher import ToolDispatcher
@@ -64,7 +69,23 @@ from ..types.run_context import RunContext
 from ..types.stacks import PromptCtx
 
 
-class Agent:
+def _storable(component: Any, what: str) -> ComponentBase[Any]:
+    """``component`` if it can be stored; a clear error saying what to do if not."""
+    try:
+        component.serialize()
+    except (NotImplementedError, AttributeError, TypeError) as error:
+        name = getattr(component, "name", None) or type(component).__name__
+        hint = (
+            "Tools written as Python functions are code and cannot be stored: "
+            "expose them through an MCP server (mcp=[...]) instead."
+            if what == "tool" else
+            "Give it a component_schema, _to_config and _from_config."
+        )
+        raise TypeError(f"Cannot serialize {what} {name!r}: {hint}") from error
+    return component
+
+
+class Agent(ComponentBase[AgentSpec]):
     """Connect a pluggable reasoning loop to workspace, skills and execution.
 
     Supply CoreTool instances or decorated functions through toolset.
@@ -79,7 +100,14 @@ class Agent:
     execution sessions internally and closes them on close(). Local execution
     is not a sandbox. Do not share a reasoning instance
     between concurrently running agents: bind() stores runtime dependencies.
+
+    ``serialize()`` turns the agent into storable data (``AgentSpec``) and
+    ``Agent.deserialize(row)`` rebuilds it: store once, rebuild per request.
     """
+
+    component_type = "agent"
+    component_schema = AgentSpec
+    component_provider_override = "maxai.agents.Agent"
 
     def __init__(
         self,
@@ -101,6 +129,7 @@ class Agent:
         idle_timeout: float = 300,
         output_format: type[BaseModel] | None = None,
         completion_handlers: Sequence[CompletionHandler] | None = None,
+        completion: RuntimeGateConfig | None = None,
         compaction: CoreCompaction | None = None,
     ) -> None:
         self._validate_configuration(max_iterations, executor, reasoning)
@@ -114,6 +143,7 @@ class Agent:
         self.instructions = instructions
         self.client = client
         self.max_iterations = max_iterations
+        self.idle_timeout = idle_timeout
         self.output_format = output_format
 
         self._configure_environment(executor, workspace, idle_timeout)
@@ -127,7 +157,7 @@ class Agent:
         for config in self.mcp_servers:
             self._mcp_manager.add_server(config)
         self._configure_capabilities(memory, skills, knowledge)
-        self._configure_runtime(completion_handlers)
+        self._configure_runtime(completion_handlers, completion)
         self._stack = self._build_prompt_stack()
 
     @staticmethod
@@ -178,7 +208,9 @@ class Agent:
         toolset: Sequence[CoreTool | Callable[..., Any]] | None,
     ) -> None:
         """User tools take precedence over built-in defaults."""
-        self._registry = ToolRegistry(toolset or ())
+        # The developer's tools; built-ins are recreated, never stored.
+        self.toolset = list(toolset or ())
+        self._registry = ToolRegistry(self.toolset)
         self._register_filesystem_tools()
         self._register_control_tools()
 
@@ -231,15 +263,18 @@ class Agent:
     def _configure_runtime(
         self,
         completion_handlers: Sequence[CompletionHandler] | None,
+        completion: RuntimeGateConfig | None,
     ) -> None:
         """Connect dispatch, completion checks and turn synchronization."""
         self.dispatcher = ToolDispatcher(
             self._registry, source=self.name, manager=self._manager
         )
+        self.completion = completion or RuntimeGateConfig()
+        self.completion_handlers = list(completion_handlers or [])
         self.completion_bus = EventBus(
             handlers=[
-                RuntimeCompletionGate(self.workspace),
-                *(completion_handlers or []),
+                RuntimeCompletionGate(self.workspace, self.completion),
+                *self.completion_handlers,
             ]
         )
         self._turn_lock = asyncio.Lock()
@@ -267,6 +302,64 @@ class Agent:
         # Compaction summary and plan: must survive compaction of the transcript.
         layers.append(SessionStateLayer())
         return LayerContainer(layers)
+
+    # -------- SERIALIZATION ------------------------------------------------------------
+    def _to_config(self) -> AgentSpec:
+        def dump(component: ComponentBase[Any]) -> dict[str, Any]:
+            return component.serialize().model_dump(exclude_none=True)
+
+        return AgentSpec(
+            name=self.name,
+            description=self.description,
+            instructions=self.instructions,
+            client=dump(self.client),
+            max_iterations=self.max_iterations,
+            idle_timeout=self.idle_timeout,
+            reasoning=dump(self.reasoning),
+            workspace=dump(self.workspace),
+            executor=dump(self.executor),
+            memory=dump(self.memory) if self.memory is not None else None,
+            skills=dump(self.skills) if self.skills is not None else None,
+            knowledge=[dump(source) for source in self.knowledge],
+            compaction=dump(self.compaction) if self.compaction is not None else None,
+            toolset=[dump(_storable(tool, "tool")) for tool in self.toolset],
+            mcp_servers=json.loads(serialize_mcp_servers(self.mcp_servers)),
+            completion=self.completion.model_dump(),
+            completion_handlers=[
+                dump(_storable(gate, "completion handler")) for gate in self.completion_handlers
+            ],
+            output_format=schema_of(self.output_format) if self.output_format else None,
+        )
+
+    @classmethod
+    def _from_config(cls, config: AgentSpec) -> Self:
+        def load(data: dict[str, Any] | None, kind: type[Any]) -> Any:
+            return kind.deserialize(data) if data is not None else None
+
+        return cls(
+            name=config.name,
+            description=config.description,
+            instructions=config.instructions,
+            client=load(config.client, CoreChatCompletionClient),
+            toolset=[load(tool, CoreTool) for tool in config.toolset],
+            mcp_servers=deserialize_mcp_servers(json.dumps(config.mcp_servers)),
+            executor=load(config.executor, ExecutorBase),
+            workspace=load(config.workspace, WorkspaceBase),
+            skills=load(config.skills, CoreSkillRegistry),
+            memory=load(config.memory, CoreMemoryRegistry),
+            knowledge=[load(source, CoreKnowledgeRegistry) for source in config.knowledge],
+            reasoning=load(config.reasoning, BaseReasoning),
+            max_iterations=config.max_iterations,
+            idle_timeout=config.idle_timeout,
+            output_format=(
+                model_from_schema(config.output_format) if config.output_format else None
+            ),
+            completion_handlers=[
+                load(gate, ComponentBase) for gate in config.completion_handlers
+            ],
+            completion=RuntimeGateConfig.model_validate(config.completion),
+            compaction=load(config.compaction, CoreCompaction),
+        )
 
     @property
     def tools(self) -> list[CoreTool]:

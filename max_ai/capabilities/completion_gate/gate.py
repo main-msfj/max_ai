@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from ...base.completion_gate import CompletionBase, CompletionDecision
 from ...base.workspace import WorkspaceBase
+from ...core.harness import messages as harness
 from ...core.messages import AssistantMessage
 from ...core.primitives import FailureReason
 from ...types.run_context import RunContext
 from ...types.tool_call import ToolCallRecord
+from ._model import RuntimeGateConfig
 
 # Failures where the command actually ran (or tried to). Denials, cancels and
 # invalid parameters never ran — denials already go through ask_user.
@@ -75,11 +77,24 @@ class RuntimeCompletionGate(CompletionBase):
     if the model stays silent.
     """
 
-    def __init__(self, workspace: WorkspaceBase) -> None:
+    component_schema = RuntimeGateConfig
+    component_provider_override = "maxai.completion.RuntimeCompletionGate"
+
+    def __init__(
+        self, workspace: WorkspaceBase, config: RuntimeGateConfig | None = None,
+    ) -> None:
         super().__init__()
+        # The workspace is a runtime dependency (the Agent injects it);
+        # only the options are config.
         self._workspace = workspace
+        self.config = config or RuntimeGateConfig()
+
+    def _to_config(self) -> RuntimeGateConfig:
+        return self.config.model_copy()
 
     def on_final_response(self, ctx: RunContext) -> CompletionDecision:
+        if not self.config.enabled:
+            return CompletionDecision(status="completed")
         # An empty final answer (no text, no tool calls) is never a valid
         # close — but rejecting it forever would retry into max_iterations.
         # First strike: bounce it back with a nudge, like any other
@@ -94,11 +109,11 @@ class RuntimeCompletionGate(CompletionBase):
             if streak >= 2:
                 return CompletionDecision(
                     status="waiting",
-                    reasons=("Model failed to produce a response twice in a row; pausing for review.",),
+                    reasons=(harness.EMPTY_ANSWER_TWICE,),
                 )
             return CompletionDecision(
                 status="incomplete",
-                reasons=("No answer was generated and no tool was called — reply with text or call a tool.",),
+                reasons=(harness.EMPTY_ANSWER,),
             )
         state["empty_streak"] = 0
 
@@ -107,17 +122,13 @@ class RuntimeCompletionGate(CompletionBase):
 
         # Pausing mid-plan to wait for the user is legitimate. Nudge once per
         # plan state; closing again with the plan unchanged is accepted.
-        if ctx.plan is not None and ctx.plan.has_unfinished_steps():
+        if self.config.plan_must_close and ctx.plan is not None and ctx.plan.has_unfinished_steps():
             shape = [f"{step.id}:{step.status}" for step in ctx.plan.steps]
             if state.get("plan_nudged") != shape:
                 state["plan_nudged"] = shape
-                reasons.append(
-                    "The plan still has pending or active steps. Keep working on "
-                    "them, or, if you need the user before continuing, tell them "
-                    "and end your turn: the plan stays open for the next turn."
-                )
+                reasons.append(harness.PLAN_STILL_OPEN)
             else:
-                notes.append(f"Turn closed with the plan still open ({_plan_progress(ctx)})")
+                notes.append(harness.plan_closed_open(_plan_progress(ctx)))
 
         records = list(ctx.tool_state.records.values())
         outputs: set[str] = set()
@@ -129,28 +140,24 @@ class RuntimeCompletionGate(CompletionBase):
                 and _exit_code(record) == 0
             ):
                 outputs.update(record.parameters.get("expected_outputs", []))
-        for path in sorted(outputs):
+        for path in sorted(outputs) if self.config.check_bash_outputs else ():
             missing = self._missing_output(ctx, path)
             if missing is not None:
                 reasons.append(missing)
 
         unresolved = self._unresolved_failures(ctx, records)
         nudged = set(state.get("failures_nudged", []))
-        new = [r for r in unresolved if r.id not in nudged]
+        new = [r for r in unresolved if r.id not in nudged] if self.config.nudge_bash_failures else []
         if new:
             state["failures_nudged"] = sorted(nudged | {r.id for r in new})
-            reasons.extend(
-                f"{_describe_failure(r)} — fix it, or tell the user it failed."
-                for r in new
-            )
+            reasons.extend(harness.command_failed(_describe_failure(r)) for r in new)
 
         if reasons:
             return CompletionDecision(status="incomplete", reasons=tuple(reasons))
         return CompletionDecision(
             status="completed",
             reasons=tuple(notes) + tuple(
-                f"Closed with unresolved failure: {_describe_failure(r)}"
-                for r in unresolved
+                harness.closed_with_failure(_describe_failure(r)) for r in unresolved
             ),
         )
 
@@ -161,13 +168,13 @@ class RuntimeCompletionGate(CompletionBase):
                 ctx.user_id, path=f"workspace/{path}"
             )
         except (OSError, ValueError) as error:
-            return f"Expected output {path!r} is unavailable: {error}"
+            return harness.expected_output_unavailable(path, error)
         if any(
             item["path"] == listing["path"] and item["type"] == "file"
             for item in listing["items"]
         ):
             return None
-        return f"Expected output {path!r} is not a regular file"
+        return harness.expected_output_missing(path)
 
     def _unresolved_failures(
         self, ctx: RunContext, records: list[ToolCallRecord]

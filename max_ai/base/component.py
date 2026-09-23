@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import os
 import typing as t
 import warnings
 
@@ -79,10 +80,43 @@ KNOWN_PROVIDERS: dict[str, str] = {
     "maxai.stacks.ContextLayer": "max_ai.capabilities.stacks.context_layer.ContextLayer",
     "maxai.stacks.MemoryLayer": "max_ai.capabilities.stacks.memory_layer.MemoryLayer",
     "maxai.stacks.SessionStateLayer": "max_ai.capabilities.stacks.session_state_layer.SessionStateLayer",
+    "maxai.agents.Agent": "max_ai.agents.agent.Agent",
+    "maxai.completion.RuntimeCompletionGate": "max_ai.capabilities.completion_gate.gate.RuntimeCompletionGate",
+    "maxai.reasoning.ReactLoop": "max_ai.capabilities.reasoning.react.loop.ReactLoop",
+    "maxai.guards.SchemaRetryGuard": "max_ai.capabilities.reasoning.guards.SchemaRetryGuard",
+    "maxai.guards.RepetitionGuard": "max_ai.capabilities.reasoning.guards.RepetitionGuard",
+    "maxai.guards.BudgetGuard": "max_ai.capabilities.reasoning.guards.BudgetGuard",
+    "maxai.guards.NoProgressGuard": "max_ai.capabilities.reasoning.guards.NoProgressGuard",
+    "maxai.guards.PlanCompletionGuard": "max_ai.capabilities.reasoning.guards.PlanCompletionGuard",
     "maxai.session_store.LocalSessionStore": "max_ai.capabilities.session_store.local._store.LocalSessionStore",
     "maxai.compaction.SummaryCompaction": "max_ai.capabilities.compaction.summary._strategy.SummaryCompaction",
     "maxai.compaction.SlidingWindowCompaction": "max_ai.capabilities.compaction.window._strategy.SlidingWindowCompaction",
 }
+
+
+# Provider allowlist: deserialize imports the class a config names, and an
+# import runs code, so only trusted packages load. Built-ins always do.
+_ALLOWED_PREFIXES: set[str] = {"max_ai."}
+
+
+def allow_providers(*prefixes: str) -> None:
+    """Let ``deserialize`` load components from these packages, e.g.
+    ``allow_providers("my_company.", "third_party_pkg.")``. ``"*"`` allows
+    any importable class (local development only). The env var
+    ``MAXAI_ALLOWED_PROVIDERS`` (comma-separated) does the same without code.
+    """
+    _ALLOWED_PREFIXES.update(prefix.strip() for prefix in prefixes if prefix.strip())
+
+
+def _check_allowed(provider: str) -> None:
+    env = os.getenv("MAXAI_ALLOWED_PROVIDERS", "")
+    allowed = _ALLOWED_PREFIXES | {p.strip() for p in env.split(",") if p.strip()}
+    if "*" in allowed or any(provider.startswith(prefix) for prefix in allowed):
+        return
+    raise PermissionError(
+        f"Component provider {provider!r} is not allowed. Trust its package with "
+        f"allow_providers({provider.split('.')[0] + '.'!r}) or MAXAI_ALLOWED_PROVIDERS."
+    )
 
 
 class ComponentBase(t.Generic[ConfigT]):
@@ -123,7 +157,10 @@ class ComponentBase(t.Generic[ConfigT]):
             "This component does not support loading from past versions"
         )
 
-    def dump_component(self) -> ComponentModel:
+    def serialize(self) -> ComponentModel:
+        """This component as storable config: its provider plus a config with
+        no secrets (only the names of the env vars that hold them). Store it
+        with ``.model_dump_json()`` and rebuild it with ``deserialize``."""
         provider = self.component_provider_override or _type_to_provider_str(
             self.__class__
         )
@@ -161,12 +198,19 @@ class ComponentBase(t.Generic[ConfigT]):
         )
 
     @classmethod
-    def load_component(
+    def deserialize(
         cls,
-        model: ComponentModel | dict[str, t.Any],
+        data: ComponentModel | dict[str, t.Any] | str | bytes,
         expected: type[ExpectedT] | None = None,
     ) -> t.Self | ExpectedT:
-        loaded_model = ComponentModel(**model) if isinstance(model, dict) else model
+        """Rebuild a component from ``serialize()`` output: the model, its
+        dict or its JSON text (e.g. straight from a database row)."""
+        if isinstance(data, (str, bytes)):
+            loaded_model = ComponentModel.model_validate_json(data)
+        elif isinstance(data, dict):
+            loaded_model = ComponentModel(**data)
+        else:
+            loaded_model = data
 
         provider = KNOWN_PROVIDERS.get(
             loaded_model.provider,
@@ -176,6 +220,7 @@ class ComponentBase(t.Generic[ConfigT]):
         parts = provider.rsplit(".", maxsplit=1)
         if len(parts) != 2:
             raise ValueError(f"Invalid provider path: {provider!r}")
+        _check_allowed(provider)
 
         module_path, class_name = parts
         module = importlib.import_module(module_path)

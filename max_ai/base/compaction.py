@@ -402,7 +402,7 @@ class CoreCompaction(ComponentBase[CompactionConfig], ABC):
 
     # -------- SERIALIZATION ------------------------------------------------------------
     def _to_config(self) -> CompactionConfig:
-        client = self.client.dump_component().model_dump() if self.client else None
+        client = self.client.serialize().model_dump() if self.client else None
         return self.config.model_copy(update={"client": client})
 
     @classmethod
@@ -410,7 +410,7 @@ class CoreCompaction(ComponentBase[CompactionConfig], ABC):
         from .clients import CoreChatCompletionClient
 
         client = (
-            CoreChatCompletionClient.load_component(config.client)
+            CoreChatCompletionClient.deserialize(config.client)
             if config.client else None
         )
         return cls(**config.model_dump(exclude={"client"}), client=client)

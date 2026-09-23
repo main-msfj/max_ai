@@ -6,7 +6,11 @@ from types import SimpleNamespace
 
 from max_ai.capabilities.compaction import SummaryCompaction
 from max_ai.capabilities.memory import LocalMemoryRegistry
-from max_ai.core.compaction import CompactionOutput, MemoryFactUpdate, MemoryMaintenanceOutput
+from max_ai.core.compaction import (
+    CompactionOutput,
+    MemoryFactUpdate,
+    MemoryMaintenanceOutput,
+)
 from max_ai.core.messages import AssistantMessage, UserMessage
 from max_ai.types.completions import ChatCompletionResult, Usage
 from max_ai.types.run_context import RunContext
@@ -97,5 +101,5 @@ async def test_can_be_turned_off(tmp_path):
     strategy = SummaryCompaction(summary_max_tokens=500, update_memory=False)
     result = await compact(strategy, client, memory)
     assert result.changed and client.memory_tasks == [] and await memory.get_context() == []
-    restored = SummaryCompaction.load_component(strategy.dump_component())
+    restored = SummaryCompaction.deserialize(strategy.serialize())
     assert restored.config.update_memory is False

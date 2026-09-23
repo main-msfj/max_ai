@@ -30,6 +30,7 @@ from ._model import LocalContextRegistryConfig
 
 
 class LocalContextRegistry(CoreLogBookRegistry):
+    component_provider_override = "max_ai.capabilities.context.local.LocalContextRegistry"
     component_schema = LocalContextRegistryConfig
     component_type = "context"
 

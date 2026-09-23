@@ -239,10 +239,10 @@ class FunctionAsTool(CoreTool):
         return DynamicModel, DynamicModel.model_json_schema()
 
     # -------- SERIALIZATION -----------------------------------------------------------
-    def dump_component(self) -> t.NoReturn:
-        """``FunctionAsTool`` wraps arbitrary callables and cannot be serialized."""
+    def serialize(self) -> t.NoReturn:
+        """A Python function is code, not config: it cannot be stored."""
         raise TypeError(
-            f"FunctionTool '{self.name}' cannot be serialized: it wraps an "
-            "arbitrary Python callable. Create a CoreTool subclass for "
-            "serializable tools."
+            f"Tool '{self.name}' is a Python function and cannot be serialized. "
+            "Expose it through an MCP server and add that server to the agent's "
+            "mcp config instead."
         )

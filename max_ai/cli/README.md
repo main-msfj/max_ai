@@ -5,7 +5,7 @@ stack of widgets, not a text log, so every piece of a turn stays live:
 
 - **Thinking** streams into a box, then folds to one line
   (`◈ Thought for 3s · 120 words`). Click it to expand/collapse.
-  It's optional: `run_repl(agent, show_thinking=False)` starts hidden, and
+  It's optional: `run_cli(agent, show_thinking=False)` starts hidden, and
   `ctrl+t` / `/thinking` toggles it at runtime (past thoughts are kept).
 - **Tool calls** render as `◆ name(main argument)` with `╰─ summary` under
   it; a diamond spinner shows while running, then turns green/red when done.
@@ -22,9 +22,10 @@ stack of widgets, not a text log, so every piece of a turn stays live:
   `? Answered 3 questions ▸ expand`.
 - **Approvals** appear in a card above the prompt: click an option or type
   its number.
-- **One summary line per turn**: `✓ Done in 16s · stop`, or `⚠ …` when the
-  completion gate retried or closed with notes, or `■ Stopped after …`
-  (max_iterations, waiting, error) with the gate's reasons.
+- **One summary line per turn**: `✓ Done in 16s · stop`, `⚠ …` when the
+  completion gate closed with notes for the user, or `■ Stopped after …`
+  (max_iterations, output_limit, waiting, error) with the reason. The
+  gate's retries are steering for the model: only shown with `ctrl+o`.
 
 | Input | Action |
 |---|---|
@@ -32,15 +33,25 @@ stack of widgets, not a text log, so every piece of a turn stays live:
 | `@relative/path` | attach a workspace file |
 | `!command` | run a shell command in the workspace |
 | `/` then `↑↓`, `tab`, `enter` | command menu: move, complete, run |
-| `/help` `/skills` `/tools` `/clear` `/thinking` `/verbose` `/files` `/exit` | commands |
+| `/help` `/skills` `/tools` `/resume` `/new` `/session` `/clear` `/thinking` `/verbose` `/files` `/exit` | commands |
 | `/<skill-name> [args]` | run a skill (every loaded skill is listed in the menu) |
 | `esc` · `ctrl+t` · `ctrl+o` · `ctrl+b` · `ctrl+l` · `pgup/pgdn` | interrupt · thinking · verbose events · files · clear screen · scroll |
 
-```python
-from max_ai.cli import run_repl
+The CLI is a host like any other: it receives an already built `Agent`
+and only adds where conversations are saved and whose they are.
 
-await run_repl(agent, show_thinking=True, initial_context=RunContext(user_id=..., session_id=...))
+```python
+from max_ai.cli import run_cli
+
+async with agent:
+    await run_cli(
+        agent,
+        store=LocalSessionStore("./sessions"),  # saves after every turn
+        user_id="user_001",
+        session_id=None,                        # an id resumes that conversation
+    )
 ```
 
-`/clear` starts a fresh conversation but keeps `user_id`/`session_id`, so
-session-bound memory keeps working.
+`/resume` picks a saved conversation, `/new` (or `/clear`) starts a new
+session and `/session` shows the current one. Memory is bound to each
+run's `user_id`/`session_id`, so it follows the session you are in.

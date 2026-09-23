@@ -118,7 +118,8 @@ async def test_bash_emits_start_and_finish_events_for_bound_environment(tmp_path
     root = tmp_path / "workspace"
     root.mkdir()
     class Env:
-        user_id = "u"; conversation_id = "c"
+        user_id = "u"
+        conversation_id = "c"
         variables = {"WORKSPACE": str(root)}
         async def start(self): pass
         async def stop(self): pass

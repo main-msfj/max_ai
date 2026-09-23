@@ -32,6 +32,7 @@ from ._model import LocalKnowledgeRegistryConfig
 
 
 class LocalKnowledgeRegistry(CoreKnowledgeRegistry):
+    component_provider_override = "max_ai.capabilities.knowledge.local.LocalKnowledgeRegistry"
     component_schema = LocalKnowledgeRegistryConfig
     component_type = "knowledge"
 

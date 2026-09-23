@@ -17,7 +17,7 @@ def create_mcp_client(config: MCPServerConfig) -> Client:
     """The v2 client probes 2026-07-28 and falls back to legacy MCP."""
     if isinstance(config, StdioMCPServerConfig):
         return Client(StdioServerParameters(
-            command=config.command, args=config.args, env=config.env or None,
+            command=config.command, args=config.args, env=config.process_env or None,
         ))
     if isinstance(config, HTTPServerConfig):
         if config.transport_protocol == "sse":

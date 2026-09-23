@@ -56,6 +56,7 @@ from ..types.run_context import RunContext
 from ..types.stacks import PromptCtx
 from .clients import CoreChatCompletionClient
 from .completion_gate import CompletionDecision
+from .component import ComponentBase
 from .tools import CoreTool, ToolContext
 
 if t.TYPE_CHECKING:
@@ -153,7 +154,13 @@ class BaseLoopState(BaseModel):
 
 
 # -------- BASE REASONING -----------------------------------------------------------
-class BaseReasoning(ABC):
+class ReasoningConfig(BaseModel):
+    """A reasoning loop's settings. Concrete loops extend it."""
+
+    max_connection_retries: int = Field(default=3, ge=0)
+
+
+class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
     """Abstract reasoning cycle.
 
     Concrete subclasses implement ``execute_reasoning_loop`` — the
@@ -175,7 +182,14 @@ class BaseReasoning(ABC):
     only declare config-time arguments in ``__init__`` (and call
     ``super().__init__(max_connection_retries=...)``); runtime
     arguments are injected later via ``bind()``.
+
+    It is a serializable component: a custom loop declares its
+    ``component_schema`` (extending ``ReasoningConfig``) and implements
+    ``_to_config``/``_from_config``, so an agent's JSON can reference it.
     """
+
+    component_type = "reasoning"
+    component_schema: t.ClassVar[type[BaseModel]] = ReasoningConfig
 
     # Each subclass declares its own loop-state class. The agent reads
     # this to instantiate the right state at the start of each run.
@@ -731,7 +745,10 @@ class BaseReasoning(ABC):
                         message=assistant_msg,
                         usage=usage,
                         model=str(model_metadata.get("model") or "unknown"),
-                        finish_reason="tool_calls" if tool_calls else "stop",
+                        finish_reason=(
+                            final_chunk.finish_reason
+                            or ("tool_calls" if tool_calls else "stop")
+                        ),
                     )
                     loop_state.record_completion(result)
                     yield ModelResponseEvent(
