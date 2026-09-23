@@ -24,8 +24,8 @@ from pydantic import BaseModel, Field
 
 from ....base.completion_gate import CompletionDecision
 from ....base.reasoning import BaseLoopState, BaseReasoning, ReasoningConfig
+from ....config import setting
 from ....core.compaction.budget import client_max_output_tokens
-from ....core.harness import messages as harness
 from ....core.event_type import (
     CompletionRejectedEvent,
     CoreEvent,
@@ -35,6 +35,7 @@ from ....core.event_type import (
     ToolApprovalEvent,
     UserInputRequestEvent,
 )
+from ....core.harness import messages as harness
 from ....core.messages import (
     HARNESS_SOURCE,
     AssistantMessage,
@@ -96,7 +97,9 @@ class ReActLoopState(BaseLoopState):
 
 # -------- LOOP -----------------------------------------------------------
 class ReactLoopConfig(ReasoningConfig):
-    max_loop_iterations: int = Field(default=10, ge=1)
+    max_loop_iterations: int | None = Field(
+        default=None, ge=1, description="None = setting.max_loop_iterations.",
+    )
     guards: list[dict[str, t.Any]] | None = Field(
         default=None, description="Serialized guards; None = the loop's defaults.",
     )
@@ -116,7 +119,7 @@ class ReactLoop(BaseReasoning):
 
     def __init__(
         self,
-        max_loop_iterations: int = 10,
+        max_loop_iterations: int | None = None,
         max_connection_retries: int = 3,
         guards: t.Sequence[LoopGuard] | None = None,
     ) -> None:
@@ -128,7 +131,9 @@ class ReactLoop(BaseReasoning):
         toolset, not by the loop — see Agent.
 
         Args:
-            max_loop_iterations: Cap on iterations within one turn.
+            max_loop_iterations: Cap on iterations within one turn. ``None``
+                follows ``setting.max_loop_iterations`` (env
+                ``MAX_LOOP_ITERATIONS``), also once serialized.
             max_connection_retries: Per-call transient-error retry budget.
             guards: Mid-loop steering checks run after each tool round
                 (see ``reasoning/guards.py``). Defaults to
@@ -139,8 +144,6 @@ class ReactLoop(BaseReasoning):
                 Pass ``[]`` to disable guards entirely.
         """
         super().__init__(max_connection_retries=max_connection_retries)
-        if max_loop_iterations < 1:
-            raise ValueError("max_loop_iterations must be positive")
         self.max_loop_iterations = max_loop_iterations
         # None keeps "the defaults": a stored agent picks up improved defaults.
         self._custom_guards = guards is not None
@@ -150,9 +153,19 @@ class ReactLoop(BaseReasoning):
             else list(guards)
         )
 
+    @property
+    def max_loop_iterations(self) -> int:
+        return self._max_loop_iterations or setting.max_loop_iterations
+
+    @max_loop_iterations.setter
+    def max_loop_iterations(self, value: int | None) -> None:
+        if value is not None and value < 1:
+            raise ValueError("max_loop_iterations must be positive")
+        self._max_loop_iterations = value
+
     def _to_config(self) -> ReactLoopConfig:
         return ReactLoopConfig(
-            max_loop_iterations=self.max_loop_iterations,
+            max_loop_iterations=self._max_loop_iterations,
             max_connection_retries=self.max_connection_retries,
             guards=(
                 [guard.serialize().model_dump(exclude_none=True) for guard in self.guards]
@@ -463,6 +476,7 @@ class ReactLoop(BaseReasoning):
                         ctx, prompts, loop_state, output_format, cancellation_token, **kwargs
                     ):
                         yield event
+                await self._apply_final_response_middleware(ctx)
                 yield TaskCompleteEvent(source=self.name, decision=gate_result)
                 break
 
@@ -482,6 +496,17 @@ class ReactLoop(BaseReasoning):
             finish_reason=loop_state.finish_reason,
         )
         yield self._reasoning_complete(loop_state)
+
+    async def _apply_final_response_middleware(self, ctx: RunContext) -> None:
+        """Let middleware read or map the accepted answer before it is delivered."""
+        if not self.middleware_chain:
+            return
+        for index in range(len(ctx.messages) - 1, -1, -1):
+            message = ctx.messages[index]
+            if isinstance(message, AssistantMessage):
+                mw = self._middleware_context(ctx)
+                ctx.messages[index] = await self.middleware_chain.final_response(mw, message)
+                return
 
     async def _format_final_answer(
         self,

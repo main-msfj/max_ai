@@ -66,7 +66,7 @@ async def test_agent_mocked_model_loop_returns_text_and_calls_model_once(tmp_pat
 async def test_agent_resumes_approved_tool_record_before_next_model_call(tmp_path):
     client = FakeClient()
     tool = CountingTool()
-    agent = Agent("test", "desc", "instructions", client, [tool], workspace=Workspace(tmp_path / "agents"))
+    agent = Agent("test", "desc", "instructions", client, toolset=[tool], workspace=Workspace(tmp_path / "agents"))
     try:
         context = RunContext(user_id="u", session_id="c")
         record = ToolCallRecord(tool_name="count", parameters={})
@@ -87,7 +87,7 @@ async def test_agent_resumes_approved_tool_record_before_next_model_call(tmp_pat
 async def test_agent_model_requested_tool_is_fed_back_before_final_response(tmp_path):
     client = ToolThenFinalClient()
     tool = CountingTool()
-    agent = Agent("test", "desc", "instructions", client, [tool], workspace=Workspace(tmp_path / "agents"))
+    agent = Agent("test", "desc", "instructions", client, toolset=[tool], workspace=Workspace(tmp_path / "agents"))
     try:
         response = await agent.run("use the counter", run_context=RunContext(user_id="u", session_id="c"))
         assert response.finish_reason == "stop"

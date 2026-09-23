@@ -31,6 +31,9 @@ class ModelConfig(BaseModel):
     max_output_tokens: int = Field(
         default=0, description=f"Output limit, capped at {MAX_OUTPUT_TOKENS:,}; 0 = unset.",
     )
+    # Prices in USD per million tokens; unset = cost unknown (no cost limits).
+    input_cost_per_mtok: float | None = Field(default=None, ge=0)
+    output_cost_per_mtok: float | None = Field(default=None, ge=0)
 
     # Capabilities
     supports_vision: bool = Field(default=False)

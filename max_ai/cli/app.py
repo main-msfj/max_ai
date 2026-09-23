@@ -805,6 +805,8 @@ class MaxAIApp(App[None]):
             count = len(self._gate_retries)
             line.append(f" · gate retried {count}×: ", style="#fbbf24")
             line.append(" | ".join(self._gate_retries)[:200], style="#a1a1aa")
+        if response.stop_message:
+            line.append(f" · {response.stop_message}", style="#a1a1aa")
         if response.finish_reason == "output_limit":
             line.append(
                 " · the model's replies kept hitting its output limit (max_tokens): "

@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 
 from ...base.executor import ExecutionSession, ExecutorBase
 from ...base.workspace import WorkspaceBase
+from ...config import setting
 
 
 @dataclass
@@ -39,8 +40,10 @@ class EnvironmentManager:
         executor: ExecutorBase,
         workspace: WorkspaceBase,
         *,
-        idle_timeout: float = 300,
+        idle_timeout: float | None = None,
     ):
+        if idle_timeout is None:
+            idle_timeout = setting.environment_idle_timeout
         if not math.isfinite(idle_timeout) or idle_timeout < 0:
             raise ValueError("idle_timeout must be finite and nonnegative")
         self.executor = executor

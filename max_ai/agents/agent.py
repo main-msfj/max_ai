@@ -12,7 +12,7 @@ import time
 from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import aclosing
 from types import TracebackType
-from typing import Any, Self
+from typing import Any, Self, get_args
 
 from pydantic import BaseModel
 
@@ -24,6 +24,7 @@ from ..base.executor import ExecutorBase
 from ..base.knowledge import CoreKnowledgeRegistry
 from ..base.layer import CoreLayer
 from ..base.memory import CoreMemoryRegistry
+from ..base.middleware import CoreMiddleware, MiddlewareContext, StopRun
 from ..base.reasoning import BaseReasoning
 from ..base.skills import CoreSkillRegistry
 from ..base.tools import CoreTool, ToolContext
@@ -57,13 +58,14 @@ from ..core.messages import (
     CoreMessage,
     UserMessage,
 )
+from ..core.middleware import MiddlewareChain
 from ..core.model.agent import AgentSpec
 from ..core.model.json_schema import model_from_schema, schema_of
 from ..core.stacks.container import LayerContainer
 from ..core.termination import CancellationToken
 from ..core.tool.dispatcher import ToolDispatcher
 from ..core.tool.registry import ToolRegistry
-from ..types.agent_response import AgentResponse
+from ..types.agent_response import AgentResponse, FinishReason
 from ..types.completions import ChatCompletionResult, Usage
 from ..types.run_context import RunContext
 from ..types.stacks import PromptCtx
@@ -115,24 +117,22 @@ class Agent(ComponentBase[AgentSpec]):
         description: str,
         instructions: str,
         client: CoreChatCompletionClient,
-        toolset: Sequence[CoreTool | Callable[..., Any]] | None = None,
         *,
+        toolset: Sequence[CoreTool | Callable[..., Any]] | None = None,
         mcp: Sequence[MCPServerConfig] | None = None,
-        mcp_servers: Sequence[MCPServerConfig] | None = None,
         executor: ExecutorBase | None = None,
         workspace: WorkspaceBase | None = None,
         skills: CoreSkillRegistry | None = None,
         memory: CoreMemoryRegistry | None = None,
         knowledge: Sequence[CoreKnowledgeRegistry] | None = None,
         reasoning: BaseReasoning | None = None,
-        max_iterations: int = 20,
-        idle_timeout: float = 300,
         output_format: type[BaseModel] | None = None,
         completion_handlers: Sequence[CompletionHandler] | None = None,
         completion: RuntimeGateConfig | None = None,
         compaction: CoreCompaction | None = None,
+        middlewares: Sequence[CoreMiddleware] | None = None,
     ) -> None:
-        self._validate_configuration(max_iterations, executor, reasoning)
+        self._validate_configuration(executor, reasoning)
         if compaction is not None and not isinstance(compaction, CoreCompaction):
             raise TypeError("compaction must implement CoreCompaction")
         # None: the window is never compacted (fine for short sessions).
@@ -142,17 +142,18 @@ class Agent(ComponentBase[AgentSpec]):
         self.description = description
         self.instructions = instructions
         self.client = client
-        self.max_iterations = max_iterations
-        self.idle_timeout = idle_timeout
         self.output_format = output_format
+        self.middlewares = list(middlewares or [])
+        for middleware in self.middlewares:
+            if not isinstance(middleware, CoreMiddleware):
+                raise TypeError("middlewares must implement CoreMiddleware")
+        self._middleware = MiddlewareChain(self.middlewares)
 
-        self._configure_environment(executor, workspace, idle_timeout)
-        self._configure_reasoning(reasoning, max_iterations)
+        self._configure_environment(executor, workspace)
+        # Iteration limit lives in the loop (default: setting.max_loop_iterations).
+        self.reasoning = reasoning if reasoning is not None else ReactLoop()
         self._configure_tools(toolset)
-        if mcp is not None and mcp_servers is not None:
-            raise ValueError("Pass either mcp or mcp_servers, not both")
-        self.mcp_servers = tuple(mcp if mcp is not None else mcp_servers or ())
-        self.mcp = self.mcp_servers
+        self.mcp_servers = tuple(mcp or ())
         self._mcp_manager = MCPClientManager()
         for config in self.mcp_servers:
             self._mcp_manager.add_server(config)
@@ -162,13 +163,10 @@ class Agent(ComponentBase[AgentSpec]):
 
     @staticmethod
     def _validate_configuration(
-        max_iterations: int,
         executor: ExecutorBase | None,
         reasoning: BaseReasoning | None,
     ) -> None:
         """Reject invalid options before constructing runtime components."""
-        if max_iterations < 1:
-            raise ValueError("max_iterations must be positive")
         if reasoning is not None and not isinstance(reasoning, BaseReasoning):
             raise TypeError("reasoning must implement BaseReasoning")
         if executor is not None and not isinstance(executor, ExecutorBase):
@@ -178,7 +176,6 @@ class Agent(ComponentBase[AgentSpec]):
         self,
         executor: ExecutorBase | None,
         workspace: WorkspaceBase | None,
-        idle_timeout: float,
     ) -> None:
         """Create the internal session manager from the public components."""
         self.workspace = (
@@ -187,21 +184,8 @@ class Agent(ComponentBase[AgentSpec]):
             else LocalWorkspace(root=setting.root_dir / ".agents")
         )
         self.executor = executor if executor is not None else LocalExecutor()
-        self._manager = EnvironmentManager(
-            self.executor, self.workspace, idle_timeout=idle_timeout
-        )
-
-    def _configure_reasoning(
-        self,
-        reasoning: BaseReasoning | None,
-        max_iterations: int,
-    ) -> None:
-        """Use the supplied reasoning loop or create the default ReAct loop."""
-        self.reasoning = (
-            reasoning
-            if reasoning is not None
-            else ReactLoop(max_loop_iterations=max_iterations)
-        )
+        # Idle sessions close after setting.environment_idle_timeout.
+        self._manager = EnvironmentManager(self.executor, self.workspace)
 
     def _configure_tools(
         self,
@@ -267,7 +251,8 @@ class Agent(ComponentBase[AgentSpec]):
     ) -> None:
         """Connect dispatch, completion checks and turn synchronization."""
         self.dispatcher = ToolDispatcher(
-            self._registry, source=self.name, manager=self._manager
+            self._registry, source=self.name, manager=self._manager,
+            middleware=self._middleware,
         )
         self.completion = completion or RuntimeGateConfig()
         self.completion_handlers = list(completion_handlers or [])
@@ -313,8 +298,6 @@ class Agent(ComponentBase[AgentSpec]):
             description=self.description,
             instructions=self.instructions,
             client=dump(self.client),
-            max_iterations=self.max_iterations,
-            idle_timeout=self.idle_timeout,
             reasoning=dump(self.reasoning),
             workspace=dump(self.workspace),
             executor=dump(self.executor),
@@ -323,12 +306,13 @@ class Agent(ComponentBase[AgentSpec]):
             knowledge=[dump(source) for source in self.knowledge],
             compaction=dump(self.compaction) if self.compaction is not None else None,
             toolset=[dump(_storable(tool, "tool")) for tool in self.toolset],
-            mcp_servers=json.loads(serialize_mcp_servers(self.mcp_servers)),
+            mcp=json.loads(serialize_mcp_servers(self.mcp_servers)),
             completion=self.completion.model_dump(),
             completion_handlers=[
                 dump(_storable(gate, "completion handler")) for gate in self.completion_handlers
             ],
             output_format=schema_of(self.output_format) if self.output_format else None,
+            middlewares=[dump(_storable(m, "middleware")) for m in self.middlewares],
         )
 
     @classmethod
@@ -342,15 +326,13 @@ class Agent(ComponentBase[AgentSpec]):
             instructions=config.instructions,
             client=load(config.client, CoreChatCompletionClient),
             toolset=[load(tool, CoreTool) for tool in config.toolset],
-            mcp_servers=deserialize_mcp_servers(json.dumps(config.mcp_servers)),
+            mcp=deserialize_mcp_servers(json.dumps(config.mcp)),
             executor=load(config.executor, ExecutorBase),
             workspace=load(config.workspace, WorkspaceBase),
             skills=load(config.skills, CoreSkillRegistry),
             memory=load(config.memory, CoreMemoryRegistry),
             knowledge=[load(source, CoreKnowledgeRegistry) for source in config.knowledge],
             reasoning=load(config.reasoning, BaseReasoning),
-            max_iterations=config.max_iterations,
-            idle_timeout=config.idle_timeout,
             output_format=(
                 model_from_schema(config.output_format) if config.output_format else None
             ),
@@ -359,6 +341,7 @@ class Agent(ComponentBase[AgentSpec]):
             ],
             completion=RuntimeGateConfig.model_validate(config.completion),
             compaction=load(config.compaction, CoreCompaction),
+            middlewares=[load(m, CoreMiddleware) for m in config.middlewares],
         )
 
     @property
@@ -418,6 +401,7 @@ class Agent(ComponentBase[AgentSpec]):
         cancellation_token: CancellationToken | None,
         stream_tokens: bool,
         kwargs: dict[str, Any],
+        task: list[CoreMessage] | None = None,
     ) -> AgentResponse:
         """Discover MCP tools for this turn and close sessions in this task."""
         mcp_names: list[str] = []
@@ -427,7 +411,7 @@ class Agent(ComponentBase[AgentSpec]):
                 self._registry.register(tool, host=True)
                 mcp_names.append(tool.name)
             return await self._drive_connected(
-                ctx, sink, cancellation_token, stream_tokens, kwargs
+                ctx, sink, cancellation_token, stream_tokens, kwargs, task
             )
         finally:
             for name in mcp_names:
@@ -441,10 +425,13 @@ class Agent(ComponentBase[AgentSpec]):
         cancellation_token: CancellationToken | None,
         stream_tokens: bool,
         kwargs: dict[str, Any],
+        task: list[CoreMessage] | None = None,
     ) -> AgentResponse:
         def emit(event: CoreEvent) -> None:
             self.completion_bus.emit(event, ctx)
             sink(event)
+
+        mw = MiddlewareContext(ctx=ctx, agent=self.name, emit=emit)
 
         await self.prepare()
         directory = self.workspace.materialize(ctx.user_id, ctx.session_id)
@@ -487,24 +474,33 @@ class Agent(ComponentBase[AgentSpec]):
             dispatcher=self.dispatcher,
             tool_context=context,
             completion_bus=self.completion_bus,
+            middleware_chain=self._middleware,
             compaction=self.compaction,
             # Custom clients may not declare a window: 0 = unknown.
             max_context_tokens=getattr(self.client.config, "max_context_window", 0) or 0,
             memory=await self._memory_for(ctx),
         )
-        async with aclosing(
-            reasoning.execute_reasoning_loop(
-                ctx=ctx,
-                prompts=await self._prompts(ctx),
-                loop_state=loop_state,
-                stream_tokens=stream_tokens,
-                cancellation_token=cancellation_token,
-                output_format=self.output_format,
-                **kwargs,
-            )
-        ) as stream:
-            async for event in stream:
-                emit(event)
+        stopped: StopRun | None = None
+        try:
+            await self._middleware.run_start(mw, task)
+            async with aclosing(
+                reasoning.execute_reasoning_loop(
+                    ctx=ctx,
+                    prompts=await self._prompts(ctx),
+                    loop_state=loop_state,
+                    stream_tokens=stream_tokens,
+                    cancellation_token=cancellation_token,
+                    output_format=self.output_format,
+                    **kwargs,
+                )
+            ) as stream:
+                async for event in stream:
+                    emit(event)
+        except StopRun as stop:
+            # A middleware ended the turn (budget, policy...): a clean finish.
+            stopped = stop
+            known = get_args(FinishReason)
+            loop_state.finish_reason = stop.finish_reason if stop.finish_reason in known else "stopped"
         duration_ms = pending.get("duration_ms", 0) + int(
             (time.monotonic() - started) * 1000
         )
@@ -540,13 +536,16 @@ class Agent(ComponentBase[AgentSpec]):
             tokens_output=loop_state.tokens_output,
             tokens_cached=loop_state.tokens_cached,
         )
-        return AgentResponse(
+        response = AgentResponse(
             context=ctx,
             source=self.name,
             usage=usage,
             finish_reason=loop_state.finish_reason,
-            completion=loop_state.last_completion_decision,
+            completion=None if stopped else loop_state.last_completion_decision,
+            stop_message=stopped.message if stopped else None,
         )
+        await self._middleware.run_end(mw, response)
+        return response
 
     async def run_stream_events(
         self,
@@ -576,20 +575,22 @@ class Agent(ComponentBase[AgentSpec]):
                 if ctx.plan is not None and not ctx.plan.has_unfinished_steps():
                     ctx.plan = None
                 ctx.runtime_state.shared_state.pop("reasoning_loop", None)
-                ctx.messages.extend(
+                new_messages = (
                     [UserMessage(source=ctx.user_id, content=task)]
                     if isinstance(task, str)
                     else task
                     if isinstance(task, list)
                     else [task]
                 )
+                ctx.messages.extend(new_messages)
             queue = asyncio.Queue()
             sentinel = object()
 
             async def produce() -> AgentResponse:
                 try:
                     return await self._drive(
-                        ctx, queue.put_nowait, cancellation_token, stream_tokens, kwargs
+                        ctx, queue.put_nowait, cancellation_token, stream_tokens, kwargs,
+                        task=new_messages if task is not None else None,
                     )
                 finally:
                     queue.put_nowait(sentinel)

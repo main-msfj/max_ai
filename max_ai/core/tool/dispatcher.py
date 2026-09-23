@@ -4,6 +4,7 @@ import asyncio
 import json
 from typing import TYPE_CHECKING
 
+from ...base.middleware import MiddlewareContext, ToolRequest
 from ...base.tools import ToolContext
 from ...types.tool_call import ToolCallRecord, ToolResult
 from ...types.tools import ToolApprovalMode
@@ -20,6 +21,7 @@ from .registry import ToolRegistry
 
 if TYPE_CHECKING:
     from ..environment.manager import EnvironmentManager
+    from ..middleware.chain import MiddlewareChain
 
 
 class ToolDispatcher:
@@ -32,10 +34,12 @@ class ToolDispatcher:
     """
 
     def __init__(self, registry: ToolRegistry, *, source: str = "tool_dispatcher",
-                 manager: "EnvironmentManager | None" = None):
+                 manager: "EnvironmentManager | None" = None,
+                 middleware: "MiddlewareChain | None" = None):
         self.registry = registry
         self.source = source
         self.manager = manager
+        self.middleware = middleware
         self._active: set[str] = set()
 
     async def dispatch_many(self, records, context, cancellation_token=None):
@@ -242,6 +246,16 @@ class ToolDispatcher:
                     session, tool, record, call_context, cancellation_token,
                 )
 
+        # Middleware sees only approved calls about to run; it may answer
+        # in the tool's place (e.g. a budget that blocks it).
+        mw = request = None
+        run_ctx = context.deps.get("run_context")
+        if self.middleware and run_ctx is not None:
+            mw = MiddlewareContext(ctx=run_ctx, agent=self.source, emit=emit)
+            request = ToolRequest(record=record)
+            if (blocked := await self.middleware.tool_request(mw, request)) is not None:
+                return finish(blocked)
+
         record.start_execution()
         try:
             task = asyncio.create_task(
@@ -259,4 +273,6 @@ class ToolDispatcher:
             raise
         except Exception as error:
             result = ToolResult.execution_error(record.id, str(error))
+        if mw is not None and request is not None:
+            result = await self.middleware.tool_response(mw, request, result)
         return finish(result)

@@ -22,6 +22,8 @@ FinishReason = t.Literal[
     "stop",  # LLM emitted no tool calls; conversation done
     "max_iterations",  # ReActLoop hit max_loop_iterations
     "output_limit",  # replies kept being cut at the client's max_tokens
+    "budget_exceeded",  # a BudgetMiddleware limit was reached
+    "stopped",  # a middleware ended the run (StopRun)
     "approval_needed",  # paused waiting for user approval on a tool
     "tool_denied",  # paused because a tool call was denied (rejected or blocked by policy)
     "tool_direct_return",  # a tool with return_control_to_llm=False finished
@@ -68,6 +70,10 @@ class AgentResponse(BaseModel):
     completion: CompletionDecision | None = Field(
         default=None,
         description="Harness completion decision; independent of workspace publication.",
+    )
+    stop_message: str | None = Field(
+        default=None,
+        description="Why a middleware ended the run (StopRun), for the user.",
     )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),

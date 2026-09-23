@@ -42,7 +42,6 @@ from ..core.event_type import (
     ModelCallEvent,
     ModelResponseEvent,
     ModelStreamChunkEvent,
-    ToolApprovalEvent,
 )
 from ..core.events_bus import EventBus
 from ..core.messages import AssistantMessage, CoreMessage
@@ -57,6 +56,7 @@ from ..types.stacks import PromptCtx
 from .clients import CoreChatCompletionClient
 from .completion_gate import CompletionDecision
 from .component import ComponentBase
+from .middleware import MiddlewareContext, ModelRequest
 from .tools import CoreTool, ToolContext
 
 if t.TYPE_CHECKING:
@@ -280,7 +280,9 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
         with ``ctx``. Re-renders the stack only when one of them changed."""
         state = {
             "compaction_summary": (
-                self._compaction.render(ctx.compaction.state) if self._compaction else None
+                self._compaction.render(ctx.compaction.state)
+                if self._compaction
+                else None
             ),
             "current_plan": ctx.plan.as_text() if ctx.plan and ctx.plan.steps else None,
         }
@@ -295,15 +297,21 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
     @property
     def _prompt_counter(self) -> TokenCounter:
         """Counter with the client's tokenizer, built once per loop."""
-        tokenizer = getattr(getattr(self.client, "config", None), "tokenizer_base", None)
+        tokenizer = getattr(
+            getattr(self.client, "config", None), "tokenizer_base", None
+        )
         counter = getattr(self, "_cached_prompt_counter", None)
         if counter is None or counter.tokenizer_base != tokenizer:
-            counter = TokenCounter(tokenizer_base=tokenizer) if tokenizer else TokenCounter()
+            counter = (
+                TokenCounter(tokenizer_base=tokenizer) if tokenizer else TokenCounter()
+            )
             self._cached_prompt_counter = counter
         return counter
 
     async def _compact_if_needed(
-        self, ctx: RunContext, prompts: PromptCtx,
+        self,
+        ctx: RunContext,
+        prompts: PromptCtx,
     ) -> t.AsyncGenerator[CoreEvent, None]:
         """Run the strategy before a model call and apply its result to ``ctx``.
 
@@ -314,21 +322,29 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
 
         compaction = self._compaction
         if compaction is None or not compaction.should_compact(
-            ctx, prompts, self._max_context_tokens, client_max_output_tokens(self.client),
+            ctx,
+            prompts,
+            self._max_context_tokens,
+            client_max_output_tokens(self.client),
         ):
             return
         strategy = type(compaction).__name__
         yield CompactionEvent(source=self.name, phase="start", strategy=strategy)
         try:
             result = await compaction.compact(
-                ctx=ctx, prompts=prompts, max_context_tokens=self._max_context_tokens,
-                client=self.client, memory=self._memory,
+                ctx=ctx,
+                prompts=prompts,
+                max_context_tokens=self._max_context_tokens,
+                client=self.client,
+                memory=self._memory,
             )
         except Exception as error:
             log.error("Compaction failed", exc=error, strategy=strategy)
             yield ErrorEvent(
-                source=self.name, error_type="compaction_failed",
-                error_message=f"{strategy}: {error}", is_recoverable=True,
+                source=self.name,
+                error_type="compaction_failed",
+                error_message=f"{strategy}: {error}",
+                is_recoverable=True,
             )
             return
         if result.changed:
@@ -338,10 +354,15 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
             ctx.compaction.archived_messages += len(result.old_messages)
             self._refresh_session_state(ctx, prompts)
         yield CompactionEvent(
-            source=self.name, phase="end", strategy=strategy,
-            changed=result.changed, pruned_only=result.pruned_only,
-            tokens_before=result.tokens_before, tokens_after=result.tokens_after,
-            kept_message_count=len(result.messages), old_messages=result.old_messages,
+            source=self.name,
+            phase="end",
+            strategy=strategy,
+            changed=result.changed,
+            pruned_only=result.pruned_only,
+            tokens_before=result.tokens_before,
+            tokens_after=result.tokens_after,
+            kept_message_count=len(result.messages),
+            old_messages=result.old_messages,
             summary=compaction.render(ctx.compaction.state),
         )
 
@@ -368,6 +389,12 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
         if self._middleware_chain is None:
             raise RuntimeError(f"{type(self).__name__} not bound — call .bind() first.")
         return self._middleware_chain
+
+    def _middleware_context(self, ctx: RunContext) -> MiddlewareContext:
+        emit = self._tool_context.emit_event if self._tool_context else None
+        return MiddlewareContext(
+            ctx=ctx, agent=self.name, emit=emit or (lambda event: None)
+        )
 
     @property
     def completion_bus(self) -> EventBus:
@@ -508,11 +535,21 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
             session_id=ctx.session_id,
         )
 
-        tools = list(tools_override) if tools_override is not None else self._tools
-        model_metadata: dict[str, t.Any] = {
-            "model": getattr(self.client, "model", None),
-            "tools": tools,
-        }
+        mw = self._middleware_context(ctx)
+        request = await self.middleware_chain.model_request(
+            mw,
+            ModelRequest(
+                messages=self._model_input_messages(ctx),
+                tools=list(tools_override)
+                if tools_override is not None
+                else self._tools,
+                options=dict(kwargs),
+                output_format=output_format,
+                model=str(getattr(self.client, "model", None) or "unknown"),
+                model_config=getattr(self.client, "config", None),
+            ),
+        )
+        model_name = request.model
 
         if cancellation_token and cancellation_token.is_cancelled():
             raise asyncio.CancelledError()
@@ -520,15 +557,15 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
         # clear any previous result
         loop_state.last_result = None
 
-        async def _single_call(_ctx: RunContext) -> ChatCompletionResult:
+        async def _single_call() -> ChatCompletionResult:
             task = asyncio.create_task(
                 self.client.run(
-                    ctx=self._model_context(_ctx, transient_messages),
+                    ctx=self._model_context(ctx, transient_messages),
                     prompts=prompts,
-                    tools=tools,
-                    output_format=output_format,
+                    tools=request.tools,
+                    output_format=request.output_format,
                     stream=False,
-                    **kwargs,
+                    **request.options,
                 )
             )
             if cancellation_token:
@@ -537,7 +574,7 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
 
         yield ModelCallEvent(
             source=self.name,
-            model=str(model_metadata.get("model") or "unknown"),
+            model=model_name,
             input_messages=self._input_messages_with_token_counts(
                 self._model_input_messages(ctx)
             ),
@@ -547,31 +584,8 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
         backoff = 1.0
         for attempt in range(self.max_connection_retries + 1):
             try:
-                async for item in self.middleware_chain.execute(
-                    action="model_call",
-                    ctx=ctx,
-                    data=ctx,
-                    func=_single_call,
-                    metadata=model_metadata,
-                ):
-                    if isinstance(item, ChatCompletionResult):
-                        loop_state.record_completion(item)
-                        msg = item.message
-                        response_text = (
-                            msg.structured_output.model_dump_json()
-                            if msg.structured_output is not None
-                            else msg.text()
-                        )
-                        yield ModelResponseEvent(
-                            source=self.name,
-                            response=response_text,
-                            has_tool_calls=bool(msg.tool_calls),
-                            usage=item.usage,
-                        )
-                    else:
-                        yield item
-
-                return
+                result = await _single_call()
+                break
 
             except asyncio.CancelledError:
                 _log.info("LLM call cancelled by user request")
@@ -580,6 +594,10 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
             except Exception as e:
                 is_transient = isinstance(e, ClientError) and e.kind in _TRANSIENT_KINDS
                 if not is_transient or attempt >= self.max_connection_retries:
+                    recovered = await self.middleware_chain.model_error(mw, request, e)
+                    if recovered is not None:
+                        result = recovered
+                        break
                     yield ErrorEvent(
                         source=self.name,
                         error_message=(
@@ -599,6 +617,20 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
                 )
                 await asyncio.sleep(backoff)
                 backoff *= 2
+
+        result = await self.middleware_chain.model_response(mw, request, result)
+        loop_state.record_completion(result)
+        msg = result.message
+        yield ModelResponseEvent(
+            source=self.name,
+            response=(
+                msg.structured_output.model_dump_json()
+                if msg.structured_output is not None
+                else msg.text()
+            ),
+            has_tool_calls=bool(msg.tool_calls),
+            usage=result.usage,
+        )
 
     # -------- STREAMING LLM CALL -----------------------------------------------------------
     async def _call_llm_stream(
@@ -633,11 +665,22 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
             run_id=ctx.run_id,
             session_id=ctx.session_id,
         )
-        tools = list(tools_override) if tools_override is not None else self._tools
-        model_metadata = {
-            "model": getattr(self.client, "model", None),
-            "tools": tools,
-        }
+        mw = self._middleware_context(ctx)
+        request = await self.middleware_chain.model_request(
+            mw,
+            ModelRequest(
+                messages=self._model_input_messages(ctx),
+                tools=list(tools_override)
+                if tools_override is not None
+                else self._tools,
+                options=dict(kwargs),
+                output_format=output_format,
+                stream=True,
+                model=str(getattr(self.client, "model", None) or "unknown"),
+                model_config=getattr(self.client, "config", None),
+            ),
+        )
+        model_name = request.model
 
         if cancellation_token and cancellation_token.is_cancelled():
             raise asyncio.CancelledError()
@@ -645,22 +688,23 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
         # clear any previous result
         loop_state.last_result = None
 
-        async def _streaming_call(
-            _ctx: RunContext,
-        ) -> t.AsyncGenerator[ChatCompletionChunk, None]:
+        async def _streaming_call() -> t.AsyncGenerator[ChatCompletionChunk, None]:
             stream = await self.client.run(
-                ctx=self._model_context(_ctx, transient_messages),
+                ctx=self._model_context(ctx, transient_messages),
                 prompts=prompts,
-                tools=tools,
-                output_format=output_format,
+                tools=request.tools,
+                output_format=request.output_format,
                 stream=True,
-                **kwargs,
+                **request.options,
             )
             stream = t.cast(t.AsyncGenerator[ChatCompletionChunk, None], stream)
             async for chunk in stream:
                 if cancellation_token and cancellation_token.is_cancelled():
                     raise asyncio.CancelledError()
-                yield chunk
+                if (
+                    chunk := await self.middleware_chain.model_chunk(mw, request, chunk)
+                ) is not None:
+                    yield chunk
 
         backoff = 1.0
         for attempt in range(self.max_connection_retries + 1):
@@ -672,29 +716,13 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
             try:
                 yield ModelCallEvent(
                     source=self.name,
-                    model=str(model_metadata.get("model") or "unknown"),
+                    model=model_name,
                     input_messages=self._input_messages_with_token_counts(
                         self._model_input_messages(ctx)
                     ),
                     prompt_tokens=prompts.prompt_tokens,
                 )
-                async for item in self.middleware_chain.execute_stream(
-                    action="model_call_stream",
-                    ctx=ctx,
-                    data=ctx,
-                    stream_func=_streaming_call,
-                    metadata=model_metadata,
-                ):
-                    if isinstance(item, ToolApprovalEvent):
-                        yield item
-                        return
-
-                    if not isinstance(item, ChatCompletionChunk):
-                        yield item
-                        continue
-
-                    chunk = item
-
+                async for chunk in _streaming_call():
                     if not chunk.is_complete:
                         if chunk.content:
                             content_chunks.append(chunk.content)
@@ -744,18 +772,21 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
                     result = ChatCompletionResult(
                         message=assistant_msg,
                         usage=usage,
-                        model=str(model_metadata.get("model") or "unknown"),
+                        model=model_name,
                         finish_reason=(
                             final_chunk.finish_reason
                             or ("tool_calls" if tool_calls else "stop")
                         ),
                     )
+                    result = await self.middleware_chain.model_response(
+                        mw, request, result
+                    )
                     loop_state.record_completion(result)
                     yield ModelResponseEvent(
                         source=self.name,
-                        response=assistant_msg.text(),
-                        has_tool_calls=bool(tool_calls),
-                        usage=usage,
+                        response=result.message.text(),
+                        has_tool_calls=bool(result.message.tool_calls),
+                        usage=result.usage,
                     )
 
                     yield ModelStreamChunkEvent(
@@ -776,6 +807,19 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
             except Exception as e:
                 is_transient = isinstance(e, ClientError) and e.kind in _TRANSIENT_KINDS
                 if not is_transient or attempt >= self.max_connection_retries:
+                    recovered = await self.middleware_chain.model_error(mw, request, e)
+                    if recovered is not None:
+                        recovered = await self.middleware_chain.model_response(
+                            mw, request, recovered
+                        )
+                        loop_state.record_completion(recovered)
+                        yield ModelResponseEvent(
+                            source=self.name,
+                            response=recovered.message.text(),
+                            has_tool_calls=bool(recovered.message.tool_calls),
+                            usage=recovered.usage,
+                        )
+                        return
                     yield ErrorEvent(
                         source=self.name,
                         error_message=(

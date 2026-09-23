@@ -30,8 +30,6 @@ class AgentSpec(BaseModel):
     description: str
     instructions: str
     client: dict[str, t.Any]
-    max_iterations: int = Field(default=20, ge=1)
-    idle_timeout: float = 300
     reasoning: dict[str, t.Any] | None = None
     workspace: dict[str, t.Any] | None = None
     executor: dict[str, t.Any] | None = None
@@ -40,7 +38,7 @@ class AgentSpec(BaseModel):
     knowledge: list[dict[str, t.Any]] = Field(default_factory=list)
     compaction: dict[str, t.Any] | None = None
     toolset: list[dict[str, t.Any]] = Field(default_factory=list)
-    mcp_servers: list[dict[str, t.Any]] = Field(default_factory=list)
+    mcp: list[dict[str, t.Any]] = Field(default_factory=list)
     completion: dict[str, t.Any] = Field(
         default_factory=dict, description="RuntimeGateConfig options of the framework's gate.",
     )
@@ -50,3 +48,4 @@ class AgentSpec(BaseModel):
     output_format: dict[str, t.Any] | None = Field(
         default=None, description="JSON Schema of the final answer.",
     )
+    middlewares: list[dict[str, t.Any]] = Field(default_factory=list)

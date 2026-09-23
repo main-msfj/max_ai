@@ -2945,3 +2945,31 @@ JSON Schema (punto 4), test con MCP real.
 - Los prompts de compactación (SUMMARY_TASK, MEMORY_TASK) quedan en su estrategia: son de la estrategia, no del harness.
 - `run_repl` → `run_cli` (cli/__init__, app, README, ejemplos). README de la CLI al día (sesiones, /resume /new /session, run_cli con store/user_id/session_id).
 - Revisado el cambio de otro agente en core/event_type.py: correcto. La unión se llamaba igual que la clase base `OrchestrationEvent` y la pisaba; ahora es `OrchestrationEvents` (como `AgentEvents`).
+
+## Middleware nuevo (componente serializable) + BudgetMiddleware
+- `base/middleware.py` reescrito: `CoreMiddleware(ComponentBase[MiddlewareConfig])`, hooks opcionales (async simples, no generadores): `on_run_start`, `on_model_request`, `on_model_chunk`, `on_model_response`, `on_model_error` (puede recuperar con otro resultado), `on_tool_request` (devolver un ToolResult bloquea la tool), `on_tool_response`, `on_final_response` (mapear la respuesta aceptada), `on_run_end`. Serialización genérica por `component_schema` (como los guards).
+- Estado por run en `RunContext` vía `mw.state(self)` (un Agent sirve a todos). `ModelRequest`/`ToolRequest` llevan `metadata` para emparejar request/response (tiempos, trazas). `ModelRequest.model_config` trae capacidades y precios.
+- `StopRun(message, finish_reason)`: desde run_start o hooks de modelo termina el turno limpio; `AgentResponse.stop_message`; FinishReason suma `budget_exceeded` y `stopped`. Las tools no usan StopRun (dejaría tool calls sin resultado): devuelven un ToolResult.
+- Dónde se enganchan: run en `Agent._drive_connected`, modelo en `_call_llm`/`_call_llm_stream`, tools en `ToolDispatcher` (después de la aprobación, justo antes de ejecutar), respuesta final en el loop tras el gate (y tras output_format).
+- `Agent(middlewares=[...])`, serializable en `AgentSpec.middlewares`.
+- `BudgetMiddleware(max_tokens, max_cost_usd, max_seconds, max_model_calls, max_tool_calls)` por tarea (una tarea sigue contando al reanudar; el tiempo solo cuenta mientras el agente corre). `spent(ctx)` para el host. Costo con `ModelConfig.input_cost_per_mtok/output_cost_per_mtok` (sin precios, max_cost_usd da error claro).
+- `LoggingMiddleware` portado (ahora también tools y run). Eliminados `ConsoleTraceMiddleware`, `types/middleware.py` (MiddlewareCtx) y `loggers/middleware.py`: solo servían al API viejo, nadie los usaba.
+- CLI muestra `stop_message`. Tests: tests/middleware/test_middleware.py (11). Prueba real (gpt-5.6-luna, streaming): logging completo y presupuesto de 1 tool → `budget_exceeded`.
+- Pendiente: cuota por usuario entre tareas (`CoreQuotaStore`), trazas OpenTelemetry.
+
+## Cuota por usuario (BudgetMiddleware + CoreQuotaStore)
+- `core/model/quota.py`: `QuotaLimits(period="day"|"month", max_tokens, max_cost_usd, max_tasks)` con `period_key()` (UTC, p. ej. `day:2026-09-23`), `resets_at()` y `exceeded()` (el límite de tareas solo aplica al iniciar una tarea). `QuotaUsage(tokens, cost_usd, tasks)`.
+- `base/quota_store.py`: `CoreQuotaStore` con `usage(user, period_key)` y `add(user, period_key, delta)` (atómico, devuelve el total). `LocalQuotaStore` (`capabilities/quota_store/local`): un JSON por usuario, lock por usuario + escritura atómica, guarda los últimos 60 periodos. Varios procesos compartiendo carpeta necesitan un store con base de datos.
+- `BudgetMiddleware(..., quota=QuotaLimits(...), quota_store=...)`: al iniciar lee el uso (y rechaza si se agotó, con la hora de reinicio); cuenta la tarea; después de cada llamada al modelo suma tokens/costo en el store; antes de cada llamada revisa. Serializa el store anidado. `quota_used(user)` para el host.
+- Tests: tests/middleware/test_quota.py (5): cuota compartida entre tareas e instancias nuevas del Agent (modelo serverless), usuarios independientes, límite de tareas, reinicio del periodo, costo mensual con precios, 50 cargos concurrentes sin pérdidas, serialización.
+
+## MongoDBQuotaStore y firma del Agent más limpia
+- `MongoDBQuotaStore` (capabilities/quota_store/mongodb): un documento por (user_id, period), `add` = un `$inc` upsert atómico (find_one_and_update), índice único; URI por `uri_env`. Probado contra MongoDB 8 real (contenedor temporal, ya borrado): 200 cargos concurrentes desde dos stores sin pérdidas y cuota compartida entre Agents nuevos. tests/middleware/test_quota_mongodb.py se salta sin MONGODB_URI.
+- `setting.max_loop_iterations` (20, env MAX_LOOP_ITERATIONS) y `setting.environment_idle_timeout` (300, env ENVIRONMENT_IDLE_TIMEOUT).
+- `ReactLoop(max_loop_iterations=None)`: None = sigue el setting, también serializado. El límite de iteraciones vive solo en el loop.
+- `EnvironmentManager(idle_timeout=None)` usa el setting.
+- Agent: fuera `max_iterations`, `idle_timeout` y el alias `mcp_servers` (queda `mcp`); `toolset` pasa a keyword-only. `AgentSpec`: sin max_iterations/idle_timeout, `mcp_servers` → `mcp`.
+- Loop vs BudgetMiddleware: no se comparan; cada límite se revisa por su lado y el primero que se alcanza (el más estricto) detiene el turno.
+- Tests: tests/test_runtime_settings.py (2).
+
+Pendiente para la próxima sesión: `TracingMiddleware` con spans de OpenTelemetry (convenciones GenAI), probado con Langfuse como backend (OTLP). Después: CoreEmbedding en core/embeddings, archivo/búsqueda de conversaciones en el session store.

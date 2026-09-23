@@ -10,7 +10,15 @@ from .context import CoreLogBookRegistry
 from .knowledge import CoreKnowledgeRegistry
 from .layer import CoreLayer
 from .memory import CoreMemoryRegistry
-from .middleware import CoreMiddleware
+from .middleware import (
+    CoreMiddleware,
+    MiddlewareContext,
+    ModelRequest,
+    StopRun,
+    ToolRequest,
+)
+from .quota_store import CoreQuotaStore
+from .session_store import CoreSessionStore
 from .skills import CoreSkillRegistry
 from .tools import CoreRuntimeTool, CoreTool, ToolContext
 from .workspace import WorkspaceBase
@@ -25,6 +33,12 @@ __all__ = [
     "CoreCompaction",
     "CoreAgentCapabilities",
     "CoreMiddleware",
+    "MiddlewareContext",
+    "ModelRequest",
+    "StopRun",
+    "ToolRequest",
+    "CoreQuotaStore",
+    "CoreSessionStore",
     "CoreTool",
     "CoreRuntimeTool",
     "CoreMemoryRegistry",

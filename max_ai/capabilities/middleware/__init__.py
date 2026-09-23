@@ -1,6 +1,6 @@
-"""Pluggable middlewares. The chain that runs them lives in ``core.middleware``."""
+"""Ready-made middlewares. The chain that runs them lives in ``core.middleware``."""
 
-from .console_trace import ConsoleTraceMiddleware
-from .logging import LoggingMiddleware
+from .budget import BudgetConfig, BudgetMiddleware
+from .logging import LoggingMiddleware, LoggingMiddlewareConfig
 
-__all__ = ["ConsoleTraceMiddleware", "LoggingMiddleware"]
+__all__ = ["BudgetConfig", "BudgetMiddleware", "LoggingMiddleware", "LoggingMiddlewareConfig"]

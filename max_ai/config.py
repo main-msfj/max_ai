@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     # Models override it via ModelConfig.tokenizer_base.
     default_tokenizer: str = Field(default="o200k_base")
 
+    # Runtime defaults (MAX_LOOP_ITERATIONS, ENVIRONMENT_IDLE_TIMEOUT). The
+    # loop and the executor sessions read them unless set on the component.
+    max_loop_iterations: int = Field(default=20, ge=1)
+    environment_idle_timeout: float = Field(default=300, ge=0)
+
     # Context compaction budgets. Environment overrides use the uppercase
     # field names, e.g. COMPACTION_PROMPT_BUDGET_TOKENS=6000.
     compaction_prompt_budget_tokens: int = Field(default=6000, gt=0)
