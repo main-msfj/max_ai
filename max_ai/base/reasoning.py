@@ -527,6 +527,7 @@ class BaseReasoning(ABC):
             input_messages=self._input_messages_with_token_counts(
                 self._model_input_messages(ctx)
             ),
+            prompt_tokens=prompts.prompt_tokens,
         )
 
         backoff = 1.0
@@ -661,6 +662,7 @@ class BaseReasoning(ABC):
                     input_messages=self._input_messages_with_token_counts(
                         self._model_input_messages(ctx)
                     ),
+                    prompt_tokens=prompts.prompt_tokens,
                 )
                 async for item in self.middleware_chain.execute_stream(
                     action="model_call_stream",

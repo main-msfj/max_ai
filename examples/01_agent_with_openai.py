@@ -19,6 +19,8 @@ from examples.cli_agent import run_agent_in_cli
 from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
 from max_ai.core.model.llm import ModelConfig
 
+MODEL = "gpt-5.6-luna"
+
 
 async def main() -> None:
     load_dotenv(Path(__file__).resolve().parents[1] / ".env")
@@ -28,12 +30,14 @@ async def main() -> None:
     if not key:
         raise SystemExit("Configura OPENAI_KEY en el entorno o en .env.")
 
+    # Default window 128K; MAX_CONTEXT_WINDOW changes it (kept within 128K–1M).
+    window = int(os.getenv("MAX_CONTEXT_WINDOW") or 0)
     client = OpenAIChatCompletionClient(
-        model="gpt-5.6-luna",
+        model=MODEL,
         api_key=key,
         reasoning_effort="none",
         max_tokens=1500,
-        config=ModelConfig(supports_function_calling=True),
+        config=ModelConfig(supports_function_calling=True, max_context_window=window),
     )
     await run_agent_in_cli(client, provider="OpenAI")
 

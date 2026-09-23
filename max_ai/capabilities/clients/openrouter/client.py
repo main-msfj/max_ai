@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import logging
 import typing as t
 
+import httpx
 from pydantic import BaseModel, SecretStr
 
 from ....core.model.llm import ModelConfig
@@ -12,6 +14,9 @@ from ....errors.client import ClientError
 from ....types.completions import ChatCompletionChunk, ChatCompletionResult
 from ..openai.client import OpenAIChatCompletionClient
 from ._model import OpenRouterChatCompletionClientConfig
+
+
+logger = logging.getLogger(__name__)
 
 
 class OpenRouterChatCompletionClient(OpenAIChatCompletionClient):
@@ -95,6 +100,27 @@ class OpenRouterChatCompletionClient(OpenAIChatCompletionClient):
             headers["X-Title"] = app_name
         if headers:
             self.client = self.client.with_options(default_headers=headers)
+
+    @classmethod
+    def fetch_context_window(
+        cls, models: t.Sequence[str], *, base_url: str | None = None, timeout: float = 10,
+    ) -> int:
+        """Smallest context window among ``models`` found in OpenRouter's
+        public ``/models`` list (any of them may answer when fallbacks are
+        set). Returns 0 (unknown) when the list can't be read or none of the
+        models is listed; both cases are logged."""
+        url = f"{(base_url or cls.DEFAULT_BASE_URL).rstrip('/')}/models"
+        try:
+            data = httpx.get(url, timeout=timeout).raise_for_status().json()["data"]
+        except (httpx.HTTPError, KeyError, ValueError) as error:
+            logger.warning("Could not read OpenRouter model windows: %s", error)
+            return 0
+        windows = {m.get("id"): m.get("context_length") or 0 for m in data}
+        sizes = [windows[model] for model in models if windows.get(model)]
+        missing = [model for model in models if not windows.get(model)]
+        if missing:
+            logger.warning("No context window listed for %s", ", ".join(missing))
+        return min(sizes) if sizes else 0
 
     def _to_config(self) -> OpenRouterChatCompletionClientConfig:  # type: ignore[override]
         return OpenRouterChatCompletionClientConfig(

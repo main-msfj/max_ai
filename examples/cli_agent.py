@@ -8,8 +8,11 @@ terminal interaction, streaming, approvals, questions, and session context.
 
 from __future__ import annotations
 
+import os
+
 from pathlib import Path
 
+from max_ai.capabilities.compaction import SummaryCompaction
 from max_ai.agents import Agent
 from max_ai.base.clients import CoreChatCompletionClient
 from max_ai.base.knowledge import KnowledgeToolMode
@@ -82,6 +85,11 @@ async def run_agent_in_cli(client: CoreChatCompletionClient, provider: str) -> N
             memory=memory,
             knowledge=knowledge,
             skills=skills,
+            # COMPACTION_THRESHOLD=0.05 compacts at ~5% of the message room,
+            # to watch it happen in a few turns (default 0.8).
+            compaction=SummaryCompaction(
+                threshold=float(os.getenv("COMPACTION_THRESHOLD") or 0.8),
+            ),
         ) as agent:
             await run_repl(
                 agent,

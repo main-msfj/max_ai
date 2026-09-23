@@ -190,6 +190,9 @@ class ModelCallEvent(ModelEvent):
     input_messages: t.Sequence[CoreMessage] = Field(
         ..., description="Message sent to model"
     )
+    prompt_tokens: int = Field(
+        default=0, description="Size of the rendered system prompt for this call"
+    )
 
 
 class ModelResponseEvent(ModelEvent):

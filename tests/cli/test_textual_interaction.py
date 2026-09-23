@@ -74,7 +74,8 @@ async def test_question_button_and_token_events(tmp_path):
             await app._write_event(ModelResponseEvent(source="test", response="", usage=Usage(tokens_input=10, tokens_output=3, tokens_cached=2)))
         assert app._tokens_input == 20
         assert app._tokens_output == 6
-        assert "26" in str(app.query_one("#usage", Static).render())
+        usage = str(app.query_one("#usage", Static).render())
+        assert "in 20 · out 6 · cached 4" in usage
 
 
 def test_runtime_event_lines():

@@ -26,7 +26,9 @@ from textual.widgets import Button, DirectoryTree, Static, TextArea
 
 from ..agents.agent import Agent
 from ..core.event_type import (
+    CompactionEvent,
     CoreEvent,
+    ErrorEvent,
     ModelCallEvent,
     ModelResponseEvent,
     ModelStreamChunkEvent,
@@ -34,14 +36,18 @@ from ..core.event_type import (
     ToolCallEvent,
     ToolCallResponseEvent,
 )
+from ..core.compaction import client_max_output_tokens, live_message_threshold_tokens
 from ..core.termination.cancellation import CancellationToken
 from ..types.agent_response import AgentResponse
 from ..types.run_context import RunContext
 from ..types.tool_call import ToolResult
 from .blocks import (
     ACCENT,
+    _k,
+    context_bar,
     SPINNER,
     AssistantBlock,
+    CompactionBlock,
     NoteLine,
     PlanBlock,
     Question,
@@ -140,6 +146,8 @@ class MaxAIApp(App[None]):
         self._tokens_output = 0
         self._tokens_cached = 0
         self._context_tokens = 0
+        self._compaction: CompactionBlock | None = None
+        self._prompt_tokens = 0
         self._turn_started_at: float | None = None
         self._turn_tokens = 0
         self._frame = 0
@@ -192,6 +200,14 @@ class MaxAIApp(App[None]):
                 self._skills = list(await skills.get_skills())
             except Exception as error:  # noqa: BLE001 — a bad skill dir must not kill the UI
                 await self._write_system(f"Could not load skills: {error}", style="#f87171")
+        client = getattr(self.agent, "client", None)
+        window = getattr(getattr(client, "config", None), "max_context_window", 0) or 0
+        if getattr(self.agent, "compaction", None) is not None and window <= 0:
+            await self._write_system(
+                "The model's context window is unknown, so token-based compaction "
+                "won't trigger. Set max_context_window (or MAX_CONTEXT_WINDOW).",
+                style="#fbbf24",
+            )
         self._refresh_usage()
         self._refresh_status()
         self.set_interval(0.12, self._tick)
@@ -283,18 +299,41 @@ class MaxAIApp(App[None]):
     def _refresh_usage(self) -> None:
         client = getattr(self.agent, "client", None)
         maximum = getattr(getattr(client, "config", None), "max_context_window", 0) or 0
-        total = self._tokens_input + self._tokens_output
         line = Text()
         if self.verbose:
             line.append("verbose · ", style=ACCENT)
-        line.append(f"{self._agent_name} · in {self._tokens_input:,} · out {self._tokens_output:,}"
-                    f" · cached {self._tokens_cached:,} · total {total:,}", style="#71717a")
+        line.append(f"{self._agent_name} · in {_k(self._tokens_input)} · out {_k(self._tokens_output)}",
+                    style="#71717a")
+        if self._tokens_cached:
+            line.append(f" · cached {_k(self._tokens_cached)}", style="#71717a")
+        line.append(" · ctx ", style="#71717a")
         if maximum > 0:
-            left = max(0, 100 - round(self._context_tokens / maximum * 100))
-            line.append(f" · ctx {left}% left", style="#71717a")
+            line.append_text(context_bar(self._context_tokens, maximum))
+        else:
+            line.append("? (window unknown · set MAX_CONTEXT_WINDOW)", style="#fbbf24")
+        strategy = getattr(self.agent, "compaction", None)
+        if strategy is not None:
+            name = type(strategy).__name__.removesuffix("Compaction").lower()
+            line.append(f" · {name} compaction", style="#71717a")
+            trigger = self._compaction_trigger(strategy, client, maximum)
+            if trigger:
+                line.append(f" at ~{trigger}%", style="#71717a")
         usage = self._static("#usage")
         if usage is not None:
             usage.update(line)
+
+    def _compaction_trigger(self, strategy, client, maximum: int) -> int:
+        """Share of the whole window where compaction kicks in: system prompt +
+        the strategy's threshold of the message capacity (0 = unknown yet)."""
+        if maximum <= 0 or not self._prompt_tokens:
+            return 0
+        threshold = live_message_threshold_tokens(
+            maximum,
+            max_output_tokens=client_max_output_tokens(client),
+            prompt_tokens=self._prompt_tokens,
+            ratio=strategy.config.threshold,
+        )
+        return round((self._prompt_tokens + threshold) / maximum * 100) if threshold else 0
 
     # -------- ACTIONS -----------------------------------------------------------
     async def action_clear_chat(self) -> None:
@@ -617,6 +656,7 @@ class MaxAIApp(App[None]):
             await self._render_plan(event)
             return
         if isinstance(event, ModelCallEvent):
+            self._prompt_tokens = event.prompt_tokens or self._prompt_tokens
             await self._finish_assistant()
             return
         if isinstance(event, ModelResponseEvent):
@@ -664,6 +704,14 @@ class MaxAIApp(App[None]):
             if block is not None:
                 block.complete(event.tool_result)
             return
+        if isinstance(event, CompactionEvent):
+            await self._render_compaction(event)
+            return
+        if isinstance(event, ErrorEvent) and event.error_type == "compaction_failed":
+            if self._compaction is not None:
+                self._compaction.fail(event.error_message)
+                self._compaction = None
+                return
         if event.event_type == "completion_rejected":
             reasons = getattr(getattr(event, "decision", None), "reasons", ()) or ()
             self._gate_retries.append("; ".join(reasons) or "incomplete")
@@ -673,6 +721,27 @@ class MaxAIApp(App[None]):
             return
         if etype in _ALWAYS_SHOWN or self.verbose:
             await self._mount(NoteLine(event_line(event)))
+
+    async def _render_compaction(self, event: CompactionEvent) -> None:
+        """One block per compaction: live at start, folded line at end."""
+        await self._finish_assistant()
+        if event.phase == "start":
+            self._compaction = CompactionBlock(event.strategy)
+            await self._mount(self._compaction)
+            return
+        block, self._compaction = self._compaction, None
+        if not event.changed:
+            if block is not None:
+                await block.remove()  # triggered but nothing to do: no noise
+            return
+        if block is None:
+            block = CompactionBlock(event.strategy)
+            await self._mount(block)
+        block.finish(event)
+        # Provider usage only updates on the next call: estimate what was freed.
+        freed = max(0, event.tokens_before - event.tokens_after)
+        self._context_tokens = max(0, self._context_tokens - freed)
+        self._refresh_usage()
 
     async def _render_plan(self, event: PlanningEvent) -> None:
         """Each update is a PlanBlock; consecutive updates with nothing in

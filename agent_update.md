@@ -2675,3 +2675,68 @@ Tests `tests/compaction/test_summary_strategy.py` (8). Suite 315 passed, los
   nueva está siempre, vacía).
 Suite: 318 passed (+3), mismos 47 fallos preexistentes; 13 scripts OK.
 Nota: `compactions` también cuenta las pasadas que solo podaron.
+
+## 2026-09-23 — CLI: barra de ventana y bloque de compactación
+
+- Línea de uso: `demo · in 40.3k · out 1.4k · ctx ▓▓▓▓▓▓░░░░ 36% left ·
+  summary compaction at ~83%`. `context_bar()` (blocks.py): verde, ámbar desde
+  60% usado, rojo desde 85%. El % sale de los `tokens_input` reales del
+  proveedor; tras compactar se descuenta lo liberado hasta la próxima llamada.
+  "at ~N%" = system prompt + umbral de la estrategia sobre la capacidad,
+  usando `ModelCallEvent.prompt_tokens` (lo agregó la sesión paralela
+  max-ai-1b en `core/event_type.py` y `base/reasoning.py`). Sin `total`, y
+  `cached` solo si >0 (para que entre en ~90 columnas).
+- `CompactionBlock` (FoldBlock): "◇ Compacting context…" en vivo; al terminar
+  se pliega a "Compacted · N messages → summary · 3.1k → 726 tokens",
+  "Trimmed old tool output · …" (solo poda) o "Window slid · N messages out";
+  click muestra lo que ve el modelo (el resumen). Si terminó sin cambios, el
+  bloque se quita (sin ruido). `ErrorEvent(compaction_failed)` → "Compaction
+  failed · … · continuing uncompacted".
+- `OpenRouterChatCompletionClient.fetch_context_window(models)`: la ventana
+  más chica entre modelo y fallbacks desde `/models` (262144 para los 3
+  free); 0 si falla o falta un modelo.
+- Ejemplos: `02` usa esa ventana; `01` la toma de `MAX_CONTEXT_WINDOW` (OpenAI
+  no la expone); en ambos `MAX_CONTEXT_WINDOW=8000` fuerza una ventana chica
+  para ver compactar. `cli_agent.py` usa `SummaryCompaction()`.
+- Verificado headless (`scratchpad/verify_cli_compaction.py`): 7 turnos, la
+  barra baja 46%→0% y tras compactar vuelve a 36%, un bloque plegado que se
+  expande con el resumen. Tests CLI actualizados al nuevo formato de uso
+  (`test_textual_interaction`: "in 20 · out 6 · cached 4"). Suite 318 passed,
+  mismos 47 fallos preexistentes; 11 scripts OK.
+
+## 2026-09-23 — `max_context_window` siempre entre 128K y 1M
+
+Reporte de marvin (ejemplo 01 con OpenAI): la CLI mostraba "summary
+compaction" sin barra de contexto, porque `max_context_window` quedaba en 0 y
+la barra solo se dibuja con ventana conocida.
+Regla pedida: mínimo 128K, máximo 1M.
+- `core/model/llm.py`: `MIN_CONTEXT_WINDOW = 128_000`, `MAX_CONTEXT_WINDOW =
+  1_000_000`; default 128K y un validador que ajusta al rango (0/desconocida
+  o menor → 128K, mayor → 1M). Se eligió ajustar en vez de rechazar porque
+  el ejemplo 01 lee 1.05M del catálogo de OpenRouter para gpt-5.6-luna y
+  habría fallado al arrancar.
+- Ejemplos: `MAX_CONTEXT_WINDOW` sigue como override (dentro del rango); para
+  ver compactar en pocos turnos, `COMPACTION_THRESHOLD=0.05` en
+  `cli_agent.py` (umbral de `SummaryCompaction`, default 0.8).
+- Tests con ventanas chicas (`test_agent_compaction`,
+  `verify_cli_compaction`) usan una config propia del cliente de prueba (como
+  un cliente personalizado), no `ModelConfig`.
+Verificado: headless con el cliente real de OpenAI del ejemplo 01 → "ctx
+░░░░░░░░░░ 99% left" con 1M (catálogo) y "▓░░░░░░░░░ 95% left" con 128K
+(sin ventana). Suite sin cambios; scripts OK.
+
+## 2026-09-23 — Ventana por defecto 128K en los ejemplos; barra con tokens reales
+
+Reporte de marvin: la barra nunca se llenaba ("99% left" con in 42.2k) y
+"compaction at ~76%" quedaba pegado al final. Causa: el ejemplo 01 leía la
+ventana de gpt-5.6-luna del catálogo de OpenRouter (1.05M → 1M); contra 1M, ~10k
+de contexto es <1% y compactar al 76% son ~760k tokens.
+Decisión de marvin: 128K es el default y solo cambia si el usuario lo pide.
+- Ejemplos 01 y 02 ya no consultan el catálogo: `ModelConfig` por defecto
+  (128K), `MAX_CONTEXT_WINDOW` como único override. `fetch_context_window()`
+  queda disponible en el cliente de OpenRouter para quien lo quiera.
+- `context_bar` muestra tokens reales: "▓░░░░░░░░░ 9.6k / 128k" (antes solo
+  "% left"); `_k` formatea 128k / 1M.
+- Con 128K y prompt ~3.6k, "summary compaction at ~76%" ≈ 97k tokens.
+Verificado headless con el cliente real de OpenAI: default → "9.6k / 128k ·
+summary compaction at ~76%"; tests CLI + compaction OK; scripts OK.

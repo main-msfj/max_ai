@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 from max_ai.agents import Agent
 from max_ai.capabilities.compaction import SlidingWindowCompaction, SummaryCompaction
@@ -11,7 +12,6 @@ from max_ai.capabilities.workspace.local import LocalWorkspace
 from max_ai.core.compaction import CompactionOutput
 from max_ai.core.event_type import CompactionEvent
 from max_ai.core.messages import AssistantMessage, ToolCall
-from max_ai.core.model.llm import ModelConfig
 from max_ai.types.agent_response import AgentResponse
 from max_ai.types.completions import ChatCompletionResult, Usage
 from max_ai.types.run_context import RunContext
@@ -28,7 +28,11 @@ class FakeLLM:
     model = "fake"
 
     def __init__(self, window: int):
-        self.config = ModelConfig(max_context_window=window, supports_function_calling=True)
+        # Custom config: ModelConfig would lift these small test windows to 128K.
+        self.config = SimpleNamespace(
+            max_context_window=window, supports_function_calling=True,
+            tokenizer_base="o200k_base", supports_vision=False,
+        )
         self.generation_options = {"max_tokens": 500}
         self.system_prompts: list[str] = []
         self.summary_calls = 0

@@ -253,6 +253,81 @@ class PlanBlock(FoldBlock):
         return body
 
 
+def context_bar(used: int, maximum: int, cells: int = 10) -> Text:
+    """``▓▓▓▓░░░░░░ 52k / 128k``: green, amber from 60% used, red from 85%."""
+    ratio = min(1.0, used / maximum) if maximum > 0 else 0.0
+    color = "#f87171" if ratio >= 0.85 else "#fbbf24" if ratio >= 0.6 else "#4ade80"
+    filled = round(ratio * cells)
+    bar = Text("▓" * filled, style=color)
+    bar.append("░" * (cells - filled), style="#3f3f46")
+    bar.append(f" {_k(used)} / {_k(maximum)}", style=color)
+    return bar
+
+
+def _k(tokens: int) -> str:
+    if tokens >= 1_000_000:
+        return f"{tokens / 1_000_000:g}M"
+    if tokens >= 100_000:
+        return f"{tokens / 1000:.0f}k"
+    return f"{tokens / 1000:.1f}k" if tokens >= 1000 else str(tokens)
+
+
+class CompactionBlock(FoldBlock):
+    """Context compaction: live while running, then one folded line whose
+    body shows what the model now sees of the past (e.g. the summary)."""
+
+    DEFAULT_CSS = """
+    CompactionBlock > .body { color: #a1a1aa; max-height: 14; }
+    """
+
+    def __init__(self, strategy: str) -> None:
+        super().__init__()
+        self.strategy = strategy
+        self.done = False
+        self.failed: str | None = None
+        self.event: t.Any = None
+
+    @property
+    def foldable(self) -> bool:  # type: ignore[override]
+        return self.done and bool(self._details())
+
+    def finish(self, event: t.Any) -> None:
+        self.done, self.event = True, event
+        self.collapse()
+
+    def fail(self, message: str) -> None:
+        self.done, self.failed = True, message
+        self.collapse()
+
+    def _header(self) -> Text:
+        header = Text("◇ ", style=f"bold {ACCENT}")
+        if not self.done:
+            header.append("Compacting context…", style="italic #a1a1aa")
+            return header
+        if self.failed is not None:
+            header.append("Compaction failed", style="bold #f87171")
+            header.append(f" · {self.failed[:80]} · continuing uncompacted", style="#a1a1aa")
+            return header
+        event = self.event
+        left = len(event.old_messages)
+        if event.pruned_only:
+            header.append("Trimmed old tool output", style="bold #e4e4e7")
+        elif event.summary:
+            header.append(f"Compacted · {_plural(left, 'message')} → summary", style="bold #e4e4e7")
+        else:
+            header.append(f"Window slid · {_plural(left, 'message')} out", style="bold #e4e4e7")
+        header.append(f" · {_k(event.tokens_before)} → {_k(event.tokens_after)} tokens", style="#a1a1aa")
+        return self._fold_hint(header)
+
+    def _details(self) -> str:
+        if self.event is None:
+            return ""
+        return (self.event.summary or "").strip()
+
+    def _body(self) -> Text:
+        return Text(self._details())
+
+
 _FILLER = frozenset(
     "what which who whom whose when where why how would could should do does did "
     "is are was were can will you your yours me my i we us our the a an to of for "

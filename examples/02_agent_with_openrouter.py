@@ -33,6 +33,8 @@ async def main() -> None:
     if not key:
         raise SystemExit("Configura OPENROUTER_API_KEY en el entorno o en .env.")
 
+    # Default window 128K; MAX_CONTEXT_WINDOW changes it (kept within 128K–1M).
+    window = int(os.getenv("MAX_CONTEXT_WINDOW") or 0)
     client = OpenRouterChatCompletionClient(
         model=MODEL,
         fallback_models=FALLBACK_MODELS,
@@ -41,7 +43,7 @@ async def main() -> None:
         reasoning={"effort": "low"},
         max_tokens=4000,
         app_name="max_ai",
-        config=ModelConfig(supports_function_calling=True),
+        config=ModelConfig(supports_function_calling=True, max_context_window=window),
     )
     await run_agent_in_cli(client, provider="OpenRouter")
 
