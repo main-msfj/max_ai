@@ -1,5 +1,9 @@
-from .local import LocalKnowledgeRegistry
+from .local import LocalKnowledgeRegistry, LocalKnowledgeRegistryConfig
+from .mongodb import MongoDBKnowledgeRegistry, MongoDBKnowledgeRegistryConfig
 
 __all__ = [
-    "LocalKnowledgeRegistry"
+    "LocalKnowledgeRegistry",
+    "LocalKnowledgeRegistryConfig",
+    "MongoDBKnowledgeRegistry",
+    "MongoDBKnowledgeRegistryConfig",
 ]

@@ -15,9 +15,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from ..core.termination import CancellationToken
 from .component import ComponentBase
 from .workspace import WorkspaceBase
-from ..termination import CancellationToken
 
 SyncDirection = Literal["to_environment", "to_workspace"]
 

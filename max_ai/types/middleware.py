@@ -1,4 +1,5 @@
 import typing as t
+
 from pydantic import BaseModel, Field
 
 if t.TYPE_CHECKING:
@@ -15,4 +16,5 @@ class MiddlewareCtx(BaseModel):
     metadata: dict[str, t.Any] = Field(default_factory=dict)
 
 from .run_context import RunContext  # noqa: E402
+
 MiddlewareCtx.model_rebuild()

@@ -16,13 +16,13 @@ from max_ai.base.agent import Agent
 from max_ai.base.clients import CoreChatCompletionClient
 from max_ai.base.tools import CoreTool, ToolContext
 from max_ai.core.messages import AssistantMessage, ToolCall
-from max_ai.core.models import ModelConfig
+from max_ai.core.model.llm import ModelConfig
+from max_ai.core.termination import CancellationToken
 from max_ai.persistence import RunContextStore
-from max_ai.termination import CancellationToken
 from max_ai.types.completions import ChatCompletionResult, Usage
 from max_ai.types.run_context import RunContext
 from max_ai.types.tool_call import ToolCallRecord, ToolResult
-from max_ai.types.tools import ToolApprovalMode, CoreToolParameters
+from max_ai.types.tools import CoreToolParameters, ToolApprovalMode
 
 
 class InMemoryStore(RunContextStore):

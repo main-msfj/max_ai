@@ -8,18 +8,17 @@ import re
 import typing as t
 from concurrent.futures import CancelledError as FuturesCancelledError
 
-from mcp import McpError
+from mcp import MCPError
 from mcp.types import CallToolResult, ImageContent, TextContent
-from pydantic import AnyUrl
 
 from ...base.tools import CoreTool, ToolContext
+from ...core.termination import CancellationToken
 from ...errors.mcp import (
     MCPToolContentError,
     MCPToolError,
     MCPToolExecutionError,
 )
 from ...loggers import ScopedLogger
-from ...termination import CancellationToken
 from ...types.tool_call import ToolCallRecord, ToolResult
 from ...types.tools import ToolApprovalMode
 
@@ -93,24 +92,22 @@ class MCPTool(CoreTool):
             tool_call_id=tool_request.id,
         )
         try:
-            task = asyncio.create_task(
-                self.client_manager.call_tool(
-                    self.server_id,
-                    self.mcp_tool_name,
-                    tool_request.parameters,
-                    self.timeout_seconds,
-                )
+            result: CallToolResult = await self.client_manager.call_tool(
+                self.server_id,
+                self.mcp_tool_name,
+                tool_request.parameters,
+                self.timeout_seconds,
             )
-            if cancellation_token:
-                cancellation_token.link_future(task)
-            result: CallToolResult = await task
 
-            if result.isError:
+            if result.is_error:
                 raise MCPToolExecutionError(f"Tool returned error: {result.content}")
 
             output = self._extract_tool_result(result)
             if isinstance(output, dict):
-                output = output.get("results") or output.get("result") or output
+                if "results" in output:
+                    output = output["results"]
+                elif "result" in output:
+                    output = output["result"]
 
             return ToolResult.success_result(
                 tool_request.id,
@@ -124,7 +121,7 @@ class MCPTool(CoreTool):
 
         except (asyncio.CancelledError, FuturesCancelledError):
             return ToolResult.cancelled_during_execution(tool_request.id)
-        except McpError as exc:
+        except MCPError as exc:
             msg = f"MCP error: {exc}"
             logger_for_call.warning(msg)
             return ToolResult.execution_error(tool_request.id, msg)
@@ -137,9 +134,9 @@ class MCPTool(CoreTool):
             logger_for_call.error(msg, exc=exc)
             return ToolResult.execution_error(tool_request.id, msg)
 
-    def _extract_tool_result(self, result: CallToolResult) -> dict[str, t.Any] | str:
-        if result.structuredContent:
-            return result.structuredContent
+    def _extract_tool_result(self, result: CallToolResult) -> t.Any:
+        if result.structured_content is not None:
+            return result.structured_content
 
         outputs: dict[str, t.Any] = {"text": [], "images": []}
         for content in result.content:
@@ -147,7 +144,7 @@ class MCPTool(CoreTool):
                 outputs["text"].append(content.text)
             elif isinstance(content, ImageContent):
                 outputs["images"].append(
-                    {"data": content.data, "mime_type": content.mimeType}
+                    {"data": content.data, "mime_type": content.mime_type}
                 )
 
         if outputs["text"]:
@@ -227,19 +224,14 @@ class MCPResourceTool(CoreTool):
             tool_call_id=tool_request.id,
         )
         try:
-            task = asyncio.create_task(
-                self.client_manager.read_resource(self.server_id, AnyUrl(uri))
-            )
-            if cancellation_token:
-                cancellation_token.link_future(task)
-            result = await task
+            result = await self.client_manager.read_resource(self.server_id, uri)
 
             texts: list[str] = []
             for content in result.contents:
                 if hasattr(content, "text"):
                     texts.append(content.text)
                 elif hasattr(content, "blob"):
-                    mime_type = getattr(content, "mimeType", None) or "unknown"
+                    mime_type = getattr(content, "mime_type", None) or "unknown"
                     texts.append(f"[Binary content: {mime_type}]")
 
             if not texts:
@@ -260,7 +252,7 @@ class MCPResourceTool(CoreTool):
 
         except (asyncio.CancelledError, FuturesCancelledError):
             return ToolResult.cancelled_during_execution(tool_request.id)
-        except McpError as exc:
+        except MCPError as exc:
             msg = f"MCP error reading resource: {exc}"
             logger_for_call.warning(msg)
             return ToolResult.execution_error(tool_request.id, msg)
@@ -283,7 +275,6 @@ class MCPResourceTool(CoreTool):
             for template in self.resource_templates:
                 desc = getattr(template, "description", None)
                 suffix = f" ({desc})" if desc else ""
-                lines.append(f"- {template.uriTemplate}{suffix}")
+                lines.append(f"- {template.uri_template}{suffix}")
             parts.append("Resource templates:\n" + "\n".join(lines))
         return "\n".join(parts)
-

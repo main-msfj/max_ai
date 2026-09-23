@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Agent configuration · Max AI framework documentation.">
+  <title>Agent configuration · Max AI Documentation</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script defer src="/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Max AI home"><span class="brand-mark"><i></i><i></i><i></i></span><span>max<span class="brand-accent">ai</span></span></a>
+    <div class="topbar-actions"><a class="github-link" href="/architecture.md">Architecture <span>↗</span></a><button class="icon-button" id="theme-toggle" type="button" aria-label="Toggle theme">☼</button><button class="menu-button" id="menu-toggle" type="button" aria-label="Open navigation">☰</button></div>
+  </header>
+  <aside class="sidebar" id="sidebar"><div class="sidebar-inner">
+    <div class="version-pill"><span class="status-dot"></span> v0.1 · in development</div>
+    <nav aria-label="Documentation"><p class="nav-label">Start here</p>
+        <a class="nav-link" href="/index.html#overview">Overview</a>
+        <a class="nav-link" href="/index.html#installation">Install & quickstart</a>
+        <p class="nav-label">Core concepts</p>
+        <a class="nav-link active" href="#agent">Agent configuration</a>
+        <a class="nav-link" href="/prompt-layers.html#prompt-overview">Prompt layers</a>
+        <a class="nav-link" href="/tools.html#tools">Tools & dispatch</a>
+        <a class="nav-link" href="/tools.html#reasoning">Reasoning loop</a>
+        <a class="nav-link" href="/tools.html#runtime-services">Runtime services</a>
+        <p class="nav-label">Capabilities</p>
+        <a class="nav-link" href="/capabilities.html#memory">Capabilities</a>
+        <a class="nav-link" href="/capabilities.html#workspace">Workspace & execution</a>
+        <a class="nav-link" href="/capabilities.html#providers">Model providers</a>
+        <p class="nav-label">Integrations</p>
+        <a class="nav-link" href="/integrations.html#mcp">MCP integrations</a>
+        <a class="nav-link" href="/integrations.html#output">Structured output</a>
+        <a class="nav-link" href="/integrations.html#human-in-loop">Approvals & resume</a>
+        <a class="nav-link" href="/integrations.html#interfaces">Application interfaces</a></nav>
+    <div class="sidebar-note"><span class="note-icon">✦</span><div><strong>Tip</strong><br>Follow a topic page from overview to implementation details.</div></div>
+  </div></aside>
+  <main class="main-content">
+    <section class="hero content-section page-hero" id="agent-top"><div class="eyebrow"><span class="eyebrow-line"></span> Core concept · Agent</div><h1>Configure the<br><em>runtime.</em></h1><p class="hero-copy">An Agent combines identity, a model client, tools, optional context providers, and execution policy. This page describes the current constructor and how to run and resume it.</p><div class="hero-actions"><a class="button button-primary" href="/prompt-layers.html">Understand prompt layers <span>→</span></a><a class="button button-ghost" href="/tools.html">Explore tools</a></div></section>
+<section class="section-block content-section" id="agent"><div class="section-kicker">04 · Building block 1</div><h2>Compose an Agent from explicit parts.</h2><p><code>Agent</code> needs an identity and a model client. The remaining arguments plug in tools, MCP connections, execution, context sources, or run policies. Defaults are selected for reasoning, workspace, and execution.</p>
+      <div class="code-card"><div class="code-head"><span>Agent constructor · max_ai.agents.Agent</span><button class="copy-button" data-copy="def __init__(self, name: str, description: str, instructions: str, client: CoreChatCompletionClient, toolset: Sequence[CoreTool | Callable[..., Any]] | None = None, *, mcp: Sequence[MCPServerConfig] | None = None, mcp_servers: Sequence[MCPServerConfig] | None = None, executor: ExecutorBase | None = None, workspace: WorkspaceBase | None = None, skills: CoreSkillRegistry | None = None, memory: CoreMemoryRegistry | None = None, knowledge: Sequence[CoreKnowledgeRegistry] | None = None, reasoning: BaseReasoning | None = None, max_iterations: int = 20, idle_timeout: float = 300, output_format: type[BaseModel] | None = None, completion_handlers: Sequence[CompletionHandler] | None = None) -> None:&#10;    ...">Copy signature</button></div><pre><code><span class="kw">def</span> <span class="fn">__init__</span>(
+    self,
+    name: <span class="type">str</span>,
+    description: <span class="type">str</span>,
+    instructions: <span class="type">str</span>,
+    client: CoreChatCompletionClient,
+    toolset: Sequence[CoreTool | Callable[..., Any]] | None = <span class="kw">None</span>,
+    *,  <span class="str"># Optional configuration follows the required arguments.</span>
+    mcp: Sequence[MCPServerConfig] | None = <span class="kw">None</span>,
+    mcp_servers: Sequence[MCPServerConfig] | None = <span class="kw">None</span>,
+    executor: ExecutorBase | None = <span class="kw">None</span>,
+    workspace: WorkspaceBase | None = <span class="kw">None</span>,
+    skills: CoreSkillRegistry | None = <span class="kw">None</span>,
+    memory: CoreMemoryRegistry | None = <span class="kw">None</span>,
+    knowledge: Sequence[CoreKnowledgeRegistry] | None = <span class="kw">None</span>,
+    reasoning: BaseReasoning | None = <span class="kw">None</span>,
+    max_iterations: <span class="type">int</span> = <span class="num">20</span>,
+    idle_timeout: <span class="type">float</span> = <span class="num">300</span>,
+    output_format: type[BaseModel] | None = <span class="kw">None</span>,
+    completion_handlers: Sequence[CompletionHandler] | None = <span class="kw">None</span>,
+) -&gt; <span class="kw">None</span>:
+    ...</code></pre></div>
+      <div class="capability-list"><div><span class="list-number">Required</span><strong>Identity</strong><small>All <code>str</code>: agent identity and behavioral instructions.</small></div><div><span class="list-number">Required</span><strong>Model</strong><small><code>CoreChatCompletionClient</code>: for example, the Ollama, OpenAI, or OpenRouter client.</small></div><div><span class="list-number">Tools</span><strong><code>toolset</code></strong><small><code>Sequence[CoreTool | Callable]</code>, optional; separate from MCP.</small></div><div><span class="list-number">Connections</span><strong><code>mcp</code></strong><small><code>Sequence[MCPServerConfig]</code>, optional. Use <code>mcp</code> or <code>mcp_servers</code>, never both.</small></div><div><span class="list-number">Runtime</span><strong>Executor + workspace</strong><small>Optional <code>ExecutorBase</code> and <code>WorkspaceBase</code>; defaults are <code>LocalExecutor</code> and <code>LocalWorkspace</code>.</small></div><div><span class="list-number">Context</span><strong>Skills, memory, knowledge</strong><small>Optional <code>CoreSkillRegistry</code>, <code>CoreMemoryRegistry</code>, and a sequence of <code>CoreKnowledgeRegistry</code> objects.</small></div><div><span class="list-number">Control</span><strong>Reasoning + limits</strong><small>Optional <code>BaseReasoning</code>; <code>max_iterations: int</code>, <code>idle_timeout: float</code>, <code>output_format: type[BaseModel]</code>, and completion handlers.</small></div></div>
+      <p>A run accepts <code>task</code> as text, one <code>CoreMessage</code>, a list of messages, or <code>None</code>; it can also receive a <code>RunContext</code> and <code>CancellationToken</code>. Call <code>await agent.run(task, run_context=...)</code> for a result. Use <code>run_stream()</code> for text chunks, <code>run_stream_events()</code> for structured events, and <code>resume(run_context)</code> after an approval or user-input pause. <code>AgentResponse</code> contains <code>final_text</code>, <code>finish_reason</code>, usage, and the run context.</p>
+    </section>
+<section class="section-block content-section" id="agent-lifecycle"><div class="section-kicker">Run lifecycle</div><h2>From task to response.</h2><div class="event-flow"><span>Task + RunContext</span><i>→</i><span>PromptCtx</span><i>→</i><span class="flow-highlight">Reasoning loop</span><i>→</i><span>AgentResponse</span></div><p><code>run()</code> returns a final <code>AgentResponse</code>; <code>run_stream()</code> yields text chunks; <code>run_stream_events()</code> yields runtime events and the final response. A pause for approval or input preserves the run context so the caller can resolve it and resume.</p><p>The agent owns its executor sessions. Use it as an async context manager so <code>close()</code> runs when the scope exits.</p></section>
+    <footer class="footer"><div class="brand"><span class="brand-mark"><i></i><i></i><i></i></span><span>max<span class="brand-accent">ai</span></span></div><span>Agent configuration</span><a href="/architecture.md">Framework architecture ↗</a></footer>
+  </main>
+</body>
+</html>

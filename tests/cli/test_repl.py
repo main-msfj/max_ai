@@ -10,27 +10,25 @@ approval flow. No polling, no background task.
 from __future__ import annotations
 
 import asyncio
-import typing as t
 
 import pytest
+from max_ai.cli.renderer import CliRenderer
+from max_ai.cli.repl import _run_one_turn, _sanitize_orphan_tool_calls
 from rich.console import Console
 
-from max_ai.cli.repl import _run_one_turn, _sanitize_orphan_tool_calls
-from max_ai.cli.renderer import CliRenderer
 from max_ai.core.event_type import (
+    ErrorEvent,
     ModelStreamChunkEvent,
-    UserInputRequestEvent,
     ReasoningCompleteEvent,
     ToolCallEvent,
     ToolCallResponseEvent,
-    ErrorEvent,
+    UserInputRequestEvent,
 )
-from max_ai.types.tool_call import ToolResult
-from max_ai.core.messages import AssistantMessage, ToolMessage, ToolCall, UserMessage
+from max_ai.core.messages import AssistantMessage, ToolCall, ToolMessage, UserMessage
 from max_ai.types.agent_response import AgentResponse
-from max_ai.types.run_context import RunContext
 from max_ai.types.completions import Usage
-from max_ai.types.tool_call import ToolCallRecord
+from max_ai.types.run_context import RunContext
+from max_ai.types.tool_call import ToolCallRecord, ToolResult
 
 
 def _chunk(text: str) -> ModelStreamChunkEvent:

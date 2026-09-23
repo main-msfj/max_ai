@@ -1,0 +1,51 @@
+[
+  {
+    "content": "max_ai's Agent is built around a pluggable reasoning loop (ReactLoop by default): it calls the model, executes any proposed tool calls, folds the results back into the transcript, and repeats until a tool-free answer passes the CompletionGate.",
+    "tokens": 50,
+    "metadata": {
+      "topic": "agent"
+    }
+  },
+  {
+    "content": "Every tool declares an approval_mode: AUTO_APPROVED runs immediately, ASK_APPROVED pauses the turn for a human y/n decision before it executes. A rejected tool now pauses the whole turn (finish_reason=tool_denied) instead of letting the model keep acting on a broken assumption.",
+    "tokens": 57,
+    "metadata": {
+      "topic": "tools"
+    }
+  },
+  {
+    "content": "CompletionGate decides whether a proposed final answer can close the turn. RuntimeCompletionGate (always registered) checks plan closure and declared Bash deliverables; domain-specific gates can add their own rules, sync or async (e.g. an LLM-judge).",
+    "tokens": 51,
+    "metadata": {
+      "topic": "completion_gate"
+    }
+  },
+  {
+    "content": "Loop guards (SchemaRetryGuard, RepetitionGuard, BudgetGuard) run after each tool round and can steer the model with a transient message — never written to the durable transcript — to correct classic small-model failure modes like repeating an identical tool call.",
+    "tokens": 50,
+    "metadata": {
+      "topic": "guards"
+    }
+  },
+  {
+    "content": "Memory (CoreMemoryRegistry) stores session-scoped categories the agent can read, create, update or delete. search_memory looks across the same user's OTHER sessions by meaning, without copying results into the current session.",
+    "tokens": 42,
+    "metadata": {
+      "topic": "memory"
+    }
+  },
+  {
+    "content": "Knowledge sources (CoreKnowledgeRegistry) expose a search_{name} tool per source, backed by local embedding cosine similarity over a JSON file of content blocks. Ingestion (chunking, writing that file) happens externally — the registry is read-only from the agent's side.",
+    "tokens": 55,
+    "metadata": {
+      "topic": "knowledge"
+    }
+  },
+  {
+    "content": "Skills are self-contained packages (a SKILL.md plus optional scripts/references) the agent discovers through a lightweight name+description catalog in the system prompt, and reads in full only when it decides a task actually needs one.",
+    "tokens": 45,
+    "metadata": {
+      "topic": "skills"
+    }
+  }
+]

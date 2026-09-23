@@ -2,21 +2,20 @@
 
 from __future__ import annotations
 
-import typing as t
 import pytest
 
 from max_ai.base.agent import Agent
 from max_ai.base.clients import CoreChatCompletionClient
-from max_ai.base.tools import CoreTool, ToolContext
-from max_ai.core.messages import AssistantMessage, ToolCall, UserMessage
+from max_ai.base.tools import CoreTool
 from max_ai.core.event_type import CoreEvent, ToolCallEvent, ToolCallResponseEvent
-from max_ai.core.models import ModelConfig
+from max_ai.core.messages import AssistantMessage, ToolCall, UserMessage
+from max_ai.core.model.llm import ModelConfig
+from max_ai.errors.agent import AgentError
 from max_ai.types.agent_response import AgentResponse
 from max_ai.types.completions import ChatCompletionResult, Usage
 from max_ai.types.run_context import RunContext
 from max_ai.types.tool_call import ToolCallRecord, ToolResult
-from max_ai.types.tools import ToolApprovalMode, CoreToolParameters
-from max_ai.errors.agent import AgentError
+from max_ai.types.tools import CoreToolParameters, ToolApprovalMode
 
 
 # -------- FAKE CLIENT -----------------------------------------------------------

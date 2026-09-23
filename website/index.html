@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Overview · Max AI framework documentation.">
+  <title>Overview · Max AI Documentation</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script defer src="/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Max AI home"><span class="brand-mark"><i></i><i></i><i></i></span><span>max<span class="brand-accent">ai</span></span></a>
+    <div class="topbar-actions"><a class="github-link" href="/architecture.md">Architecture <span>↗</span></a><button class="icon-button" id="theme-toggle" type="button" aria-label="Toggle theme">☼</button><button class="menu-button" id="menu-toggle" type="button" aria-label="Open navigation">☰</button></div>
+  </header>
+  <aside class="sidebar" id="sidebar"><div class="sidebar-inner">
+    <div class="version-pill"><span class="status-dot"></span> v0.1 · in development</div>
+    <nav aria-label="Documentation"><p class="nav-label">Start here</p>
+        <a class="nav-link active" href="#overview">Overview</a>
+        <a class="nav-link" href="#installation">Install & quickstart</a>
+        <p class="nav-label">Core concepts</p>
+        <a class="nav-link" href="/agent.html#agent">Agent configuration</a>
+        <a class="nav-link" href="/prompt-layers.html#prompt-overview">Prompt layers</a>
+        <a class="nav-link" href="/tools.html#tools">Tools & dispatch</a>
+        <a class="nav-link" href="/tools.html#reasoning">Reasoning loop</a>
+        <a class="nav-link" href="/tools.html#runtime-services">Runtime services</a>
+        <p class="nav-label">Capabilities</p>
+        <a class="nav-link" href="/capabilities.html#memory">Capabilities</a>
+        <a class="nav-link" href="/capabilities.html#workspace">Workspace & execution</a>
+        <a class="nav-link" href="/capabilities.html#providers">Model providers</a>
+        <p class="nav-label">Integrations</p>
+        <a class="nav-link" href="/integrations.html#mcp">MCP integrations</a>
+        <a class="nav-link" href="/integrations.html#output">Structured output</a>
+        <a class="nav-link" href="/integrations.html#human-in-loop">Approvals & resume</a>
+        <a class="nav-link" href="/integrations.html#interfaces">Application interfaces</a></nav>
+    <div class="sidebar-note"><span class="note-icon">✦</span><div><strong>Tip</strong><br>Follow a topic page from overview to implementation details.</div></div>
+  </div></aside>
+  <main class="main-content">
+    <section class="hero content-section" id="overview"><div class="eyebrow"><span class="eyebrow-line"></span> Python framework for agents</div><h1>Build agents that<br><em>do</em> things.</h1><p class="hero-copy">Max AI connects model clients, reasoning, tools, capabilities, and execution through typed interfaces. Start with one agent and add only the services your application needs.</p><div class="hero-actions"><a class="button button-primary" href="#quickstart">Get started <span>→</span></a><a class="button button-ghost" href="#architecture">Explore architecture</a></div><div class="hero-stats"><div><strong>Python 3.11+</strong><span>Pydantic-based contracts</span></div><div><strong>ReAct loop</strong><span>tool-using agent runtime</span></div><div><strong>Local, Docker, Modal</strong><span>select an executor</span></div></div></section>
+<section class="section-block content-section" id="installation"><div class="section-kicker">01 · Getting started</div><h2>Install the project.</h2><p>From a checkout of the repository, sync the project dependencies with uv.</p><div class="code-card compact-code"><div class="code-head"><span>Terminal</span><button class="copy-button" data-copy="uv sync">Copy</button></div><pre><code><span class="code-prompt">$</span> uv sync</code></pre></div></section>
+<section class="section-block content-section" id="quickstart"><div class="section-kicker">02 · First working example</div><h2>Build a small tool-using agent.</h2><p>This complete example defines a typed Python tool, adds it to an agent, asks a question that uses the tool, then reads the final response. It uses the Ollama client; start Ollama and pull a tool-capable model before running it.</p><div class="code-card"><div class="code-head"><span>agent.py</span><button class="copy-button" data-copy="import asyncio&#10;from max_ai.agents import Agent&#10;from max_ai.capabilities.clients.ollama import OllamaChatCompletionClient&#10;from max_ai.capabilities.tools.decorator import tool&#10;from max_ai.core.model.llm import ModelConfig&#10;&#10;@tool&#10;def multiply(left: int, right: int) -> int:&#10;    &quot;&quot;&quot;Multiply two integers.&quot;&quot;&quot;&#10;    return left * right&#10;&#10;async def main():&#10;    client = OllamaChatCompletionClient(&#10;        model='qwen3:8b',&#10;        config=ModelConfig(supports_function_calling=True),&#10;    )&#10;    agent = Agent(&#10;        name='math-assistant',&#10;        description='Answers simple questions with a calculator tool.',&#10;        instructions='Use the multiply tool when multiplication is needed.',&#10;        client=client,&#10;        toolset=[multiply],&#10;    )&#10;    async with agent:&#10;        result = await agent.run('What is 19 multiplied by 23?')&#10;        print(result.final_text)&#10;&#10;asyncio.run(main())">Copy</button></div><pre><code><span class="kw">import</span> asyncio
+<span class="kw">from</span> max_ai.agents <span class="kw">import</span> Agent
+<span class="kw">from</span> max_ai.capabilities.clients.ollama <span class="kw">import</span> OllamaChatCompletionClient
+<span class="kw">from</span> max_ai.capabilities.tools.decorator <span class="kw">import</span> tool
+<span class="kw">from</span> max_ai.core.model.llm <span class="kw">import</span> ModelConfig
+
+<span class="decor">@tool</span>
+<span class="kw">def</span> <span class="fn">multiply</span>(left: <span class="type">int</span>, right: <span class="type">int</span>) -&gt; <span class="type">int</span>:
+    <span class="str">"""Multiply two integers."""</span>
+    <span class="kw">return</span> left * right
+
+<span class="kw">async def</span> <span class="fn">main</span>():
+    <span class="str"># 1. Select a model client and declare its tool-calling support.</span>
+    client = OllamaChatCompletionClient(
+        model=<span class="str">"qwen3:8b"</span>,
+        config=ModelConfig(supports_function_calling=<span class="kw">True</span>),
+    )
+
+    <span class="str"># 2. Compose the agent from its identity, client, and local toolset.</span>
+    agent = Agent(
+        name=<span class="str">"math-assistant"</span>,
+        description=<span class="str">"Answers simple questions with a calculator tool."</span>,
+        instructions=<span class="str">"Use the multiply tool when multiplication is needed."</span>,
+        client=client,
+        toolset=[multiply],
+    )
+
+    <span class="str"># 3. Run a task and read the final assistant text.</span>
+    <span class="kw">async with</span> agent:
+        result = <span class="kw">await</span> agent.run(<span class="str">"What is 19 multiplied by 23?"</span>)
+        <span class="fn">print</span>(result.final_text)
+
+asyncio.run(main())</code></pre></div><p>Here <code>@tool</code> builds a validated tool adapter from the function signature and docstring. The function is passed through <code>toolset</code>; Max AI handles registration and dispatch. The <code>async with</code> block closes the agent's managed execution resources.</p></section>
+<section class="section-block content-section" id="use-cases"><div class="section-kicker">03 · Choose a path</div><h2>What are you building?</h2><p>Start from the task, then open the relevant parts of the framework.</p><div class="feature-grid"><a class="feature-card" href="/tools.html#tools"><span class="feature-icon orange">⌘</span><h3>Give an agent tools</h3><p>Define typed Python functions and route calls through the dispatcher.</p><span class="card-arrow">Read tools →</span></a><a class="feature-card" href="/integrations.html#mcp"><span class="feature-icon blue">↗</span><h3>Connect MCP servers</h3><p>Configure several MCP servers separately from local tools.</p><span class="card-arrow">Read MCP →</span></a><a class="feature-card" href="/integrations.html#human-in-loop"><span class="feature-icon purple">◎</span><h3>Pause for a person</h3><p>Handle approval or input requests, then resume the run context.</p><span class="card-arrow">Read run outcomes →</span></a><a class="feature-card" href="/capabilities.html#workspace"><span class="feature-icon green">▦</span><h3>Choose where tools run</h3><p>Pair a workspace with a local, Docker, or Modal executor.</p><span class="card-arrow">Read execution →</span></a></div></section>
+<section class="section-block content-section" id="architecture"><div class="section-kicker">03 · Framework map</div><h2>How the framework is organized.</h2><p>The public agent composes a reasoning loop with a tool registry and dispatcher, a managed execution environment, and optional capability layers. Read the full architecture note in the workspace.</p><div class="diagram-card"><div class="diagram-node primary">Agent · prompt stack · ReAct</div><div class="diagram-branch"><span>Model client</span><span>Tool registry</span><span>Capabilities</span></div><div class="diagram-node secondary">Dispatcher → host or executor</div></div><p><a class="button button-ghost" href="/architecture.md">Read architecture.md ↗</a></p></section>
+    <footer class="footer"><div class="brand"><span class="brand-mark"><i></i><i></i><i></i></span><span>max<span class="brand-accent">ai</span></span></div><span>Overview</span><a href="/architecture.md">Framework architecture ↗</a></footer>
+  </main>
+</body>
+</html>

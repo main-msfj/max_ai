@@ -31,14 +31,13 @@ from abc import ABC, abstractmethod
 
 from pydantic import BaseModel, SecretStr
 
-from .tools import CoreTool
-from .component import ComponentBase
-
-from ..types.stacks import PromptCtx
 from ..core.blocks import CoreMessage
-from ..core.models import ModelConfig
+from ..core.model.llm import ModelConfig
 from ..errors.client import ClientError
 from ..types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
+from ..types.stacks import PromptCtx
+from .component import ComponentBase
+from .tools import CoreTool
 
 if t.TYPE_CHECKING:
     from ..types.run_context import RunContext

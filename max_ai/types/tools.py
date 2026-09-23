@@ -1,7 +1,12 @@
 import typing as t
 from enum import Enum
 from pathlib import Path
+
 from pydantic import BaseModel, Field
+
+from ..capabilities.tools.agent_as_tool._model import (
+    AgentAsToolConfig as AgentAsToolConfig,
+)
 
 
 # -------- TOOLS BASE MODEL -----------------------------------------------------------
@@ -55,10 +60,3 @@ class DockerToolRef(BaseModel):
         default_factory=dict,
         description="JSON-serializable constructor configuration for class-based tools.",
     )
-
-class AgentAsToolConfig(BaseModel):
-    """Serializable configuration for an agent wrapped as a tool."""
-
-    agent: dict[str, t.Any]
-    input_name: str = "task"
-    strategy: str = "last"

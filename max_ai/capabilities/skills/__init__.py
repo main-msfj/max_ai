@@ -1,3 +1,3 @@
-from .local import LocalSkillRegistry
+from .local import LocalSkillRegistry, LocalSkillRegistryConfig
 
-__all__ = ["LocalSkillRegistry"]
+__all__ = ["LocalSkillRegistry", "LocalSkillRegistryConfig"]

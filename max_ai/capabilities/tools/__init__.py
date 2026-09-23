@@ -38,8 +38,8 @@ if t.TYPE_CHECKING:  # static analyzers see the real symbols
     from .agent_as_tool import AgentAsTool
     from .bash import BashTool
     from .decorator import tool
-    from .function_as_tool import FunctionAsTool
     from .file_system import FileSystem, FileSystemTools, UserFileSystem
+    from .function_as_tool import FunctionAsTool
 
 
 def __getattr__(name: str) -> t.Any:

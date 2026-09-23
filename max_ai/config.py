@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     # Allowed artifact extensions.
     files: list[str] = Field(default=[".json", ".pdf", ".docx", ".xlsx", ".pptx"])
 
+    # Fallback tiktoken encoding for token counting (DEFAULT_TOKENIZER in .env).
+    # Models override it via ModelConfig.tokenizer_base.
+    default_tokenizer: str = Field(default="o200k_base")
+
     # Context compaction budgets. Environment overrides use the uppercase
     # field names, e.g. COMPACTION_PROMPT_BUDGET_TOKENS=6000.
     compaction_prompt_budget_tokens: int = Field(default=6000, gt=0)

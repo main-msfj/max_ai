@@ -7,12 +7,15 @@ Safety comes from git discipline (status/diff before destructive ops), the
 same discipline this harness expects of the model itself.
 """
 
+from __future__ import annotations
+
 import asyncio
 import math
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
-from ...base.executor import ExecutorBase, ExecutionSession
+from ...base.executor import ExecutionSession, ExecutorBase
 from ...base.workspace import WorkspaceBase
 
 
@@ -20,7 +23,7 @@ from ...base.workspace import WorkspaceBase
 class _Entry:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     session: ExecutionSession | None = None
-    idle: asyncio.Task | None = None
+    idle: asyncio.Task[None] | None = None
 
 
 class EnvironmentManager:
@@ -31,7 +34,13 @@ class EnvironmentManager:
     writing to the same workspace.
     """
 
-    def __init__(self, executor: ExecutorBase, workspace: WorkspaceBase, *, idle_timeout: float = 300):
+    def __init__(
+        self,
+        executor: ExecutorBase,
+        workspace: WorkspaceBase,
+        *,
+        idle_timeout: float = 300,
+    ):
         if not math.isfinite(idle_timeout) or idle_timeout < 0:
             raise ValueError("idle_timeout must be finite and nonnegative")
         self.executor = executor
@@ -42,14 +51,22 @@ class EnvironmentManager:
         self._closed = False
         self.cleanup_errors: dict[tuple[str, str], Exception] = {}
 
-    def _validate(self, session, user_id, conversation_id):
+    def _validate(
+        self, session: ExecutionSession, user_id: str, conversation_id: str
+    ) -> None:
         if (session.user_id, session.conversation_id, session.workspace.base_root) != (
-            user_id, conversation_id, self.workspace.base_root,
+            user_id,
+            conversation_id,
+            self.workspace.base_root,
         ):
-            raise ValueError("Executor returned a session for a different workspace or identity")
+            raise ValueError(
+                "Executor returned a session for a different workspace or identity"
+            )
 
     @asynccontextmanager
-    async def acquire(self, user_id: str, conversation_id: str):
+    async def acquire(
+        self, user_id: str, conversation_id: str
+    ) -> AsyncIterator[ExecutionSession]:
         """Connect lazily to the persistent workspace; reuse an open session.
 
         Callers should acquire only when execution is needed, not for text-only
@@ -69,7 +86,9 @@ class EnvironmentManager:
                 await asyncio.gather(entry.idle, return_exceptions=True)
                 entry.idle = None
             if entry.session is None:
-                session = await self.executor.connect(self.workspace, user_id, conversation_id)
+                session = await self.executor.connect(
+                    self.workspace, user_id, conversation_id
+                )
                 try:
                     self._validate(session, user_id, conversation_id)
                 except Exception:
@@ -88,6 +107,7 @@ class EnvironmentManager:
                 cancelled = True
                 raise
             finally:
+
                 async def release():
                     try:
                         if cancelled:
@@ -109,7 +129,7 @@ class EnvironmentManager:
                     await cleanup
                     raise
 
-    async def _expire(self, key, entry):
+    async def _expire(self, key: tuple[str, str], entry: _Entry) -> None:
         await asyncio.sleep(self.idle_timeout)
         async with self._users[key[0]], entry.lock:
             try:
@@ -123,14 +143,14 @@ class EnvironmentManager:
             except Exception as error:
                 self.cleanup_errors[key] = error
 
-    async def _disconnect(self, entry):
+    async def _disconnect(self, entry: _Entry) -> None:
         if entry.session is not None:
             await self.executor.sync(entry.session, "to_workspace")
             await self.executor.disconnect(entry.session)
             await self.executor.clean(entry.session)
             entry.session = None
 
-    async def rebuild(self, user_id: str, conversation_id: str):
+    async def rebuild(self, user_id: str, conversation_id: str) -> None:
         """Recreate an inactive session after saving its workspace changes."""
         if self._closed:
             raise RuntimeError("EnvironmentManager is closed")
@@ -161,7 +181,7 @@ class EnvironmentManager:
             await self.executor.sync(replacement, "to_environment")
             self.cleanup_errors.pop(key, None)
 
-    async def close(self):
+    async def close(self) -> None:
         """Wait for leases and release every runtime, preserving workspace files.
 
         Failed entries remain available for another close attempt.
@@ -191,10 +211,10 @@ class EnvironmentManager:
         if errors:
             raise ExceptionGroup("Environment cleanup failed", errors)
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> EnvironmentManager:
         if self._closed:
             raise RuntimeError("EnvironmentManager is closed")
         return self
 
-    async def __aexit__(self, *args):
+    async def __aexit__(self, *args: object) -> None:
         await self.close()

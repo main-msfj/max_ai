@@ -8,19 +8,19 @@ to execute external actions (e.g., APIs, file I/O, services).
 import typing as t
 from abc import ABC, abstractmethod
 
-from pydantic import BaseModel
 from jsonschema import Draft202012Validator
+from pydantic import BaseModel
 
+from ..core.termination import CancellationToken
 from ..errors.tools import DockerToolReferenceError
-from ..termination import CancellationToken
-from .component import ComponentBase
 from ..types.tool_call import ToolCallRecord, ToolResult
 from ..types.tools import (
-    ToolApprovalMode,
-    CoreToolParameters,
     CoreToolDefinition,
+    CoreToolParameters,
     DockerToolRef,
+    ToolApprovalMode,
 )
+from .component import ComponentBase
 
 
 class ToolContext:

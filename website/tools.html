@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Tools and runtime · Max AI framework documentation.">
+  <title>Tools and runtime · Max AI Documentation</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script defer src="/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Max AI home"><span class="brand-mark"><i></i><i></i><i></i></span><span>max<span class="brand-accent">ai</span></span></a>
+    <div class="topbar-actions"><a class="github-link" href="/architecture.md">Architecture <span>↗</span></a><button class="icon-button" id="theme-toggle" type="button" aria-label="Toggle theme">☼</button><button class="menu-button" id="menu-toggle" type="button" aria-label="Open navigation">☰</button></div>
+  </header>
+  <aside class="sidebar" id="sidebar"><div class="sidebar-inner">
+    <div class="version-pill"><span class="status-dot"></span> v0.1 · in development</div>
+    <nav aria-label="Documentation"><p class="nav-label">Start here</p>
+        <a class="nav-link" href="/index.html#overview">Overview</a>
+        <a class="nav-link" href="/index.html#installation">Install & quickstart</a>
+        <p class="nav-label">Core concepts</p>
+        <a class="nav-link" href="/agent.html#agent">Agent configuration</a>
+        <a class="nav-link" href="/prompt-layers.html#prompt-overview">Prompt layers</a>
+        <a class="nav-link active" href="#tools">Tools & dispatch</a>
+        <a class="nav-link" href="#reasoning">Reasoning loop</a>
+        <a class="nav-link" href="#runtime-services">Runtime services</a>
+        <p class="nav-label">Capabilities</p>
+        <a class="nav-link" href="/capabilities.html#memory">Capabilities</a>
+        <a class="nav-link" href="/capabilities.html#workspace">Workspace & execution</a>
+        <a class="nav-link" href="/capabilities.html#providers">Model providers</a>
+        <p class="nav-label">Integrations</p>
+        <a class="nav-link" href="/integrations.html#mcp">MCP integrations</a>
+        <a class="nav-link" href="/integrations.html#output">Structured output</a>
+        <a class="nav-link" href="/integrations.html#human-in-loop">Approvals & resume</a>
+        <a class="nav-link" href="/integrations.html#interfaces">Application interfaces</a></nav>
+    <div class="sidebar-note"><span class="note-icon">✦</span><div><strong>Tip</strong><br>Follow a topic page from overview to implementation details.</div></div>
+  </div></aside>
+  <main class="main-content">
+    <section class="hero content-section page-hero" id="tools-top"><div class="eyebrow"><span class="eyebrow-line"></span> Core concepts · Tools</div><h1>Give the model<br><em>actions.</em></h1><p class="hero-copy">Typed tools, explicit dispatch, and a reasoning loop turn a model response into work the application can validate, route, and observe.</p></section>
+<section class="section-block content-section" id="tools"><div class="section-kicker">05 · Building block 2</div><h2>Tools, registry, and dispatch.</h2><p>Tools declare callable schemas. <code>ToolRegistry</code> indexes them, and <code>ToolDispatcher</code> validates parameters, applies approval rules, and routes each call either to a host adapter or through <code>EnvironmentManager</code> to the configured executor.</p><div class="code-card"><div class="code-head"><span>tools.py</span><button class="copy-button" data-copy="from max_ai.capabilities.tools.decorator import tool&#10;&#10;@tool&#10;def calculate_total(price: float, quantity: int) -> float:&#10;    &quot;&quot;&quot;Calculate the total price for a quantity of items.&quot;&quot;&quot;&#10;    return price * quantity">Copy</button></div><pre><code><span class="kw">from</span> max_ai.capabilities.tools.decorator <span class="kw">import</span> tool
+
+<span class="decor">@tool</span>
+<span class="kw">def</span> <span class="fn">calculate_total</span>(price: <span class="type">float</span>, quantity: <span class="type">int</span>) -&gt; <span class="type">float</span>:
+    <span class="str">"""Calculate the total price for a quantity of items."""</span>
+    <span class="kw">return</span> price * quantity</code></pre></div></section>
+<section class="section-block content-section dark-section" id="reasoning"><div class="section-kicker">07 · Building block 4</div><h2>Reasoning runs the turn loop.</h2><p><code>BaseReasoning</code> is the extension contract; <code>ReactLoop</code> is the default implementation. It coordinates model calls, tool dispatch, streamed events, iteration limits, cancellation, and pause/resume state.</p><div class="event-flow"><span>RunContext</span><i>→</i><span>Model client</span><i>→</i><span class="flow-highlight">Tool dispatcher</span><i>→</i><span>Events + state</span><i>↺</i></div></section>
+<section class="section-block content-section" id="runtime-services"><div class="section-kicker">08 · Building blocks 5–12</div><h2>Runtime services coordinate the run.</h2><div class="capability-list"><div><span class="list-number">05</span><strong>Environment manager</strong><small>Manages execution sessions around workspace and executor.</small></div><div><span class="list-number">06</span><strong>Event bus</strong><small>Emits model, tool, approval, input, and completion events.</small></div><div><span class="list-number">07</span><strong>Completion gate</strong><small>Evaluates whether a run may report a completed outcome.</small></div><div><span class="list-number">08</span><strong>Run context</strong><small>Holds messages, tool state, plan, completion evidence, and resumable state.</small></div><div><span class="list-number">09</span><strong>Persistence</strong><small>Stores serialized run context for checkpoints and continuation.</small></div><div><span class="list-number">10</span><strong>Middleware &amp; telemetry</strong><small>Logging, tracing, and observability hooks around runtime work.</small></div><div><span class="list-number">11</span><strong>Messages &amp; events</strong><small>Typed conversation messages and runtime event contracts.</small></div><div><span class="list-number">12</span><strong>Provider clients</strong><small>Ollama, OpenAI, and OpenRouter implement the model client contract.</small></div></div></section>
+    <footer class="footer"><div class="brand"><span class="brand-mark"><i></i><i></i><i></i></span><span>max<span class="brand-accent">ai</span></span></div><span>Tools and runtime</span><a href="/architecture.md">Framework architecture ↗</a></footer>
+  </main>
+</body>
+</html>

@@ -17,7 +17,6 @@ Design principles:
 
 from __future__ import annotations
 
-import uuid
 import base64
 import typing as t
 from datetime import datetime, timezone
@@ -32,6 +31,15 @@ from pydantic import (
     TypeAdapter,
     model_validator,
 )
+
+from ..ids import short_id
+
+if t.TYPE_CHECKING:
+    from .compaction.token_counter import TokenCounter
+
+# Source of messages the harness itself writes (gate rejections, limits),
+# as opposed to the user or the model.
+HARNESS_SOURCE = "harness"
 
 
 # -------- CONTENT PARTS -----------------------------------------------------------
@@ -123,7 +131,7 @@ MessageContent = Union[str, list[ContentPart]]
 class ToolCall(BaseModel):
     """A tool invocation requested by the assistant."""
 
-    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    id: str = Field(default_factory=short_id)
     tool_name: str = Field(..., description="Name of the tool to call")
     parameters: dict[str, t.Any] = Field(default_factory=dict)
 
@@ -180,16 +188,17 @@ class CoreMessage(BaseModel):
         """
         return _MESSAGE_ADAPTER.validate_python(data)
 
-    def with_token_count(self, func: t.Callable[[str], int] | None = None) -> t.Self:
-        """Return a copy with token_count set. Only counts textual content."""
+    def with_token_count(self, counter: TokenCounter | None = None) -> t.Self:
+        """Return a copy with ``token_count`` set by ``counter``.
+
+        Defaults to the shared counter for ``setting.default_tokenizer``.
+        """
         if self.token_count > 0:
             return self
-        text = self.text()
-        if func:
-            count = func(text) if text else 0
-        else:
-            buffer = 5  # Message structure overhead: <|start|>role<|message|>
-            count = buffer + max(1, int(len(text) / 4)) if text else 0
+        # Imported here: token_counter's package imports this module.
+        from .compaction.token_counter import default_counter
+
+        count = (counter or default_counter()).count_message(self)
         return self.model_copy(update={"token_count": count})
 
 

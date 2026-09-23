@@ -1,7 +1,7 @@
 """Internal bridge for tools that consume the existing ToolContext.environment."""
 
+from ...base.executor import ExecutionSession, ExecutorBase
 from .environment import Environment
-from ...base.executor import ExecutorBase, ExecutionSession
 
 
 class SessionEnvironment(Environment):

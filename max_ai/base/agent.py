@@ -16,16 +16,17 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from .clients import CoreChatCompletionClient
-from .executor import ExecutorBase
-from .skills import CoreSkillRegistry
-from ..core.tool.dispatcher import ToolDispatcher
-from ..core.tool.registry import ToolRegistry
-from .tools import CoreTool, ToolContext
-from .workspace import WorkspaceBase
+from ..capabilities.executor.local import LocalExecutor
+from ..capabilities.mcp import MCPClientManager, MCPServerConfig
+from ..capabilities.stacks.agent_policy_layer import AgentPolicyLayer
+from ..capabilities.tools.ask_user import AskUserTool
+from ..capabilities.tools.file_system import FileSystem
+from ..capabilities.tools.plan import AgentUpdatePlanTool
 from ..capabilities.workspace.local import LocalWorkspace
 from ..config import setting
-from ..core.event_type import CoreEvent, ModelResponseEvent, ModelStreamChunkEvent
+from ..core.environment.manager import EnvironmentManager
+from ..core.event_type import ModelResponseEvent, ModelStreamChunkEvent
+from ..core.executor.reference import ToolReference
 from ..core.messages import (
     AssistantMessage,
     CoreMessage,
@@ -33,20 +34,20 @@ from ..core.messages import (
     ToolMessage,
     UserMessage,
 )
-from ..core.environment.manager import EnvironmentManager
-from ..manager.stacks import LayerContainer
-from ..capabilities.executor.local import LocalExecutor
-from ..capabilities.executor.reference import ToolReference
-from ..stacks.agent_policy_layer import AgentPolicyLayer
-from ..termination import CancellationToken
-from ..capabilities.tools.ask_user import AskUserTool
-from ..capabilities.tools.file_system import FileSystem
-from ..capabilities.tools.plan import AgentUpdatePlanTool
+from ..core.stacks.container import LayerContainer
+from ..core.termination import CancellationToken
+from ..core.tool.dispatcher import ToolDispatcher
+from ..core.tool.registry import ToolRegistry
 from ..types.agent_response import AgentResponse
 from ..types.completions import ChatCompletionResult, Usage
 from ..types.run_context import RunContext
 from ..types.stacks import PromptCtx
 from ..types.tool_call import ToolCallRecord
+from .clients import CoreChatCompletionClient
+from .executor import ExecutorBase
+from .skills import CoreSkillRegistry
+from .tools import CoreTool, ToolContext
+from .workspace import WorkspaceBase
 
 
 class Agent:
@@ -64,6 +65,8 @@ class Agent:
         client: CoreChatCompletionClient,
         toolset: Sequence[CoreTool | Callable[..., Any]] | None = None,
         *,
+        mcp: Sequence[MCPServerConfig] | None = None,
+        mcp_servers: Sequence[MCPServerConfig] | None = None,
         executor: ExecutorBase | None = None,
         workspace: WorkspaceBase | None = None,
         skills: CoreSkillRegistry | None = None,
@@ -82,6 +85,13 @@ class Agent:
         self._registry = ToolRegistry()
         for tool in toolset or ():
             self._registry.register(tool)
+        if mcp is not None and mcp_servers is not None:
+            raise ValueError("Pass either mcp or mcp_servers, not both")
+        self.mcp_servers = tuple(mcp if mcp is not None else mcp_servers or ())
+        self.mcp = self.mcp_servers
+        self._mcp_manager = MCPClientManager()
+        for config in self.mcp_servers:
+            self._mcp_manager.add_server(config)
         # host=True: touches the persistent Workspace, not Bash's sandbox.
         for tool in FileSystem().get_toolset().tools:
             if self._registry.get(tool.name) is None:
@@ -223,6 +233,21 @@ class Agent:
             )
 
     async def _drive(self, ctx, emit, cancellation_token, stream_tokens, kwargs):
+        mcp_names = []
+        try:
+            await self._mcp_manager.connect_all()
+            for tool in self._mcp_manager.get_tools():
+                self._registry.register(tool, host=True)
+                mcp_names.append(tool.name)
+            return await self._drive_connected(
+                ctx, emit, cancellation_token, stream_tokens, kwargs
+            )
+        finally:
+            for name in mcp_names:
+                self._registry.unregister(name)
+            await self._mcp_manager.disconnect_all()
+
+    async def _drive_connected(self, ctx, emit, cancellation_token, stream_tokens, kwargs):
         await self.prepare()
         directory = self.workspace.materialize(ctx.user_id, ctx.session_id)
         if self.skills is not None:

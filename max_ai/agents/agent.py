@@ -8,42 +8,58 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import aclosing
-from typing import Any
+from types import TracebackType
+from typing import Any, Self
 
 from pydantic import BaseModel
 
 from ..base.clients import CoreChatCompletionClient
+from ..base.compaction import CoreCompaction
+from ..base.completion_gate import CompletionDecision
 from ..base.executor import ExecutorBase
-from ..base.skills import CoreSkillRegistry
+from ..base.knowledge import CoreKnowledgeRegistry
+from ..base.layer import CoreLayer
+from ..base.memory import CoreMemoryRegistry
 from ..base.reasoning import BaseReasoning
-from ..capabilities.skills.local import LocalSkillRegistry
-from ..reasoning.react import ReactLoop
-from ..core.tool.dispatcher import ToolDispatcher
-from ..core.tool.registry import ToolRegistry
-from ..core.events_bus import EventBus
+from ..base.skills import CoreSkillRegistry
 from ..base.tools import CoreTool, ToolContext
 from ..base.workspace import WorkspaceBase
-from ..capabilities.workspace.local import LocalWorkspace
-from ..config import setting
-from ..core.event_type import ModelStreamChunkEvent
-from ..core.messages import (
-    CoreMessage,
-    UserMessage,
-)
-from ..core.environment.manager import EnvironmentManager
-from ..manager.stacks import LayerContainer
+from ..capabilities.completion_gate import RuntimeCompletionGate
 from ..capabilities.executor.local import LocalExecutor
-from ..capabilities.executor.reference import ToolReference
-from ..stacks.agent_policy_layer import AgentPolicyLayer
-from ..termination import CancellationToken
+from ..capabilities.mcp import MCPClientManager, MCPServerConfig
+from ..capabilities.reasoning.react import ReactLoop
+from ..capabilities.stacks import (
+    KnowledgeLayer,
+    MemoryLayer,
+    RenderingLayer,
+    SessionStateLayer,
+    SkillsLayer,
+    TaskAnalysisLayer,
+)
+from ..capabilities.stacks.agent_policy_layer import AgentPolicyLayer
 from ..capabilities.tools.ask_user import AskUserTool
 from ..capabilities.tools.bash import BashTool
 from ..capabilities.tools.file_system import FileSystem
 from ..capabilities.tools.plan import AgentUpdatePlanTool
+from ..capabilities.workspace.local import LocalWorkspace
+from ..config import setting
+from ..core.compaction import TokenCounter
+from ..core.environment.manager import EnvironmentManager
+from ..core.event_type import CoreEvent, ModelStreamChunkEvent
+from ..core.events_bus import CompletionHandler, EventBus
+from ..core.executor.reference import ToolReference
+from ..core.messages import (
+    CoreMessage,
+    UserMessage,
+)
+from ..core.stacks.container import LayerContainer
+from ..core.termination import CancellationToken
+from ..core.tool.dispatcher import ToolDispatcher
+from ..core.tool.registry import ToolRegistry
 from ..types.agent_response import AgentResponse
-from ..types.completions import Usage
+from ..types.completions import ChatCompletionResult, Usage
 from ..types.run_context import RunContext
 from ..types.stacks import PromptCtx
 
@@ -54,10 +70,13 @@ class Agent:
     Supply CoreTool instances or decorated functions through toolset.
     The tool registry is managed internally by the agent.
 
-    Defaults: LocalWorkspace, LocalExecutor, an empty LocalSkillRegistry,
-    an owned EnvironmentManager and ReactLoop. Local execution is not a
-    sandbox. A supplied environment owns its executor/workspace and remains
-    the caller's responsibility to close. Do not share a reasoning instance
+    Memory, skills and knowledge are optional and only enabled when supplied.
+    Supplied registries remain caller-owned. Memory must match the run's user
+    and session; pass a matching RunContext when running an agent with memory.
+
+    Defaults: LocalWorkspace, LocalExecutor and ReactLoop. The agent manages
+    execution sessions internally and closes them on close(). Local execution
+    is not a sandbox. Do not share a reasoning instance
     between concurrently running agents: bind() stores runtime dependencies.
     """
 
@@ -69,126 +88,268 @@ class Agent:
         client: CoreChatCompletionClient,
         toolset: Sequence[CoreTool | Callable[..., Any]] | None = None,
         *,
+        mcp: Sequence[MCPServerConfig] | None = None,
+        mcp_servers: Sequence[MCPServerConfig] | None = None,
         executor: ExecutorBase | None = None,
         workspace: WorkspaceBase | None = None,
         skills: CoreSkillRegistry | None = None,
-        environment: EnvironmentManager | None = None,
+        memory: CoreMemoryRegistry | None = None,
+        knowledge: Sequence[CoreKnowledgeRegistry] | None = None,
         reasoning: BaseReasoning | None = None,
         max_iterations: int = 20,
         idle_timeout: float = 300,
         output_format: type[BaseModel] | None = None,
-    ):
+        completion_handlers: Sequence[CompletionHandler] | None = None,
+        compaction: CoreCompaction | None = None,
+    ) -> None:
+        self._validate_configuration(max_iterations, executor, reasoning)
+        if compaction is not None and not isinstance(compaction, CoreCompaction):
+            raise TypeError("compaction must implement CoreCompaction")
+        # None: the window is never compacted (fine for short sessions).
+        self.compaction = compaction
+
+        self.name = name
+        self.description = description
+        self.instructions = instructions
+        self.client = client
+        self.max_iterations = max_iterations
+        self.output_format = output_format
+
+        self._configure_environment(executor, workspace, idle_timeout)
+        self._configure_reasoning(reasoning, max_iterations)
+        self._configure_tools(toolset)
+        if mcp is not None and mcp_servers is not None:
+            raise ValueError("Pass either mcp or mcp_servers, not both")
+        self.mcp_servers = tuple(mcp if mcp is not None else mcp_servers or ())
+        self.mcp = self.mcp_servers
+        self._mcp_manager = MCPClientManager()
+        for config in self.mcp_servers:
+            self._mcp_manager.add_server(config)
+        self._configure_capabilities(memory, skills, knowledge)
+        self._configure_runtime(completion_handlers)
+        self._stack = self._build_prompt_stack()
+
+    @staticmethod
+    def _validate_configuration(
+        max_iterations: int,
+        executor: ExecutorBase | None,
+        reasoning: BaseReasoning | None,
+    ) -> None:
+        """Reject invalid options before constructing runtime components."""
         if max_iterations < 1:
             raise ValueError("max_iterations must be positive")
-        self.name, self.description, self.instructions = name, description, instructions
-        self.client = client
-        if environment is not None:
-            if not isinstance(environment, EnvironmentManager):
-                raise TypeError("environment must be an EnvironmentManager")
-            if executor is not None and executor is not environment.executor:
-                raise ValueError("executor must match the supplied environment.executor")
-            if workspace is not None and workspace is not environment.workspace:
-                raise ValueError("workspace must match the supplied environment.workspace")
-            workspace, executor = environment.workspace, environment.executor
-        self.workspace = workspace if workspace is not None else LocalWorkspace(
-            root=setting.root_dir / ".agents"
+        if reasoning is not None and not isinstance(reasoning, BaseReasoning):
+            raise TypeError("reasoning must implement BaseReasoning")
+        if executor is not None and not isinstance(executor, ExecutorBase):
+            raise TypeError("Use an executor from max_ai.capabilities.executor")
+
+    def _configure_environment(
+        self,
+        executor: ExecutorBase | None,
+        workspace: WorkspaceBase | None,
+        idle_timeout: float,
+    ) -> None:
+        """Create the internal session manager from the public components."""
+        self.workspace = (
+            workspace
+            if workspace is not None
+            else LocalWorkspace(root=setting.root_dir / ".agents")
         )
         self.executor = executor if executor is not None else LocalExecutor()
-        self.reasoning = reasoning if reasoning is not None else ReactLoop(
-            max_loop_iterations=max_iterations
+        self._manager = EnvironmentManager(
+            self.executor, self.workspace, idle_timeout=idle_timeout
         )
-        if not isinstance(self.reasoning, BaseReasoning):
-            raise TypeError("reasoning must implement BaseReasoning")
-        if not isinstance(self.executor, ExecutorBase):
-            raise TypeError("Use an executor from max_ai.capabilities.executor")
-        self._registry = ToolRegistry()
-        for tool in toolset or ():
-            self._registry.register(tool)
-        # host=True: touches the persistent Workspace, not Bash's sandbox.
+
+    def _configure_reasoning(
+        self,
+        reasoning: BaseReasoning | None,
+        max_iterations: int,
+    ) -> None:
+        """Use the supplied reasoning loop or create the default ReAct loop."""
+        self.reasoning = (
+            reasoning
+            if reasoning is not None
+            else ReactLoop(max_loop_iterations=max_iterations)
+        )
+
+    def _configure_tools(
+        self,
+        toolset: Sequence[CoreTool | Callable[..., Any]] | None,
+    ) -> None:
+        """User tools take precedence over built-in defaults."""
+        self._registry = ToolRegistry(toolset or ())
+        self._register_filesystem_tools()
+        self._register_control_tools()
+
+    def _register_filesystem_tools(self) -> None:
+        """Filesystem tools access the persistent workspace on the host."""
         for tool in FileSystem().get_toolset().tools:
-            if self._registry.get(tool.name) is None:
-                self._registry.register(
-                    tool,
-                    host=True,
-                    reference=ToolReference(
-                        module="max_ai.capabilities.tools.file_system",
-                        qualname="FileSystemTools",
-                        kind="factory",
-                        tool_name=tool.name,
-                    ),
-                )
-        # host=True: pure ToolCallRecord state, no I/O.
-        if self.reasoning.enable_human_input and self._registry.get(AskUserTool.TOOL_NAME) is None:
+            if self._registry.get(tool.name) is not None:
+                continue
+            self._registry.register(
+                tool,
+                host=True,
+                reference=ToolReference(
+                    module="max_ai.capabilities.tools.file_system",
+                    qualname="FileSystemTools",
+                    kind="factory",
+                    tool_name=tool.name,
+                ),
+            )
+
+    def _register_control_tools(self) -> None:
+        """Plan and user input run on the host; Bash uses the executor."""
+        if (
+            self.reasoning.enable_human_input
+            and self._registry.get(AskUserTool.TOOL_NAME) is None
+        ):
             self._registry.register(AskUserTool(), host=True)
-        # host=True: mutates ctx.plan in-process (see tools/plan/_agent_tool.py).
         if self._registry.get(AgentUpdatePlanTool.TOOL_NAME) is None:
             self._registry.register(AgentUpdatePlanTool(), host=True)
         if self._registry.get("bash") is None:
             self._registry.register(BashTool())
-        self.skills = skills if skills is not None else LocalSkillRegistry(
-            source=setting.root_dir, skills=[]
-        )
+
+    def _configure_capabilities(
+        self,
+        memory: CoreMemoryRegistry | None,
+        skills: CoreSkillRegistry | None,
+        knowledge: Sequence[CoreKnowledgeRegistry] | None,
+    ) -> None:
+        """Keep optional registries and register only their exposed tools."""
+        self.skills = skills
+        self.memory = memory
+        self.knowledge = tuple(knowledge or ())
         self._skill_blocks = []
-        self.max_iterations = max_iterations
-        self.output_format = output_format
-        self._owns_environment = environment is None
-        self.environment = environment if environment is not None else EnvironmentManager(
-            self.executor, self.workspace, idle_timeout=idle_timeout
+        self._memory_tools = self._register_capability_tools(
+            memory.tools if memory is not None else ()
         )
-        self._manager = self.environment
+        self._knowledge_tools = self._register_capability_tools(
+            [tool for source in self.knowledge for tool in source.tools]
+        )
+
+    def _configure_runtime(
+        self,
+        completion_handlers: Sequence[CompletionHandler] | None,
+    ) -> None:
+        """Connect dispatch, completion checks and turn synchronization."""
         self.dispatcher = ToolDispatcher(
-            self._registry, source=name, manager=self._manager
+            self._registry, source=self.name, manager=self._manager
         )
-        self.completion_bus = EventBus()
+        self.completion_bus = EventBus(
+            handlers=[
+                RuntimeCompletionGate(self.workspace),
+                *(completion_handlers or []),
+            ]
+        )
         self._turn_lock = asyncio.Lock()
         self._closed = False
-        self._policy = AgentPolicyLayer()
-        self._stack = LayerContainer([self._policy])
 
-    async def prepare(self):
-        await self.skills.prepare()
-        self._skill_blocks = await self.skills.get_skills()
+    def _register_capability_tools(self, tools: Sequence[CoreTool]) -> list[str]:
+        """Register bound registry tools on the host and retain their names."""
+        for tool in tools:
+            self._registry.register(tool, host=True)
+        return [tool.name for tool in tools]
 
-    def _prompts(self, ctx):
-        variables = dict(
-            name=self.name, description=self.description, instructions=self.instructions
-        )
-        rendered = self._policy.render(variables)
-        rendered += (
-            f"\nWorkspace belongs to user {ctx.user_id}. Skills are in skills/. "
-            f"New files belong in conversation {ctx.session_id}/. "
-            "File tools default to the current conversation. Pass only a short relative "
-            "name such as report.md or documents/report.docx; do not repeat workspace, "
-            "user, or conversation paths. find_files and search_text search all of this "
-            "user's conversations. "
-            "Execution tools start in this same conversation directory and receive it as "
-            "WORKSPACE; do not assume a host path or access another user's workspace. "
-            "Intermediate artifacts (downloaded pages, scraped raw data, throwaway scripts) "
-            "belong in $SCRATCHPAD, not the conversation directory. If you do not need a file "
-            "again after this step, do not save it at all — pipe/process it inline instead. "
-            "Only save to the conversation directory the files the user actually asked for or "
-            "will want to revisit. Clean up $SCRATCHPAD explicitly when you are done with it. "
-            "Work through multi-step tasks autonomously: after a tool call, keep going to the "
-            "next step yourself instead of stopping to report progress and wait. Only stop "
-            "mid-task when you are genuinely blocked — need approval, need missing information "
-            "from the user, or the task is fully complete."
-        )
-        if self._skill_blocks:
-            rendered += "\nAvailable skills (read SKILL.md before using one):"
-            for skill in self._skill_blocks:
-                rendered += (
-                    f"\n- {skill.name}: {skill.description} "
-                    f"[skills/{skill.name}/SKILL.md]"
-                )
-        return PromptCtx(
+    def _build_prompt_stack(self) -> LayerContainer:
+        """Only configured capabilities contribute layers; context is deferred."""
+        layers: list[CoreLayer] = [
+            AgentPolicyLayer(),
+            TaskAnalysisLayer(),
+            RenderingLayer(),
+        ]
+        if self.skills is not None:
+            layers.append(SkillsLayer())
+        if self.knowledge:
+            layers.append(KnowledgeLayer())
+        if self.memory is not None:
+            layers.append(MemoryLayer())
+        # Compaction summary and plan: must survive compaction of the transcript.
+        layers.append(SessionStateLayer())
+        return LayerContainer(layers)
+
+    @property
+    def tools(self) -> list[CoreTool]:
+        """Every tool the model can call (host, capability and native)."""
+        return self._registry.all_tools()
+
+    async def prepare(self) -> None:
+        """Load selected skill metadata; retrieval backends connect on demand."""
+        if self.skills is not None:
+            self._skill_blocks = await self.skills.get_skills()
+
+    def _validate_memory_scope(self, ctx: RunContext) -> None:
+        """Never expose a bound registry to a different user or session."""
+        if self.memory is not None and (
+            self.memory.user_id != ctx.user_id
+            or self.memory.session_id != ctx.session_id
+        ):
+            raise ValueError("Memory user_id/session_id must match the RunContext")
+
+    async def _prompt_variables(self, ctx: RunContext) -> dict[str, Any]:
+        """Collect current data without making the templates access registries."""
+        self._validate_memory_scope(ctx)
+        variables: dict[str, Any] = {
+            "name": self.name,
+            "description": self.description,
+            "instructions": self.instructions,
+        }
+        if self.skills is not None:
+            variables["loaded_skills"] = self._skill_blocks
+        if self.knowledge:
+            variables["retrieval_tools"] = self._knowledge_tools
+        if self.memory is not None:
+            variables["persistent_memories"] = await self.memory.get_context()
+            variables["memory_tools"] = self._memory_tools
+        return variables
+
+    async def _prompts(self, ctx: RunContext) -> PromptCtx:
+        """Render a fresh snapshot for each run/resume in stack order."""
+        variables = await self._prompt_variables(ctx)
+        prompts = PromptCtx(
             stack=self._stack,
             variables=variables,
-            rendered_layers={AgentPolicyLayer: rendered},
+            rendered_layers={
+                type(layer): layer.render(variables) for layer in self._stack
+            },
         )
+        # The real prompt size, so compaction budgets the window correctly.
+        tokenizer = getattr(self.client.config, "tokenizer_base", None)
+        prompts.measure(TokenCounter(tokenizer_base=tokenizer) if tokenizer else TokenCounter())
+        return prompts
 
-    async def _drive(self, ctx, sink, cancellation_token, stream_tokens, kwargs):
-        def emit(event):
-            self.completion_bus.emit(event)
+    async def _drive(
+        self,
+        ctx: RunContext,
+        sink: Callable[[CoreEvent], None],
+        cancellation_token: CancellationToken | None,
+        stream_tokens: bool,
+        kwargs: dict[str, Any],
+    ) -> AgentResponse:
+        """Discover MCP tools for this turn and close sessions in this task."""
+        mcp_names: list[str] = []
+        try:
+            await self._mcp_manager.connect_all()
+            for tool in self._mcp_manager.get_tools():
+                self._registry.register(tool, host=True)
+                mcp_names.append(tool.name)
+            return await self._drive_connected(
+                ctx, sink, cancellation_token, stream_tokens, kwargs
+            )
+        finally:
+            for name in mcp_names:
+                self._registry.unregister(name)
+            await self._mcp_manager.disconnect_all()
+
+    async def _drive_connected(
+        self,
+        ctx: RunContext,
+        sink: Callable[[CoreEvent], None],
+        cancellation_token: CancellationToken | None,
+        stream_tokens: bool,
+        kwargs: dict[str, Any],
+    ) -> AgentResponse:
+        def emit(event: CoreEvent) -> None:
+            self.completion_bus.emit(event, ctx)
             sink(event)
 
         await self.prepare()
@@ -198,6 +359,14 @@ class Agent:
         pending = ctx.runtime_state.shared_state.pop("reasoning_loop", {})
         loop_state = self.reasoning.LOOP_STATE_CLS()
         loop_state.apply_metrics(pending.get("metrics", {}))
+        if pending.get("completion") is not None:
+            loop_state.last_completion_decision = CompletionDecision.model_validate(
+                pending["completion"]
+            )
+        if pending.get("last_result") is not None:
+            loop_state.last_result = ChatCompletionResult.model_validate(
+                pending["last_result"]
+            )
         if hasattr(loop_state, "guard_state"):
             loop_state.guard_state.update(pending.get("guard_state", {}))
         started = time.monotonic()
@@ -208,7 +377,7 @@ class Agent:
             emit_event=emit,
             deps={
                 "runtime_root": str(directory.root),
-                "conversation_dir": str(directory.conversation_dir),
+                "workspace_dir": str(directory.workspace_dir),
                 "scratch_dir": str(directory.scratch_dir),
                 "skills_dir": str(directory.skill_dir),
                 "filesystem_root": str(self.workspace.base_root),
@@ -219,28 +388,57 @@ class Agent:
             },
         )
         reasoning = self.reasoning.bind(
-            name=self.name, client=self.client,
-            dispatcher=self.dispatcher, tool_context=context,
+            name=self.name,
+            client=self.client,
+            dispatcher=self.dispatcher,
+            tool_context=context,
             completion_bus=self.completion_bus,
+            compaction=self.compaction,
+            # Custom clients may not declare a window: 0 = unknown.
+            max_context_tokens=getattr(self.client.config, "max_context_window", 0) or 0,
+            memory=self.memory,
         )
-        async with aclosing(reasoning.execute_reasoning_loop(
-            ctx=ctx, prompts=self._prompts(ctx), loop_state=loop_state,
-            stream_tokens=stream_tokens, cancellation_token=cancellation_token,
-            output_format=self.output_format, **kwargs,
-        )) as stream:
+        async with aclosing(
+            reasoning.execute_reasoning_loop(
+                ctx=ctx,
+                prompts=await self._prompts(ctx),
+                loop_state=loop_state,
+                stream_tokens=stream_tokens,
+                cancellation_token=cancellation_token,
+                output_format=self.output_format,
+                **kwargs,
+            )
+        ) as stream:
             async for event in stream:
                 emit(event)
         duration_ms = pending.get("duration_ms", 0) + int(
             (time.monotonic() - started) * 1000
         )
-        if loop_state.finish_reason in ("approval_needed", "input_needed"):
+        if loop_state.finish_reason in (
+            "approval_needed",
+            "input_needed",
+            "waiting",
+            "tool_denied",
+        ):
             ctx.runtime_state.shared_state["reasoning_loop"] = {
                 "metrics": loop_state.metrics_snapshot(),
                 "guard_state": getattr(loop_state, "guard_state", {}),
                 "duration_ms": duration_ms,
+                "completion": (
+                    loop_state.last_completion_decision.model_dump(mode="json")
+                    if loop_state.last_completion_decision is not None
+                    else None
+                ),
+                "last_result": (
+                    loop_state.last_result.model_dump(mode="json")
+                    if loop_state.finish_reason == "waiting"
+                    and loop_state.last_result is not None
+                    else None
+                ),
             }
         usage = Usage(
-            duration_ms=duration_ms, retries=loop_state.retries,
+            duration_ms=duration_ms,
+            retries=loop_state.retries,
             llm_calls=loop_state.llm_calls,
             attempts_to_call_api=loop_state.attempts_to_call_api,
             tool_calls=loop_state.tool_calls,
@@ -249,8 +447,11 @@ class Agent:
             tokens_cached=loop_state.tokens_cached,
         )
         return AgentResponse(
-            context=ctx, source=self.name, usage=usage,
+            context=ctx,
+            source=self.name,
+            usage=usage,
             finish_reason=loop_state.finish_reason,
+            completion=loop_state.last_completion_decision,
         )
 
     async def run_stream_events(
@@ -259,18 +460,29 @@ class Agent:
         run_context: RunContext | None = None,
         cancellation_token: CancellationToken | None = None,
         stream_tokens: bool = False,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> AsyncGenerator[CoreEvent | AgentResponse, None]:
         async with self._turn_lock:
             if self._closed:
                 raise RuntimeError("Agent is closed")
             ctx = run_context if run_context is not None else RunContext()
             ctx.session_id = ctx.session_id or ctx.run_id
+            self._validate_memory_scope(ctx)
             if task is not None:
                 if any(not r.is_consumed for r in ctx.tool_state.records.values()):
                     raise ValueError(
                         "Resolve pending tool calls before adding another task"
                     )
+                # New task: drop last task's tool_state and gate evidence so
+                # completion gates only see evidence from the task actually
+                # in progress.
+                ctx.tool_state.reset()
+                ctx.completion_state.clear()
+                # An unfinished plan belongs to the conversation (e.g. walked
+                # step by step with the user); only a finished one is dropped.
+                if ctx.plan is not None and not ctx.plan.has_unfinished_steps():
+                    ctx.plan = None
+                ctx.runtime_state.shared_state.pop("reasoning_loop", None)
                 ctx.messages.extend(
                     [UserMessage(source=ctx.user_id, content=task)]
                     if isinstance(task, str)
@@ -281,7 +493,7 @@ class Agent:
             queue = asyncio.Queue()
             sentinel = object()
 
-            async def produce():
+            async def produce() -> AgentResponse:
                 try:
                     return await self._drive(
                         ctx, queue.put_nowait, cancellation_token, stream_tokens, kwargs
@@ -302,42 +514,58 @@ class Agent:
                 await asyncio.gather(producer, return_exceptions=True)
             yield response
 
-    async def run(self, *args, **kwargs):
+    async def run(self, *args: Any, **kwargs: Any) -> AgentResponse:
         async with aclosing(self.run_stream_events(*args, **kwargs)) as stream:
             async for item in stream:
                 if isinstance(item, AgentResponse):
                     return item
         raise RuntimeError("Agent produced no response")
 
-    async def run_stream(self, *args, **kwargs):
+    async def run_stream(self, *args: Any, **kwargs: Any) -> AsyncGenerator[str, None]:
         kwargs["stream_tokens"] = True
         async with aclosing(self.run_stream_events(*args, **kwargs)) as stream:
             async for item in stream:
                 if isinstance(item, ModelStreamChunkEvent) and item.chunk:
                     yield item.chunk
 
-    async def resume(self, run_context: RunContext, **kwargs):
+    async def resume(self, run_context: RunContext, **kwargs: Any) -> AgentResponse:
         """Continue after callers apply approvals or answers to tool records."""
         return await self.run(run_context=run_context, **kwargs)
 
-    async def resume_stream_events(self, run_context: RunContext, **kwargs):
-        async with aclosing(self.run_stream_events(run_context=run_context, **kwargs)) as stream:
+    async def resume_stream_events(
+        self,
+        run_context: RunContext,
+        **kwargs: Any,
+    ) -> AsyncGenerator[CoreEvent | AgentResponse, None]:
+        async with aclosing(
+            self.run_stream_events(run_context=run_context, **kwargs)
+        ) as stream:
             async for item in stream:
                 yield item
 
-    async def resume_stream(self, run_context: RunContext, **kwargs):
-        async with aclosing(self.run_stream(run_context=run_context, **kwargs)) as stream:
+    async def resume_stream(
+        self,
+        run_context: RunContext,
+        **kwargs: Any,
+    ) -> AsyncGenerator[str, None]:
+        async with aclosing(
+            self.run_stream(run_context=run_context, **kwargs)
+        ) as stream:
             async for chunk in stream:
                 yield chunk
 
-    async def close(self):
+    async def close(self) -> None:
         self._closed = True
         async with self._turn_lock:
-            if self._owns_environment:
-                await self._manager.close()
+            await self._manager.close()
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, *args):
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
         await self.close()

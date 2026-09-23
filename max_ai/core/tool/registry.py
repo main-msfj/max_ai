@@ -6,17 +6,18 @@ from typing import Any
 
 from ...base.tools import CoreTool
 from ...types.tools import CoreToolDefinition
+from ..executor.reference import ToolReference
 
 
 class ToolRegistry:
-    def __init__(self, tools: Iterable[CoreTool | Callable[..., Any]] = ()):
+    def __init__(self, tools: Iterable[CoreTool | Callable[..., Any]] = ()) -> None:
         self._tools: dict[str, CoreTool] = {}
-        self._references: dict[str, Any] = {}
+        self._references: dict[str, ToolReference] = {}
         self._host_tools: set[str] = set()
         for tool in tools:
             self.register(tool)
 
-    def register(self, tool: CoreTool | Callable[..., Any], *, reference=None,
+    def register(self, tool: CoreTool | Callable[..., Any], *, reference: ToolReference | None = None,
                  host: bool = False) -> CoreTool:
         """Accept CoreTools (including MCP adapters) or wrapped functions."""
         if not isinstance(tool, CoreTool):
@@ -34,7 +35,7 @@ class ToolRegistry:
             self._host_tools.add(tool.name)
         return tool
 
-    def reference(self, name: str):
+    def reference(self, name: str) -> ToolReference | None:
         return self._references.get(name)
 
     def runs_on_host(self, name: str) -> bool:
@@ -43,6 +44,11 @@ class ToolRegistry:
 
     def get(self, name: str) -> CoreTool | None:
         return self._tools.get(name)
+
+    def unregister(self, name: str) -> None:
+        self._tools.pop(name, None)
+        self._references.pop(name, None)
+        self._host_tools.discard(name)
 
     def all_tools(self) -> list[CoreTool]:
         return list(self._tools.values())

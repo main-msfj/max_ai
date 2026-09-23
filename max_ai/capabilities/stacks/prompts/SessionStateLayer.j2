@@ -1,0 +1,10 @@
+{% if compaction_summary %}
+{{ compaction_summary }}
+{% endif %}
+{% if current_plan %}
+<current_plan>
+Your plan for this conversation (kept here so it survives compaction). Update
+it with `update_plan`; the latest `update_plan` call wins over this copy.
+{{ current_plan }}
+</current_plan>
+{% endif %}

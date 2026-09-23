@@ -14,10 +14,11 @@ in test_react_loop.py.
 from __future__ import annotations
 
 import logging
-import pytest
-import typing as t 
+import typing as t
 
-from max_ai.base.reasoning import BaseReasoning, BaseLoopState
+import pytest
+
+from max_ai.base.reasoning import BaseLoopState, BaseReasoning
 from max_ai.core.messages import AssistantMessage, ToolCall
 from max_ai.types.completions import ChatCompletionResult, Usage
 

@@ -4,15 +4,19 @@ import asyncio
 import json
 from typing import TYPE_CHECKING
 
-from .registry import ToolRegistry
 from ...base.tools import ToolContext
-from ..messages import ToolMessage
-from ..event_type import (
-    ToolApprovalEvent, ToolCallEvent, ToolCallResponseEvent, UserInputRequestEvent,
-)
-from ...termination import CancellationToken
 from ...types.tool_call import ToolCallRecord, ToolResult
 from ...types.tools import ToolApprovalMode
+from ..event_type import (
+    ToolApprovalEvent,
+    ToolAutoApprovalEvent,
+    ToolCallEvent,
+    ToolCallResponseEvent,
+    UserInputRequestEvent,
+)
+from ..messages import ToolMessage
+from ..termination import CancellationToken
+from .registry import ToolRegistry
 
 if TYPE_CHECKING:
     from ..environment.manager import EnvironmentManager
@@ -116,7 +120,7 @@ class ToolDispatcher:
         )
         if record.is_rejected:
             return finish(
-                ToolResult.execution_error(
+                ToolResult.approval_denied(
                     record.id, record.approval_reason or "User declined approval"
                 )
             )
@@ -135,32 +139,29 @@ class ToolDispatcher:
                     record.id, validation.msg_error or "Invalid arguments"
                 )
             )
-        from ...capabilities.tools.ask_user import AskUserTool
+        from ...capabilities.tools.ask_user import AskUserTool, pending_questions
 
         if isinstance(tool, AskUserTool):
+            if record.user_answers is not None:
+                return finish(ToolResult.success_result(record.id, {
+                    "answers": record.user_answers,
+                }))
             if record.user_answer is not None:
                 return finish(ToolResult.success_result(record.id, {
                     "question": record.input_question,
                     "answer": record.user_answer,
                 }))
             if record.is_pending_approval:
-                # Options already passed schema validation (each a
-                # {label, description} dict) by the time we get here.
-                raw_options = record.parameters.get("options")
-                display_options = None
-                if isinstance(raw_options, list):
-                    sanitized: list[str] = []
-                    for o in raw_options:
-                        label = o.get("label") if isinstance(o, dict) else None
-                        if isinstance(label, str) and label.strip():
-                            text = label.strip()
-                            description = o.get("description")
-                            if isinstance(description, str) and description.strip():
-                                text = f"{text} — {description.strip()}"
-                            sanitized.append(text)
-                    display_options = sanitized or None
+                questions = pending_questions(record.parameters)
+                if not questions:
+                    return finish(ToolResult.invalid_parameters(
+                        record.id, "ask_user needs at least one non-empty question",
+                    ))
+                # input_question/options mirror the first question for
+                # consumers that only know single questions.
                 record.await_user_input(
-                    record.parameters["question"], display_options,
+                    questions[0]["question"], questions[0]["options"],
+                    questions=questions,
                 )
             if not record.is_awaiting_input:
                 return finish(ToolResult.execution_error(
@@ -180,7 +181,7 @@ class ToolDispatcher:
             if isinstance(tool, BashTool):
                 permission = tool.permission_for(record.parameters["command"])
                 if permission == "deny":
-                    return finish(ToolResult.execution_error(record.id, "Command denied by Bash permissions"))
+                    return finish(ToolResult.approval_denied(record.id, "Command denied by Bash permissions"))
                 approval_mode = (
                     ToolApprovalMode.AUTO_APPROVED if permission == "allow"
                     else ToolApprovalMode.ASK_APPROVED
@@ -205,6 +206,11 @@ class ToolDispatcher:
                 )
                 return None
             record.auto_approve()
+            emit(ToolAutoApprovalEvent(
+                source=self.source,
+                tool_call_id=record.id,
+                tool_name=record.tool_name,
+            ))
         if not record.is_actionable:
             raise ValueError(f"Cannot dispatch from {record.status}")
         if approval_mode == ToolApprovalMode.ASK_APPROVED and record.was_auto_approved:

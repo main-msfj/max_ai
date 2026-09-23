@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import typing as t
+
 import pytest
-import typing as t 
 
 from max_ai.core.messages import (
     AssistantMessage,
@@ -12,10 +13,10 @@ from max_ai.core.messages import (
     UserMessage,
 )
 from max_ai.types.agent_response import AgentResponse
+from max_ai.types.chat_history import ChatHistory
 from max_ai.types.completions import Usage
 from max_ai.types.run_context import RunContext
 from max_ai.types.tool_call import ToolCallRecord
-from max_ai.types.chat_history import ChatHistory
 
 
 # -------- HELPERS -----------------------------------------------------------

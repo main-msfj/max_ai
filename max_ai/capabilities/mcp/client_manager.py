@@ -1,40 +1,31 @@
-"""Lifecycle manager for MCP client sessions and discovered tools."""
+"""Lifecycle manager for MCP SDK v2 clients and discovered tools."""
 
 from __future__ import annotations
 
-import logging
+import asyncio
 import typing as t
-from contextlib import suppress
 from dataclasses import dataclass, field
 
-from mcp import ClientSession, McpError
+from mcp import Client, MCPError
 
 from ...base.tools import CoreTool
-from ...errors.mcp import (
-    MCPServerNotFoundError,
-    MCPServerRegistrationError,
-)
-from ...loggers import ScopedLogger
+from ...errors.mcp import MCPServerNotFoundError, MCPServerRegistrationError
 from ...types.tools import ToolApprovalMode
-from .config import MCPServerConfig
+from ._model import MCPServerConfig
 from .tool import MCPResourceTool, MCPTool
-from .transport import MCPTransportConnection, connect_to_mcp_server
-
-logger = logging.getLogger(__name__)
-log = ScopedLogger(logger, scope="mcp.manager")
+from .transport import create_mcp_client
 
 
 @dataclass
 class _ManagedServer:
     config: MCPServerConfig
-    transport: MCPTransportConnection | None = None
-    session: ClientSession | None = None
+    worker: asyncio.Task[None] | None = None
+    requests: asyncio.Queue[t.Any] = field(default_factory=asyncio.Queue)
     tools: list[CoreTool] = field(default_factory=list)
-    connected: bool = False
 
 
 class MCPClientManager:
-    """Own MCP configs, sessions, discovery, and shutdown."""
+    """Own MCP clients in dedicated tasks so SDK calls share their lifecycle."""
 
     def __init__(self) -> None:
         self._servers: dict[str, _ManagedServer] = {}
@@ -44,99 +35,97 @@ class MCPClientManager:
         return list(self._servers)
 
     def add_server(self, config: MCPServerConfig) -> None:
+        if not isinstance(config, MCPServerConfig) or type(config) is MCPServerConfig:
+            raise TypeError("Use StdioMCPServerConfig or HTTPServerConfig")
         if config.server_id in self._servers:
             raise MCPServerRegistrationError(
                 f"MCP server already registered: {config.server_id}"
             )
         self._servers[config.server_id] = _ManagedServer(config=config)
 
-    async def connect(self, server_id: str) -> ClientSession:
+    async def connect(self, server_id: str) -> None:
         server = self._get_server(server_id)
-        if server.connected and server.session is not None:
-            return server.session
-
-        logger_for_server = log.child(server_id=server_id)
-        logger_for_server.info("Connecting MCP server")
-        transport = await connect_to_mcp_server(server.config)
-
+        if server.worker is not None:
+            return
+        ready = asyncio.get_running_loop().create_future()
+        server.worker = asyncio.create_task(self._serve(server, ready))
         try:
-            # Enter the session context into the transport's exit stack so the
-            # session and transport unwind together, LIFO, in this same task.
-            # Splitting __aenter__/__aexit__ across call sites corrupts anyio's
-            # cancel-scope stack and surfaces as CancelledError in initialize().
-            session = await transport.exit_stack.enter_async_context(
-                ClientSession(transport.read, transport.write)
-            )
-            await session.initialize()
-            server.transport = transport
-            server.session = session
-            server.connected = True
-            server.tools = await self._discover_server_tools(server)
-            logger_for_server.info(
-                "MCP server connected",
-                tool_count=len(server.tools),
-            )
-            return session
-        except Exception:
-            with suppress(Exception):
-                await transport.close()
-            server.transport = None
-            server.session = None
-            server.connected = False
-            server.tools = []
+            server.tools = await ready
+        except BaseException:
+            await self.disconnect(server_id)
             raise
 
-    async def connect_all(self) -> None:
-        for server_id in self.server_ids:
-            await self.connect(server_id)
+    async def _serve(self, server: _ManagedServer, ready: asyncio.Future) -> None:
+        try:
+            async with create_mcp_client(server.config) as client:
+                ready.set_result(await self._discover_server_tools(server.config, client))
+                while True:
+                    request = await server.requests.get()
+                    if request is None:
+                        break
+                    method, args, future = request
+                    if future.done():
+                        continue
+                    try:
+                        future.set_result(await getattr(client, method)(*args))
+                    except BaseException as exc:
+                        if not future.done():
+                            future.set_exception(exc)
+        except BaseException as exc:
+            if not ready.done():
+                ready.set_exception(exc)
+            raise
+        finally:
+            while not server.requests.empty():
+                request = server.requests.get_nowait()
+                if request is not None:
+                    future = request[2]
+                    if not future.done():
+                        future.set_exception(RuntimeError("MCP connection closed"))
 
-    async def get_session(self, server_id: str) -> ClientSession:
-        server = self._get_server(server_id)
-        if server.session is None or not server.connected:
-            return await self.connect(server_id)
-        return server.session
+    async def connect_all(self) -> None:
+        try:
+            for server_id in self.server_ids:
+                await self.connect(server_id)
+        except BaseException:
+            await self.disconnect_all()
+            raise
 
     def get_tools(self) -> list[CoreTool]:
-        tools: list[CoreTool] = []
-        for server in self._servers.values():
-            tools.extend(server.tools)
-        return tools
+        return [tool for server in self._servers.values() for tool in server.tools]
 
     async def disconnect(self, server_id: str) -> None:
         server = self._get_server(server_id)
-        transport = server.transport
-        server.session = None
-        server.transport = None
-        server.connected = False
+        worker = server.worker
+        server.worker = None
         server.tools = []
-
-        # The session was entered into the transport's exit stack, so closing
-        # the transport unwinds both together in LIFO order in this task.
-        if transport is not None:
-            with suppress(Exception):
-                await transport.close()
+        if worker is not None:
+            await server.requests.put(None)
+            await worker
 
     async def disconnect_all(self) -> None:
-        for server_id in list(self._servers):
+        for server_id in reversed(self.server_ids):
             await self.disconnect(server_id)
 
     async def call_tool(
-        self,
-        server_id: str,
-        tool_name: str,
-        arguments: dict[str, t.Any],
-        timeout_seconds: float,
+        self, server_id: str, tool_name: str,
+        arguments: dict[str, t.Any], timeout_seconds: float,
     ) -> t.Any:
-        session = await self.get_session(server_id)
-        return await session.call_tool(
-            tool_name,
-            arguments,
-            read_timeout_seconds=self._timeout_delta(timeout_seconds),
-        )
+        return await self._request(server_id, "call_tool", tool_name, arguments, timeout_seconds)
 
-    async def read_resource(self, server_id: str, uri: t.Any) -> t.Any:
-        session = await self.get_session(server_id)
-        return await session.read_resource(uri)
+    async def read_resource(self, server_id: str, uri: str) -> t.Any:
+        return await self._request(server_id, "read_resource", uri)
+
+    async def _request(self, server_id: str, method: str, *args: t.Any) -> t.Any:
+        server = self._get_server(server_id)
+        if server.worker is None:
+            await self.connect(server_id)
+        elif server.worker.done():
+            await server.worker
+            raise RuntimeError(f"MCP connection closed: {server_id}")
+        future = asyncio.get_running_loop().create_future()
+        await server.requests.put((method, args, future))
+        return await future
 
     def _get_server(self, server_id: str) -> _ManagedServer:
         try:
@@ -144,100 +133,83 @@ class MCPClientManager:
         except KeyError as exc:
             raise MCPServerNotFoundError(f"Unknown MCP server: {server_id}") from exc
 
-    async def _discover_server_tools(self, server: _ManagedServer) -> list[CoreTool]:
-        assert server.session is not None
-        config = server.config
+    async def _discover_server_tools(
+        self, config: MCPServerConfig, client: Client,
+    ) -> list[CoreTool]:
         discovered: list[CoreTool] = []
-
-        tool_defs = await self._list_all_tools(server.session)
-        for tool_def in tool_defs:
-            discovered.append(
-                MCPTool(
-                    mcp_tool_name=tool_def.name,
-                    mcp_tool_description=tool_def.description or tool_def.name,
-                    mcp_tool_schema=tool_def.inputSchema,
-                    client_manager=self,
-                    server_id=config.server_id,
-                    approval_mode=self._approval_mode_for_tool(config, tool_def),
-                    timeout_seconds=config.timeout_seconds,
-                )
-            )
-
-        resources, templates = await self._list_resources(server.session)
+        for tool_def in await self._list_all_tools(client):
+            discovered.append(MCPTool(
+                mcp_tool_name=tool_def.name,
+                mcp_tool_description=tool_def.description or tool_def.name,
+                mcp_tool_schema=tool_def.input_schema,
+                client_manager=self,
+                server_id=config.server_id,
+                approval_mode=self._approval_mode_for_tool(config, tool_def),
+                timeout_seconds=config.timeout_seconds,
+            ))
+        resources, templates = await self._list_resources(client)
         if resources or templates:
-            discovered.append(
-                MCPResourceTool(
-                    client_manager=self,
-                    server_id=config.server_id,
-                    available_resources=resources,
-                    resource_templates=templates,
-                    approval_mode=config.resource_approval_mode,
-                    timeout_seconds=config.timeout_seconds,
-                )
-            )
-
+            discovered.append(MCPResourceTool(
+                client_manager=self,
+                server_id=config.server_id,
+                available_resources=resources,
+                resource_templates=templates,
+                approval_mode=config.effective_resource_approval_mode,
+                timeout_seconds=config.timeout_seconds,
+            ))
         return discovered
 
     @staticmethod
-    def _approval_mode_for_tool(
-        config: MCPServerConfig,
-        tool_def: t.Any,
-    ) -> ToolApprovalMode:
+    def _approval_mode_for_tool(config: MCPServerConfig, tool_def: t.Any) -> ToolApprovalMode:
         explicit = config.tool_approval_modes.get(tool_def.name)
         if explicit is not None:
             return explicit
-
         annotations = getattr(tool_def, "annotations", None)
         if annotations is None:
             return config.approval_mode
-
-        is_read_only = annotations.readOnlyHint is True
-        is_destructive = annotations.destructiveHint is True
-        is_open_world = annotations.openWorldHint is True
-        if is_read_only and not is_destructive and not is_open_world:
+        if (annotations.read_only_hint is True
+                and annotations.destructive_hint is not True
+                and annotations.open_world_hint is not True):
             return ToolApprovalMode.AUTO_APPROVED
-        if is_destructive or is_open_world or annotations.readOnlyHint is False:
+        if (annotations.destructive_hint is True
+                or annotations.open_world_hint is True
+                or annotations.read_only_hint is False):
             return ToolApprovalMode.ASK_APPROVED
         return config.approval_mode
 
     @staticmethod
-    async def _list_all_tools(session: ClientSession) -> list[t.Any]:
+    async def _list_all_tools(client: Client) -> list[t.Any]:
         tools: list[t.Any] = []
         cursor: str | None = None
         while True:
-            result = await session.list_tools(cursor=cursor)
-            tools.extend(result.tools)
-            cursor = result.nextCursor
+            page = await client.list_tools(cursor=cursor)
+            tools.extend(page.tools)
+            cursor = page.next_cursor
             if cursor is None:
                 return tools
 
     @staticmethod
-    async def _list_resources(session: ClientSession) -> tuple[list[t.Any], list[t.Any]]:
+    async def _list_resources(client: Client) -> tuple[list[t.Any], list[t.Any]]:
         resources: list[t.Any] = []
         templates: list[t.Any] = []
-
-        with suppress(McpError):
+        try:
             cursor: str | None = None
             while True:
-                result = await session.list_resources(cursor=cursor)
-                resources.extend(result.resources)
-                cursor = result.nextCursor
+                page = await client.list_resources(cursor=cursor)
+                resources.extend(page.resources)
+                cursor = page.next_cursor
                 if cursor is None:
                     break
-
-        with suppress(McpError):
+        except MCPError:
+            pass
+        try:
             cursor = None
             while True:
-                result = await session.list_resource_templates(cursor=cursor)
-                templates.extend(result.resourceTemplates)
-                cursor = result.nextCursor
+                page = await client.list_resource_templates(cursor=cursor)
+                templates.extend(page.resource_templates)
+                cursor = page.next_cursor
                 if cursor is None:
                     break
-
+        except MCPError:
+            pass
         return resources, templates
-
-    @staticmethod
-    def _timeout_delta(timeout_seconds: float) -> t.Any:
-        from datetime import timedelta
-
-        return timedelta(seconds=timeout_seconds)

@@ -2,23 +2,24 @@
 
 from __future__ import annotations
 
-import re
-import os
 import asyncio
+import hashlib
 import logging
+import os
+import re
 import typing as t
 from pathlib import Path
 
-from ....config import setting
-from ....loggers.scope import ScopedLogger
-from ....termination import CancellationToken
 from ....base.tools import CoreRuntimeTool, ToolContext
+from ....config import setting
+from ....core.termination import CancellationToken
+from ....loggers.scope import ScopedLogger
 from ....types.tool_call import ToolCallRecord, ToolResult
 from ....types.tools import (
     CoreToolParameters,
     DockerToolRef,
-    ToolApprovalMode,
     RuntimeDirs,
+    ToolApprovalMode,
 )
 from ._permissions import BashPermission, BashPermissions
 
@@ -32,6 +33,9 @@ _READ_SKILL_RE = re.compile(r"^\s*read_skill\s+([A-Za-z0-9_-]+)\s*$")
 # even if it's malformed (extra args, quotes, chaining). Used to give a
 # helpful error instead of letting the shell fail with "command not found".
 _READ_SKILL_PREFIX_RE = re.compile(r"^\s*read_skill\b")
+# Best-effort nudge, not a real shell parser — catches the common case of
+# a literal /tmp path, not every way a command could reference it.
+_TMP_PATH_RE = re.compile(r"(?<![\w./])/tmp\b")
 
 
 class BashTool(CoreRuntimeTool):
@@ -48,7 +52,8 @@ class BashTool(CoreRuntimeTool):
         "Run a shell command from the configured runtime directory. "
         "Use relative paths or paths supplied in the task context. "
         "Commands are subject to configured permissions and approval. "
-        "Returns the exit code, stdout and stderr."
+        "Declare expected_outputs when producing deliverable files, not temporary files. "
+        "Returns the exit code, stdout, stderr and evidence for declared outputs."
     )
 
     def __init__(
@@ -112,6 +117,18 @@ class BashTool(CoreRuntimeTool):
                         "the intent without reading the raw command."
                     ),
                 },
+                "expected_outputs": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                    "uniqueItems": True,
+                    "description": (
+                        "Deliverable file paths this command should produce. Literal paths "
+                        "relative to $WORKSPACE, even if the command uses cd. No absolute "
+                        "paths, parent traversal, globs or variable expansion. Omit for "
+                        "commands that do not produce deliverables. Existing unchanged "
+                        "files are reported as unchanged, not as newly created."
+                    ),
+                },
             },
             "required": ["command", "description"],
             "additionalProperties": False,
@@ -123,6 +140,16 @@ class BashTool(CoreRuntimeTool):
             return validation
 
         command = t.cast(str, tool_request.parameters["command"])
+        for path in tool_request.parameters.get("expected_outputs", []):
+            if (
+                not path.strip() or Path(path).is_absolute()
+                or ".." in Path(path).parts or not Path(path).parts
+                or any(char in path for char in "\x00$*?[]")
+            ):
+                return CoreToolParameters(
+                    is_tool_valid=False,
+                    msg_error="expected_outputs must contain literal workspace-relative file paths.",
+                )
         if not command.strip():
             return CoreToolParameters(
                 is_tool_valid=False,
@@ -195,6 +222,11 @@ class BashTool(CoreRuntimeTool):
             env = os.environ.copy()
             env["WORKSPACE"] = str(runtime.cwd)
             env["SCRATCHPAD"] = str(runtime.scratch)
+            expected_outputs = tool_request.parameters.get("expected_outputs", [])
+            before = {
+                path: self._output_snapshot(runtime.cwd, path)
+                for path in expected_outputs
+            }
 
             proc = await asyncio.create_subprocess_shell(
                 command,
@@ -214,20 +246,41 @@ class BashTool(CoreRuntimeTool):
             stdout, stdout_truncated, stdout_chars = self._truncate(stdout)
             stderr, stderr_truncated, stderr_chars = self._truncate(stderr)
 
+            result: dict[str, t.Any] = {
+                "exit_code": proc.returncode,
+                "stdout": stdout,
+                "stderr": stderr,
+                "cwd": str(runtime.cwd),
+                "command": command,
+                "stdout_truncated": stdout_truncated,
+                "stderr_truncated": stderr_truncated,
+                "stdout_original_chars": stdout_chars,
+                "stderr_original_chars": stderr_chars,
+            }
+            if expected_outputs:
+                outputs = []
+                for path in expected_outputs:
+                    snapshot = self._output_snapshot(runtime.cwd, path)
+                    if snapshot["exists"]:
+                        previous = before[path]
+                        snapshot["change"] = (
+                            "created" if not previous["exists"] else
+                            "unchanged" if previous.get("sha256") == snapshot["sha256"]
+                            else "modified"
+                        )
+                    else:
+                        snapshot["change"] = "unavailable"
+                    outputs.append({"path": path, **snapshot})
+                result["expected_outputs"] = outputs
+            if _TMP_PATH_RE.search(command):
+                result["note"] = (
+                    "This command references /tmp, which is outside your "
+                    "workspace — nothing there is tracked by your file tools "
+                    "or cleaned up automatically. Use $SCRATCHPAD instead for "
+                    "throwaway files; it's a regular folder inside your workspace."
+                )
             return ToolResult.success_result(
-                tool_request.id,
-                {
-                    "exit_code": proc.returncode,
-                    "stdout": stdout,
-                    "stderr": stderr,
-                    "cwd": str(runtime.cwd),
-                    "command": command,
-                    "stdout_truncated": stdout_truncated,
-                    "stderr_truncated": stderr_truncated,
-                    "stdout_original_chars": stdout_chars,
-                    "stderr_original_chars": stderr_chars,
-                },
-                metadata={"name": self.name},
+                tool_request.id, result, metadata={"name": self.name, "tool_kind": "bash"},
             )
 
         except asyncio.TimeoutError:
@@ -244,6 +297,25 @@ class BashTool(CoreRuntimeTool):
 
         except Exception as e:
             return ToolResult.execution_error(tool_request.id, str(e))
+
+    @staticmethod
+    def _output_snapshot(workspace: Path, path: str) -> dict[str, t.Any]:
+        """Read evidence from the runtime filesystem, never from shell output."""
+        target = workspace
+        try:
+            for part in Path(path).parts:
+                target = target / part
+                if target.is_symlink():
+                    raise ValueError("Output paths must not contain symlinks")
+            target.resolve().relative_to(workspace.resolve())
+            if not target.is_file():
+                return {"exists": False, "error": "Missing or not a regular file"}
+            with target.open("rb") as stream:
+                digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                size = os.fstat(stream.fileno()).st_size
+            return {"exists": True, "size_bytes": size, "sha256": digest}
+        except (OSError, ValueError) as error:
+            return {"exists": False, "error": str(error)}
 
     def _truncate(self, value: str) -> tuple[str, bool, int]:
         """Truncate to max_output_chars, reporting the original length.
@@ -311,7 +383,7 @@ class BashTool(CoreRuntimeTool):
         root = cls._path_from_deps_or_env(deps, "runtime_root", "RUNTIME_DIR")
         skills = cls._path_from_deps_or_env(deps, "skills_dir", "SKILLS_DIR")
         scratch = cls._path_from_deps_or_env(deps, "scratch_dir", "SCRATCHPAD")
-        cwd = cls._path_from_deps_or_env(deps, "conversation_dir", "CONVERSATION_DIR")
+        cwd = cls._path_from_deps_or_env(deps, "workspace_dir", "WORKSPACE_DIR")
 
         if root is None:
             # Fallback layout matches the workspace registry (no `tmp`
@@ -322,8 +394,8 @@ class BashTool(CoreRuntimeTool):
             skills = root / "skills"
         if scratch is None:
             scratch = root / "scratchpad"
-        # Commands start in the current conversation, not the shared user
-        # root — matches where write_file/read_file put things.
+        # Commands start in the user's workspace, not the flat user root —
+        # matches where write_file/read_file put things.
         if cwd is None:
             cwd = root
 

@@ -1,10 +1,10 @@
-import uuid
 import typing as t
-
 from datetime import datetime, timezone
-from pydantic import BaseModel, Field, ConfigDict
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..core.primitives import FailureReason, ToolCallStatus
+from ..ids import short_id
 
 
 # -------- TOOL RESULT -----------------------------------------------------------
@@ -113,6 +113,17 @@ class ToolResult(BaseModel):
         )
 
     @classmethod
+    def approval_denied(cls, tool_call_id: str, err_msg: str | None = None) -> t.Self:
+        """Factory for a tool blocked by a denial — explicit user rejection or
+        static permission policy. Distinct from ``execution_error`` so callers
+        (the loop, in particular) can single out "won't run" from "broke"."""
+        return cls.tool_failure(
+            tool_call_id,
+            error=err_msg or "Tool call was denied.",
+            reason=FailureReason.APPROVAL_DENIED,
+        )
+
+    @classmethod
     def timeout(cls, tool_call_id: str, timeout_seconds: float) -> t.Self:
         return cls.tool_failure(
             tool_call_id,
@@ -157,7 +168,7 @@ class ToolCallRecord(BaseModel):
     """
 
     # -------- IDENTITY -----------------------------------------------------------
-    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    id: str = Field(default_factory=short_id)
     tool_name: str = Field(...)
     parameters: dict[str, t.Any] = Field(default_factory=dict)
 
@@ -189,6 +200,18 @@ class ToolCallRecord(BaseModel):
     input_options: list[str] | None = Field(
         default=None,
         description="Optional choices offered with the question.",
+    )
+    input_questions: list[dict[str, t.Any]] | None = Field(
+        default=None,
+        description=(
+            "Every question of a multi-question ask: each "
+            "{question, header, options}. input_question/input_options "
+            "mirror the first one for single-question consumers."
+        ),
+    )
+    user_answers: dict[str, str] | None = Field(
+        default=None,
+        description="Per-question answers ({question: answer}) for a multi-question ask.",
     )
     user_answer: str | None = Field(
         default=None,
@@ -288,7 +311,10 @@ class ToolCallRecord(BaseModel):
         return self
 
     def await_user_input(
-        self, question: str, options: list[str] | None = None
+        self,
+        question: str,
+        options: list[str] | None = None,
+        questions: list[dict[str, t.Any]] | None = None,
     ) -> t.Self:
         """Move ``PENDING_APPROVAL`` → ``INPUT_NEEDED``. Returns self.
 
@@ -306,9 +332,10 @@ class ToolCallRecord(BaseModel):
         self.status = ToolCallStatus.INPUT_NEEDED
         self.input_question = question
         self.input_options = list(options) if options else None
+        self.input_questions = [dict(q) for q in questions] if questions else None
         return self
 
-    def apply_user_answer(self, answer: str) -> t.Self:
+    def apply_user_answer(self, answer: str | dict[str, str]) -> t.Self:
         """Move ``INPUT_NEEDED`` → ``APPROVED``, storing the answer. Returns self.
 
         The record becomes actionable again; on resume the executor sees
@@ -321,6 +348,10 @@ class ToolCallRecord(BaseModel):
                 f"{self.status} (must be INPUT_NEEDED)."
             )
         self.status = ToolCallStatus.APPROVED
+        if isinstance(answer, dict):
+            # One answer per question; user_answer keeps a readable digest.
+            self.user_answers = dict(answer)
+            answer = "\n".join(f"{q} → {a}" for q, a in answer.items())
         self.user_answer = answer
         self.answered_at = datetime.now(timezone.utc)
         self.approval_decided_at = self.answered_at

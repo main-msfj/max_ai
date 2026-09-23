@@ -15,7 +15,7 @@ class CoreAgentCapabilities(CoreLifecycleComponent[ConfigT], ABC):
     """Serializable registry with an async connection lifecycle.
 
     Capabilities are agent-facing resources such as memory, knowledge,
-    routines, skills, and conversation context. They may expose tools,
+    skills, and conversation context. They may expose tools,
     but they do not have to.
     """
 

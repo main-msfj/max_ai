@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Integrations and run patterns · Max AI framework documentation.">
+  <title>Integrations and run patterns · Max AI Documentation</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script defer src="/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Max AI home"><span class="brand-mark"><i></i><i></i><i></i></span><span>max<span class="brand-accent">ai</span></span></a>
+    <div class="topbar-actions"><a class="github-link" href="/architecture.md">Architecture <span>↗</span></a><button class="icon-button" id="theme-toggle" type="button" aria-label="Toggle theme">☼</button><button class="menu-button" id="menu-toggle" type="button" aria-label="Open navigation">☰</button></div>
+  </header>
+  <aside class="sidebar" id="sidebar"><div class="sidebar-inner">
+    <div class="version-pill"><span class="status-dot"></span> v0.1 · in development</div>
+    <nav aria-label="Documentation"><p class="nav-label">Start here</p>
+        <a class="nav-link" href="/index.html#overview">Overview</a>
+        <a class="nav-link" href="/index.html#installation">Install & quickstart</a>
+        <p class="nav-label">Core concepts</p>
+        <a class="nav-link" href="/agent.html#agent">Agent configuration</a>
+        <a class="nav-link" href="/prompt-layers.html#prompt-overview">Prompt layers</a>
+        <a class="nav-link" href="/tools.html#tools">Tools & dispatch</a>
+        <a class="nav-link" href="/tools.html#reasoning">Reasoning loop</a>
+        <a class="nav-link" href="/tools.html#runtime-services">Runtime services</a>
+        <p class="nav-label">Capabilities</p>
+        <a class="nav-link" href="/capabilities.html#memory">Capabilities</a>
+        <a class="nav-link" href="/capabilities.html#workspace">Workspace & execution</a>
+        <a class="nav-link" href="/capabilities.html#providers">Model providers</a>
+        <p class="nav-label">Integrations</p>
+        <a class="nav-link active" href="#mcp">MCP integrations</a>
+        <a class="nav-link" href="#output">Structured output</a>
+        <a class="nav-link" href="#human-in-loop">Approvals & resume</a>
+        <a class="nav-link" href="#interfaces">Application interfaces</a></nav>
+    <div class="sidebar-note"><span class="note-icon">✦</span><div><strong>Tip</strong><br>Follow a topic page from overview to implementation details.</div></div>
+  </div></aside>
+  <main class="main-content">
+    <section class="hero content-section page-hero" id="integrations-top"><div class="eyebrow"><span class="eyebrow-line"></span> Integrations · Run patterns</div><h1>Connect tools<br><em>and people.</em></h1><p class="hero-copy">Connect MCP servers, return validated structured data, pause for review, and embed the same runtime in an application interface.</p></section>
+<section class="section-block content-section" id="mcp"><div class="section-kicker">14 · Integrations</div><h2>Connect multiple MCP servers.</h2><p>Keep remote capabilities in the <code>mcp</code> or <code>mcp_servers</code> list, separate from local Python <code>toolset</code>. The agent connects servers for a run, discovers tools, dispatches calls, and closes its MCP sessions afterward. Both server configs and the mixed server list are Pydantic models with JSON round-trip helpers.</p><div class="code-card"><div class="code-head"><span>mcp_config.py</span><button class="copy-button" data-copy="import os&#10;from max_ai.agents import Agent&#10;from max_ai.capabilities.clients.ollama import OllamaChatCompletionClient&#10;from max_ai.capabilities.mcp import (&#10;    HTTPServerConfig, StdioMCPServerConfig,&#10;    serialize_mcp_servers, deserialize_mcp_servers,&#10;)&#10;&#10;servers = [&#10;    StdioMCPServerConfig(&#10;        server_id='local-docs', command='your-mcp-server',&#10;    ),&#10;    HTTPServerConfig(&#10;        server_id='tickets', url='https://your-mcp.example/mcp',&#10;        token=os.environ['TICKETS_MCP_TOKEN'],&#10;    ),&#10;]&#10;stored_json = serialize_mcp_servers(servers)&#10;restored_servers = deserialize_mcp_servers(stored_json)&#10;&#10;agent = Agent(&#10;    name='support', description='A support assistant',&#10;    instructions='Use connected tools when useful.',&#10;    client=OllamaChatCompletionClient(model='qwen3:8b'),&#10;    mcp_servers=restored_servers,&#10;)">Copy</button></div><pre><code><span class="kw">import</span> os
+<span class="kw">from</span> max_ai.agents <span class="kw">import</span> Agent
+<span class="kw">from</span> max_ai.capabilities.clients.ollama <span class="kw">import</span> OllamaChatCompletionClient
+<span class="kw">from</span> max_ai.capabilities.mcp <span class="kw">import</span> (
+    HTTPServerConfig,
+    StdioMCPServerConfig,
+    serialize_mcp_servers,
+    deserialize_mcp_servers,
+)
+
+servers = [
+    StdioMCPServerConfig(
+        server_id=<span class="str">"local-docs"</span>,
+        command=<span class="str">"your-mcp-server"</span>,
+    ),
+    HTTPServerConfig(
+        server_id=<span class="str">"tickets"</span>,
+        url=<span class="str">"https://your-mcp.example/mcp"</span>,
+        token=os.environ[<span class="str">"TICKETS_MCP_TOKEN"</span>],
+    ),
+]
+
+stored_json = serialize_mcp_servers(servers)
+restored_servers = deserialize_mcp_servers(stored_json)
+
+agent = Agent(
+    name=<span class="str">"support"</span>,
+    description=<span class="str">"A support assistant"</span>,
+    instructions=<span class="str">"Use connected tools when useful."</span>,
+    client=OllamaChatCompletionClient(model=<span class="str">"qwen3:8b"</span>),
+    mcp_servers=restored_servers,
+)</code></pre></div><p>Replace the example server command and URL with real MCP endpoints. Keep tokens and sensitive headers in a secret store when persisting serialized configs. MCP SDK support is declared in the repository's <code>pyproject.toml</code>.</p></section>
+<section class="section-block content-section" id="output"><div class="section-kicker">09 · Typed results</div><h2>Ask for a structured response.</h2><p>Pass a Pydantic model class as <code>output_format</code>. The final assistant message carries the validated model instance, so application code can use typed fields directly.</p><div class="code-card"><div class="code-head"><span>structured_output.py</span><button class="copy-button" data-copy="import asyncio&#10;from pydantic import BaseModel, Field&#10;from max_ai.agents import Agent&#10;from max_ai.capabilities.clients.ollama import OllamaChatCompletionClient&#10;from max_ai.core.model.llm import ModelConfig&#10;&#10;class Summary(BaseModel):&#10;    title: str&#10;    key_points: list[str]&#10;    confidence: float = Field(ge=0, le=1)&#10;&#10;async def main():&#10;    client = OllamaChatCompletionClient(&#10;        model='qwen3:8b',&#10;        config=ModelConfig(supports_function_calling=True),&#10;    )&#10;    agent = Agent(&#10;        name='summarizer',&#10;        description='Summarizes reports as structured data.',&#10;        instructions='Return a concise, faithful summary.',&#10;        client=client,&#10;        output_format=Summary,&#10;    )&#10;    async with agent:&#10;        response = await agent.run('Summarize the supplied report.')&#10;        message = response.final_message&#10;        if message and message.structured_output:&#10;            print(message.structured_output.title)&#10;&#10;asyncio.run(main())">Copy</button></div><pre><code><span class="kw">import</span> asyncio
+<span class="kw">from</span> pydantic <span class="kw">import</span> BaseModel, Field
+<span class="kw">from</span> max_ai.agents <span class="kw">import</span> Agent
+<span class="kw">from</span> max_ai.capabilities.clients.ollama <span class="kw">import</span> OllamaChatCompletionClient
+<span class="kw">from</span> max_ai.core.model.llm <span class="kw">import</span> ModelConfig
+
+<span class="kw">class</span> <span class="type">Summary</span>(BaseModel):
+    title: <span class="type">str</span>
+    key_points: <span class="type">list</span>[<span class="type">str</span>]
+    confidence: <span class="type">float</span> = Field(ge=<span class="num">0</span>, le=<span class="num">1</span>)
+
+<span class="kw">async def</span> <span class="fn">main</span>():
+    client = OllamaChatCompletionClient(
+        model=<span class="str">"qwen3:8b"</span>,
+        config=ModelConfig(supports_function_calling=<span class="kw">True</span>),
+    )
+    agent = Agent(
+        name=<span class="str">"summarizer"</span>,
+        description=<span class="str">"Summarizes reports as structured data."</span>,
+        instructions=<span class="str">"Return a concise, faithful summary."</span>,
+        client=client,
+        output_format=Summary,
+    )
+    <span class="kw">async with</span> agent:
+        response = <span class="kw">await</span> agent.run(<span class="str">"Summarize the supplied report."</span>)
+        message = response.final_message
+        <span class="kw">if</span> message <span class="kw">and</span> message.structured_output:
+            <span class="fn">print</span>(message.structured_output.title)
+
+asyncio.run(main())</code></pre></div><p>The field constraints come from Pydantic. Use a model/provider combination that supports structured output for best results.</p></section>
+<section class="section-block content-section" id="human-in-loop"><div class="section-kicker">10 · Human review</div><h2>Pause, approve, and resume.</h2><p>Set a tool's approval mode to <code>ask_for_approval</code>. The run returns with pending approval records. A trusted reviewer can approve or reject the call, then the application resumes the same <code>RunContext</code>.</p><div class="code-card"><div class="code-head"><span>approval_flow.py · inside an async application</span><button class="copy-button" data-copy="from max_ai.capabilities.tools.decorator import tool&#10;&#10;@tool(approval_mode='ask_for_approval')&#10;def publish_report(report_id: str) -> str:&#10;    &quot;&quot;&quot;Publish a report through the application's publishing service.&quot;&quot;&quot;&#10;    return publisher.publish(report_id)&#10;&#10;agent = Agent(&#10;    name='publisher',&#10;    description='Publishes reports after review.',&#10;    instructions='Use publish_report when asked to publish.',&#10;    client=client,  # configured model client&#10;    toolset=[publish_report],&#10;)&#10;response = await agent.run('Publish report R-42')&#10;if response.needs_approval:&#10;    # Wait for your UI or service to obtain a reviewer decision.&#10;    call = response.pending_approvals[0]&#10;    call.approve(reason='Approved by the assigned reviewer')&#10;    response = await agent.resume(run_context=response.context)">Copy</button></div><pre><code><span class="kw">from</span> max_ai.capabilities.tools.decorator <span class="kw">import</span> tool
+
+<span class="decor">@tool</span>(approval_mode=<span class="str">"ask_for_approval"</span>)
+<span class="kw">def</span> <span class="fn">publish_report</span>(report_id: <span class="type">str</span>) -&gt; <span class="type">str</span>:
+    <span class="str">"""Publish a report through the application's publishing service."""</span>
+    <span class="kw">return</span> publisher.publish(report_id)
+
+agent = Agent(
+    name=<span class="str">"publisher"</span>,
+    description=<span class="str">"Publishes reports after review."</span>,
+    instructions=<span class="str">"Use publish_report when asked to publish."</span>,
+    client=client,  <span class="str"># configured model client</span>
+    toolset=[publish_report],
+)
+response = <span class="kw">await</span> agent.run(<span class="str">"Publish report R-42"</span>)
+<span class="kw">if</span> response.needs_approval:
+    <span class="str"># Wait for your UI or service to obtain a reviewer decision.</span>
+    call = response.pending_approvals[<span class="num">0</span>]
+    call.approve(reason=<span class="str">"Approved by the assigned reviewer"</span>)
+    response = <span class="kw">await</span> agent.resume(run_context=response.context)</code></pre></div><p>This is the approval decision point in application code; connect the call to your actual review workflow. The agent returns <code>AgentResponse</code> with pending approvals and resumable run context.</p></section>
+<section class="section-block content-section" id="interfaces"><div class="section-kicker">15 · Application interfaces</div><h2>Use the same runtime from different surfaces.</h2><p>The repository includes a Textual CLI and a FastAPI UI server. The runtime emits structured events for streaming, approvals, and user input. Persistence utilities serialize run context for checkpointing and resumption workflows.</p><div class="inline-code"><span>max_ai/cli</span><span>max_ai/ui</span><span>max_ai/persistence</span></div></section>
+    <footer class="footer"><div class="brand"><span class="brand-mark"><i></i><i></i><i></i></span><span>max<span class="brand-accent">ai</span></span></div><span>Integrations and run patterns</span><a href="/architecture.md">Framework architecture ↗</a></footer>
+  </main>
+</body>
+</html>

@@ -1,0 +1,84 @@
+"""Real key/button interactions with the Textual CLI."""
+
+import asyncio
+from types import SimpleNamespace
+
+import pytest
+from textual.widgets import Static, TextArea
+
+from max_ai.cli.app import MaxAIApp
+from max_ai.cli.events import event_line
+from max_ai.core.event_type import BashFinishedEvent, FileReadEvent, ModelResponseEvent
+from max_ai.types.agent_response import AgentResponse
+from max_ai.types.completions import Usage
+from max_ai.types.run_context import RunContext
+from max_ai.types.tool_call import ToolCallRecord
+
+
+def make_app(tmp_path):
+    return MaxAIApp(SimpleNamespace(name="test", memory=None, skills=None, knowledge=[],
+                                   workspace=SimpleNamespace(base_root=tmp_path)))
+
+
+@pytest.mark.asyncio
+async def test_enter_submits_and_busy_draft_is_preserved(tmp_path):
+    app = make_app(tmp_path)
+    tasks = []
+    app._run_turn = tasks.append
+    async with app.run_test() as pilot:
+        prompt = app.query_one(TextArea)
+        prompt.text = "hello"
+        await pilot.press("enter")
+        assert tasks == ["hello"]
+        prompt.text = "draft"
+        await pilot.press("enter")
+        assert prompt.text == "draft"
+        await pilot.press("shift+enter")
+        assert "\n" in prompt.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answer", ["yes", "no"])
+async def test_approval_enter_while_busy(tmp_path, answer):
+    app = make_app(tmp_path)
+    ctx = RunContext()
+    record = ToolCallRecord(id="a", tool_name="send_email", parameters={})
+    ctx.tool_state.add(record)
+    response = AgentResponse(source="test", context=ctx, usage=Usage(), finish_reason="approval_needed")
+    async with app.run_test() as pilot:
+        app._busy = True
+        worker = asyncio.create_task(app._resolve_requests(response))
+        await pilot.pause()
+        app.query_one(TextArea).text = answer
+        await pilot.press("enter")
+        await asyncio.wait_for(worker, 2)
+        assert not record.is_pending_approval
+
+
+@pytest.mark.asyncio
+async def test_question_button_and_token_events(tmp_path):
+    app = make_app(tmp_path)
+    ctx = RunContext()
+    record = ToolCallRecord(id="q", tool_name="ask_user", parameters={})
+    record.await_user_input("Format?", ["CSV", "JSON"])
+    ctx.tool_state.add(record)
+    response = AgentResponse(source="test", context=ctx, usage=Usage(), finish_reason="input_needed")
+    async with app.run_test(size=(120, 45)) as pilot:
+        app._busy = True
+        worker = asyncio.create_task(app._resolve_requests(response))
+        await pilot.pause()
+        await pilot.press("enter")  # question form: enter picks the highlighted option
+        await asyncio.wait_for(worker, 2)
+        assert record.user_answer == "CSV"
+        for _ in range(2):
+            await app._write_event(ModelResponseEvent(source="test", response="", usage=Usage(tokens_input=10, tokens_output=3, tokens_cached=2)))
+        assert app._tokens_input == 20
+        assert app._tokens_output == 6
+        assert "26" in str(app.query_one("#usage", Static).render())
+
+
+def test_runtime_event_lines():
+    bash = event_line(BashFinishedEvent(source="test", tool_call_id="b", exit_code=0, duration_ms=12))
+    skill = event_line(FileReadEvent(source="test", tool_call_id="s", path="skills/demo/SKILL.md", root_dir="/tmp", content_hash="abc"))
+    assert "bash finished" in bash.plain
+    assert "skills/demo/SKILL.md" in skill.plain

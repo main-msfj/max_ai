@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import typing as t
-from contextlib import AsyncExitStack
 
 import pytest
 from mcp.types import (
     CallToolResult,
-    ListResourceTemplatesResult,
     ListResourcesResult,
+    ListResourceTemplatesResult,
     ListToolsResult,
     Resource,
     ResourceTemplate,
@@ -16,7 +15,6 @@ from mcp.types import (
     Tool,
     ToolAnnotations,
 )
-from pydantic import AnyUrl
 
 from max_ai.base.tools import CoreTool
 from max_ai.capabilities.mcp import (
@@ -26,6 +24,8 @@ from max_ai.capabilities.mcp import (
     MCPTool,
     StdioMCPServerConfig,
     create_mcp_tools,
+    deserialize_mcp_servers,
+    serialize_mcp_servers,
 )
 from max_ai.types.tool_call import ToolCallRecord
 from max_ai.types.tools import ToolApprovalMode
@@ -94,7 +94,7 @@ def test_http_server_config_adds_bearer_token_header() -> None:
         token="secret",
     )
 
-    assert config.headers["Authorization"] == "Bearer secret"
+    assert config.request_headers["Authorization"] == "Bearer secret"
 
 
 @pytest.mark.asyncio
@@ -131,7 +131,7 @@ async def test_mcp_resource_tool_reads_text_resource() -> None:
                 {
                     "contents": [
                         TextResourceContents(
-                            uri=AnyUrl("file:///tmp/readme.md"),
+                            uri="file:///tmp/readme.md",
                             text="resource body",
                         )
                     ]
@@ -143,7 +143,7 @@ async def test_mcp_resource_tool_reads_text_resource() -> None:
         client_manager=t.cast(t.Any, manager),
         server_id="docs",
         available_resources=[
-            Resource(name="readme", uri=AnyUrl("file:///tmp/readme.md"))
+            Resource(name="readme", uri="file:///tmp/readme.md")
         ],
     )
 
@@ -176,100 +176,77 @@ async def test_create_mcp_tools_can_register_without_connecting() -> None:
 async def test_manager_connect_discovers_tools_and_resources(monkeypatch: pytest.MonkeyPatch) -> None:
     import max_ai.capabilities.mcp.client_manager as client_manager_module
 
-    class FakeTransport:
+    class FakeClient:
         def __init__(self) -> None:
-            self.read = object()
-            self.write = object()
             self.closed = False
-            self.exit_stack = AsyncExitStack()
+            self.calls = []
 
-        async def close(self) -> None:
-            self.closed = True
-            await self.exit_stack.aclose()
-
-    class FakeClientSession:
-        def __init__(self, read: object, write: object) -> None:
-            self.read = read
-            self.write = write
-            self.exited = False
-
-        async def __aenter__(self) -> "FakeClientSession":
+        async def __aenter__(self):
             return self
 
-        async def __aexit__(self, *args: object) -> None:
-            self.exited = True
+        async def __aexit__(self, *args):
+            self.closed = True
 
-        async def initialize(self) -> object:
-            return object()
+        async def list_tools(self, *, cursor=None):
+            return ListToolsResult(tools=[
+                Tool(name="search", description="Search docs",
+                     input_schema={"type": "object", "properties": {"q": {"type": "string"}}},
+                     annotations=ToolAnnotations(read_only_hint=True)),
+                Tool(name="delete_doc", description="Delete docs",
+                     input_schema={"type": "object", "properties": {"id": {"type": "string"}}},
+                     annotations=ToolAnnotations(destructive_hint=True)),
+                Tool(name="forced_safe", description="Override me",
+                     input_schema={"type": "object", "properties": {}}),
+            ])
 
-        async def list_tools(self, cursor: str | None = None) -> ListToolsResult:
-            return ListToolsResult(
-                tools=[
-                    Tool(
-                        name="search",
-                        description="Search docs",
-                        inputSchema={
-                            "type": "object",
-                            "properties": {"q": {"type": "string"}},
-                        },
-                        annotations=ToolAnnotations(readOnlyHint=True),
-                    ),
-                    Tool(
-                        name="delete_doc",
-                        description="Delete docs",
-                        inputSchema={
-                            "type": "object",
-                            "properties": {"id": {"type": "string"}},
-                        },
-                        annotations=ToolAnnotations(destructiveHint=True),
-                    ),
-                    Tool(
-                        name="forced_safe",
-                        description="Override me",
-                        inputSchema={"type": "object", "properties": {}},
-                    ),
-                ]
-            )
+        async def list_resources(self, *, cursor=None):
+            return ListResourcesResult(resources=[Resource(name="readme", uri="file:///readme.md")])
 
-        async def list_resources(self, cursor: str | None = None) -> ListResourcesResult:
-            return ListResourcesResult(
-                resources=[Resource(name="readme", uri=AnyUrl("file:///readme.md"))]
-            )
+        async def list_resource_templates(self, *, cursor=None):
+            return ListResourceTemplatesResult(resource_templates=[
+                ResourceTemplate(name="doc", uri_template="docs://{name}")
+            ])
 
-        async def list_resource_templates(
-            self,
-            cursor: str | None = None,
-        ) -> ListResourceTemplatesResult:
-            return ListResourceTemplatesResult(
-                resourceTemplates=[
-                    ResourceTemplate(name="doc", uriTemplate="docs://{name}")
-                ]
-            )
+        async def call_tool(self, name, arguments, read_timeout_seconds=None):
+            self.calls.append((name, arguments, read_timeout_seconds))
+            return CallToolResult(content=[TextContent(type="text", text="done")])
 
-    async def fake_connect(config: object) -> FakeTransport:
-        return FakeTransport()
-
-    monkeypatch.setattr(client_manager_module, "ClientSession", FakeClientSession)
-    monkeypatch.setattr(client_manager_module, "connect_to_mcp_server", fake_connect)
-
+    client = FakeClient()
+    monkeypatch.setattr(client_manager_module, "create_mcp_client", lambda config: client)
     manager = MCPClientManager()
-    manager.add_server(
-        HTTPServerConfig(
-            server_id="docs",
-            url="http://localhost:3000/mcp",
-            tool_approval_modes={"forced_safe": ToolApprovalMode.AUTO_APPROVED},
-        )
-    )
+    manager.add_server(HTTPServerConfig(
+        server_id="docs", url="http://localhost:3000/mcp",
+        tool_approval_modes={"forced_safe": ToolApprovalMode.AUTO_APPROVED},
+    ))
 
     await manager.connect("docs")
     tools = manager.get_tools()
-
     assert len(tools) == 4
     assert all(isinstance(tool, CoreTool) for tool in tools)
-    assert tools[0].name == "docs_search"
+    assert [tool.name for tool in tools] == [
+        "docs_search", "docs_delete_doc", "docs_forced_safe", "docs_read_resource"
+    ]
     assert tools[0].approval_mode == ToolApprovalMode.AUTO_APPROVED
-    assert tools[1].name == "docs_delete_doc"
     assert tools[1].approval_mode == ToolApprovalMode.ASK_APPROVED
-    assert tools[2].name == "docs_forced_safe"
     assert tools[2].approval_mode == ToolApprovalMode.AUTO_APPROVED
-    assert tools[3].name == "docs_read_resource"
+    assert await manager.call_tool("docs", "search", {"q": "x"}, 12) == CallToolResult(
+        content=[TextContent(type="text", text="done")]
+    )
+    assert client.calls == [("search", {"q": "x"}, 12)]
+    await manager.disconnect_all()
+    assert client.closed
+
+
+def test_server_configs_round_trip_as_json() -> None:
+    stdio = StdioMCPServerConfig(
+        server_id="local", command="python", args=["-m", "server"],
+        env={"MODE": "test"}, tool_approval_modes={"search": "auto_approval"},
+    )
+    http = HTTPServerConfig(
+        server_id="remote", url="https://example.com/mcp", token="secret",
+        headers={"X-Test": "yes"},
+    )
+    assert StdioMCPServerConfig.model_validate_json(stdio.model_dump_json()) == stdio
+    assert HTTPServerConfig.model_validate_json(http.model_dump_json()) == http
+    assert deserialize_mcp_servers(serialize_mcp_servers([stdio, http])) == [stdio, http]
+    assert http.request_headers["Authorization"] == "Bearer secret"

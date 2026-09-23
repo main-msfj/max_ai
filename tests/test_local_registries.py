@@ -21,18 +21,15 @@ from pathlib import Path
 
 import pytest
 
-from max_ai.base.memory import MemoryToolMode
 from max_ai.base.context import LogBookToolMode
 from max_ai.base.knowledge import KnowledgeToolMode
-from max_ai.base.routines import RoutineToolMode
-
-from max_ai.capabilities.memory import LocalMemoryRegistry
+from max_ai.base.memory import MemoryToolMode
 from max_ai.capabilities.context import LocalContextRegistry
 from max_ai.capabilities.knowledge import LocalKnowledgeRegistry
-from max_ai.legacy.routines import LocalRoutineRegistry
+from max_ai.capabilities.memory import LocalMemoryRegistry
 from max_ai.capabilities.skills.local import LocalSkillRegistry
-from max_ai.types.workspace import WorkspaceDirectory
 from max_ai.errors.memory import MemoryError
+from max_ai.types.workspace import WorkspaceDirectory
 
 
 # =====================================================================
@@ -172,19 +169,16 @@ async def test_local_knowledge_registry_search(tmp_path: Path):
     source_file.write_text(json.dumps([
         {
             "content": "FastAPI is a modern Python web framework for APIs.",
-            "score": None,
             "tokens": 12,
             "metadata": {"source": "fastapi.md"},
         },
         {
             "content": "Pydantic provides data validation using type annotations.",
-            "score": None,
             "tokens": 10,
             "metadata": {"source": "pydantic.md"},
         },
         {
             "content": "Cooking pasta requires boiling salted water.",
-            "score": None,
             "tokens": 7,
             "metadata": {"source": "irrelevant.md"},
         },
@@ -201,16 +195,15 @@ async def test_local_knowledge_registry_search(tmp_path: Path):
         # Query that matches the python framework blocks.
         results = await kb.search("Python framework", limit=5)
         assert len(results) >= 1
-        # All returned blocks must have a fresh score, not None.
-        for block in results:
-            assert block.score is not None
-            assert block.score > 0
         # Top result should be the FastAPI block (closest semantically).
+        # Ranking happens internally (cosine similarity); the score itself
+        # is never attached to the returned blocks — see KnowledgeBlock.
         assert "FastAPI" in results[0].content
-        # The unrelated cooking block must rank below the on-topic blocks.
-        cooking = next((b for b in results if "pasta" in b.content), None)
-        if cooking is not None:
-            assert cooking.score < results[0].score
+        # The unrelated cooking block, if it clears the relevance bar at
+        # all, must rank below the on-topic blocks.
+        contents = [b.content for b in results]
+        if any("pasta" in c for c in contents):
+            assert contents.index(next(c for c in contents if "pasta" in c)) > 0
 
 
 @pytest.mark.asyncio
@@ -223,74 +216,6 @@ async def test_local_knowledge_registry_missing_file(tmp_path: Path):
     )
     async with kb:
         assert await kb.search("anything") == []
-
-
-# =====================================================================
-# ROUTINE
-# =====================================================================
-@pytest.mark.asyncio
-async def test_local_routine_registry_only_authorized(tmp_path: Path):
-    """Repo has 3 routines on disk; only 2 are authorized."""
-    routines_dir = tmp_path / "routines"
-    routines_dir.mkdir(parents=True)
-
-    def write_routine(name: str, description: str, instructions: str):
-        (routines_dir / f"{name}.json").write_text(json.dumps({
-            "name": name,
-            "description": description,
-            "instructions": instructions,
-        }))
-
-    write_routine("client_followup", "Follow up with a client.", "1. ... 2. ...")
-    write_routine("email_reply", "Draft an email reply.", "Steps...")
-    write_routine("internal_secret", "Internal procedure.", "Don't expose.")
-
-    reg = LocalRoutineRegistry(
-        source_path=tmp_path,
-        routines=["client_followup", "email_reply"],  # only 2 of 3
-        tool_mode=RoutineToolMode.FULL,
-    )
-
-    async with reg:
-        # Catalog returns the 2 authorized, ignores the 3rd on disk.
-        catalog = await reg.get_catalog()
-        assert {r.name for r in catalog} == {"client_followup", "email_reply"}
-
-        # Search ranks the email routine on top, and never leaks the
-        # unauthorized routine regardless of semantic score.
-        results = await reg.search("email")
-        assert results
-        assert results[0].name == "email_reply"
-        assert "internal_secret" not in {r.name for r in results}
-
-        # Fetch authorized routine succeeds.
-        block = await reg.fetch("client_followup")
-        assert block.name == "client_followup"
-        assert "1." in block.instructions
-
-        # Fetch unauthorized routine fails with informative message.
-        with pytest.raises(ValueError) as exc_info:
-            await reg.fetch("internal_secret")
-        msg = str(exc_info.value)
-        assert "internal_secret" in msg
-        assert "client_followup" in msg  # available list mentioned
-        assert "email_reply" in msg
-
-
-@pytest.mark.asyncio
-async def test_local_routine_registry_missing_authorized(tmp_path: Path):
-    """Authorized routine that doesn't exist on disk → fails loud at connect."""
-    (tmp_path / "routines").mkdir(parents=True)
-    # Don't create any files — just an empty routines dir.
-
-    reg = LocalRoutineRegistry(
-        source_path=tmp_path,
-        routines=["does_not_exist"],
-    )
-    with pytest.raises(FileNotFoundError) as exc_info:
-        async with reg:
-            pass
-    assert "does_not_exist" in str(exc_info.value)
 
 
 # =====================================================================

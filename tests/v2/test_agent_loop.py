@@ -2,12 +2,12 @@ import pytest
 
 from max_ai.base.agent import Agent
 from max_ai.base.tools import CoreTool
+from max_ai.base.workspace import Workspace
 from max_ai.core.messages import AssistantMessage, ToolCall, ToolMessage
 from max_ai.types.completions import ChatCompletionResult, Usage
+from max_ai.types.run_context import RunContext
 from max_ai.types.tool_call import ToolCallRecord
 from max_ai.types.tools import ToolApprovalMode
-from max_ai.types.run_context import RunContext
-from max_ai.base.workspace import Workspace
 
 
 class CountingTool(CoreTool):

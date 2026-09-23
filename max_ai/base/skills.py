@@ -13,11 +13,10 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel
 
-from .capability import CoreAgentCapabilities
 from ..config import setting
 from ..core.blocks import SkillBlock
 from ..types.workspace import WorkspaceDirectory
-
+from .capability import CoreAgentCapabilities
 
 _VALID_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 

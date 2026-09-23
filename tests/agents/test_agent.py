@@ -1,25 +1,26 @@
-"""Agent tests with fake client; ToolExecutor real with empty middlewares."""
+"""Agent tests with a fake client and empty middlewares."""
 
 from __future__ import annotations
 
 import asyncio
+
 import pytest
 
 from max_ai.base.agent import Agent
 from max_ai.base.clients import CoreChatCompletionClient
-from max_ai.core.messages import AssistantMessage, UserMessage
 from max_ai.core.event_type import (
     CoreEvent,
+    ErrorEvent,
     ModelCallEvent,
     ModelResponseEvent,
     ReasoningCompleteEvent,
     ReasoningIterationEvent,
-    ErrorEvent,
 )
-from max_ai.core.models import ModelConfig
+from max_ai.core.messages import AssistantMessage, UserMessage
+from max_ai.core.model.llm import ModelConfig
+from max_ai.errors.client import ClientError
 from max_ai.types.agent_response import AgentResponse
 from max_ai.types.completions import ChatCompletionResult, Usage
-from max_ai.errors.client import ClientError
 
 
 # -------- FAKE CLIENT -----------------------------------------------------------
@@ -185,5 +186,5 @@ async def test_cancellation_propagates_without_response():
 # -------- INTERNAL -----------------------------------------------------------
 def _no_retry_config():
     """AgentConfig with retries disabled so error tests run fast."""
-    from max_ai.core.models import AgentConfig
+    from max_ai.core.model.agent import AgentConfig
     return AgentConfig(max_connection_retries=0)

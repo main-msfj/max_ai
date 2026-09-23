@@ -25,18 +25,18 @@ from __future__ import annotations
 
 import logging
 import typing as t
-from enum import Enum
 from abc import ABC, abstractmethod
+from enum import Enum
 
 from pydantic import BaseModel
 
+from ..capabilities.tools.function_as_tool import FunctionAsTool
+from ..core.blocks import ContextBlock
+from ..core.observation import ObservationRecord
+from ..loggers import ScopedLogger
+from ..types.tools import ToolApprovalMode
 from .capability import CoreAgentCapabilities
 from .tools import CoreTool
-from .observation import ObservationRecord
-from ..loggers import ScopedLogger
-from ..capabilities.tools.function_as_tool import FunctionAsTool
-from ..types.tools import ToolApprovalMode
-from ..core.blocks import ContextBlock
 
 logger = logging.getLogger(__name__)
 log = ScopedLogger(logger, scope=["CoreLogBookRegistry"])

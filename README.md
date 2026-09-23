@@ -196,6 +196,36 @@ The agent collects these automatically from constructor arguments.
 
 ### Tools
 
+MCP servers are configured separately from `toolset`. Pass one or more
+serializable server configurations through `mcp` (or `mcp_servers`):
+
+```python
+from max_ai.base.agent import Agent
+from max_ai.capabilities.mcp import (
+    HTTPServerConfig, StdioMCPServerConfig,
+    serialize_mcp_servers, deserialize_mcp_servers,
+)
+
+servers = [
+    HTTPServerConfig(server_id="docs", url="https://example.com/mcp"),
+    StdioMCPServerConfig(
+        server_id="local", command="uvx", args=["mcp-server-fetch"],
+    ),
+]
+payload = serialize_mcp_servers(servers)
+restored = deserialize_mcp_servers(payload)
+
+agent = Agent(
+    name="assistant", description="Uses MCP", instructions="Help the user",
+    client=client, toolset=[local_tool], mcp=restored,
+)
+```
+
+The agent discovers MCP tools when a run starts, prefixes their names with the
+server ID, executes them in the host process, and closes the connections at the
+end of the run. `uvx` runs older servers in their own environment; the Max AI
+client uses MCP 2.x and negotiates with both current and earlier protocol versions.
+
 Tools implement `CoreTool` or are regular Python callables wrapped by `FunctionAsTool`. The `@tool` decorator is the easiest entry point.
 
 ```python

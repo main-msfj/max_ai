@@ -4,6 +4,7 @@ which represents a sequence of actions to achieve a goal.
 """
 
 import typing as t
+
 from pydantic import BaseModel, Field, model_validator
 
 
@@ -66,6 +67,10 @@ class AgentPlan(BaseModel):
                     f"Step {s.id} depends on unknown step ids {missing}."
                 )
         return self
+
+    def as_text(self) -> str:
+        """One line per step, for prompts: ``[active] 2. Write the scraper``."""
+        return "\n".join(f"[{s.status}] {s.id}. {s.description}" for s in self.steps)
 
     def has_unfinished_steps(self) -> bool:
         """True if any step is still pending or active (work remains)."""

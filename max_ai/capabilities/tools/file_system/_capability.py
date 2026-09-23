@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from ....workspace_copy.filesystem import UserFileSystem
+from ...workspace.local._filesystem import UserFileSystem
 from ._toolset import READ_ONLY_TOOL_NAMES, FileSystemTools
 
 

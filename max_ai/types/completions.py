@@ -1,7 +1,9 @@
 import typing as t
+
 from pydantic import BaseModel, Field
 
 from ..core.messages import AssistantMessage
+
 
 # -------- MODEL USAGE -----------------------------------------------------------
 class Usage(BaseModel):

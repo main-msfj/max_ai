@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+from max_ai.core.tool.state import ToolState
 from max_ai.types.tool_call import ToolCallRecord, ToolResult
-from max_ai.core.tool_state import ToolState
 
 
 # -------- HELPERS -----------------------------------------------------------

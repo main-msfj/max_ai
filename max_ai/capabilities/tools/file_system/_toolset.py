@@ -13,14 +13,13 @@ from ....core.event_type import (
     FileDeletedEvent,
     FileInfoEvent,
     FileReadEvent,
-    FileWrittenEvent,
     FilesSearchedEvent,
+    FileWrittenEvent,
 )
 from ....types.tools import ToolApprovalMode
-from ....workspace_copy.filesystem import UserFileSystem
-from ....capabilities.workspace.local import LocalWorkspace as Workspace
+from ...workspace.local import LocalWorkspace as Workspace
+from ...workspace.local._filesystem import UserFileSystem
 from ..decorator import tool
-
 
 _MAX_TOOL_RESULTS = 200
 _MAX_SEARCH_FILES = 1000
@@ -41,7 +40,7 @@ READ_ONLY_TOOL_NAMES = frozenset(
 
 
 class FileSystemTools:
-    """Conversation-relative file tools backed by one user workspace."""
+    """Workspace-relative file tools, one shared workspace per user."""
 
     def __init__(self, workspace: str | Path | UserFileSystem | None = None):
         self._workspace = (
@@ -54,14 +53,14 @@ class FileSystemTools:
 
         @tool(
             name="list_directory",
-            description="List a folder in the current conversation. Use paths relative to the conversation.",
+            description="List a folder in your workspace. Use paths relative to the workspace.",
             approval_mode=ToolApprovalMode.AUTO_APPROVED,
         )
         def list_directory(
             context: ToolContext, path: str = "", limit: int = 200
         ) -> dict[str, Any]:
             filesystem = self._filesystem(context)
-            resolved = self._conversation_path(context, path, allow_empty=True)
+            resolved = self._workspace_path(context, path, allow_empty=True)
             result = filesystem.list_files(context.user_id, path=resolved, limit=limit)
             self._emit(
                 context,
@@ -77,7 +76,7 @@ class FileSystemTools:
 
         @tool(
             name="find_files",
-            description="Find a file name or glob across all conversations belonging to the current user.",
+            description="Find a file name or glob anywhere in your workspace.",
             approval_mode=ToolApprovalMode.AUTO_APPROVED,
         )
         def find_files(
@@ -103,7 +102,7 @@ class FileSystemTools:
 
         @tool(
             name="search_text",
-            description="Search text across all conversations belonging to the current user.",
+            description="Search text anywhere in your workspace.",
             approval_mode=ToolApprovalMode.AUTO_APPROVED,
         )
         def search_text(
@@ -129,20 +128,16 @@ class FileSystemTools:
 
         @tool(
             name="read_file",
-            description=(
-                "Read a file from the current conversation. Pass conversation_id only "
-                "when reading a result found in another conversation."
-            ),
+            description="Read a file from your workspace.",
             approval_mode=ToolApprovalMode.AUTO_APPROVED,
         )
         def read_file(
             context: ToolContext,
             file_name: str,
-            conversation_id: str | None = None,
             max_bytes: int = 65536,
         ) -> dict[str, Any]:
             filesystem = self._filesystem(context)
-            resolved = self._conversation_path(context, file_name, conversation_id)
+            resolved = self._workspace_path(context, file_name)
             result = filesystem.read_file_details(
                 context.user_id, path=resolved, max_bytes=max_bytes
             )
@@ -160,7 +155,7 @@ class FileSystemTools:
 
         @tool(
             name="write_file",
-            description="Create a UTF-8 text file in the current conversation.",
+            description="Create a UTF-8 text file in your workspace.",
             approval_mode=ToolApprovalMode.ASK_APPROVED,
         )
         def write_file(
@@ -169,7 +164,6 @@ class FileSystemTools:
             filesystem = self._filesystem(context)
             result = filesystem.create_text_file(
                 context.user_id,
-                context.session_id,
                 path=self._write_target(context, file_name),
                 content=content,
             )
@@ -189,7 +183,7 @@ class FileSystemTools:
         @tool(
             name="edit_file",
             description=(
-                "Replace one exact text occurrence in a conversation file after verifying "
+                "Replace one exact text occurrence in a workspace file after verifying "
                 "the SHA-256 returned by read_file."
             ),
             approval_mode=ToolApprovalMode.ASK_APPROVED,
@@ -200,10 +194,9 @@ class FileSystemTools:
             old_text: str,
             new_text: str,
             expected_sha256: str,
-            conversation_id: str | None = None,
         ) -> dict[str, Any]:
             filesystem = self._filesystem(context)
-            resolved = self._conversation_path(context, file_name, conversation_id)
+            resolved = self._workspace_path(context, file_name)
             result = filesystem.edit_text_file(
                 context.user_id,
                 path=resolved,
@@ -226,13 +219,13 @@ class FileSystemTools:
 
         @tool(
             name="create_directory",
-            description="Create a directory in the current conversation.",
+            description="Create a directory in your workspace.",
             approval_mode=ToolApprovalMode.AUTO_APPROVED,
         )
         def create_directory(context: ToolContext, path: str) -> dict[str, Any]:
             filesystem = self._filesystem(context)
             result = filesystem.create_directory(
-                context.user_id, context.session_id, self._write_target(context, path)
+                context.user_id, self._write_target(context, path)
             )
             self._emit(
                 context,
@@ -247,17 +240,14 @@ class FileSystemTools:
 
         @tool(
             name="file_info",
-            description=(
-                "Inspect a file or directory in the current conversation. Pass "
-                "conversation_id only for a result from another conversation."
-            ),
+            description="Inspect a file or directory in your workspace.",
             approval_mode=ToolApprovalMode.AUTO_APPROVED,
         )
         def file_info(
-            context: ToolContext, file_name: str, conversation_id: str | None = None
+            context: ToolContext, file_name: str
         ) -> dict[str, Any]:
             filesystem = self._filesystem(context)
-            resolved = self._conversation_path(context, file_name, conversation_id)
+            resolved = self._workspace_path(context, file_name)
             result = filesystem.file_info(context.user_id, resolved)
             self._emit(
                 context,
@@ -274,8 +264,8 @@ class FileSystemTools:
         @tool(
             name="delete_file",
             description=(
-                "Delete a file from the current conversation after verifying the SHA-256 "
-                "returned by read_file. Pass conversation_id only for an older conversation."
+                "Delete a file from your workspace after verifying the SHA-256 "
+                "returned by read_file."
             ),
             approval_mode=ToolApprovalMode.ASK_APPROVED,
         )
@@ -283,10 +273,9 @@ class FileSystemTools:
             context: ToolContext,
             file_name: str,
             expected_sha256: str,
-            conversation_id: str | None = None,
         ) -> dict[str, Any]:
             filesystem = self._filesystem(context)
-            resolved = self._conversation_path(context, file_name, conversation_id)
+            resolved = self._workspace_path(context, file_name)
             result = filesystem.delete_file(context.user_id, resolved, expected_sha256)
             self._emit(
                 context,
@@ -313,35 +302,30 @@ class FileSystemTools:
         ]
 
     @staticmethod
-    def _conversation_path(
+    def _workspace_path(
         context: ToolContext,
         path: str,
-        conversation_id: str | None = None,
         *,
         allow_empty: bool = False,
     ) -> str:
-        """Keep user and workspace roots out of model-visible tool arguments."""
-        session = conversation_id or context.session_id
-        UserFileSystem._safe_session_id(session)
+        """Keep the user root out of model-visible tool arguments."""
         if path == "" and allow_empty:
-            return "/".join(("conversation", session))
+            return "workspace"
         parts = UserFileSystem._visible_parts(path)
         if parts[0] == "skills":
-            if conversation_id is not None:
-                raise ValueError("conversation_id cannot be used with skills")
             return "/".join(parts)
         if parts[0] == "scratchpad":
-            return "/".join(("scratchpad", session, *parts[1:]))
-        return "/".join(("conversation", session, *parts))
+            UserFileSystem._safe_session_id(context.session_id)
+            return "/".join(("scratchpad", context.session_id, *parts[1:]))
+        return "/".join(("workspace", *parts))
 
     @staticmethod
     def _write_target(context: ToolContext, path: str) -> str:
-        """Expand scratchpad/... for write_file/create_directory, which
-        prepend the session themselves; anything else passes through."""
+        """Resolve a write_file/create_directory path to its full location."""
         parts = UserFileSystem._visible_parts(path)
         if parts and parts[0] == "scratchpad":
             return "/".join(("scratchpad", context.session_id, *parts[1:]))
-        return path
+        return "/".join(("workspace", *parts))
 
     @staticmethod
     def _tool_call_id(context: ToolContext) -> str:

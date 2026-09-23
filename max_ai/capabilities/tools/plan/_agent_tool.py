@@ -1,12 +1,4 @@
-"""update_plan tool variant for ``Agent`` — writes straight to RunContext.plan.
-
-``UpdatePlanTool`` (in ``_tool.py``) is built for ``ReActLoopSelfDirected``/
-``react.py``: it stages the plan on ``loop_state.plan_draft`` and leaves the
-loop to sync it to ``ctx.plan`` and emit ``PlanningEvent``. ``Agent`` has no
-``loop_state`` concept — a tool only gets a ``ToolContext`` per call — so
-this is a deliberately separate class (Option B), not a rewrite of
-``UpdatePlanTool``: ``react.py``'s tested behavior stays untouched, at the
-cost of duplicating the plan-validation logic below instead of sharing it.
+"""Native update_plan tool — writes straight to RunContext.plan.
 
 This tool expects the caller (``Agent``) to put the live ``RunContext`` on
 ``ToolContext.deps["run_context"]`` before dispatching — it reads the
@@ -21,20 +13,14 @@ import typing as t
 
 from ....base.tools import CoreTool, ToolContext
 from ....core.event_type import PlanningEvent
-from ....termination.cancellation import CancellationToken
+from ....core.termination.cancellation import CancellationToken
 from ....types.tool_call import ToolCallRecord, ToolResult
 from ....types.tools import ToolApprovalMode
-
 from ._model import AgentPlan, PlanStep
 
 
 class AgentUpdatePlanTool(CoreTool):
-    """Native Agent tool — set or revise the plan directly on RunContext.
-
-    Same model (``AgentPlan``/``PlanStep``), same validation, no-op and
-    replacement-warning behavior as ``UpdatePlanTool`` — only where it reads
-    the previous plan from and where it writes the new one differ.
-    """
+    """Native Agent tool — set or revise the plan directly on RunContext."""
 
     TOOL_NAME: t.ClassVar[str] = "update_plan"
 

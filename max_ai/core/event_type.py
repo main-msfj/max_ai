@@ -7,18 +7,18 @@ stop signals, and orchestration results.
 
 from __future__ import annotations
 
-import uuid
 import typing as t
-from typing import Annotated
 from datetime import datetime, timezone
-from pydantic import BaseModel, Discriminator, Field, ConfigDict
+from typing import Annotated
 
-from .messages import CoreMessage
+from pydantic import BaseModel, ConfigDict, Discriminator, Field
+
+from ..base.completion_gate import CompletionDecision
+from ..capabilities.tools.plan import AgentPlan
+from ..ids import short_id
 from ..types.completions import Usage
 from ..types.tool_call import ToolResult
-
-from ..capabilities.tools.plan import AgentPlan
-from ..reasoning.eval import EvalResult
+from .messages import CoreMessage, Message
 
 
 # -------- -----------------------------------------------------------
@@ -34,7 +34,7 @@ class CoreEvent(BaseModel):
 
     source: str = Field()
     event_type: str = Field(default="")
-    event_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    event_id: str = Field(default_factory=short_id)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     def __init_subclass__(cls, **kwargs: t.Any) -> None:
@@ -157,10 +157,26 @@ class TaskStartEvent(TasksEvent):
 
 
 class TaskCompleteEvent(TasksEvent):
-    """Emitted when task processing completes."""
+    """Emitted once, only when the completion gate accepts the final
+    response. Never emitted by the model, and never on a pause, error,
+    or exhausted limit — only on a genuine, gate-approved completion."""
 
     EVENT_TYPE = "task_complete"
-    result: str = Field(..., description="The final task result")
+    decision: CompletionDecision = Field(
+        ..., description="The aggregate decision that closed this turn"
+    )
+
+
+class CompletionRejectedEvent(TasksEvent):
+    """Emitted every time the completion gate rejects a proposed final
+    response as incomplete and forces the model to try again. Distinct
+    from TaskCompleteEvent so a consumer can show retries live instead
+    of only finding out about them after the fact in ctx.messages."""
+
+    EVENT_TYPE = "completion_rejected"
+    decision: CompletionDecision = Field(
+        ..., description="The aggregate decision that rejected this response"
+    )
 
 
 # -------- -----------------------------------------------------------
@@ -229,16 +245,6 @@ class PlanningEvent(ReasoningEvent):
     plan: AgentPlan | None = Field(default=None)
 
 
-class EvalEvent(ReasoningEvent):
-    """Emmited durin the self-evaluationn step"""
-
-    EVENT_TYPE = "eval"
-    phase: t.Literal["start", "complete", "failed", "skipped", "intermediate"]
-    score: float | None = Field(default=None)
-    passed: bool | None = Field(default=None)
-    result: EvalResult | None = Field(default=None)
-
-
 class UserInputRequestEvent(ReasoningEvent):
     """The agent asked the user a question; the turn pauses until answered.
 
@@ -285,44 +291,29 @@ class AgentExecutionCompleteEvent(AgentEvent):
 
 
 class CompactionEvent(AgentEvent):
-    """Emitted when context compaction starts or finishes."""
+    """Emitted when context compaction starts and when it ends.
+
+    ``old_messages`` (end only) are the messages that left the window, for
+    hosts that archive the full conversation; the RunContext no longer has them.
+    """
 
     EVENT_TYPE = "compaction"
     phase: t.Literal["start", "end"] = Field(
         ..., description="Whether compaction is starting or finished"
     )
-    strategy: str = Field(..., description="Compaction strategy name")
-    changed: bool = Field(
-        default=False, description="Whether compaction changed the active transcript"
+    strategy: str = Field(..., description="Compaction strategy class name")
+    changed: bool = Field(default=False, description="Whether the window changed")
+    pruned_only: bool = Field(
+        default=False, description="The cheap prune pass was enough (no LLM)"
     )
-    old_message_count: int = Field(
-        default=0, description="Messages moved out of context"
-    )
-    recent_message_count: int = Field(default=0, description="Messages kept in context")
-    old_token_count: int = Field(
-        default=0, description="Token count moved out of context"
-    )
-    recent_token_count: int = Field(
-        default=0, description="Token count kept in context"
-    )
-    total_token_count: int = Field(
-        default=0, description="Token count before compaction"
-    )
-    live_message_threshold_tokens: int = Field(
-        default=0, description="Live message token count that triggered compaction"
-    )
-    live_message_budget_tokens: int = Field(
-        default=0, description="Raw live message budget kept after compaction"
+    tokens_before: int = Field(default=0, description="Live tokens before compacting")
+    tokens_after: int = Field(default=0, description="Live tokens after compacting")
+    kept_message_count: int = Field(default=0, description="Messages left in the window")
+    old_messages: list[Message] = Field(  # type: ignore[valid-type]
+        default_factory=list, description="Messages that left the window"
     )
     summary: str | None = Field(
-        default=None, description="Updated structured summary payload"
-    )
-    context_summary_persisted: bool = Field(
-        default=False,
-        description="Whether the summary was written to the context registry",
-    )
-    context_summary_session_id: str | None = Field(
-        default=None, description="Session id used when persisting the context summary"
+        default=None, description="What the model now sees of the past (render())"
     )
 
 
@@ -483,6 +474,14 @@ class ToolApprovalEvent(ToolEvent):
         )
 
 
+class ToolAutoApprovalEvent(ToolEvent):
+    """Emitted when policy approves a tool call without asking the user."""
+
+    EVENT_TYPE = "tool_auto_approval"
+    tool_call_id: str
+    tool_name: str
+
+
 class ToolValidationEvent(ToolEvent):
     """Event emitted after parameter validation."""
 
@@ -562,6 +561,7 @@ AgentEvents = Annotated[
     t.Union[
         TaskStartEvent,
         TaskCompleteEvent,
+        CompletionRejectedEvent,
         ModelCallEvent,
         ModelResponseEvent,
         ModelStreamChunkEvent,
@@ -570,10 +570,10 @@ AgentEvents = Annotated[
         LastMessageResponseEvent,
         PlanningEvent,
         UserInputRequestEvent,
-        EvalEvent,
         ToolCallEvent,
         ToolCallResponseEvent,
         ToolApprovalEvent,
+        ToolAutoApprovalEvent,
         ToolValidationEvent,
         ToolProgressEvent,
         BashStartedEvent,

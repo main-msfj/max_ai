@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from max_ai.clients.ollama import OllamaChatCompletionClient
-from max_ai.core.models import ModelConfig, OllamaChatCompletionClientConfig
+from max_ai.capabilities.clients.ollama import (
+    OllamaChatCompletionClient,
+    OllamaChatCompletionClientConfig,
+)
+from max_ai.core.model.llm import ModelConfig
 from max_ai.errors.client import ClientError
 
 

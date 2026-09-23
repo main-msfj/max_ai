@@ -1,13 +1,13 @@
 import pytest
+from max_ai.base.environment import ExecutionResult
 
+from max_ai.base.tools import CoreTool, ToolContext
+from max_ai.capabilities.tools.bash import BashTool
+from max_ai.core.event_type import BashFinishedEvent, BashStartedEvent
 from max_ai.core.tool.dispatcher import ToolDispatcher
 from max_ai.core.tool.registry import ToolRegistry
-from max_ai.base.tools import CoreTool, ToolContext
-from max_ai.core.event_type import BashFinishedEvent, BashStartedEvent
-from max_ai.capabilities.tools.bash import BashTool
 from max_ai.types.tool_call import ToolCallRecord
 from max_ai.types.tools import ToolApprovalMode
-from max_ai.base.environment import ExecutionResult
 
 
 class EchoTool(CoreTool):

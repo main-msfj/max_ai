@@ -1,5 +1,6 @@
 from enum import Enum
 
+
 # -------- ENUMS -----------------------------------------------------------
 class ApprovalStatus(str, Enum):
     """Status of a tool call in the approval workflow."""
@@ -18,6 +19,7 @@ class FailureReason(str, Enum):
     INVALID_PARAMETERS = "invalid_parameters"
     EXECUTION_ERROR = "execution_error"
     TIMEOUT = "timeout"
+    APPROVAL_DENIED = "approval_denied"
 
 class ToolCallStatus(str, Enum):
     PENDING_APPROVAL = "pending_approval"

@@ -1,7 +1,5 @@
-from pathlib import Path
 
 import pytest
-
 from max_ai.base.execution_workspace import ExecutionWorkspace, WorkspaceConflictError
 
 

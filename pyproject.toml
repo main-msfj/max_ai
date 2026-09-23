@@ -6,10 +6,10 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.135.1",
+    "flask>=3.1.3",
     "jinja2>=3.1.6",
     "jsonschema>=4.26.0",
-    "mcp>=1.26.0",
-    "mcp-server-fetch>=2025.4.7",
+    "mcp>=2.0,<3",
     "ollama>=0.6.1",
     "openai>=2.24.0",
     "opentelemetry-distro>=0.60b1",
@@ -23,7 +23,9 @@ dependencies = [
     "qdrant-client[fastembed]>=1.17.0",
     "redis>=7.2.0",
     "requests>=2.32.5",
+    "ruff>=0.16.8",
     "tiktoken>=0.12.0",
+    "textual>=4.0.0",
 ]
 
 [build-system]
@@ -32,6 +34,11 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["max_ai"]
+
+[tool.ruff.lint]
+# Ruff's own defaults (E4, E7, E9, F) kept explicit, plus "I" (import
+# sorting/formatting) — that's what actually surfaced this section.
+select = ["E4", "E7", "E9", "F", "I"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -43,11 +50,8 @@ markers = [
 [dependency-groups]
 dev = [
     "hatchling>=1.29.0",
-    "mcp>=1.26.0",
+    "mcp>=2.0,<3",
     "pyjwt>=2.11.0",
-]
-dev-imp = [
-    "flask>=3.1.3",
 ]
 
 ui = [
@@ -55,6 +59,9 @@ ui = [
 ]
 
 [project.optional-dependencies]
+mongodb = [
+    "pymongo>=4.13,<5",
+]
 runtime-modal = [
     "modal>=1.0,<2",
 ]

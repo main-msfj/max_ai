@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 from ...base.workspace import WorkspaceBase
-from ...termination import CancellationToken
+from ...core.termination import CancellationToken
 
 
 @dataclass(frozen=True)

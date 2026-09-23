@@ -18,29 +18,27 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-
-from max_ai.base.clients import CoreChatCompletionClient
+from max_ai.capabilities.stacks.priority_tools_layer import PriorityToolsLayer
+from max_ai.capabilities.stacks.routine_layer import RoutineLayer
 from max_ai.executor.local import LocalExecutor
+from max_ai.legacy.routines import LocalRoutineRegistry
+
 from max_ai.base.agent import Agent
-from max_ai.core.models import ModelConfig
+from max_ai.base.clients import CoreChatCompletionClient
+from max_ai.capabilities.context import LocalContextRegistry
+from max_ai.capabilities.knowledge import LocalKnowledgeRegistry
+from max_ai.capabilities.memory import LocalMemoryRegistry
+from max_ai.capabilities.skills.local import LocalSkillRegistry
+from max_ai.capabilities.stacks.agent_policy_layer import AgentPolicyLayer
+from max_ai.capabilities.stacks.context_layer import ContextLayer
+from max_ai.capabilities.stacks.knowledge_layer import KnowledgeLayer
+from max_ai.capabilities.stacks.memory_layer import MemoryLayer
+from max_ai.capabilities.stacks.skills_layer import SkillsLayer
+from max_ai.capabilities.workspace import WorkspaceLocal
+from max_ai.core.model.llm import ModelConfig
 from max_ai.errors.agent import AgentError
 from max_ai.types.completions import Usage
 from max_ai.types.run_context import RunContext
-
-from max_ai.stacks.memory_layer import MemoryLayer
-from max_ai.stacks.skills_layer import SkillsLayer
-from max_ai.stacks.context_layer import ContextLayer
-from max_ai.stacks.routine_layer import RoutineLayer
-from max_ai.stacks.knowledge_layer import KnowledgeLayer
-from max_ai.stacks.agent_policy_layer import AgentPolicyLayer
-from max_ai.stacks.priority_tools_layer import PriorityToolsLayer
-
-from max_ai.capabilities.memory import LocalMemoryRegistry
-from max_ai.capabilities.context import LocalContextRegistry
-from max_ai.capabilities.knowledge import LocalKnowledgeRegistry
-from max_ai.legacy.routines import LocalRoutineRegistry
-from max_ai.capabilities.skills.local import LocalSkillRegistry
-from max_ai.capabilities.workspace import WorkspaceLocal
 
 
 # =====================================================================

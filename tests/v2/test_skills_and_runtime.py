@@ -2,10 +2,10 @@ import asyncio
 
 import pytest
 
-from max_ai.capabilities.skills.local import LocalSkillRegistry
 from max_ai.capabilities.executor.docker import DockerExecutor
 from max_ai.capabilities.executor.local import LocalExecutor
 from max_ai.capabilities.executor.modal import ModalExecutor
+from max_ai.capabilities.skills.local import LocalSkillRegistry
 from max_ai.config import setting
 
 
@@ -81,10 +81,11 @@ def test_remote_executor_configuration_contract(factory):
 
 @pytest.mark.asyncio
 async def test_docker_start_contract_uses_copy_mount_and_nonroot_check(tmp_path, monkeypatch):
-    from max_ai.base.workspace import Workspace
-    from max_ai.base.execution_workspace import ExecutionWorkspace
     from max_ai.base.environment import ExecutionResult
+    from max_ai.base.execution_workspace import ExecutionWorkspace
+
     import max_ai.capabilities.executor.docker as docker_module
+    from max_ai.base.workspace import Workspace
 
     calls = []
     async def fake_run(argv, **kwargs):

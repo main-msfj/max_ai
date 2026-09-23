@@ -21,7 +21,6 @@ from abc import ABC, abstractmethod
 
 from ..types.run_context import RunContext
 
-
 # Run IDs are used as filesystem paths and database keys. We restrict
 # them to hex / alphanumeric / hyphen / underscore so no implementation
 # has to defend against path traversal or SQL escaping.

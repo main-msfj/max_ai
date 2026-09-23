@@ -5,17 +5,12 @@ from __future__ import annotations
 import asyncio
 import math
 import os
-from uuid import uuid4
 
-from pydantic import BaseModel
-
-from ....base.executor import ExecutorBase, ExecutionSession
+from ....base.executor import ExecutionSession, ExecutorBase
 from ....base.tools import ToolContext
-from ..process import run_process
-
-
-class LocalExecutorConfig(BaseModel):
-    max_output_bytes: int = 1 << 20
+from ....core.executor.process import run_process
+from ....ids import short_id
+from ._model import LocalExecutorConfig
 
 
 class LocalExecutor(ExecutorBase):
@@ -44,7 +39,7 @@ class LocalExecutor(ExecutorBase):
     async def connect(self, workspace, user_id, conversation_id) -> ExecutionSession:
         directory = workspace.materialize(user_id, conversation_id)
         session = ExecutionSession(
-            uuid4().hex, user_id, conversation_id, workspace,
+            short_id(), user_id, conversation_id, workspace,
             str(directory.root), handle=directory,
         )
         self._sessions[session.id] = session
@@ -115,7 +110,7 @@ class LocalExecutor(ExecutorBase):
         directory = session.handle
         deps.update(
             runtime_root=session.workspace_path,
-            conversation_dir=str(directory.conversation_dir),
+            workspace_dir=str(directory.workspace_dir),
             skills_dir=str(directory.skill_dir),
             filesystem_root=str(session.workspace.base_root),
             workspace_filesystem=session.workspace.get_filesystem(),

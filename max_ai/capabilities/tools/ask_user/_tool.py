@@ -15,14 +15,84 @@ serializes with the ``RunContext`` and survives process death.
 
 import typing as t
 
-from ....base.tools import CoreTool, ToolContext
-from ....termination.cancellation import CancellationToken
+from ....base.tools import CoreTool, CoreToolParameters, ToolContext
+from ....core.termination.cancellation import CancellationToken
 from ....types.tool_call import ToolCallRecord, ToolResult
 from ....types.tools import ToolApprovalMode
 
+_OPTION_SCHEMA = {
+    "type": "array",
+    "minItems": 2,
+    "maxItems": 4,
+    "items": {
+        "type": "object",
+        "properties": {
+            "label": {
+                "type": "string",
+                "description": "Short choice label (1-5 words).",
+            },
+            "description": {
+                "type": "string",
+                "description": "What this choice means or its trade-off.",
+            },
+        },
+        "required": ["label", "description"],
+        "additionalProperties": False,
+    },
+    "description": (
+        "2-4 choices, each a short label plus its trade-off. The user can "
+        "always type their own answer instead, so never add an 'Other' "
+        "choice. Omit for a purely free-text question."
+    ),
+}
+
+
+def _display_options(raw: t.Any) -> list[str] | None:
+    """Options as the "label — description" strings records carry."""
+    if not isinstance(raw, list):
+        return None
+    shown: list[str] = []
+    for option in raw:
+        if isinstance(option, str) and option.strip():
+            shown.append(option.strip())
+        elif isinstance(option, dict):
+            label = option.get("label")
+            if isinstance(label, str) and label.strip():
+                text = label.strip()
+                description = option.get("description")
+                if isinstance(description, str) and description.strip():
+                    text = f"{text} — {description.strip()}"
+                shown.append(text)
+    return shown or None
+
+
+def pending_questions(parameters: dict[str, t.Any]) -> list[dict[str, t.Any]]:
+    """Normalize an ask_user call into ``[{question, header, options}]``.
+
+    Accepts the current ``questions`` list and the legacy single
+    ``question``/``options`` form (records persisted before the change).
+    """
+    raw = parameters.get("questions")
+    if not isinstance(raw, list):
+        raw = [{"question": parameters.get("question"), "options": parameters.get("options")}]
+    questions: list[dict[str, t.Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("question") or "").strip()
+        if not text:
+            continue
+        header = item.get("header")
+        questions.append({
+            "question": text,
+            "header": header.strip() if isinstance(header, str) and header.strip() else None,
+            "options": _display_options(item.get("options")),
+        })
+    return questions
+
 
 class AskUserTool(CoreTool):
-    """Native framework tool — pause the run to ask the user a question."""
+    """Native framework tool — pause the run to ask the user questions."""
 
     TOOL_NAME: t.ClassVar[str] = "ask_user"
     # The tool's name before the rename. The executor still intercepts
@@ -35,16 +105,15 @@ class AskUserTool(CoreTool):
         super().__init__(
             name=self.TOOL_NAME,
             description=(
-                "Ask the user a question and wait for their answer. This is "
+                "Ask the user 1-4 questions and wait for the answers. This is "
                 "the ONLY way to ask the user something mid-task: it pauses "
-                "the run and shows an interactive question card in the UI. "
+                "the run and shows ONE interactive form with every question. "
                 "Use it whenever you need clarification, a decision, or a "
                 "preference that cannot be inferred from context — never ask "
-                "questions in your plain-text reply. If you have SEVERAL "
-                "independent questions, call this tool once per question in "
-                "the SAME response — the user sees them together as one form "
-                "and you get all answers in one round, instead of one slow "
-                "back-and-forth per question."
+                "questions in your plain-text reply. Put ALL the questions "
+                "you need right now in a single call (the `questions` list), "
+                "never one call per question: the user answers them together "
+                "and you get every answer in one round."
             ),
             approval_mode=ToolApprovalMode.AUTO_APPROVED,
         )
@@ -54,54 +123,45 @@ class AskUserTool(CoreTool):
         return {
             "type": "object",
             "properties": {
-                "question": {
-                    "type": "string",
-                    "description": "The question to ask the user.",
-                },
-                "options": {
+                "questions": {
                     "type": "array",
-                    "minItems": 2,
+                    "minItems": 1,
                     "maxItems": 4,
+                    "description": "Every question to ask now, in order.",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "label": {
+                            "question": {
+                                "type": "string",
+                                "description": "The full question, ending with '?'.",
+                            },
+                            "header": {
                                 "type": "string",
                                 "description": (
-                                    "Short choice label (1-5 words), shown as "
-                                    "the button title."
+                                    "Very short tab label (max 12 chars), "
+                                    "e.g. 'Name', 'Format', 'Detail'."
                                 ),
                             },
-                            "description": {
-                                "type": "string",
-                                "description": (
-                                    "What this choice means or its trade-off, "
-                                    "shown as the button subtitle."
-                                ),
-                            },
+                            "options": _OPTION_SCHEMA,
                         },
-                        "required": ["label", "description"],
+                        "required": ["question", "header"],
                         "additionalProperties": False,
                     },
-                    "description": (
-                        "Optional list of 2-4 choices rendered as clickable "
-                        "buttons, each with a short label and a description "
-                        "of its trade-off. Omit for free-text answers."
-                    ),
-                },
-                "multiSelect": {
-                    "type": "boolean",
-                    "default": False,
-                    "description": (
-                        "Whether the user may pick more than one option at "
-                        "once. Declared for forward compatibility only: the "
-                        "executor and UI do not honor it yet, so treat every "
-                        "answer as a single value until that follow-up lands."
-                    ),
                 },
             },
-            "required": ["question"],
+            "required": ["questions"],
         }
+
+    def validate_parameters(self, tool_request: ToolCallRecord) -> CoreToolParameters:
+        # Records persisted with the legacy single-question shape are
+        # rewritten to the current one so they still validate on resume.
+        params = tool_request.parameters
+        if "questions" not in params and "question" in params:
+            legacy: dict[str, t.Any] = {"question": params["question"], "header": "Question"}
+            if params.get("options"):
+                legacy["options"] = params["options"]
+            tool_request.parameters = {"questions": [legacy]}
+        return super().validate_parameters(tool_request)
 
     async def execute(
         self,
@@ -113,6 +173,8 @@ class AskUserTool(CoreTool):
         short-circuit: complete from a stored answer if one exists,
         otherwise report that the question is still pending. Never blocks.
         """
+        if tool_request.user_answers is not None:
+            return ToolResult.success_result(tool_request.id, {"answers": tool_request.user_answers})
         if tool_request.user_answer is not None:
             return ToolResult.success_result(tool_request.id, tool_request.user_answer)
         return ToolResult.tool_failure(

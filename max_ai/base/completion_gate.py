@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from abc import ABC, abstractmethod
+from collections.abc import Awaitable
 from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from .component import ComponentBase
+
 if TYPE_CHECKING:
+    from ..core.event_type import (
+        ModelResponseEvent,
+        ToolCallEvent,
+        ToolCallResponseEvent,
+    )
     from ..types.run_context import RunContext
 
 
@@ -25,66 +33,60 @@ class CompletionDecision(BaseModel):
     reasons: tuple[str, ...] = ()
 
 
-class CompletionGate:
-    """Evaluate runtime invariants and optional mandatory checks.
+class CompletionConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-    Checks are synchronous, short, read-only callbacks supplied by the host.
-    Run tests, network operations or other expensive verification elsewhere;
-    callbacks inspect its evidence. Missing/unknown evidence blocks completion.
-    Checks must scope evidence to the current task and current artifact version.
-    They cannot override cancellation, pending calls or exhausted budgets.
 
-    The gate neither reads TODO status nor treats old tool failures as permanent
-    blockers. Without mandatory checks, completion certifies only the runtime
-    conditions, not semantic task correctness. It never publishes files or
-    retries the model. Cancellation and resource limits are enforced by the
-    runtime; this component classifies their effect on completion.
+class CompletionBase(ComponentBase[CompletionConfig], ABC):
+    """Subclass and override what you need — only ``on_final_response`` is
+    required.
+
+    Registered as a handler on an Agent's ``EventBus``. The three
+    observation hooks (``on_model_response``, ``on_call_tool``,
+    ``on_tool_response``) are fire-and-forget: nothing reads their return
+    value, and they cannot veto anything. Only ``on_final_response`` can
+    force the loop to keep iterating instead of ending the turn.
+
+    Write anything a hook needs to remember into ``ctx`` (never into
+    ``self``) — one instance is shared across every turn this Agent runs,
+    so private state on ``self`` would leak between turns and wouldn't
+    survive a resume after a process restart.
+
+    Serialization is opt-in per subclass, like every other ``ComponentBase``
+    (``CoreTool`` doesn't implement it either): implement your own
+    ``_to_config``/``_from_config`` if you need it. There is no default
+    here on purpose — a default that quietly ignores a subclass's real
+    config is worse than no default at all.
     """
 
-    def __init__(
-        self,
-        checks: Mapping[str, Callable[[RunContext], CompletionCheck]] | None = None,
-    ) -> None:
-        self._checks = dict(checks or {})
-        if any(not isinstance(name, str) or not name.strip() or not callable(check)
-               for name, check in self._checks.items()):
-            raise ValueError("Completion checks require non-empty names and callables")
+    component_type = "completion"
+    component_schema = CompletionConfig
 
-    def evaluate(
-        self,
-        context: RunContext,
-        *,
-        final_requested: bool,
-        cancelled: bool = False,
-        exhausted_limits: tuple[str, ...] = (),
-    ) -> CompletionDecision:
-        if cancelled:
-            return CompletionDecision(status="cancelled", reasons=("Execution cancelled",))
-        if exhausted_limits:
-            return CompletionDecision(
-                status="incomplete",
-                reasons=tuple(f"Limit exhausted: {name}" for name in exhausted_limits),
-            )
-        pending = tuple(
-            f"Pending tool call: {record.id} ({record.status})"
-            for record in context.tool_state.records.values() if not record.is_consumed
-        )
-        if pending:
-            return CompletionDecision(status="waiting", reasons=pending)
-        if not final_requested:
-            return CompletionDecision(status="incomplete", reasons=("No final response proposed",))
+    @property
+    def gate_id(self) -> str:
+        """Key into ``ctx.completion_state``. Override if you register more
+        than one instance of the same class — two gates sharing an id would
+        silently overwrite each other's evidence."""
+        return type(self).__name__
 
-        reasons = []
-        for name, check in self._checks.items():
-            try:
-                result = check(context)
-                if not isinstance(result, CompletionCheck):
-                    raise TypeError("Check must return CompletionCheck")
-            except Exception as error:
-                reasons.append(f"{name}: verification unavailable ({type(error).__name__})")
-                continue
-            if result.status != "pass":
-                reasons.append(f"{name}: {result.status}: {result.reason or 'No passing evidence'}")
-        return CompletionDecision(
-            status="incomplete" if reasons else "completed", reasons=tuple(reasons),
-        )
+    def on_model_response(self, event: ModelResponseEvent, ctx: RunContext) -> None:
+        """Fires once the model responds, before any of its tool calls run."""
+        return None
+
+    def on_call_tool(self, event: ToolCallEvent, ctx: RunContext) -> None:
+        """Fires right before a tool call executes."""
+        return None
+
+    def on_tool_response(self, event: ToolCallResponseEvent, ctx: RunContext) -> None:
+        """Fires once a tool call finishes, success or failure."""
+        return None
+
+    @abstractmethod
+    def on_final_response(
+        self, ctx: RunContext
+    ) -> CompletionDecision | Awaitable[CompletionDecision]:
+        """Decide whether the turn can end. Called only when the model
+        proposed a final answer with no tool calls. May be ``def`` or
+        ``async def`` — implement it async if verifying needs an LLM-judge
+        call or any other I/O; a cheap local check can stay synchronous."""
+        ...

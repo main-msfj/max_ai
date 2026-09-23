@@ -1,7 +1,13 @@
 """MCP integration for MaxAI agents."""
 
+from ._model import (
+    HTTPServerConfig,
+    MCPServerConfig,
+    StdioMCPServerConfig,
+    deserialize_mcp_servers,
+    serialize_mcp_servers,
+)
 from .client_manager import MCPClientManager
-from .config import HTTPServerConfig, MCPServerConfig, StdioMCPServerConfig
 from .integration import create_mcp_tools
 from .tool import MCPResourceTool, MCPTool
 
@@ -12,5 +18,7 @@ __all__ = [
     "MCPServerConfig",
     "MCPTool",
     "StdioMCPServerConfig",
+    "deserialize_mcp_servers",
+    "serialize_mcp_servers",
     "create_mcp_tools",
 ]

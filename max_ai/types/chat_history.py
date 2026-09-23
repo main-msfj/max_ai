@@ -1,10 +1,11 @@
 """Chat History Context"""
 
 import typing as t
+
 from pydantic import field_validator
 
-from ..core.messages import CoreMessage
 from ..core.blocks import ChatHistoryBlock
+from ..core.messages import CoreMessage
 from ..errors.context import ChatHistoryError
 
 

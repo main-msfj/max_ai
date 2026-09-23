@@ -6,14 +6,14 @@ from __future__ import annotations
 
 import typing as t
 from datetime import datetime, timezone
+
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..core.messages import CoreMessage, AssistantMessage
-from .completions import Usage
 from ..base.completion_gate import CompletionDecision
+from ..core.messages import AssistantMessage, CoreMessage
+from .completions import Usage
 from .run_context import RunContext
 from .tool_call import ToolCallRecord
-
 
 # Allowed values for ``finish_reason``. Using ``Literal`` so callers
 # get type-checking help; new reasons should be added here as the
@@ -22,12 +22,14 @@ FinishReason = t.Literal[
     "stop",  # LLM emitted no tool calls; conversation done
     "max_iterations",  # ReActLoop hit max_loop_iterations
     "approval_needed",  # paused waiting for user approval on a tool
+    "tool_denied",  # paused because a tool call was denied (rejected or blocked by policy)
     "tool_direct_return",  # a tool with return_control_to_llm=False finished
     "no_result",  # client returned without a result (provider error)
     "error",  # uncaught exception in the run
     "cancelled",  # cancellation token was triggered
     "input_needed",  # run paused waiting for additional input from the user
     "incomplete",  # completion gate did not accept the proposed final response
+    "waiting",  # completion gate is waiting on something outside the model's control
 ]
 
 

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Capabilities · Max AI framework documentation.">
+  <title>Capabilities · Max AI Documentation</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script defer src="/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Max AI home"><span class="brand-mark"><i></i><i></i><i></i></span><span>max<span class="brand-accent">ai</span></span></a>
+    <div class="topbar-actions"><a class="github-link" href="/architecture.md">Architecture <span>↗</span></a><button class="icon-button" id="theme-toggle" type="button" aria-label="Toggle theme">☼</button><button class="menu-button" id="menu-toggle" type="button" aria-label="Open navigation">☰</button></div>
+  </header>
+  <aside class="sidebar" id="sidebar"><div class="sidebar-inner">
+    <div class="version-pill"><span class="status-dot"></span> v0.1 · in development</div>
+    <nav aria-label="Documentation"><p class="nav-label">Start here</p>
+        <a class="nav-link" href="/index.html#overview">Overview</a>
+        <a class="nav-link" href="/index.html#installation">Install & quickstart</a>
+        <p class="nav-label">Core concepts</p>
+        <a class="nav-link" href="/agent.html#agent">Agent configuration</a>
+        <a class="nav-link" href="/prompt-layers.html#prompt-overview">Prompt layers</a>
+        <a class="nav-link" href="/tools.html#tools">Tools & dispatch</a>
+        <a class="nav-link" href="/tools.html#reasoning">Reasoning loop</a>
+        <a class="nav-link" href="/tools.html#runtime-services">Runtime services</a>
+        <p class="nav-label">Capabilities</p>
+        <a class="nav-link" href="#memory">Capabilities</a>
+        <a class="nav-link active" href="#workspace">Workspace & execution</a>
+        <a class="nav-link" href="#providers">Model providers</a>
+        <p class="nav-label">Integrations</p>
+        <a class="nav-link" href="/integrations.html#mcp">MCP integrations</a>
+        <a class="nav-link" href="/integrations.html#output">Structured output</a>
+        <a class="nav-link" href="/integrations.html#human-in-loop">Approvals & resume</a>
+        <a class="nav-link" href="/integrations.html#interfaces">Application interfaces</a></nav>
+    <div class="sidebar-note"><span class="note-icon">✦</span><div><strong>Tip</strong><br>Follow a topic page from overview to implementation details.</div></div>
+  </div></aside>
+  <main class="main-content">
+    <section class="hero content-section page-hero" id="capabilities-top"><div class="eyebrow"><span class="eyebrow-line"></span> Capabilities · Providers</div><h1>Add the right<br><em>runtime pieces.</em></h1><p class="hero-copy">Workspaces, execution providers, and context registries supply capabilities around the core Agent. Configure only the providers this application needs.</p></section>
+<section class="section-block content-section" id="workspace"><div class="section-kicker">11 · Workspace &amp; execution</div><h2>Files and processes have separate providers.</h2><p><code>WorkspaceBase</code> owns persistent user files and skill materialization. <code>ExecutorBase</code> runs executor-routed tools. <code>EnvironmentManager</code> manages sessions linking the two. Available executors are Local, Docker, and Modal; local execution runs on the host and is not a sandbox.</p><div class="inline-code"><span>WorkspaceBase</span><span>EnvironmentManager</span><span>ExecutorBase</span></div></section>
+<section class="section-block content-section" id="memory"><div class="section-kicker">12 · Context sources</div><h2>Registries provide optional data.</h2><p>Memory is scoped to a user and session. Skills provide instructions and resources. Knowledge registries expose retrieval tools. Context registries are also available as independent providers for context data. Each capability has provider implementations under <code>max_ai.capabilities</code>, with config models kept in <code>_model.py</code>.</p></section>
+<section class="section-block content-section" id="providers"><div class="section-kicker">13 · Model providers</div><h2>Provider clients share a contract.</h2><p>Provider-specific clients translate framework messages, tool schemas, streaming, and usage data to the model service. Current client packages include Ollama, OpenAI, and OpenRouter.</p><div class="inline-code"><span>capabilities/clients/ollama</span><span>capabilities/clients/openai</span><span>capabilities/clients/openrouter</span></div></section>
+<section class="section-block content-section" id="completion-gate"><div class="section-kicker">16 · Run outcomes</div><h2>Completion is an explicit outcome.</h2><p>Runs can finish normally or pause for approval or additional input, hit an iteration limit, be cancelled, or remain incomplete. <code>AgentResponse</code> exposes the finish reason, completion decision, final text, and pending approval state.</p><div class="inline-code"><span>AgentResponse</span><span>finish_reason</span><span>needs_approval</span></div></section>
+    <footer class="footer"><div class="brand"><span class="brand-mark"><i></i><i></i><i></i></span><span>max<span class="brand-accent">ai</span></span></div><span>Capabilities</span><a href="/architecture.md">Framework architecture ↗</a></footer>
+  </main>
+</body>
+</html>

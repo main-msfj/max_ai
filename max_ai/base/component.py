@@ -6,11 +6,10 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-import warnings
 import typing as t
+import warnings
 
 from pydantic import BaseModel
-
 
 ComponentType = t.Union[
     t.Literal[
@@ -26,7 +25,6 @@ ComponentType = t.Union[
         "knowledge",
         "prompts",
         "skills",
-        "routines",
         "context",
     ],
     str,
@@ -66,20 +64,23 @@ def _type_to_provider_str(cls: type) -> str:
 
 
 KNOWN_PROVIDERS: dict[str, str] = {
-    "ollama": "max_ai.clients.ollama.client.OllamaChatCompletionClient",
-    "OllamaChatCompletionClient": "max_ai.clients.ollama.client.OllamaChatCompletionClient",
-    "maxai.llm.OllamaChatCompletionClient": "max_ai.clients.ollama.client.OllamaChatCompletionClient",
-    "OpenAIChatCompletionClient": "max_ai.clients.openai.client.OpenAIChatCompletionClient",
-    "maxai.llm.OpenAIChatCompletionClient": "max_ai.clients.openai.client.OpenAIChatCompletionClient",
-    "maxai.stacks.AgentPolicyLayer": "max_ai.stacks.agent_policy_layer.AgentPolicyLayer",
-    "maxai.stacks.TaskAnalysisLayer": "max_ai.stacks.task_analysis_layer.TaskAnalysisLayer",
-    "maxai.stacks.RenderingLayer": "max_ai.stacks.rendering_layer.RenderingLayer",
-    "maxai.stacks.PriorityToolsLayer": "max_ai.stacks.priority_tools_layer.PriorityToolsLayer",
-    "maxai.stacks.SkillsLayer": "max_ai.stacks.skills_layer.SkillsLayer",
-    "maxai.stacks.RoutineLayer": "max_ai.stacks.routine_layer.RoutineLayer",
-    "maxai.stacks.KnowledgeLayer": "max_ai.stacks.knowledge_layer.KnowledgeLayer",
-    "maxai.stacks.ContextLayer": "max_ai.stacks.context_layer.ContextLayer",
-    "maxai.stacks.MemoryLayer": "max_ai.stacks.memory_layer.MemoryLayer",
+    "ollama": "max_ai.capabilities.clients.ollama.client.OllamaChatCompletionClient",
+    "OllamaChatCompletionClient": "max_ai.capabilities.clients.ollama.client.OllamaChatCompletionClient",
+    "maxai.llm.OllamaChatCompletionClient": "max_ai.capabilities.clients.ollama.client.OllamaChatCompletionClient",
+    "OpenAIChatCompletionClient": "max_ai.capabilities.clients.openai.client.OpenAIChatCompletionClient",
+    "maxai.llm.OpenAIChatCompletionClient": "max_ai.capabilities.clients.openai.client.OpenAIChatCompletionClient",
+    "OpenRouterChatCompletionClient": "max_ai.capabilities.clients.openrouter.client.OpenRouterChatCompletionClient",
+    "maxai.llm.OpenRouterChatCompletionClient": "max_ai.capabilities.clients.openrouter.client.OpenRouterChatCompletionClient",
+    "maxai.stacks.AgentPolicyLayer": "max_ai.capabilities.stacks.agent_policy_layer.AgentPolicyLayer",
+    "maxai.stacks.TaskAnalysisLayer": "max_ai.capabilities.stacks.task_analysis_layer.TaskAnalysisLayer",
+    "maxai.stacks.RenderingLayer": "max_ai.capabilities.stacks.rendering_layer.RenderingLayer",
+    "maxai.stacks.SkillsLayer": "max_ai.capabilities.stacks.skills_layer.SkillsLayer",
+    "maxai.stacks.KnowledgeLayer": "max_ai.capabilities.stacks.knowledge_layer.KnowledgeLayer",
+    "maxai.stacks.ContextLayer": "max_ai.capabilities.stacks.context_layer.ContextLayer",
+    "maxai.stacks.MemoryLayer": "max_ai.capabilities.stacks.memory_layer.MemoryLayer",
+    "maxai.stacks.SessionStateLayer": "max_ai.capabilities.stacks.session_state_layer.SessionStateLayer",
+    "maxai.compaction.SummaryCompaction": "max_ai.capabilities.compaction.summary._strategy.SummaryCompaction",
+    "maxai.compaction.SlidingWindowCompaction": "max_ai.capabilities.compaction.window._strategy.SlidingWindowCompaction",
 }
 
 

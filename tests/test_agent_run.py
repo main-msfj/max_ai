@@ -7,12 +7,11 @@ import pytest
 from max_ai.base.agent import Agent
 from max_ai.base.clients import CoreChatCompletionClient
 from max_ai.base.compaction import CompactionResult, CoreCompaction
-from max_ai.core.event_type import CompactionEvent
-from max_ai.core.messages import AssistantMessage
-from max_ai.core.messages import UserMessage
-from max_ai.core.models import ModelConfig
 from max_ai.capabilities.memory import LocalMemoryRegistry
-from max_ai.stacks.memory_layer import MemoryLayer
+from max_ai.capabilities.stacks.memory_layer import MemoryLayer
+from max_ai.core.event_type import CompactionEvent
+from max_ai.core.messages import AssistantMessage, UserMessage
+from max_ai.core.model.llm import ModelConfig
 from max_ai.types.completions import ChatCompletionResult, Usage
 from max_ai.types.run_context import RunContext
 

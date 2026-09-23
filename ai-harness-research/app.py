@@ -5,7 +5,6 @@ from pathlib import Path
 
 from flask import Flask, abort, redirect, send_from_directory
 
-
 SITE_DIR = Path(__file__).resolve().parent
 app = Flask(__name__, static_folder=str(SITE_DIR), static_url_path="")
 

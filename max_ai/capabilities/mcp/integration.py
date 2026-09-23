@@ -5,8 +5,8 @@ from __future__ import annotations
 import typing as t
 
 from ...base.tools import CoreTool
+from ._model import MCPServerConfig
 from .client_manager import MCPClientManager
-from .config import MCPServerConfig
 
 
 async def create_mcp_tools(

@@ -6,19 +6,17 @@ import asyncio
 import inspect
 import logging
 import typing as t
+from asyncio import CancelledError as AsyncioCancelledError
 from concurrent.futures import CancelledError as FuturesCancelledError
 
-from asyncio import CancelledError as AsyncioCancelledError
-from pydantic import ConfigDict, create_model, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError, create_model
 
-
-from ...loggers import ScopedLogger
-from ...errors.tools import DockerToolReferenceError, ToolRetry
-from ...termination import CancellationToken
 from ...base.tools import CoreTool, ToolContext
+from ...core.termination import CancellationToken
+from ...errors.tools import DockerToolReferenceError, ToolRetry
+from ...loggers import ScopedLogger
 from ...types.tool_call import ToolCallRecord, ToolResult
-from ...types.tools import ToolApprovalMode, CoreToolParameters, DockerToolRef
-
+from ...types.tools import CoreToolParameters, DockerToolRef, ToolApprovalMode
 
 # -------- LOGGER -----------------------------------------------------------
 logger = logging.getLogger(__name__)

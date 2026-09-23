@@ -1,5 +1,6 @@
 
 import random
+
 from max_ai.tools import tool
 
 

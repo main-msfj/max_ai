@@ -3,12 +3,12 @@
 import asyncio
 import math
 import os
-from uuid import uuid4
 import weakref
+from uuid import uuid4
 
-from .environment import Environment, ExecutionResult
 from ...base.workspace import Workspace
-from ...termination import CancellationToken
+from ...core.termination import CancellationToken
+from .environment import Environment, ExecutionResult
 
 
 class DockerEnvironment(Environment):

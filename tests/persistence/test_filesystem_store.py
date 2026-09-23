@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from max_ai.persistence.filesystem import FileSystemRunContextStore
-from max_ai.persistence.core import validate_run_id
-from max_ai.types.run_context import RunContext
 from max_ai.core.messages import UserMessage
-from max_ai.core.tool_state import ToolCallRecord
+from max_ai.core.tool.state import ToolCallRecord
+from max_ai.persistence.core import validate_run_id
+from max_ai.persistence.filesystem import FileSystemRunContextStore
+from max_ai.types.run_context import RunContext
 
 
 # -------- VALIDATION -----------------------------------------------------------

@@ -7,8 +7,8 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
-from .environment import Environment
 from ...base.workspace import Workspace
+from .environment import Environment
 
 EnvironmentFactory = Callable[[Workspace, str, str], Environment]
 

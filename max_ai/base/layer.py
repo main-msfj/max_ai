@@ -13,13 +13,12 @@ from jinja2 import (
     Template,
     TemplateSyntaxError,
     meta,
-    select_autoescape,
 )
 from pydantic import BaseModel
 
-from .component import ComponentBase
+from ..core.model.stacks import StackConfig
 from ..errors.stacks import StackError
-from ..core.models import StackConfig
+from .component import ComponentBase
 
 
 class CoreLayer(ComponentBase[BaseModel], ABC):
@@ -48,7 +47,7 @@ class CoreLayer(ComponentBase[BaseModel], ABC):
         render-time variables winning on collision).
     """
 
-    _DEFAULT_TEMPLATE_PATH = Path(__file__).parent.parent / "stacks" / "prompts"
+    _DEFAULT_TEMPLATE_PATH = Path(__file__).parent.parent / "capabilities" / "stacks" / "prompts"
 
     def __init__(
         self,
@@ -98,7 +97,8 @@ class CoreLayer(ComponentBase[BaseModel], ABC):
         return Environment(
             loader=FileSystemLoader(search_paths),
             undefined=StrictUndefined,
-            autoescape=select_autoescape(enabled_extensions=(), default=False),
+            # Prompts are plain text for a model, never HTML: no escaping.
+            autoescape=False,
             trim_blocks=True,
             lstrip_blocks=True,
             keep_trailing_newline=False,

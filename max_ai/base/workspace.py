@@ -19,10 +19,10 @@ class WorkspaceConfig(BaseModel):
 
 
 class WorkspaceBase(CoreAgentCapabilities[WorkspaceConfig], ABC):
-    """Own ``.agents/<user>/skills`` and ``.agents/<user>/<conversation>``.
+    """Own ``.agents/<user>/skills`` and ``.agents/<user>/workspace``.
 
-    User and conversation identifiers come from the run context. Files remain
-    on disk between runs; agents using the same root share the same workspace.
+    The user identifier comes from the run context. Files remain on disk
+    between runs; every conversation for a user shares the same workspace.
     """
 
     component_schema = WorkspaceConfig
@@ -46,7 +46,7 @@ class WorkspaceBase(CoreAgentCapabilities[WorkspaceConfig], ABC):
         return cls(root=config.root)
 
     def get_filesystem(self):
-        from ..workspace_copy.filesystem import UserFileSystem
+        from ..capabilities.workspace.local._filesystem import UserFileSystem
 
         if self._filesystem is None:
             self._filesystem = UserFileSystem(self.base_root)
@@ -55,7 +55,12 @@ class WorkspaceBase(CoreAgentCapabilities[WorkspaceConfig], ABC):
     def materialize(
         self, user_id: str, conversation_id: str | None = None
     ) -> WorkspaceDirectory:
-        """Create a user's directories without clearing existing files."""
+        """Create a user's directories without clearing existing files.
+
+        ``workspace_dir`` is the same single project directory for every
+        conversation this user has — ``conversation_id`` only scopes the
+        (optional) scratchpad, not the workspace itself.
+        """
         filesystem = self.get_filesystem()
         filesystem._safe_id(user_id, "user_id")
         if conversation_id is not None:
@@ -67,11 +72,7 @@ class WorkspaceBase(CoreAgentCapabilities[WorkspaceConfig], ABC):
             os.close(skills_fd)
         finally:
             os.close(user_fd)
-        conversation = (
-            filesystem.conversation_root(user_id, conversation_id)
-            if conversation_id is not None
-            else None
-        )
+        workspace = filesystem.workspace_root(user_id)
         scratch = (
             filesystem.scratchpad_root(user_id, conversation_id)
             if conversation_id is not None
@@ -80,9 +81,9 @@ class WorkspaceBase(CoreAgentCapabilities[WorkspaceConfig], ABC):
         return WorkspaceDirectory(
             root=root,
             skill_dir=root / "skills",
-            conversation_dir=conversation,
+            workspace_dir=workspace,
             scratch_dir=scratch,
-            artifacts_dir=conversation or root / "artifacts",
+            artifacts_dir=workspace,
         )
 
     @abstractmethod

@@ -7,10 +7,10 @@ any tool calls, and decide whether to call the LLM again.
 Lifecycle from the user's perspective:
 
   1. User constructs the loop with config-only kwargs (e.g.
-     ``ReActLoopSelfDirected(max_loop_iterations=5)``). No client, no
-     executor, no middleware — those don't exist yet at config time.
-  2. The agent calls ``loop.bind(name, client, tool_executor,
-     middleware_chain)`` inside ``run()`` to wire the runtime context.
+     ``ReactLoop(max_loop_iterations=5)``). No client, no
+     dispatcher, no middleware — those don't exist yet at config time.
+  2. The agent calls ``loop.bind(name, client, dispatcher=...,
+     tool_context=...)`` inside ``run()`` to wire the runtime context.
   3. The agent calls ``loop.execute_reasoning_loop(...)`` to drive the
      turn.
 
@@ -25,49 +25,44 @@ orphaned tool calls / unanswered tool responses) before calling
 
 from __future__ import annotations
 
-import json
-import time
 import asyncio
+import json
 import logging
+import time
 import typing as t
 from abc import ABC, abstractmethod
 
-from pydantic import BaseModel, Field, ConfigDict
-from .compaction import TokenCounter
+from pydantic import BaseModel, ConfigDict, Field
 
-from ..loggers import ScopedLogger
-from ..termination import CancellationToken
-from ..middleware.chain import MiddlewareChain
-
-from ..base.tools import CoreTool, ToolContext
-from ..base.clients import CoreChatCompletionClient
-
-from ..core.messages import AssistantMessage
-from ..core.messages import CoreMessage
+from ..core.compaction import TokenCounter
 from ..core.event_type import (
+    CompactionEvent,
     CoreEvent,
     ErrorEvent,
     ModelCallEvent,
-    CompactionEvent,
-    ToolApprovalEvent,
     ModelResponseEvent,
     ModelStreamChunkEvent,
+    ToolApprovalEvent,
 )
-
-from ..types.stacks import PromptCtx
-from ..types.run_context import RunContext
+from ..core.events_bus import EventBus
+from ..core.messages import AssistantMessage, CoreMessage
+from ..core.middleware.chain import MiddlewareChain
+from ..core.termination import CancellationToken
+from ..errors.client import ClientError
+from ..loggers import ScopedLogger
 from ..types.chat_history import ChatHistory
 from ..types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
-
-from ..errors.client import ClientError
-
-from ..core.events_bus import EventBus
+from ..types.run_context import RunContext
+from ..types.stacks import PromptCtx
+from .clients import CoreChatCompletionClient
+from .completion_gate import CompletionDecision
+from .tools import CoreTool, ToolContext
 
 if t.TYPE_CHECKING:
-    from .compaction import CoreCompaction
-    from .tool_executor import ToolExecutor
-    from ..core.tool.dispatcher import ToolDispatcher
     from ..core.messages import ToolCall
+    from ..core.tool.dispatcher import ToolDispatcher
+    from .compaction import CoreCompaction
+    from .memory import CoreMemoryRegistry
 
 
 logger = logging.getLogger(__name__)
@@ -107,9 +102,13 @@ class BaseLoopState(BaseModel):
     # and finish_reason after an LLM call returns.
     last_result: ChatCompletionResult | None = Field(default=None)
 
+    # Last CompletionDecision computed, whatever its status — Agent reads
+    # this to populate AgentResponse.completion after the turn ends.
+    last_completion_decision: CompletionDecision | None = Field(default=None)
+
     # Turn-scoped scratch space for loop guards (repetition counters,
     # fired-once flags). Fresh per turn because the loop state is.
-    # guard_state: dict[str, t.Any] = Field(default_factory=dict) (Por ahora deacivated)
+    guard_state: dict[str, t.Any] = Field(default_factory=dict)
 
     @property
     def retries(self) -> int:
@@ -187,7 +186,7 @@ class BaseReasoning(ABC):
     ) -> None:
         """Initialize config-only state.
 
-        Runtime dependencies (``name``, ``client``, ``tool_executor``,
+        Runtime dependencies (``name``, ``client``, ``dispatcher``,
         ``middleware_chain``) are not arguments — the agent injects
         them later via ``bind()``. This keeps user-constructed
         reasoning instances free of agent internals.
@@ -204,11 +203,11 @@ class BaseReasoning(ABC):
         # bind() raises a clear error rather than silently passing None.
         self._name: str | None = None
         self._client: CoreChatCompletionClient | None = None
-        self._tool_executor: ToolExecutor | None = None
         self._dispatcher: ToolDispatcher | None = None
         self._tool_context: ToolContext | None = None
         self._middleware_chain: MiddlewareChain | None = None
         self._compaction: CoreCompaction | None = None
+        self._memory: CoreMemoryRegistry | None = None
         self._max_context_tokens: int = 0
         self._completion_bus: EventBus | None = None
 
@@ -217,27 +216,11 @@ class BaseReasoning(ABC):
     def _set_loop_state(self, state: BaseLoopState) -> None:
         self._current_loop_state = state
 
-    def _register_runtime_tools(self, loop_state: BaseLoopState):
-        """Register per-run tools that need this run's loop_state.
-
-        Native to every loop. Subclasses override to ADD more (e.g.
-        self-directed adds update_plan), calling super() first.
-        """
-        from ..capabilities.tools.ask_user import AskUserTool
-
-        if self._dispatcher is not None:
-            return  # Agent owns registration in the dispatcher stack.
-        if not self.enable_human_input:
-            return
-        if AskUserTool.TOOL_NAME not in self.tool_executor.tools:
-            self.tool_executor.tools[AskUserTool.TOOL_NAME] = AskUserTool()
-
     # -------- BIND -----------------------------------------------------------
     def bind(
         self,
         name: str,
         client: CoreChatCompletionClient,
-        tool_executor: ToolExecutor | None = None,
         middleware_chain: MiddlewareChain | None = None,
         compaction: CoreCompaction | None = None,
         max_context_tokens: int = 0,
@@ -245,6 +228,7 @@ class BaseReasoning(ABC):
         dispatcher: ToolDispatcher | None = None,
         tool_context: ToolContext | None = None,
         completion_bus: EventBus | None = None,
+        memory: CoreMemoryRegistry | None = None,
     ) -> t.Self:
         """Wire runtime dependencies. Called by the agent inside ``run()``.
 
@@ -257,101 +241,96 @@ class BaseReasoning(ABC):
         concurrent ``agent.run()`` calls is unsafe — to be revisited
         when concurrent runs become a concern.
         """
-        if dispatcher is None and tool_executor is None:
+        if dispatcher is None:
             raise ValueError("A tool dispatcher is required")
-        if dispatcher is not None and tool_context is None:
+        if tool_context is None:
             raise ValueError("Dispatcher binding requires a ToolContext")
         self._dispatcher = dispatcher
         self._tool_context = tool_context
         self._name = name
         self._client = client
-        self._tool_executor = tool_executor
-        self._middleware_chain = middleware_chain if middleware_chain is not None else MiddlewareChain()
+        self._middleware_chain = (
+            middleware_chain if middleware_chain is not None else MiddlewareChain()
+        )
         self._compaction = compaction
+        self._memory = memory
         self._max_context_tokens = max_context_tokens
-        self._completion_bus = completion_bus if completion_bus is not None else EventBus()
+        self._completion_bus = (
+            completion_bus if completion_bus is not None else EventBus()
+        )
         return self
 
+    # -------- SESSION STATE & COMPACTION -------------------------------------------------
+    def _refresh_session_state(self, ctx: RunContext, prompts: PromptCtx) -> None:
+        """Keep the prompt's session state (compaction summary, plan) in sync
+        with ``ctx``. Re-renders the stack only when one of them changed."""
+        state = {
+            "compaction_summary": (
+                self._compaction.render(ctx.compaction.state) if self._compaction else None
+            ),
+            "current_plan": ctx.plan.as_text() if ctx.plan and ctx.plan.steps else None,
+        }
+        if all(prompts.variables.get(key) == value for key, value in state.items()):
+            return
+        prompts.variables.update(state)
+        if prompts.stack is not None:
+            for layer in prompts.stack:
+                prompts.rendered_layers[type(layer)] = layer.render(prompts.variables)
+        prompts.measure(self._prompt_counter)
+
     @property
-    def _compaction_token_counter(self) -> TokenCounter:
-        """Lazily built, cached per loop instance (tiktoken lookup isn't free)."""
-        counter = getattr(self, "_cached_token_counter", None)
-        if counter is None:
-            counter = TokenCounter(tokenizer_base=self.client.config.tokenizer_base)
-            self._cached_token_counter = counter
+    def _prompt_counter(self) -> TokenCounter:
+        """Counter with the client's tokenizer, built once per loop."""
+        tokenizer = getattr(getattr(self.client, "config", None), "tokenizer_base", None)
+        counter = getattr(self, "_cached_prompt_counter", None)
+        if counter is None or counter.tokenizer_base != tokenizer:
+            counter = TokenCounter(tokenizer_base=tokenizer) if tokenizer else TokenCounter()
+            self._cached_prompt_counter = counter
         return counter
 
-    def _should_compact(
-        self, ctx: RunContext, prompts: PromptCtx | None = None
-    ) -> bool:
-        from .compaction import live_message_threshold_tokens, client_max_output_tokens
-
-        if self._compaction is None or self._max_context_tokens <= 0:
-            return False
-        live_tokens = self._compaction_token_counter.count_messages(ctx.messages)
-        threshold = live_message_threshold_tokens(
-            self._max_context_tokens,
-            max_output_tokens=client_max_output_tokens(self.client),
-            prompt_tokens=(prompts.prompt_tokens or None) if prompts else None,
-        )
-        return threshold > 0 and live_tokens > threshold
-
-    async def _run_mid_loop_compaction(
-        self,
-        ctx: RunContext,
-        prompts: PromptCtx,
+    async def _compact_if_needed(
+        self, ctx: RunContext, prompts: PromptCtx,
     ) -> t.AsyncGenerator[CoreEvent, None]:
-        from .compaction import (
-            client_max_output_tokens,
-            live_message_budget_tokens,
-            live_message_capacity_tokens,
-            live_message_threshold_tokens,
-        )
+        """Run the strategy before a model call and apply its result to ``ctx``.
 
-        if self._compaction is None:
+        A failing compaction never ends the turn: it is reported as a
+        recoverable error and the call goes ahead with the window as it is.
+        """
+        from ..core.compaction import client_max_output_tokens
+
+        compaction = self._compaction
+        if compaction is None or not compaction.should_compact(
+            ctx, prompts, self._max_context_tokens, client_max_output_tokens(self.client),
+        ):
             return
-
-        result = await self._compaction.compact(
-            ctx=ctx,
-            prompts=prompts,
-            max_context_tokens=self._max_context_tokens,
-            client=self.client,
-        )
-
-        # The strategy is pure w.r.t. ctx.messages — the loop applies it.
-        # Evicted messages are gone from the agent's state by design (the
-        # model gets the summary); a UI that wants to keep showing them
-        # must keep its own display transcript (see max_ai/ui/server.py).
+        strategy = type(compaction).__name__
+        yield CompactionEvent(source=self.name, phase="start", strategy=strategy)
+        try:
+            result = await compaction.compact(
+                ctx=ctx, prompts=prompts, max_context_tokens=self._max_context_tokens,
+                client=self.client, memory=self._memory,
+            )
+        except Exception as error:
+            log.error("Compaction failed", exc=error, strategy=strategy)
+            yield ErrorEvent(
+                source=self.name, error_type="compaction_failed",
+                error_message=f"{strategy}: {error}", is_recoverable=True,
+            )
+            return
         if result.changed:
-            ctx.messages[:] = result.recent_messages
-
-        max_output_tokens = client_max_output_tokens(self.client)
-        prompt_tokens = prompts.prompt_tokens or None
+            ctx.messages[:] = result.messages
+            ctx.compaction.state = result.state
+            ctx.compaction.compactions += 1
+            ctx.compaction.archived_messages += len(result.old_messages)
+            self._refresh_session_state(ctx, prompts)
         yield CompactionEvent(
-            source=self.name,
-            phase="end",
-            strategy=type(self._compaction).__name__,
-            changed=result.changed,
-            old_message_count=len(result.old_messages),
-            recent_message_count=len(result.recent_messages),
-            old_token_count=result.old_token_count,
-            recent_token_count=result.recent_token_count,
-            total_token_count=result.total_token_count,
-            live_message_threshold_tokens=live_message_threshold_tokens(
-                self._max_context_tokens,
-                max_output_tokens=max_output_tokens,
-                prompt_tokens=prompt_tokens,
-            ),
-            live_message_budget_tokens=live_message_budget_tokens(
-                live_message_capacity_tokens(
-                    self._max_context_tokens,
-                    max_output_tokens=max_output_tokens,
-                    prompt_tokens=prompt_tokens,
-                )
-            ),
+            source=self.name, phase="end", strategy=strategy,
+            changed=result.changed, pruned_only=result.pruned_only,
+            tokens_before=result.tokens_before, tokens_after=result.tokens_after,
+            kept_message_count=len(result.messages), old_messages=result.old_messages,
+            summary=compaction.render(ctx.compaction.state),
         )
 
-    # -------- RUNTIME ACCESSORS -----------------------------------------------------------
     @property
     def name(self) -> str:
         if self._name is None:
@@ -365,10 +344,10 @@ class BaseReasoning(ABC):
         return self._client
 
     @property
-    def tool_executor(self) -> ToolExecutor:
-        if self._tool_executor is None:
+    def dispatcher(self) -> ToolDispatcher:
+        if self._dispatcher is None:
             raise RuntimeError(f"{type(self).__name__} not bound — call .bind() first.")
-        return self._tool_executor
+        return self._dispatcher
 
     @property
     def middleware_chain(self) -> MiddlewareChain:
@@ -394,23 +373,22 @@ class BaseReasoning(ABC):
 
     @property
     def tool_catalog(self) -> dict[str, CoreTool]:
-        if self._dispatcher is not None:
-            return {tool.name: tool for tool in self._dispatcher.registry.all_tools()}
-        return self.tool_executor.tools
+        return {tool.name: tool for tool in self.dispatcher.registry.all_tools()}
 
-    async def _execute_tools(self, ctx: RunContext, records, cancellation_token=None):
-        if self._dispatcher is not None:
-            from contextlib import aclosing
+    async def _execute_tools(
+        self,
+        ctx: RunContext,
+        records: t.Any,
+        cancellation_token: CancellationToken | None = None,
+    ):
+        from contextlib import aclosing
 
-            async with aclosing(self._dispatcher.dispatch_many(
+        async with aclosing(
+            self.dispatcher.dispatch_many(
                 records, self._tool_context, cancellation_token
-            )) as stream:
-                async for item in stream:
-                    yield item
-        else:
-            async for item in self.tool_executor.execute_tool_call(
-                ctx=ctx, records=records, cancellation_token=cancellation_token
-            ):
+            )
+        ) as stream:
+            async for item in stream:
                 yield item
 
     @staticmethod
@@ -488,8 +466,9 @@ class BaseReasoning(ABC):
         prompts: PromptCtx,
         loop_state: BaseLoopState,
         cancellation_token: CancellationToken | None = None,
-        output_format: t.Type[BaseModel] | None = None,
+        output_format: type[BaseModel] | None = None,
         transient_messages: t.Sequence[CoreMessage] | None = None,
+        tools_override: t.Sequence[CoreTool] | None = None,
         **kwargs: t.Any,
     ) -> t.AsyncGenerator[CoreEvent, None]:
         """Make one non-streaming LLM call through middleware.
@@ -498,6 +477,11 @@ class BaseReasoning(ABC):
         ``ModelResponseEvent`` summarizing the assistant message.
         Captures the result into ``loop_state`` so the loop body can
         inspect it after the helper returns.
+
+        ``tools_override``, when given, replaces the full tool catalog
+        for THIS call only (e.g. restricting the model to ``ask_user``/
+        ``update_plan`` right after a tool denial, so it can't reopen
+        the approval chain it was just denied).
 
         Raises:
             asyncio.CancelledError: cancellation was requested.
@@ -510,20 +494,24 @@ class BaseReasoning(ABC):
             session_id=ctx.session_id,
         )
 
+        tools = list(tools_override) if tools_override is not None else self._tools
         model_metadata: dict[str, t.Any] = {
             "model": getattr(self.client, "model", None),
-            "tools": self._tools,
+            "tools": tools,
         }
 
         if cancellation_token and cancellation_token.is_cancelled():
             raise asyncio.CancelledError()
+
+        # clear any previous result
+        loop_state.last_result = None
 
         async def _single_call(_ctx: RunContext) -> ChatCompletionResult:
             task = asyncio.create_task(
                 self.client.run(
                     ctx=self._model_context(_ctx, transient_messages),
                     prompts=prompts,
-                    tools=self._tools,
+                    tools=tools,
                     output_format=output_format,
                     stream=False,
                     **kwargs,
@@ -604,8 +592,9 @@ class BaseReasoning(ABC):
         prompts: PromptCtx,
         loop_state: BaseLoopState,
         cancellation_token: CancellationToken | None = None,
-        output_format: t.Type[BaseModel] | None = None,
+        output_format: type[BaseModel] | None = None,
         transient_messages: t.Sequence[CoreMessage] | None = None,
+        tools_override: t.Sequence[CoreTool] | None = None,
         **kwargs: t.Any,
     ) -> t.AsyncGenerator[CoreEvent, None]:
         """Make one streaming LLM call through middleware.
@@ -622,18 +611,24 @@ class BaseReasoning(ABC):
         accumulated by call id. Providers that emit complete tool
         calls per chunk (e.g. Ollama) still match this shape — they
         just send all the fragments in a single chunk.
+
+        ``tools_override`` — see ``_call_llm``.
         """
         _log = log.child(
             run_id=ctx.run_id,
             session_id=ctx.session_id,
         )
+        tools = list(tools_override) if tools_override is not None else self._tools
         model_metadata = {
             "model": getattr(self.client, "model", None),
-            "tools": self._tools,
+            "tools": tools,
         }
 
         if cancellation_token and cancellation_token.is_cancelled():
             raise asyncio.CancelledError()
+
+        # clear any previous result
+        loop_state.last_result = None
 
         async def _streaming_call(
             _ctx: RunContext,
@@ -641,7 +636,7 @@ class BaseReasoning(ABC):
             stream = await self.client.run(
                 ctx=self._model_context(_ctx, transient_messages),
                 prompts=prompts,
-                tools=self._tools,
+                tools=tools,
                 output_format=output_format,
                 stream=True,
                 **kwargs,

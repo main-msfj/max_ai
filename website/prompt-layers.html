@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Prompt layers · Max AI framework documentation.">
+  <title>Prompt layers · Max AI Documentation</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script defer src="/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Max AI home"><span class="brand-mark"><i></i><i></i><i></i></span><span>max<span class="brand-accent">ai</span></span></a>
+    <div class="topbar-actions"><a class="github-link" href="/architecture.md">Architecture <span>↗</span></a><button class="icon-button" id="theme-toggle" type="button" aria-label="Toggle theme">☼</button><button class="menu-button" id="menu-toggle" type="button" aria-label="Open navigation">☰</button></div>
+  </header>
+  <aside class="sidebar" id="sidebar"><div class="sidebar-inner">
+    <div class="version-pill"><span class="status-dot"></span> v0.1 · in development</div>
+    <nav aria-label="Documentation"><p class="nav-label">Start here</p>
+        <a class="nav-link" href="/index.html#overview">Overview</a>
+        <a class="nav-link" href="/index.html#installation">Install & quickstart</a>
+        <p class="nav-label">Core concepts</p>
+        <a class="nav-link" href="/agent.html#agent">Agent configuration</a>
+        <a class="nav-link active" href="#prompt-overview">Prompt layers</a>
+        <a class="nav-link" href="/tools.html#tools">Tools & dispatch</a>
+        <a class="nav-link" href="/tools.html#reasoning">Reasoning loop</a>
+        <a class="nav-link" href="/tools.html#runtime-services">Runtime services</a>
+        <p class="nav-label">Capabilities</p>
+        <a class="nav-link" href="/capabilities.html#memory">Capabilities</a>
+        <a class="nav-link" href="/capabilities.html#workspace">Workspace & execution</a>
+        <a class="nav-link" href="/capabilities.html#providers">Model providers</a>
+        <p class="nav-label">Integrations</p>
+        <a class="nav-link" href="/integrations.html#mcp">MCP integrations</a>
+        <a class="nav-link" href="/integrations.html#output">Structured output</a>
+        <a class="nav-link" href="/integrations.html#human-in-loop">Approvals & resume</a>
+        <a class="nav-link" href="/integrations.html#interfaces">Application interfaces</a></nav>
+    <div class="sidebar-note"><span class="note-icon">✦</span><div><strong>Tip</strong><br>Follow a topic page from overview to implementation details.</div></div>
+  </div></aside>
+  <main class="main-content">
+    
+    <section class="hero content-section page-hero" id="prompt-overview"><div class="eyebrow"><span class="eyebrow-line"></span> Core concepts · Prompt layers</div><h1>How a prompt<br><em>is assembled.</em></h1><p class="hero-copy">Prompt layers turn agent configuration and optional registry data into model instructions. They are rendered for each run, then adapted to the selected provider's message format.</p><div class="hero-actions"><a class="button button-primary" href="#layer-flow">Follow the data <span>↓</span></a><a class="button button-ghost" href="#custom-layers">See a layer example</a></div></section>
+    <div class="content-section topic-toc"><span>On this page</span><a href="#layer-flow">Data flow</a><a href="#layer-stack">Layer order</a><a href="#layer-variables">Variable sources</a><a href="#layer-example">Template rendering</a><a href="#layer-injection">Provider injection</a><a href="#custom-layers">Define a layer</a></div>
+    <section class="section-block content-section" id="layer-flow"><div class="section-kicker">01 · The pipeline</div><h2>Values flow through four stages.</h2><p>The user task and tool schemas remain separate inputs. The diagram follows only the prompt instructions from configuration to the provider request.</p>
+      <div class="layer-flow" aria-label="Prompt layer data flow">
+        <article class="layer-flow-card"><span>01 · Collect</span><h3>Agent + registries</h3><p>Read identity fields and collect configured skills, knowledge tool names, and memory context.</p><code>Agent._prompt_variables()</code></article>
+        <div class="layer-flow-arrow" aria-hidden="true">→</div>
+        <article class="layer-flow-card"><span>02 · Render</span><h3>Ordered templates</h3><p>Each active <code>CoreLayer</code> receives the shared values and renders its own Jinja2 template.</p><code>layer.render(variables)</code></article>
+        <div class="layer-flow-arrow" aria-hidden="true">→</div>
+        <article class="layer-flow-card"><span>03 · Package</span><h3><code>PromptCtx</code></h3><p>Rendered text is stored by layer class in <code>rendered_layers</code>, with the source stack and values.</p><code>Agent._prompts()</code></article>
+        <div class="layer-flow-arrow" aria-hidden="true">→</div>
+        <article class="layer-flow-card"><span>04 · Inject</span><h3>Model client</h3><p>The reasoning loop passes <code>PromptCtx</code> to <code>client.run()</code>; the client builds provider-native messages.</p><code>client.format_messages()</code></article>
+      </div>
+    </section>
+    <section class="section-block content-section" id="layer-stack"><div class="section-kicker">02 · Layer stack</div><h2>The current Agent stack.</h2><p><code>max_ai.agents.Agent._build_prompt_stack()</code> creates these layers in this order. The first three are always present. Capability layers appear when the matching registry is passed to the agent.</p>
+      <div class="layer-catalog">
+        <article class="layer-row"><span class="layer-index">01</span><div><h3>AgentPolicyLayer</h3><p>Agent identity, description, developer instructions, and behavior policy.</p></div><div class="layer-kind">Always · agent fields</div></article>
+        <article class="layer-row"><span class="layer-index">02</span><div><h3>TaskAnalysisLayer</h3><p>Static guidance for interpreting the task, checking missing information, and deciding whether to plan or clarify.</p></div><div class="layer-kind">Always · static template</div></article>
+        <article class="layer-row"><span class="layer-index">03</span><div><h3>RenderingLayer</h3><p>Static response-format guidance for readable text, code, lists, links, and diagrams.</p></div><div class="layer-kind">Always · static template</div></article>
+        <article class="layer-row optional"><span class="layer-index">04</span><div><h3>SkillsLayer</h3><p>Renders available skill names and summaries after the skill registry is prepared. Full instructions stay in the materialized skill package.</p></div><div class="layer-kind">When <code>skills</code> is set</div></article>
+        <article class="layer-row optional"><span class="layer-index">05</span><div><h3>KnowledgeLayer</h3><p>Lets the model know which retrieval tools exist. Search results arrive later as tool-result messages.</p></div><div class="layer-kind">When <code>knowledge</code> is set</div></article>
+        <article class="layer-row optional"><span class="layer-index">06</span><div><h3>MemoryLayer</h3><p>Adds the current memory snapshot and describes available memory operations.</p></div><div class="layer-kind">When <code>memory</code> is set</div></article>
+      </div>
+    </section>
+    <section class="section-block content-section" id="layer-variables"><div class="section-kicker">03 · Variable sources</div><h2>What gets injected into each layer?</h2><p>The agent collects values before rendering. A layer only reads the names used by its own template; it does not query a registry directly.</p>
+      <div class="layer-data-table"><div class="layer-data-head"><b>Template</b><b>Variables</b><b>Source</b></div>
+        <div><code>AgentPolicyLayer</code><span><code>name</code>, <code>description</code>, <code>instructions</code></span><span>Agent constructor</span></div>
+        <div><code>SkillsLayer</code><span><code>loaded_skills</code></span><span><code>skills.get_skills()</code> during prepare</span></div>
+        <div><code>KnowledgeLayer</code><span><code>retrieval_tools</code></span><span>Tool names from knowledge registries</span></div>
+        <div><code>MemoryLayer</code><span><code>persistent_memories</code>, <code>memory_tools</code></span><span>Scoped memory registry</span></div>
+        <div><code>TaskAnalysisLayer</code><span>—</span><span>Static template text; no run variables</span></div><div><code>RenderingLayer</code><span>—</span><span>Static template text; no run variables</span></div>
+      </div>
+      <aside class="layer-callout"><strong>Not part of the prompt layers</strong><p>The user task and chat history are <code>CoreMessage</code> entries in <code>RunContext</code>. Tool schemas are sent as the separate <code>tools</code> argument to the model client. Knowledge results are added as tool-result messages after retrieval.</p></aside>
+    </section>
+    <section class="section-block content-section" id="layer-example"><div class="section-kicker">04 · Template rendering</div><h2>A variable becomes prompt text.</h2><p>The template declares where a value belongs. At run time <code>CoreLayer.render()</code> inserts values into that position and returns a string. For example, <code>AgentPolicyLayer</code> has this structure:</p>
+      <div class="layer-example-grid"><div class="layer-code-panel"><div class="code-head"><span>Jinja2 template</span></div><pre><code>&lt;identity&gt;
+  &lt;name&gt;{{ name }}&lt;/name&gt;
+  &lt;description&gt;{{ description }}&lt;/description&gt;
+  &lt;instructions&gt;{{ instructions }}&lt;/instructions&gt;
+&lt;/identity&gt;</code></pre></div><div class="layer-render-arrow">Agent values<br>render into<br>the placeholders ↓</div><div class="layer-code-panel"><div class="code-head"><span>Rendered layer text</span></div><pre><code>&lt;identity&gt;
+  &lt;name&gt;math-assistant&lt;/name&gt;
+  &lt;description&gt;Answers questions with a calculator.&lt;/description&gt;
+  &lt;instructions&gt;Use the multiply tool when needed.&lt;/instructions&gt;
+&lt;/identity&gt;</code></pre></div></div>
+      <p>Templates use Jinja2. `CoreLayer` validates required and optional placeholders when it is constructed; strict rendering surfaces missing values instead of silently producing incomplete instructions.</p>
+    </section>
+    <section class="section-block content-section" id="layer-injection"><div class="section-kicker">05 · Injection point</div><h2>Rendered layers enter the model client here.</h2><p>The agent packages the ordered stack and its rendered strings in <code>PromptCtx</code>. The reasoning loop passes it into the client on every model call. The provider adapter decides how to form the actual request.</p>
+      <div class="code-card"><div class="code-head"><span>Agent._prompts() and BaseReasoning._call_llm()</span><button class="copy-button" data-copy="variables = await self._prompt_variables(ctx)&#10;prompts = PromptCtx(&#10;    stack=self._stack,&#10;    variables=variables,&#10;    rendered_layers={&#10;        type(layer): layer.render(variables)&#10;        for layer in self._stack&#10;    },&#10;)&#10;&#10;# The reasoning loop supplies this prompt context and tools separately.&#10;result = await client.run(&#10;    ctx=self._model_context(ctx, transient_messages),&#10;    prompts=prompts,&#10;    tools=tools,&#10;)">Copy</button></div><pre><code>variables = await self._prompt_variables(ctx)
+prompts = PromptCtx(
+    stack=self._stack,
+    variables=variables,
+    rendered_layers={
+        type(layer): layer.render(variables)
+        for layer in self._stack
+    },
+)
+
+# ReactLoop supplies prompt context and tool schemas separately.
+result = await self.client.run(
+    ctx=self._model_context(ctx, transient_messages),
+    prompts=prompts,
+    tools=tools,
+)</code></pre></div>
+      <p>For Ollama, non-empty rendered layers are joined with blank lines into a system message. Conversation history and the current task follow as messages. Other model clients can assemble those pieces differently to match their provider APIs.</p>
+    </section>
+    <section class="section-block content-section" id="custom-layers"><div class="section-kicker">06 · Defining layers</div><h2>Define a template and render it.</h2><p>A <code>CoreLayer</code> subclass defines a template, its required variables, and optional variables. The framework's generic <code>LayerContainer</code> can hold layers and replace defaults.</p>
+      <div class="code-card"><div class="code-head"><span>Layer authoring · generic stack API</span><button class="copy-button" data-copy="from max_ai.capabilities.stacks.agent_policy_layer import AgentPolicyLayer&#10;from max_ai.core.stacks.container import LayerContainer&#10;from max_ai.types.stacks import PromptCtx&#10;&#10;policy = AgentPolicyLayer(&#10;    template=(&#10;        '&lt;name&gt;{{ name }}&lt;/name&gt;\n'&#10;        '&lt;description&gt;{{ description }}&lt;/description&gt;\n'&#10;        '&lt;instructions&gt;{{ instructions }}&lt;/instructions&gt;'&#10;    ),&#10;)&#10;variables = {&#10;    'name': 'support',&#10;    'description': 'A support assistant',&#10;    'instructions': 'Answer with concise, grounded help.',&#10;}&#10;stack = LayerContainer([policy])&#10;prompt = PromptCtx(&#10;    stack=stack,&#10;    variables=variables,&#10;    rendered_layers={type(layer): layer.render(variables) for layer in stack},&#10;)">Copy</button></div><pre><code>from max_ai.capabilities.stacks.agent_policy_layer import AgentPolicyLayer
+from max_ai.core.stacks.container import LayerContainer
+from max_ai.types.stacks import PromptCtx
+
+policy = AgentPolicyLayer(
+    template=(
+        '&lt;name&gt;{{ name }}&lt;/name&gt;\n'
+        '&lt;description&gt;{{ description }}&lt;/description&gt;\n'
+        '&lt;instructions&gt;{{ instructions }}&lt;/instructions&gt;'
+    ),
+)
+variables = {
+    'name': 'support',
+    'description': 'A support assistant',
+    'instructions': 'Answer with concise, grounded help.',
+}
+stack = LayerContainer([policy])
+prompt = PromptCtx(
+    stack=stack,
+    variables=variables,
+    rendered_layers={type(layer): layer.render(variables) for layer in stack},
+)</code></pre></div>
+      <p>Important: this demonstrates the generic layer and <code>PromptCtx</code> APIs. The current public <code>max_ai.agents.Agent</code> builds its stack inside <code>_build_prompt_stack()</code>; it does not yet accept <code>prompt_layers=</code> in its constructor. So a custom stack is not currently injectable into that Agent without extending the runtime.</p>
+    </section>
+
+    <footer class="footer"><div class="brand"><span class="brand-mark"><i></i><i></i><i></i></span><span>max<span class="brand-accent">ai</span></span></div><span>Prompt layers</span><a href="/architecture.md">Framework architecture ↗</a></footer>
+  </main>
+</body>
+</html>
