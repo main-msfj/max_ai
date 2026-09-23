@@ -1,0 +1,49 @@
+services:
+  mongodb:
+    image: ${MONGODB_IMAGE:-mongo:8.0}
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_USERNAME:-maxai}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_PASSWORD:-maxai-local-dev}
+    ports:
+      - "127.0.0.1:${MONGODB_PORT:-27017}:27017"
+    volumes:
+      - mongodb-data:/data/db
+      - mongodb-config:/data/configdb
+    networks:
+      - backend
+    healthcheck:
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --eval
+        - "quit(db.adminCommand({ping: 1}).ok ? 0 : 1)"
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  mongo-express:
+    image: ${MONGO_EXPRESS_IMAGE:-mongo-express:1.0.2-20-alpine}
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      ME_CONFIG_MONGODB_URL: "mongodb://${MONGODB_USERNAME:-maxai}:${MONGODB_PASSWORD:-maxai-local-dev}@mongodb:27017/?authSource=admin"
+      ME_CONFIG_MONGODB_ENABLE_ADMIN: "true"
+      ME_CONFIG_BASICAUTH_ENABLED: "true"
+      ME_CONFIG_BASICAUTH_USERNAME: ${MONGO_EXPRESS_USERNAME:-maxai}
+      ME_CONFIG_BASICAUTH_PASSWORD: ${MONGO_EXPRESS_PASSWORD:-maxai-local-ui}
+    ports:
+      - "127.0.0.1:${MONGO_EXPRESS_PORT:-8081}:8081"
+    networks:
+      - backend
+
+volumes:
+  mongodb-data:
+  mongodb-config:
+
+networks:
+  backend:

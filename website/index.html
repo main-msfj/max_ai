@@ -1,44 +1,120 @@
-<!doctype html>
+<!DOCTYPE html>
+
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Overview · Max AI framework documentation.">
-  <title>Overview · Max AI Documentation</title>
-  <link rel="stylesheet" href="/styles.css">
-  <script defer src="/app.js"></script>
-</head>
-<body>
-  <header class="topbar">
-    <a class="brand" href="/" aria-label="Max AI home"><span class="brand-mark"><i></i><i></i><i></i></span><span>max<span class="brand-accent">ai</span></span></a>
-    <div class="topbar-actions"><a class="github-link" href="/architecture.md">Architecture <span>↗</span></a><button class="icon-button" id="theme-toggle" type="button" aria-label="Toggle theme">☼</button><button class="menu-button" id="menu-toggle" type="button" aria-label="Open navigation">☰</button></div>
-  </header>
-  <aside class="sidebar" id="sidebar"><div class="sidebar-inner">
-    <div class="version-pill"><span class="status-dot"></span> v0.1 · in development</div>
-    <nav aria-label="Documentation"><p class="nav-label">Start here</p>
-        <a class="nav-link active" href="#overview">Overview</a>
-        <a class="nav-link" href="#installation">Install & quickstart</a>
-        <p class="nav-label">Core concepts</p>
-        <a class="nav-link" href="/agent.html#agent">Agent configuration</a>
-        <a class="nav-link" href="/prompt-layers.html#prompt-overview">Prompt layers</a>
-        <a class="nav-link" href="/tools.html#tools">Tools & dispatch</a>
-        <a class="nav-link" href="/tools.html#reasoning">Reasoning loop</a>
-        <a class="nav-link" href="/tools.html#runtime-services">Runtime services</a>
-        <p class="nav-label">Capabilities</p>
-        <a class="nav-link" href="/capabilities.html#memory">Capabilities</a>
-        <a class="nav-link" href="/capabilities.html#workspace">Workspace & execution</a>
-        <a class="nav-link" href="/capabilities.html#providers">Model providers</a>
-        <p class="nav-label">Integrations</p>
-        <a class="nav-link" href="/integrations.html#mcp">MCP integrations</a>
-        <a class="nav-link" href="/integrations.html#output">Structured output</a>
-        <a class="nav-link" href="/integrations.html#human-in-loop">Approvals & resume</a>
-        <a class="nav-link" href="/integrations.html#interfaces">Application interfaces</a></nav>
-    <div class="sidebar-note"><span class="note-icon">✦</span><div><strong>Tip</strong><br>Follow a topic page from overview to implementation details.</div></div>
-  </div></aside>
-  <main class="main-content">
-    <section class="hero content-section" id="overview"><div class="eyebrow"><span class="eyebrow-line"></span> Python framework for agents</div><h1>Build agents that<br><em>do</em> things.</h1><p class="hero-copy">Max AI connects model clients, reasoning, tools, capabilities, and execution through typed interfaces. Start with one agent and add only the services your application needs.</p><div class="hero-actions"><a class="button button-primary" href="#quickstart">Get started <span>→</span></a><a class="button button-ghost" href="#architecture">Explore architecture</a></div><div class="hero-stats"><div><strong>Python 3.11+</strong><span>Pydantic-based contracts</span></div><div><strong>ReAct loop</strong><span>tool-using agent runtime</span></div><div><strong>Local, Docker, Modal</strong><span>select an executor</span></div></div></section>
-<section class="section-block content-section" id="installation"><div class="section-kicker">01 · Getting started</div><h2>Install the project.</h2><p>From a checkout of the repository, sync the project dependencies with uv.</p><div class="code-card compact-code"><div class="code-head"><span>Terminal</span><button class="copy-button" data-copy="uv sync">Copy</button></div><pre><code><span class="code-prompt">$</span> uv sync</code></pre></div></section>
-<section class="section-block content-section" id="quickstart"><div class="section-kicker">02 · First working example</div><h2>Build a small tool-using agent.</h2><p>This complete example defines a typed Python tool, adds it to an agent, asks a question that uses the tool, then reads the final response. It uses the Ollama client; start Ollama and pull a tool-capable model before running it.</p><div class="code-card"><div class="code-head"><span>agent.py</span><button class="copy-button" data-copy="import asyncio&#10;from max_ai.agents import Agent&#10;from max_ai.capabilities.clients.ollama import OllamaChatCompletionClient&#10;from max_ai.capabilities.tools.decorator import tool&#10;from max_ai.core.model.llm import ModelConfig&#10;&#10;@tool&#10;def multiply(left: int, right: int) -> int:&#10;    &quot;&quot;&quot;Multiply two integers.&quot;&quot;&quot;&#10;    return left * right&#10;&#10;async def main():&#10;    client = OllamaChatCompletionClient(&#10;        model='qwen3:8b',&#10;        config=ModelConfig(supports_function_calling=True),&#10;    )&#10;    agent = Agent(&#10;        name='math-assistant',&#10;        description='Answers simple questions with a calculator tool.',&#10;        instructions='Use the multiply tool when multiplication is needed.',&#10;        client=client,&#10;        toolset=[multiply],&#10;    )&#10;    async with agent:&#10;        result = await agent.run('What is 19 multiplied by 23?')&#10;        print(result.final_text)&#10;&#10;asyncio.run(main())">Copy</button></div><pre><code><span class="kw">import</span> asyncio
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/><script>try { const saved = localStorage.getItem('max-ai-theme'); document.documentElement.dataset.theme = saved || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); } catch (_) {}</script>
+<meta content="Overview · Max AI framework documentation." name="description"/>
+<title>Overview · Max AI Docs</title>
+<link href="/styles.css" rel="stylesheet"/>
+<script defer="" src="/app.js"></script>
+<link href="/favicon.svg" rel="icon" type="image/svg+xml"/></head>
+<body data-page="index.html">
+
+<a class="skip-link" href="#main-content">Skip to content</a>
+<header class="topbar">
+<a aria-label="Max AI home" class="brand" href="/"><svg aria-hidden="true" class="brand-logo" fill="none" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"><rect fill="currentColor" height="38" rx="10" width="38" x="1" y="1"></rect><path d="M10 28V12l10 12 10-12v16" stroke="var(--bg)" stroke-linejoin="round" stroke-width="3"></path><circle cx="30" cy="12" fill="#b9a5f4" r="3"></circle></svg><span>max<span class="brand-accent">ai</span></span><span class="brand-divider"></span><span class="header-label">Documentation</span></a>
+<div class="topbar-actions">
+<button aria-controls="search-dialog" aria-haspopup="dialog" class="search-trigger" type="button"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><span>Search documentation</span><kbd>⌘ K</kbd></button>
+<a class="header-link" href="/architecture.md">Architecture<svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M14 4h6v6m0-6L10 14M10 4H4v16h16v-6"></path></svg></a>
+<button aria-label="Switch color theme" class="icon-button" id="theme-toggle" type="button"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"></path></svg></button>
+<button aria-controls="sidebar" aria-expanded="false" aria-label="Open navigation" class="menu-button" id="menu-toggle" type="button"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M4 6h16M4 12h16M4 18h16"></path></svg></button>
+</div>
+</header>
+<nav aria-label="Primary" class="tabs-bar">
+<a class="selected" href="/">Documentation</a><a href="/#quickstart">Quickstart</a><a href="/agent.html#agent">API guide</a>
+<span class="release-label"><span class="status-dot"></span>v0.1.0 <span class="release-status">· in development</span></span>
+</nav>
+<aside class="sidebar" id="sidebar">
+<div class="sidebar-title"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 6c-3-3-7-3-10-2v15c3-1 7-1 10 2m0-15c3-3 7-3 10-2v15c-3-1-7-1-10 2V6Z"></path></svg>Max AI documentation</div>
+<nav aria-label="Documentation">
+<div class="nav-group">
+<p class="nav-label">Get started</p><a aria-current="location" class="nav-link active" href="/#overview"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 6c-3-3-7-3-10-2v15c3-1 7-1 10 2m0-15c3-3 7-3 10-2v15c-3-1-7-1-10 2V6Z"></path></svg>Overview</a><a class="nav-link" href="/#installation"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m7 6-6 6 6 6m10-12 6 6-6 6M14 3l-4 18"></path></svg>Installation</a><a class="nav-link" href="/#quickstart"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5 12h14m-5-5 5 5-5 5"></path></svg>Quickstart</a>
+</div>
+<div class="nav-group">
+<p class="nav-label">Core concepts</p><a class="nav-link" href="/agent.html#agent-top"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m12 3 9 5v9l-9 5-9-5V8l9-5Zm-9 5 9 5 9-5M12 13v9M8 5l9 5"></path></svg>Agents</a><a class="nav-link" href="/prompt-layers.html#prompt-overview"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m12 3 10 5-10 5L2 8l10-5Zm-10 9 10 5 10-5M2 16l10 5 10-5"></path></svg>Prompt layers</a><a class="nav-link" href="/tools.html#reasoning"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m12 3 10 5-10 5L2 8l10-5Zm-10 9 10 5 10-5M2 16l10 5 10-5"></path></svg>Reasoning loop</a>
+</div>
+<div class="nav-group">
+<p class="nav-label">Tools</p><a class="nav-link" href="/tools.html#tools"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m7 6-6 6 6 6m10-12 6 6-6 6M14 3l-4 18"></path></svg>Tools &amp; dispatch</a><a class="nav-link" href="/tools.html#function-tools">Function tools</a><a class="nav-link" href="/tools.html#native-tools">Native tools</a><a class="nav-link" href="/tools.html#runtime-services">Runtime services</a>
+</div>
+<div class="nav-group">
+<p class="nav-label">Capabilities</p><a class="nav-link" href="/capabilities.html#workspace"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m12 3 9 5v9l-9 5-9-5V8l9-5Zm-9 5 9 5 9-5M12 13v9M8 5l9 5"></path></svg>Workspace &amp; execution</a><a class="nav-link" href="/capabilities.html#memory">Memory &amp; knowledge</a><a class="nav-link" href="/capabilities.html#providers">Model providers</a><a class="nav-link" href="/capabilities.html#completion-gate">Run outcomes</a>
+</div>
+<div class="nav-group">
+<p class="nav-label">Integrations</p><a class="nav-link" href="/integrations.html#mcp"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m8 3 4 4m4-4 4 4M6 9l9 9m-5-5-5 5H2m7-12 9 9 3-3-9-9-3 3Zm0 0-3 3a6 6 0 0 0 9 9l3-3"></path></svg>MCP servers</a><a class="nav-link" href="/integrations.html#output">Structured output</a><a class="nav-link" href="/integrations.html#human-in-loop">Approvals &amp; resume</a><a class="nav-link" href="/integrations.html#interfaces">Application interfaces</a>
+</div>
+</nav>
+<div class="sidebar-note"><a href="/architecture.md">Framework architecture <svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M14 4h6v6m0-6L10 14M10 4H4v16h16v-6"></path></svg></a>
+</div>
+</aside><button aria-label="Close navigation" class="nav-backdrop" tabindex="-1" type="button"></button>
+<main class="main-content" id="main-content" tabindex="-1">
+<nav aria-label="Breadcrumb" class="breadcrumb"><a href="/">Docs</a><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m9 5 7 7-7 7"></path></svg><span>Get started</span><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m9 5 7 7-7 7"></path></svg><span>Overview</span>
+</nav>
+<details class="mobile-toc"><summary>On this page</summary>
+<nav aria-label="Page sections"><a class="toc-link" href="#overview">Overview</a><a class="toc-link" href="#use-cases">Build with Max AI</a><a class="toc-link" href="#installation">Installation</a><a class="toc-link" href="#quickstart">Your first agent</a><a class="toc-link" href="#architecture">How it fits together</a>
+</nav></details>
+<section class="hero content-section" id="overview">
+<div class="overview-heading"><svg aria-hidden="true" class="brand-logo" fill="none" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"><rect fill="currentColor" height="38" rx="10" width="38" x="1" y="1"></rect><path d="M10 28V12l10 12 10-12v16" stroke="var(--bg)" stroke-linejoin="round" stroke-width="3"></path><circle cx="30" cy="12" fill="#b9a5f4" r="3"></circle></svg>
+<h1>Max AI</h1>
+</div>
+<p class="overview-tagline">A Python framework for agents that take action.</p>
+<p class="overview-intro">Compose an agent from a model, instructions, and typed tools. Max AI connects the reasoning loop, execution environment, and context your application needs through explicit Python interfaces.</p>
+<div class="doc-badges"><span class="badge-version">v0.1.0</span><span>Python ≥ 3.11</span><span>Pydantic-based</span><span>Async runtime</span>
+</div>
+<div class="overview-callout"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6m0-10h.01"></path></svg>
+<p><strong>Start with a working example.</strong> Define a tool, connect a model, and run your first task in the <a href="#quickstart">quickstart</a>. Then explore the <a href="/agent.html">Agent API</a> as your application grows.</p>
+</div>
+</section>
+<section class="section-block content-section" id="use-cases">
+<h2>Build with Max AI<a aria-label="Link to Build with Max AI" class="heading-anchor" href="#use-cases">#</a></h2>
+<p>Choose a starting point for your application.</p>
+<div class="feature-grid"><a class="feature-card" href="/tools.html#function-tools"><span class="feature-icon"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m7 6-6 6 6 6m10-12 6 6-6 6M14 3l-4 18"></path></svg></span><span aria-hidden="true" class="card-arrow">↗</span>
+<h3>Give your agent tools</h3>
+<p>Turn Python functions into actions with validated inputs.</p></a><a class="feature-card" href="/integrations.html#mcp"><span class="feature-icon"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m8 3 4 4m4-4 4 4M6 9l9 9m-5-5-5 5H2m7-12 9 9 3-3-9-9-3 3Zm0 0-3 3a6 6 0 0 0 9 9l3-3"></path></svg></span><span aria-hidden="true" class="card-arrow">↗</span>
+<h3>Connect an MCP server</h3>
+<p>Bring external tools into the same agent run.</p></a><a class="feature-card" href="/integrations.html#output"><span class="feature-icon"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m5 12 4 4L19 6"></path></svg></span><span aria-hidden="true" class="card-arrow">↗</span>
+<h3>Get structured results</h3>
+<p>Describe your output with a Pydantic model.</p></a><a class="feature-card" href="/capabilities.html#workspace"><span class="feature-icon"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m12 3 9 5v9l-9 5-9-5V8l9-5Zm-9 5 9 5 9-5M12 13v9M8 5l9 5"></path></svg></span><span aria-hidden="true" class="card-arrow">↗</span>
+<h3>Choose an environment</h3>
+<p>Configure workspace files and tool execution.</p></a>
+</div>
+</section>
+<section class="section-block content-section" id="installation">
+<h2>Installation<a aria-label="Link to Installation" class="heading-anchor" href="#installation">#</a></h2>
+<p>Max AI requires <strong>Python 3.11 or later</strong>. From a local checkout of this repository, install the project and its dependencies.</p>
+<div class="tab-group">
+<div aria-label="Installation method" class="example-tabs" role="tablist">
+<button aria-controls="install-uv" aria-selected="true" id="tab-install-uv" role="tab" type="button">uv</button>
+<button aria-controls="install-pip" aria-selected="false" id="tab-install-pip" role="tab" tabindex="-1" type="button">pip</button>
+</div>
+<div aria-labelledby="tab-install-uv" class="tab-panel" id="install-uv" role="tabpanel">
+<div class="code-card">
+<div class="code-head"><span>Terminal</span><button aria-label="Copy code" class="copy-button" type="button"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect height="13" rx="2" width="12" x="8" y="8"></rect><path d="M16 8V3H3v13h5"></path></svg><span>Copy</span></button>
+</div><pre tabindex="0"><code>uv sync</code></pre>
+</div>
+</div>
+<div aria-labelledby="tab-install-pip" class="tab-panel" hidden="" id="install-pip" role="tabpanel">
+<div class="code-card">
+<div class="code-head"><span>Terminal</span><button aria-label="Copy code" class="copy-button" type="button"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect height="13" rx="2" width="12" x="8" y="8"></rect><path d="M16 8V3H3v13h5"></path></svg><span>Copy</span></button>
+</div><pre tabindex="0"><code>python -m pip install -e .</code></pre>
+</div>
+</div>
+</div>
+<p class="installation-note">Using Ollama? Start the local server and download a model before running the examples: <code>ollama pull qwen3:8b</code>.</p>
+</section>
+<section class="section-block content-section" id="quickstart">
+<h2>Your first agent<a aria-label="Link to Your first agent" class="heading-anchor" href="#quickstart">#</a></h2>
+<p>An agent combines a model client with instructions and the tools it can call. These examples use a local Ollama model.</p>
+<div class="tab-group">
+<div aria-label="Agent example" class="example-tabs" role="tablist">
+<button aria-controls="example-tools" aria-selected="true" id="tab-example-tools" role="tab" type="button">Agent with tools</button>
+<button aria-controls="example-output" aria-selected="false" id="tab-example-output" role="tab" tabindex="-1" type="button">Structured output</button>
+</div>
+<div aria-labelledby="tab-example-tools" class="tab-panel" id="example-tools" role="tabpanel">
+<p>Define a typed function, register it with <code>toolset</code>, and let the agent use it to answer a question.</p>
+<div class="code-card">
+<div class="code-head"><span>agent.py</span><button aria-label="Copy code" class="copy-button" type="button"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect height="13" rx="2" width="12" x="8" y="8"></rect><path d="M16 8V3H3v13h5"></path></svg><span>Copy</span></button>
+</div><pre tabindex="0"><code><span class="kw">import</span> asyncio
 <span class="kw">from</span> max_ai.agents <span class="kw">import</span> Agent
 <span class="kw">from</span> max_ai.capabilities.clients.ollama <span class="kw">import</span> OllamaChatCompletionClient
 <span class="kw">from</span> max_ai.capabilities.tools.decorator <span class="kw">import</span> tool
@@ -49,31 +125,108 @@
     <span class="str">"""Multiply two integers."""</span>
     <span class="kw">return</span> left * right
 
-<span class="kw">async def</span> <span class="fn">main</span>():
-    <span class="str"># 1. Select a model client and declare its tool-calling support.</span>
+<span class="kw">async</span> <span class="kw">def</span> <span class="fn">main</span>():
+    <span class="comment"># 1. Select a model client and declare its tool-calling support.</span>
     client = OllamaChatCompletionClient(
-        model=<span class="str">"qwen3:8b"</span>,
+        model=<span class="str">"</span><span class="str">qwen3:8b</span><span class="str">"</span>,
         config=ModelConfig(supports_function_calling=<span class="kw">True</span>),
     )
 
-    <span class="str"># 2. Compose the agent from its identity, client, and local toolset.</span>
+    <span class="comment"># 2. Compose the agent from its identity, client, and local toolset.</span>
     agent = Agent(
-        name=<span class="str">"math-assistant"</span>,
-        description=<span class="str">"Answers simple questions with a calculator tool."</span>,
-        instructions=<span class="str">"Use the multiply tool when multiplication is needed."</span>,
+        name=<span class="str">"</span><span class="str">math-assistant</span><span class="str">"</span>,
+        description=<span class="str">"</span><span class="str">Answers simple questions with a calculator tool.</span><span class="str">"</span>,
+        instructions=<span class="str">"</span><span class="str">Use the multiply tool when multiplication is needed.</span><span class="str">"</span>,
         client=client,
         toolset=[multiply],
     )
 
-    <span class="str"># 3. Run a task and read the final assistant text.</span>
-    <span class="kw">async with</span> agent:
-        result = <span class="kw">await</span> agent.run(<span class="str">"What is 19 multiplied by 23?"</span>)
-        <span class="fn">print</span>(result.final_text)
+    <span class="comment"># 3. Run a task and read the final assistant text.</span>
+    <span class="kw">async</span> <span class="kw">with</span> agent:
+        result = <span class="kw">await</span> agent.run(<span class="str">"</span><span class="str">What is 19 multiplied by 23?</span><span class="str">"</span>)
+        <span class="type">print</span>(result.final_text)
 
-asyncio.run(main())</code></pre></div><p>Here <code>@tool</code> builds a validated tool adapter from the function signature and docstring. The function is passed through <code>toolset</code>; Max AI handles registration and dispatch. The <code>async with</code> block closes the agent's managed execution resources.</p></section>
-<section class="section-block content-section" id="use-cases"><div class="section-kicker">03 · Choose a path</div><h2>What are you building?</h2><p>Start from the task, then open the relevant parts of the framework.</p><div class="feature-grid"><a class="feature-card" href="/tools.html#tools"><span class="feature-icon orange">⌘</span><h3>Give an agent tools</h3><p>Define typed Python functions and route calls through the dispatcher.</p><span class="card-arrow">Read tools →</span></a><a class="feature-card" href="/integrations.html#mcp"><span class="feature-icon blue">↗</span><h3>Connect MCP servers</h3><p>Configure several MCP servers separately from local tools.</p><span class="card-arrow">Read MCP →</span></a><a class="feature-card" href="/integrations.html#human-in-loop"><span class="feature-icon purple">◎</span><h3>Pause for a person</h3><p>Handle approval or input requests, then resume the run context.</p><span class="card-arrow">Read run outcomes →</span></a><a class="feature-card" href="/capabilities.html#workspace"><span class="feature-icon green">▦</span><h3>Choose where tools run</h3><p>Pair a workspace with a local, Docker, or Modal executor.</p><span class="card-arrow">Read execution →</span></a></div></section>
-<section class="section-block content-section" id="architecture"><div class="section-kicker">03 · Framework map</div><h2>How the framework is organized.</h2><p>The public agent composes a reasoning loop with a tool registry and dispatcher, a managed execution environment, and optional capability layers. Read the full architecture note in the workspace.</p><div class="diagram-card"><div class="diagram-node primary">Agent · prompt stack · ReAct</div><div class="diagram-branch"><span>Model client</span><span>Tool registry</span><span>Capabilities</span></div><div class="diagram-node secondary">Dispatcher → host or executor</div></div><p><a class="button button-ghost" href="/architecture.md">Read architecture.md ↗</a></p></section>
-    <footer class="footer"><div class="brand"><span class="brand-mark"><i></i><i></i><i></i></span><span>max<span class="brand-accent">ai</span></span></div><span>Overview</span><a href="/architecture.md">Framework architecture ↗</a></footer>
-  </main>
+asyncio.run(main())</code></pre>
+</div>
+<p class="example-note">The <code>@tool</code> decorator builds the input schema from your function. The agent handles registration and dispatch. <a href="/tools.html#function-tools">Explore function tools →</a>
+</p>
+</div>
+<div aria-labelledby="tab-example-output" class="tab-panel" hidden="" id="example-output" role="tabpanel">
+<p>Pass a Pydantic model as <code>output_format</code> to describe the result your application needs.</p>
+<div class="code-card">
+<div class="code-head"><span>structured_output.py</span><button aria-label="Copy code" class="copy-button" type="button"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect height="13" rx="2" width="12" x="8" y="8"></rect><path d="M16 8V3H3v13h5"></path></svg><span>Copy</span></button>
+</div><pre tabindex="0"><code><span class="kw">import</span> asyncio
+<span class="kw">from</span> pydantic <span class="kw">import</span> BaseModel, Field
+<span class="kw">from</span> max_ai.agents <span class="kw">import</span> Agent
+<span class="kw">from</span> max_ai.capabilities.clients.ollama <span class="kw">import</span> OllamaChatCompletionClient
+<span class="kw">from</span> max_ai.core.model.llm <span class="kw">import</span> ModelConfig
+
+<span class="kw">class</span> <span class="type">Summary</span>(BaseModel):
+    title: <span class="type">str</span>
+    key_points: <span class="type">list</span>[<span class="type">str</span>]
+    confidence: <span class="type">float</span> = Field(ge=<span class="num">0</span>, le=<span class="num">1</span>)
+
+<span class="kw">async</span> <span class="kw">def</span> <span class="fn">main</span>():
+    client = OllamaChatCompletionClient(
+        model=<span class="str">"</span><span class="str">qwen3:8b</span><span class="str">"</span>,
+        config=ModelConfig(supports_function_calling=<span class="kw">True</span>),
+    )
+    agent = Agent(
+        name=<span class="str">"</span><span class="str">summarizer</span><span class="str">"</span>,
+        description=<span class="str">"</span><span class="str">Summarizes reports as structured data.</span><span class="str">"</span>,
+        instructions=<span class="str">"</span><span class="str">Return a concise, faithful summary.</span><span class="str">"</span>,
+        client=client,
+        output_format=Summary,
+    )
+    <span class="kw">async</span> <span class="kw">with</span> agent:
+        response = <span class="kw">await</span> agent.run(<span class="str">"</span><span class="str">Summarize the supplied report.</span><span class="str">"</span>)
+        message = response.final_message
+        <span class="kw">if</span> message and message.structured_output:
+            <span class="type">print</span>(message.structured_output.title)
+
+asyncio.run(main())</code></pre>
+</div>
+<p class="example-note">Read the validated result from the final message. <a href="/integrations.html#output">Explore structured output →</a>
+</p>
+</div>
+</div>
+<h3>What happens during a run?</h3>
+<ol class="steps"><li><strong>Build the context</strong>The agent assembles instructions, tools, and enabled context providers.</li><li><strong>Call the model and execute tools</strong>The reasoning loop requests a response and dispatches tool calls.</li><li><strong>Read the result</strong>Use <code>final_text</code> or the structured output from the final message. The async context manager closes managed resources.</li></ol>
+</section>
+<section class="section-block content-section" id="architecture">
+<h2>How it fits together<a aria-label="Link to How it fits together" class="heading-anchor" href="#architecture">#</a></h2>
+<p>The public agent composes a reasoning loop with a tool registry and dispatcher, a managed execution environment, and optional capability layers. Read the full architecture note in the workspace.</p>
+<div class="diagram-card">
+<div class="diagram-node primary">Agent · prompt stack · ReAct</div>
+<div class="diagram-branch"><span>Model client</span><span>Tool registry</span><span>Capabilities</span>
+</div>
+<div class="diagram-node secondary">Dispatcher → host or executor</div>
+</div>
+<p><a class="button button-ghost" href="/architecture.md">Read architecture.md ↗</a>
+</p>
+</section>
+<nav aria-label="Previous and next page" class="page-pagination"><a class="next" href="/agent.html"><small>Next →</small><strong>Agent configuration</strong></a>
+</nav>
+<footer class="footer"><span>Max AI · Python agent framework</span><a href="/architecture.md">Built on explicit interfaces ↗</a>
+</footer>
+</main>
+<aside aria-label="On this page" class="page-toc">
+<p><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"></path></svg>On this page</p>
+<nav><a class="toc-link" href="#overview">Overview</a><a class="toc-link" href="#use-cases">Build with Max AI</a><a class="toc-link" href="#installation">Installation</a><a class="toc-link" href="#quickstart">Your first agent</a><a class="toc-link" href="#architecture">How it fits together</a>
+</nav>
+<div class="toc-extra"><a href="/architecture.md"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m7 6-6 6 6 6m10-12 6 6-6 6M14 3l-4 18"></path></svg>Architecture reference</a><a href="#overview"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5 12h14m-5-5 5 5-5 5"></path></svg>Back to top</a>
+</div>
+</aside>
+<dialog aria-labelledby="search-title" class="search-dialog" id="search-dialog">
+<h2 class="sr-only" id="search-title">Search documentation</h2>
+<div class="search-input-row"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><label class="sr-only" for="docs-search">Search documentation</label><input autocomplete="off" id="docs-search" placeholder="Search documentation…" spellcheck="false" type="search"/><button aria-label="Close search" id="search-close" type="button">Esc</button>
+</div>
+<div class="search-results" id="search-results">
+</div>
+<p class="sr-only" id="search-status" role="status">
+</p>
+<div class="search-footer"><span><kbd>↑</kbd> <kbd>↓</kbd> navigate   <kbd>↵</kbd> open</span><span>Search Max AI docs</span>
+</div>
+</dialog>
 </body>
 </html>

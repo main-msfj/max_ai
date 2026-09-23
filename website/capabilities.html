@@ -1,47 +1,106 @@
-<!doctype html>
+<!DOCTYPE html>
+
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Capabilities · Max AI framework documentation.">
-  <title>Capabilities · Max AI Documentation</title>
-  <link rel="stylesheet" href="/styles.css">
-  <script defer src="/app.js"></script>
-</head>
-<body>
-  <header class="topbar">
-    <a class="brand" href="/" aria-label="Max AI home"><span class="brand-mark"><i></i><i></i><i></i></span><span>max<span class="brand-accent">ai</span></span></a>
-    <div class="topbar-actions"><a class="github-link" href="/architecture.md">Architecture <span>↗</span></a><button class="icon-button" id="theme-toggle" type="button" aria-label="Toggle theme">☼</button><button class="menu-button" id="menu-toggle" type="button" aria-label="Open navigation">☰</button></div>
-  </header>
-  <aside class="sidebar" id="sidebar"><div class="sidebar-inner">
-    <div class="version-pill"><span class="status-dot"></span> v0.1 · in development</div>
-    <nav aria-label="Documentation"><p class="nav-label">Start here</p>
-        <a class="nav-link" href="/index.html#overview">Overview</a>
-        <a class="nav-link" href="/index.html#installation">Install & quickstart</a>
-        <p class="nav-label">Core concepts</p>
-        <a class="nav-link" href="/agent.html#agent">Agent configuration</a>
-        <a class="nav-link" href="/prompt-layers.html#prompt-overview">Prompt layers</a>
-        <a class="nav-link" href="/tools.html#tools">Tools & dispatch</a>
-        <a class="nav-link" href="/tools.html#reasoning">Reasoning loop</a>
-        <a class="nav-link" href="/tools.html#runtime-services">Runtime services</a>
-        <p class="nav-label">Capabilities</p>
-        <a class="nav-link" href="#memory">Capabilities</a>
-        <a class="nav-link active" href="#workspace">Workspace & execution</a>
-        <a class="nav-link" href="#providers">Model providers</a>
-        <p class="nav-label">Integrations</p>
-        <a class="nav-link" href="/integrations.html#mcp">MCP integrations</a>
-        <a class="nav-link" href="/integrations.html#output">Structured output</a>
-        <a class="nav-link" href="/integrations.html#human-in-loop">Approvals & resume</a>
-        <a class="nav-link" href="/integrations.html#interfaces">Application interfaces</a></nav>
-    <div class="sidebar-note"><span class="note-icon">✦</span><div><strong>Tip</strong><br>Follow a topic page from overview to implementation details.</div></div>
-  </div></aside>
-  <main class="main-content">
-    <section class="hero content-section page-hero" id="capabilities-top"><div class="eyebrow"><span class="eyebrow-line"></span> Capabilities · Providers</div><h1>Add the right<br><em>runtime pieces.</em></h1><p class="hero-copy">Workspaces, execution providers, and context registries supply capabilities around the core Agent. Configure only the providers this application needs.</p></section>
-<section class="section-block content-section" id="workspace"><div class="section-kicker">11 · Workspace &amp; execution</div><h2>Files and processes have separate providers.</h2><p><code>WorkspaceBase</code> owns persistent user files and skill materialization. <code>ExecutorBase</code> runs executor-routed tools. <code>EnvironmentManager</code> manages sessions linking the two. Available executors are Local, Docker, and Modal; local execution runs on the host and is not a sandbox.</p><div class="inline-code"><span>WorkspaceBase</span><span>EnvironmentManager</span><span>ExecutorBase</span></div></section>
-<section class="section-block content-section" id="memory"><div class="section-kicker">12 · Context sources</div><h2>Registries provide optional data.</h2><p>Memory is scoped to a user and session. Skills provide instructions and resources. Knowledge registries expose retrieval tools. Context registries are also available as independent providers for context data. Each capability has provider implementations under <code>max_ai.capabilities</code>, with config models kept in <code>_model.py</code>.</p></section>
-<section class="section-block content-section" id="providers"><div class="section-kicker">13 · Model providers</div><h2>Provider clients share a contract.</h2><p>Provider-specific clients translate framework messages, tool schemas, streaming, and usage data to the model service. Current client packages include Ollama, OpenAI, and OpenRouter.</p><div class="inline-code"><span>capabilities/clients/ollama</span><span>capabilities/clients/openai</span><span>capabilities/clients/openrouter</span></div></section>
-<section class="section-block content-section" id="completion-gate"><div class="section-kicker">16 · Run outcomes</div><h2>Completion is an explicit outcome.</h2><p>Runs can finish normally or pause for approval or additional input, hit an iteration limit, be cancelled, or remain incomplete. <code>AgentResponse</code> exposes the finish reason, completion decision, final text, and pending approval state.</p><div class="inline-code"><span>AgentResponse</span><span>finish_reason</span><span>needs_approval</span></div></section>
-    <footer class="footer"><div class="brand"><span class="brand-mark"><i></i><i></i><i></i></span><span>max<span class="brand-accent">ai</span></span></div><span>Capabilities</span><a href="/architecture.md">Framework architecture ↗</a></footer>
-  </main>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/><script>try { const saved = localStorage.getItem('max-ai-theme'); document.documentElement.dataset.theme = saved || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); } catch (_) {}</script>
+<meta content="Capabilities · Max AI framework documentation." name="description"/>
+<title>Capabilities · Max AI Docs</title>
+<link href="/styles.css" rel="stylesheet"/>
+<script defer="" src="/app.js"></script>
+<link href="/favicon.svg" rel="icon" type="image/svg+xml"/></head>
+<body data-page="capabilities.html">
+
+<a class="skip-link" href="#main-content">Skip to content</a>
+<header class="topbar">
+<a aria-label="Max AI home" class="brand" href="/"><svg aria-hidden="true" class="brand-logo" fill="none" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"><rect fill="currentColor" height="38" rx="10" width="38" x="1" y="1"></rect><path d="M10 28V12l10 12 10-12v16" stroke="var(--bg)" stroke-linejoin="round" stroke-width="3"></path><circle cx="30" cy="12" fill="#b9a5f4" r="3"></circle></svg><span>max<span class="brand-accent">ai</span></span><span class="brand-divider"></span><span class="header-label">Documentation</span></a>
+<div class="topbar-actions">
+<button aria-controls="search-dialog" aria-haspopup="dialog" class="search-trigger" type="button"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><span>Search documentation</span><kbd>⌘ K</kbd></button>
+<a class="header-link" href="/architecture.md">Architecture<svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M14 4h6v6m0-6L10 14M10 4H4v16h16v-6"></path></svg></a>
+<button aria-label="Switch color theme" class="icon-button" id="theme-toggle" type="button"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"></path></svg></button>
+<button aria-controls="sidebar" aria-expanded="false" aria-label="Open navigation" class="menu-button" id="menu-toggle" type="button"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M4 6h16M4 12h16M4 18h16"></path></svg></button>
+</div>
+</header>
+<nav aria-label="Primary" class="tabs-bar">
+<a class="selected" href="/">Documentation</a><a href="/#quickstart">Quickstart</a><a href="/agent.html#agent">API guide</a>
+<span class="release-label"><span class="status-dot"></span>v0.1.0 <span class="release-status">· in development</span></span>
+</nav>
+<aside class="sidebar" id="sidebar">
+<div class="sidebar-title"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 6c-3-3-7-3-10-2v15c3-1 7-1 10 2m0-15c3-3 7-3 10-2v15c-3-1-7-1-10 2V6Z"></path></svg>Max AI documentation</div>
+<nav aria-label="Documentation">
+<div class="nav-group">
+<p class="nav-label">Get started</p><a class="nav-link" href="/#overview"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 6c-3-3-7-3-10-2v15c3-1 7-1 10 2m0-15c3-3 7-3 10-2v15c-3-1-7-1-10 2V6Z"></path></svg>Overview</a><a class="nav-link" href="/#installation"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m7 6-6 6 6 6m10-12 6 6-6 6M14 3l-4 18"></path></svg>Installation</a><a class="nav-link" href="/#quickstart"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5 12h14m-5-5 5 5-5 5"></path></svg>Quickstart</a>
+</div>
+<div class="nav-group">
+<p class="nav-label">Core concepts</p><a class="nav-link" href="/agent.html#agent-top"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m12 3 9 5v9l-9 5-9-5V8l9-5Zm-9 5 9 5 9-5M12 13v9M8 5l9 5"></path></svg>Agents</a><a class="nav-link" href="/prompt-layers.html#prompt-overview"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m12 3 10 5-10 5L2 8l10-5Zm-10 9 10 5 10-5M2 16l10 5 10-5"></path></svg>Prompt layers</a><a class="nav-link" href="/tools.html#reasoning"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m12 3 10 5-10 5L2 8l10-5Zm-10 9 10 5 10-5M2 16l10 5 10-5"></path></svg>Reasoning loop</a>
+</div>
+<div class="nav-group">
+<p class="nav-label">Tools</p><a class="nav-link" href="/tools.html#tools"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m7 6-6 6 6 6m10-12 6 6-6 6M14 3l-4 18"></path></svg>Tools &amp; dispatch</a><a class="nav-link" href="/tools.html#function-tools">Function tools</a><a class="nav-link" href="/tools.html#native-tools">Native tools</a><a class="nav-link" href="/tools.html#runtime-services">Runtime services</a>
+</div>
+<div class="nav-group">
+<p class="nav-label">Capabilities</p><a aria-current="location" class="nav-link active" href="/capabilities.html#workspace"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m12 3 9 5v9l-9 5-9-5V8l9-5Zm-9 5 9 5 9-5M12 13v9M8 5l9 5"></path></svg>Workspace &amp; execution</a><a class="nav-link" href="/capabilities.html#memory">Memory &amp; knowledge</a><a class="nav-link" href="/capabilities.html#providers">Model providers</a><a class="nav-link" href="/capabilities.html#completion-gate">Run outcomes</a>
+</div>
+<div class="nav-group">
+<p class="nav-label">Integrations</p><a class="nav-link" href="/integrations.html#mcp"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m8 3 4 4m4-4 4 4M6 9l9 9m-5-5-5 5H2m7-12 9 9 3-3-9-9-3 3Zm0 0-3 3a6 6 0 0 0 9 9l3-3"></path></svg>MCP servers</a><a class="nav-link" href="/integrations.html#output">Structured output</a><a class="nav-link" href="/integrations.html#human-in-loop">Approvals &amp; resume</a><a class="nav-link" href="/integrations.html#interfaces">Application interfaces</a>
+</div>
+</nav>
+<div class="sidebar-note"><a href="/architecture.md">Framework architecture <svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M14 4h6v6m0-6L10 14M10 4H4v16h16v-6"></path></svg></a>
+</div>
+</aside><button aria-label="Close navigation" class="nav-backdrop" tabindex="-1" type="button"></button>
+<main class="main-content" id="main-content" tabindex="-1">
+<nav aria-label="Breadcrumb" class="breadcrumb"><a href="/">Docs</a><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m9 5 7 7-7 7"></path></svg><span>Core concepts</span><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m9 5 7 7-7 7"></path></svg><span>Capabilities</span>
+</nav>
+<details class="mobile-toc"><summary>On this page</summary>
+<nav aria-label="Page sections"><a class="toc-link" href="#capabilities-top">Overview</a><a class="toc-link" href="#workspace">Workspace and execution</a><a class="toc-link" href="#memory">Memory, skills, and knowledge</a><a class="toc-link" href="#providers">Model providers</a><a class="toc-link" href="#completion-gate">Run outcomes</a>
+</nav></details>
+<section class="hero content-section page-hero" id="capabilities-top">
+<h1>Capabilities</h1>
+<p class="hero-copy">Workspaces, execution providers, and context registries supply capabilities around the core Agent. Configure only the providers this application needs.</p>
+</section>
+<section class="section-block content-section" id="workspace">
+<h2>Workspace and execution<a aria-label="Link to Workspace and execution" class="heading-anchor" href="#workspace">#</a></h2>
+<p><code>WorkspaceBase</code> owns persistent user files and skill materialization. <code>ExecutorBase</code> runs executor-routed tools. <code>EnvironmentManager</code> manages sessions linking the two. Available executors are Local, Docker, and Modal; local execution runs on the host and is not a sandbox.</p>
+<div class="inline-code"><span>WorkspaceBase</span><span>EnvironmentManager</span><span>ExecutorBase</span>
+</div>
+</section>
+<section class="section-block content-section" id="memory">
+<h2>Memory, skills, and knowledge<a aria-label="Link to Memory, skills, and knowledge" class="heading-anchor" href="#memory">#</a></h2>
+<p>Memory is scoped to a user and session. Skills provide instructions and resources. Knowledge registries expose retrieval tools. Context registries are also available as independent providers for context data. Each capability has provider implementations under <code>max_ai.capabilities</code>, with config models kept in <code>_model.py</code>.</p>
+</section>
+<section class="section-block content-section" id="providers">
+<h2>Model providers<a aria-label="Link to Model providers" class="heading-anchor" href="#providers">#</a></h2>
+<p>Provider-specific clients translate framework messages, tool schemas, streaming, and usage data to the model service. Current client packages include Ollama, OpenAI, and OpenRouter.</p>
+<div class="inline-code"><span>capabilities/clients/ollama</span><span>capabilities/clients/openai</span><span>capabilities/clients/openrouter</span>
+</div>
+</section>
+<section class="section-block content-section" id="completion-gate">
+<h2>Run outcomes<a aria-label="Link to Run outcomes" class="heading-anchor" href="#completion-gate">#</a></h2>
+<p>Runs can finish normally or pause for approval or additional input, hit an iteration limit, be cancelled, or remain incomplete. <code>AgentResponse</code> exposes the finish reason, completion decision, final text, and pending approval state.</p>
+<div class="inline-code"><span>AgentResponse</span><span>finish_reason</span><span>needs_approval</span>
+</div>
+</section>
+<nav aria-label="Previous and next page" class="page-pagination"><a href="/tools.html"><small>← Previous</small><strong>Tools &amp; dispatch</strong></a><a class="next" href="/integrations.html"><small>Next →</small><strong>Integrations</strong></a>
+</nav>
+<footer class="footer"><span>Max AI · Python agent framework</span><a href="/architecture.md">Built on explicit interfaces ↗</a>
+</footer>
+</main>
+<aside aria-label="On this page" class="page-toc">
+<p><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"></path></svg>On this page</p>
+<nav><a class="toc-link" href="#capabilities-top">Overview</a><a class="toc-link" href="#workspace">Workspace and execution</a><a class="toc-link" href="#memory">Memory, skills, and knowledge</a><a class="toc-link" href="#providers">Model providers</a><a class="toc-link" href="#completion-gate">Run outcomes</a>
+</nav>
+<div class="toc-extra"><a href="/architecture.md"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m7 6-6 6 6 6m10-12 6 6-6 6M14 3l-4 18"></path></svg>Architecture reference</a><a href="#capabilities-top"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5 12h14m-5-5 5 5-5 5"></path></svg>Back to top</a>
+</div>
+</aside>
+<dialog aria-labelledby="search-title" class="search-dialog" id="search-dialog">
+<h2 class="sr-only" id="search-title">Search documentation</h2>
+<div class="search-input-row"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><label class="sr-only" for="docs-search">Search documentation</label><input autocomplete="off" id="docs-search" placeholder="Search documentation…" spellcheck="false" type="search"/><button aria-label="Close search" id="search-close" type="button">Esc</button>
+</div>
+<div class="search-results" id="search-results">
+</div>
+<p class="sr-only" id="search-status" role="status">
+</p>
+<div class="search-footer"><span><kbd>↑</kbd> <kbd>↓</kbd> navigate   <kbd>↵</kbd> open</span><span>Search Max AI docs</span>
+</div>
+</dialog>
 </body>
 </html>

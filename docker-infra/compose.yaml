@@ -1,0 +1,6 @@
+name: max-ai-infra
+
+include:
+  - ./llm/compose.yaml
+  - ./backend/compose.yaml
+  - ./mcp/compose.yaml
