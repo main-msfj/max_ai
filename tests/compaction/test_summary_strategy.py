@@ -147,3 +147,18 @@ async def test_a_long_current_turn_is_cut_between_tool_blocks():
     result = await compact(SummaryCompaction(summary_max_tokens=500), RunContext(messages=msgs), client)
     assert result.changed and "migra el proyecto" in client.calls[0]["task"]  # question → summary
     assert result.messages[0].tool_calls  # window opens at a whole tool block
+
+
+async def test_json_cut_by_the_token_limit_keeps_its_complete_fields():
+    class Cut(Summarizer):
+        async def run(self, **kwargs):
+            result = await super().run(**kwargs)
+            cut = '{"summary":"Armando un scraper","decisions":["perro Toby","vive en Lima","formato de 200 pal'
+            return result.model_copy(update={"message": AssistantMessage(source="s", content=cut)})
+
+    client = Cut(FIRST, structured=False)
+    result = await compact(SummaryCompaction(summary_max_tokens=500), RunContext(messages=chat(8)), client)
+    assert result.state["summary"] == {
+        "summary": "Armando un scraper", "decisions": ["perro Toby", "vive en Lima"],
+    }
+    assert "Keep the whole summary under 500 tokens" in client.calls[0]["task"]

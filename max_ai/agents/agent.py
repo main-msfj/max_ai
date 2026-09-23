@@ -71,8 +71,9 @@ class Agent:
     The tool registry is managed internally by the agent.
 
     Memory, skills and knowledge are optional and only enabled when supplied.
-    Supplied registries remain caller-owned. Memory must match the run's user
-    and session; pass a matching RunContext when running an agent with memory.
+    Supplied registries remain caller-owned. Configure memory with its backend
+    only: each run binds it to that RunContext's user_id/session_id, so one
+    agent serves every user and session without ever mixing their memories.
 
     Defaults: LocalWorkspace, LocalExecutor and ReactLoop. The agent manages
     execution sessions internally and closes them on close(). Local execution
@@ -277,17 +278,16 @@ class Agent:
         if self.skills is not None:
             self._skill_blocks = await self.skills.get_skills()
 
-    def _validate_memory_scope(self, ctx: RunContext) -> None:
-        """Never expose a bound registry to a different user or session."""
-        if self.memory is not None and (
-            self.memory.user_id != ctx.user_id
-            or self.memory.session_id != ctx.session_id
-        ):
-            raise ValueError("Memory user_id/session_id must match the RunContext")
+    async def _memory_for(self, ctx: RunContext) -> CoreMemoryRegistry | None:
+        """The memory scoped to this run's user and session. The registry is
+        connected first so every bound copy shares one backend client."""
+        if self.memory is None:
+            return None
+        await self.memory._ensure_connected()
+        return self.memory.bind(ctx.user_id, ctx.session_id or ctx.run_id)
 
     async def _prompt_variables(self, ctx: RunContext) -> dict[str, Any]:
         """Collect current data without making the templates access registries."""
-        self._validate_memory_scope(ctx)
         variables: dict[str, Any] = {
             "name": self.name,
             "description": self.description,
@@ -297,8 +297,9 @@ class Agent:
             variables["loaded_skills"] = self._skill_blocks
         if self.knowledge:
             variables["retrieval_tools"] = self._knowledge_tools
-        if self.memory is not None:
-            variables["persistent_memories"] = await self.memory.get_context()
+        memory = await self._memory_for(ctx)
+        if memory is not None:
+            variables["persistent_memories"] = await memory.get_context()
             variables["memory_tools"] = self._memory_tools
         return variables
 
@@ -396,7 +397,7 @@ class Agent:
             compaction=self.compaction,
             # Custom clients may not declare a window: 0 = unknown.
             max_context_tokens=getattr(self.client.config, "max_context_window", 0) or 0,
-            memory=self.memory,
+            memory=await self._memory_for(ctx),
         )
         async with aclosing(
             reasoning.execute_reasoning_loop(
@@ -467,7 +468,6 @@ class Agent:
                 raise RuntimeError("Agent is closed")
             ctx = run_context if run_context is not None else RunContext()
             ctx.session_id = ctx.session_id or ctx.run_id
-            self._validate_memory_scope(ctx)
             if task is not None:
                 if any(not r.is_consumed for r in ctx.tool_state.records.values()):
                     raise ValueError(

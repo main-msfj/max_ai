@@ -8,6 +8,7 @@ terminal interaction, streaming, approvals, questions, and session context.
 
 from __future__ import annotations
 
+import argparse
 import os
 
 from pathlib import Path
@@ -19,17 +20,16 @@ from max_ai.base.knowledge import KnowledgeToolMode
 from max_ai.base.memory import MemoryToolMode
 from max_ai.capabilities.knowledge.local import LocalKnowledgeRegistry
 from max_ai.capabilities.memory.local import LocalMemoryRegistry
+from max_ai.capabilities.session_store import LocalSessionStore
 from max_ai.capabilities.skills.local import LocalSkillRegistry
 from max_ai.capabilities.tools.bash import BashTool
 from max_ai.capabilities.tools.function_as_tool import FunctionAsTool
 from max_ai.cli import run_repl
-from max_ai.types.run_context import RunContext
 from max_ai.types.tools import ToolApprovalMode
 
 EXAMPLES_DIR = Path(__file__).resolve().parent
 LOCAL_DIR = EXAMPLES_DIR / "local"
 USER_ID = "user_001"
-SESSION_ID = "demo"
 
 
 def get_weather(city: str) -> dict[str, str | int]:
@@ -43,6 +43,13 @@ def send_email(to: str, subject: str, body: str) -> dict[str, str | bool]:
     return {"sent": True, "to": to}
 
 
+def _session_arg() -> str | None:
+    """``--session <id>`` continues a saved conversation."""
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--session")
+    return parser.parse_known_args()[0].session
+
+
 async def run_agent_in_cli(client: CoreChatCompletionClient, provider: str) -> None:
     """Same tools, memory, knowledge and skills for any client."""
     toolset = [
@@ -52,12 +59,8 @@ async def run_agent_in_cli(client: CoreChatCompletionClient, provider: str) -> N
     ]
 
     # Fixture data under examples/local/ — see that folder for the raw files.
-    memory = LocalMemoryRegistry(
-        user_id=USER_ID,
-        session_id=SESSION_ID,
-        base_path=LOCAL_DIR,
-        tool_mode=MemoryToolMode.FULL,
-    )
+    # Backend only: each run binds it to its RunContext's user and session.
+    memory = LocalMemoryRegistry(base_path=LOCAL_DIR, tool_mode=MemoryToolMode.FULL)
     knowledge = [
         LocalKnowledgeRegistry(
             name="framework",
@@ -75,6 +78,7 @@ async def run_agent_in_cli(client: CoreChatCompletionClient, provider: str) -> N
         skills=["create-report", "create-ppt"],
     )
 
+    threshold = float(os.getenv("COMPACTION_THRESHOLD") or 0.8)
     try:
         async with Agent(
             name="LocalDemo",
@@ -87,14 +91,15 @@ async def run_agent_in_cli(client: CoreChatCompletionClient, provider: str) -> N
             skills=skills,
             # COMPACTION_THRESHOLD=0.05 compacts at ~5% of the message room,
             # to watch it happen in a few turns (default 0.8).
-            compaction=SummaryCompaction(
-                threshold=float(os.getenv("COMPACTION_THRESHOLD") or 0.8),
-            ),
+            compaction=SummaryCompaction(threshold=threshold, keep_ratio=threshold / 2),
         ) as agent:
             await run_repl(
                 agent,
                 show_thinking=True,
-                initial_context=RunContext(user_id=USER_ID, session_id=SESSION_ID),
+                # The CLI is the host: it saves each turn and resumes sessions.
+                store=LocalSessionStore(LOCAL_DIR / "sessions"),
+                user_id=USER_ID,
+                session_id=_session_arg(),
             )
     finally:
         await client.client.close()

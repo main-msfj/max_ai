@@ -41,23 +41,27 @@ class LocalMemoryRegistry(CoreMemoryRegistry):
 
     def __init__(
         self,
-        user_id: str,
-        session_id: str,
-        base_path: str | Path,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        base_path: str | Path | None = None,
         tool_mode: MemoryToolMode = MemoryToolMode.FULL,
         *,
         context_days: int | None = 30,
     ) -> None:
+        if base_path is None:
+            raise ValueError("LocalMemoryRegistry needs a base_path")
+        self.base_path: Path = Path(base_path).expanduser().resolve()
         super().__init__(
             user_id=user_id, session_id=session_id,
             tool_mode=tool_mode, context_days=context_days,
         )
+
+    def _validate_scope(self) -> None:
         if not _SAFE_ID_RE.match(self.user_id) or not _SAFE_ID_RE.match(self.session_id):
             raise ValueError(
                 "user_id/session_id must match "
                 f"{_SAFE_ID_RE.pattern!r} to be safe as filesystem paths"
             )
-        self.base_path: Path = Path(base_path).expanduser().resolve()
 
     def _to_config(self) -> LocalMemoryRegistryConfig:
         return LocalMemoryRegistryConfig(
@@ -90,7 +94,8 @@ class LocalMemoryRegistry(CoreMemoryRegistry):
         return self._user_dir / f"{session_id}.json"
 
     async def connect(self) -> None:
-        self._user_dir.mkdir(parents=True, exist_ok=True)
+        # Per-user folders are created on first write (see _write_store).
+        self._memory_dir.mkdir(parents=True, exist_ok=True)
 
     async def disconnect(self) -> None:
         return None

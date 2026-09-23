@@ -11,6 +11,7 @@ for compaction or requires indexing.
 
 from __future__ import annotations
 
+import copy
 import typing as t
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime, timedelta
@@ -18,9 +19,10 @@ from enum import Enum
 
 from pydantic import AwareDatetime, BaseModel, Field
 
+from ..errors.memory import MemoryError
 from ..types.tools import ToolApprovalMode
 from .capability import CoreAgentCapabilities
-from .tools import CoreTool
+from .tools import CoreTool, ToolContext
 
 
 class MemoryRecord(BaseModel):
@@ -48,6 +50,10 @@ class MemoryToolMode(str, Enum):
 class CoreMemoryRegistry(CoreAgentCapabilities[BaseModel], ABC):
     """Shared memory operations; concrete backends own persistence and search.
 
+    Configure a registry with its backend only and ``bind`` it to a user and
+    session per run: the Agent does it from each ``RunContext``, so one agent
+    serves every user. Operations on an unbound registry raise.
+
     All storage operations MUST be scoped to ``user_id`` and ``session_id``.
     Search MUST be scoped to the same user and exclude the current session.
     Category identity is exact and case-sensitive after trimming whitespace.
@@ -55,15 +61,17 @@ class CoreMemoryRegistry(CoreAgentCapabilities[BaseModel], ABC):
 
     def __init__(
         self,
-        user_id: str,
-        session_id: str,
+        user_id: str | None = None,
+        session_id: str | None = None,
         tool_mode: MemoryToolMode = MemoryToolMode.FULL,
         *,
         context_days: int | None = 30,
     ) -> None:
         super().__init__()
-        self.user_id = self._validate_non_empty("user_id", user_id)
-        self.session_id = self._validate_non_empty("session_id", session_id)
+        self.user_id: str | None = None
+        self.session_id: str | None = None
+        if user_id is not None or session_id is not None:
+            self._set_scope(user_id, session_id)
         self.tool_mode = self.require_type(tool_mode, MemoryToolMode, "tool_mode")
         if context_days is not None and (
             isinstance(context_days, bool)
@@ -72,6 +80,27 @@ class CoreMemoryRegistry(CoreAgentCapabilities[BaseModel], ABC):
         ):
             raise ValueError("context_days must be a non-negative integer or None")
         self.context_days = context_days
+
+    # -------- SCOPE -----------------------------------------------------------
+    def bind(self, user_id: str, session_id: str) -> t.Self:
+        """A copy scoped to ``user_id``/``session_id`` that shares this
+        registry's backend connection (connect the registry first so every
+        copy reuses one client)."""
+        bound = copy.copy(self)
+        bound._set_scope(user_id, session_id)
+        return bound
+
+    def _set_scope(self, user_id: str | None, session_id: str | None) -> None:
+        self.user_id = self._validate_non_empty("user_id", user_id)
+        self.session_id = self._validate_non_empty("session_id", session_id)
+        self._validate_scope()
+
+    def _validate_scope(self) -> None:
+        """Backend hook: reject ids it can't store safely (e.g. as paths)."""
+
+    def _require_scope(self) -> None:
+        if self.user_id is None or self.session_id is None:
+            raise MemoryError.unbound()
 
     @abstractmethod
     async def connect(self) -> None: ...
@@ -116,6 +145,7 @@ class CoreMemoryRegistry(CoreAgentCapabilities[BaseModel], ABC):
 
         None disables the date filter. Filtering never deletes stored memories.
         """
+        self._require_scope()
         await self._ensure_connected()
         records = await self._read_session()
         if self.context_days is not None:
@@ -125,11 +155,13 @@ class CoreMemoryRegistry(CoreAgentCapabilities[BaseModel], ABC):
 
     async def list_category(self) -> list[str]:
         """List ALL stored categories in this session, including older ones."""
+        self._require_scope()
         await self._ensure_connected()
         return sorted({record.category for record in await self._read_session()})
 
     async def create_or_update(self, category: str, memory: str) -> str:
         """Replace the entire category content or create it, independently of compaction."""
+        self._require_scope()
         record = MemoryRecord(
             category=self._validate_non_empty("category", category),
             memory=self._validate_non_empty("memory", memory),
@@ -142,6 +174,7 @@ class CoreMemoryRegistry(CoreAgentCapabilities[BaseModel], ABC):
 
     async def delete_memory(self, category: str) -> str:
         """Delete a category only in the bound session."""
+        self._require_scope()
         category = self._validate_non_empty("category", category)
         await self._ensure_connected()
         deleted = await self._delete_memory(category)
@@ -151,6 +184,7 @@ class CoreMemoryRegistry(CoreAgentCapabilities[BaseModel], ABC):
 
     async def search_memory(self, text: str) -> list[MemorySearchResult]:
         """Search other sessions without adding their memories to this session."""
+        self._require_scope()
         text = self._validate_non_empty("text", text)
         await self._ensure_connected()
         return [
@@ -165,34 +199,35 @@ class CoreMemoryRegistry(CoreAgentCapabilities[BaseModel], ABC):
         if self.tool_mode == MemoryToolMode.NONE:
             return []
 
-        async def get_context() -> dict[str, t.Any]:
+        async def get_context(context: ToolContext | None) -> dict[str, t.Any]:
             """Read stored memories about the user in the current session."""
+            memory = self._for_run(context)
             return {
-                "session_id": self.session_id,
+                "session_id": memory.session_id,
                 "memories": [
                     record.model_dump(mode="json")
-                    for record in await self.get_context()
+                    for record in await memory.get_context()
                 ],
             }
 
-        async def list_category() -> list[str]:
+        async def list_category(context: ToolContext | None) -> list[str]:
             """List every stored memory category in the current session."""
-            return await self.list_category()
+            return await self._for_run(context).list_category()
 
-        async def search_memory(text: str) -> list[dict[str, t.Any]]:
+        async def search_memory(context: ToolContext | None, text: str) -> list[dict[str, t.Any]]:
             """Search relevant memories from other sessions of this user."""
             return [
                 record.model_dump(mode="json")
-                for record in await self.search_memory(text)
+                for record in await self._for_run(context).search_memory(text)
             ]
 
-        async def create_or_update(category: str, memory: str) -> str:
+        async def create_or_update(context: ToolContext | None, category: str, memory: str) -> str:
             """Create a category or replace its entire memory in this session."""
-            return await self.create_or_update(category, memory)
+            return await self._for_run(context).create_or_update(category, memory)
 
-        async def delete_memory(category: str) -> str:
+        async def delete_memory(context: ToolContext | None, category: str) -> str:
             """Delete a memory category from the current session."""
-            return await self.delete_memory(category)
+            return await self._for_run(context).delete_memory(category)
 
         tools = [
             FunctionAsTool(
@@ -255,10 +290,15 @@ class CoreMemoryRegistry(CoreAgentCapabilities[BaseModel], ABC):
     def tools(self) -> list[CoreTool]:
         return self.as_tools()
 
+    def _for_run(self, context: ToolContext | None) -> t.Self:
+        """The registry scoped to the calling run (tools are built once).
+        Without a run (a tool called directly) the registry's own scope applies."""
+        if context is None:
+            return self
+        return self.bind(context.user_id, context.session_id)
+
     @staticmethod
     def _validate_non_empty(field: str, value: str) -> str:
-        from ..errors.memory import MemoryError
-
         if not isinstance(value, str):
             raise MemoryError.invalid_type(field, "str", type(value).__name__)
         clean = value.strip()

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import typing as t
 
-from pydantic import BaseModel, Field, JsonValue
+from pydantic import BaseModel, Field, JsonValue, model_validator
 
 from ..messages import AssistantMessage, CoreMessage
 
@@ -39,11 +39,12 @@ class CompactionOutput(BaseModel):
 
 
 class MemoryFactUpdate(BaseModel):
-    """Memory fact to create or update after compaction."""
+    """One memory category to create or overwrite after compaction."""
 
-    key: str = Field(..., description="Stable memory key to create or update.")
-    category: str = Field(..., description="Memory category.")
-    content: str = Field(..., description="Updated durable memory content.")
+    category: str = Field(..., description="Memory category (its identity).")
+    content: str = Field(
+        ..., description="The category's COMPLETE new content; it replaces the old one.",
+    )
     reason: str | None = Field(default=None, description="Why this update is justified.")
 
 
@@ -77,10 +78,25 @@ class CompactionConfig(BaseModel):
     drop_harness_messages: bool = Field(
         default=True, description="Drop harness messages from previous turns.",
     )
+    update_memory: bool = Field(
+        default=True,
+        description="Save durable facts from what leaves the window into memory.",
+    )
+    memory_max_tokens: int = Field(default=1000, gt=0)
     client: dict[str, t.Any] | None = Field(
         default=None,
         description="Serialized client for summaries/memory. None = the agent's client.",
     )
+
+    @model_validator(mode="after")
+    def _keep_less_than_threshold(self) -> "CompactionConfig":
+        # Keeping >= what triggers means a compaction frees nothing, forever.
+        if self.keep_ratio >= self.threshold:
+            raise ValueError(
+                f"keep_ratio ({self.keep_ratio}) must be lower than threshold "
+                f"({self.threshold}): compaction would keep everything it found."
+            )
+        return self
 
 
 class CompactionState(BaseModel):

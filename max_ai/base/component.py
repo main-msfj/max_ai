@@ -79,6 +79,7 @@ KNOWN_PROVIDERS: dict[str, str] = {
     "maxai.stacks.ContextLayer": "max_ai.capabilities.stacks.context_layer.ContextLayer",
     "maxai.stacks.MemoryLayer": "max_ai.capabilities.stacks.memory_layer.MemoryLayer",
     "maxai.stacks.SessionStateLayer": "max_ai.capabilities.stacks.session_state_layer.SessionStateLayer",
+    "maxai.session_store.LocalSessionStore": "max_ai.capabilities.session_store.local._store.LocalSessionStore",
     "maxai.compaction.SummaryCompaction": "max_ai.capabilities.compaction.summary._strategy.SummaryCompaction",
     "maxai.compaction.SlidingWindowCompaction": "max_ai.capabilities.compaction.window._strategy.SlidingWindowCompaction",
 }

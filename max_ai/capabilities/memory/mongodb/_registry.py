@@ -24,8 +24,8 @@ class MongoDBMemoryRegistry(CoreMemoryRegistry):
 
     def __init__(
         self,
-        user_id: str,
-        session_id: str,
+        user_id: str | None = None,
+        session_id: str | None = None,
         tool_mode: MemoryToolMode = MemoryToolMode.FULL,
         *,
         database: str = "max_ai",
@@ -48,7 +48,10 @@ class MongoDBMemoryRegistry(CoreMemoryRegistry):
         self._collection: Any = None
 
     def _to_config(self) -> MongoDBMemoryRegistryConfig:
-        return self._mongo_config.model_copy(deep=True)
+        # Scope comes from the instance: a bound copy shares _mongo_config.
+        return self._mongo_config.model_copy(
+            update={"user_id": self.user_id, "session_id": self.session_id}, deep=True,
+        )
 
     @classmethod
     def _from_config(cls, config: MongoDBMemoryRegistryConfig) -> "MongoDBMemoryRegistry":

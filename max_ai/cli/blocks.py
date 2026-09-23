@@ -328,6 +328,47 @@ class CompactionBlock(FoldBlock):
         return Text(self._details())
 
 
+class PastSummaryBlock(FoldBlock):
+    """On resume: what the model remembers of messages compacted away."""
+
+    DEFAULT_CSS = """
+    PastSummaryBlock > .body { color: #a1a1aa; max-height: 14; }
+    """
+
+    def __init__(self, archived: int, summary: str | None) -> None:
+        super().__init__()
+        self.archived, self.summary = archived, (summary or "").strip()
+
+    @property
+    def foldable(self) -> bool:  # type: ignore[override]
+        return bool(self.summary)
+
+    def _header(self) -> Text:
+        header = Text("◇ ", style=f"bold {ACCENT}")
+        header.append(f"Earlier conversation summarized · {_plural(self.archived, 'message')}",
+                      style="bold #a1a1aa")
+        return self._fold_hint(header)
+
+    def _body(self) -> Text:
+        return Text(self.summary)
+
+
+def time_ago(moment: t.Any) -> str:
+    """``just now`` / ``5 min ago`` / ``3 h ago`` / ``yesterday`` / ``22 Sep``."""
+    from datetime import datetime, timezone
+
+    seconds = (datetime.now(timezone.utc) - moment).total_seconds()
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        return f"{int(seconds // 60)} min ago"
+    if seconds < 86_400:
+        return f"{int(seconds // 3600)} h ago"
+    if seconds < 172_800:
+        return "yesterday"
+    return moment.strftime("%d %b")
+
+
 _FILLER = frozenset(
     "what which who whom whose when where why how would could should do does did "
     "is are was were can will you your yours me my i we us our the a an to of for "

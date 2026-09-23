@@ -8,8 +8,8 @@ from ....base.memory import MemoryToolMode
 
 
 class MongoDBMemoryRegistryConfig(BaseModel):
-    user_id: str
-    session_id: str
+    user_id: str | None = None
+    session_id: str | None = None
     tool_mode: MemoryToolMode = MemoryToolMode.FULL
     context_days: int | None = Field(default=30, ge=0)
     search_limit: int = Field(default=20, ge=1, le=100, strict=True)

@@ -7,11 +7,13 @@ import logging
 import typing as t
 from abc import ABC, abstractmethod
 
-from pydantic import JsonValue
+from pydantic import BaseModel, JsonValue
+from pydantic_core import from_json
 
 from ..core.compaction import (
     CompactionConfig,
     CompactionResult,
+    MemoryMaintenanceOutput,
     MessageGroup,
     TokenCounter,
     client_max_output_tokens,
@@ -21,17 +23,36 @@ from ..core.compaction import (
     live_message_capacity_tokens,
     live_message_threshold_tokens,
 )
-from ..core.messages import HARNESS_SOURCE, AssistantMessage, CoreMessage, ToolMessage
+from ..core.messages import (
+    HARNESS_SOURCE,
+    AssistantMessage,
+    CoreMessage,
+    ToolMessage,
+    UserMessage,
+)
 from ..errors.compaction import CompactionError
+from ..types.run_context import RunContext
+from ..types.stacks import PromptCtx
 from .component import ComponentBase
 
 if t.TYPE_CHECKING:
-    from ..types.run_context import RunContext
-    from ..types.stacks import PromptCtx
     from .clients import CoreChatCompletionClient
     from .memory import CoreMemoryRegistry
 
 logger = logging.getLogger(__name__)
+OutputT = t.TypeVar("OutputT", bound=BaseModel)
+
+MEMORY_TASK = (
+    "Some messages are leaving the conversation window. Extract the durable "
+    "facts worth remembering in later conversations: who the user is, their "
+    "preferences, projects, decisions and personal details. Skip one-off task "
+    "chatter. Existing memories are below as `category: content`. For each "
+    "category you create or change, return its COMPLETE new content (it "
+    "replaces the old one), merging what was there. Reuse existing categories "
+    "when they fit. Return an empty list when there is nothing new.\n\n"
+    "Existing memories:\n{existing}\n\n"
+    "Messages leaving the window:\n{transcript}"
+)
 
 
 class CoreCompaction(ComponentBase[CompactionConfig], ABC):
@@ -58,6 +79,8 @@ class CoreCompaction(ComponentBase[CompactionConfig], ABC):
         truncate_tool_outputs: bool = True,
         tool_output_max_tokens: int = 500,
         drop_harness_messages: bool = True,
+        update_memory: bool = True,
+        memory_max_tokens: int = 1000,
         client: CoreChatCompletionClient | None = None,
         token_counter: TokenCounter | None = None,
     ) -> None:
@@ -69,6 +92,8 @@ class CoreCompaction(ComponentBase[CompactionConfig], ABC):
             truncate_tool_outputs=truncate_tool_outputs,
             tool_output_max_tokens=tool_output_max_tokens,
             drop_harness_messages=drop_harness_messages,
+            update_memory=update_memory,
+            memory_max_tokens=memory_max_tokens,
         )
         self.client = client
         self.token_counter = token_counter or TokenCounter()
@@ -159,7 +184,7 @@ class CoreCompaction(ComponentBase[CompactionConfig], ABC):
         )
         self._validate(result.messages)
 
-        if memory is not None and result.old_messages:
+        if memory is not None and self.config.update_memory and result.old_messages:
             try:
                 await self._update_memory(
                     result.old_messages, memory=memory, client=strategy_client,
@@ -286,11 +311,72 @@ class CoreCompaction(ComponentBase[CompactionConfig], ABC):
         memory: CoreMemoryRegistry,
         client: CoreChatCompletionClient,
     ) -> None:
-        """Extract durable facts from messages leaving the window and save
-        them (``MemoryMaintenanceOutput`` → ``memory.create_or_update``).
-        ``compact`` logs failures; they never reach the turn."""
-        # TODO
-        ...
+        """Save durable facts from messages leaving the window.
+
+        The model sees the current memories and returns the complete new
+        content of each category it changes (``create_or_update`` replaces a
+        category). ``compact`` logs failures; they never reach the turn.
+        """
+        current = await memory.get_context()
+        existing = "\n".join(f"- {r.category}: {r.memory}" for r in current) or "None yet."
+        task = MEMORY_TASK.format(
+            existing=existing,
+            transcript=self._transcript(old_messages, self.config.memory_max_tokens),
+        )
+        output = await self._ask(client, task, MemoryMaintenanceOutput, self.config.memory_max_tokens)
+        if not isinstance(output, MemoryMaintenanceOutput):
+            return  # prose instead of structured output: nothing reliable to save
+        for update in output.updates:
+            if update.category.strip() and update.content.strip():
+                await memory.create_or_update(update.category, update.content)
+
+    # -------- SHARED LLM HELPERS ------------------------------------------------------
+    def _transcript(self, messages: list[CoreMessage], cap: int) -> str:
+        """``[role/source] text`` per message, each cut to ``cap`` tokens."""
+        rows = []
+        for message in messages:
+            text = message.text()
+            calls = getattr(message, "tool_calls", None)
+            if calls:
+                text += " " + "; ".join(f"{c.tool_name}({c.parameters})" for c in calls)
+            tokens = self.token_counter.encode(text)
+            if len(tokens) > cap:
+                text = self.token_counter.decode(tokens[:cap]) + " …[truncated]"
+            rows.append(f"[{message.role}/{message.source}] {text.strip()}")
+        return "\n".join(rows)
+
+    async def _ask(
+        self,
+        client: CoreChatCompletionClient,
+        task: str,
+        output_format: type[OutputT],
+        max_tokens: int,
+    ) -> OutputT | str:
+        """One structured request with no tools. Returns the parsed model;
+        JSON cut by ``max_tokens`` keeps its complete fields; anything else
+        comes back as the raw text."""
+        result = await client.run(
+            ctx=RunContext(messages=[UserMessage(source="compaction", content=task)]),
+            prompts=PromptCtx.model_construct(
+                stack=None, variables={}, rendered_layers={}, layer_usage={}, prompt_tokens=0,
+            ),
+            tools=None,
+            output_format=output_format,
+            stream=False,
+            max_tokens=max_tokens,
+        )
+        structured = result.message.structured_output
+        if isinstance(structured, output_format):
+            return structured
+        if structured is not None:
+            return output_format.model_validate(structured.model_dump())
+        text = result.message.text().strip()
+        if text.startswith("{"):
+            try:
+                return output_format.model_validate(from_json(text, allow_partial=True))
+            except ValueError:
+                pass
+        return text
 
     def _validate(self, messages: list[CoreMessage]) -> None:
         """Check the window a provider will accept, or raise ``CompactionError``.

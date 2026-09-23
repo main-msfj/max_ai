@@ -63,11 +63,11 @@ class FunctionAsTool(CoreTool):
         self.type_hints = t.get_type_hints(func)
 
         # ToolContext detection: must be the FIRST parameter if used.
+        # ``ToolContext | None`` also works outside a run (None is passed).
         self._first_param_name: str | None = next(iter(self.signature.parameters), None)
-        self._needs_context: bool = (
-            self._first_param_name is not None
-            and self.type_hints.get(self._first_param_name) is ToolContext
-        )
+        hint = self.type_hints.get(self._first_param_name) if self._first_param_name else None
+        self._context_optional: bool = hint in (ToolContext | None, t.Optional[ToolContext])
+        self._needs_context: bool = hint is ToolContext or self._context_optional
 
         self._dynamic_model, self._parameters_schema = self._build_parameters_schema()
         self._type_adapter: TypeAdapter[t.Any] = TypeAdapter(self._dynamic_model)
@@ -163,7 +163,7 @@ class FunctionAsTool(CoreTool):
         # 2. Build kwargs, injecting ToolContext if the function requires it.
         kwargs: dict[str, t.Any] = dict(tool_request.parameters)
         if self._needs_context:
-            if tool_context is None:
+            if tool_context is None and not self._context_optional:
                 msg = (
                     f"Tool: {self.name} requires a ToolContext "
                     "but none was provided by the caller."

@@ -2740,3 +2740,117 @@ Decisión de marvin: 128K es el default y solo cambia si el usuario lo pide.
 - Con 128K y prompt ~3.6k, "summary compaction at ~76%" ≈ 97k tokens.
 Verificado headless con el cliente real de OpenAI: default → "9.6k / 128k ·
 summary compaction at ~76%"; tests CLI + compaction OK; scripts OK.
+
+## 2026-09-23 — Compactación cerrada: prueba real + `_update_memory`
+
+Prueba real con OpenAI gpt-5.6-luna (`scratchpad/verify_compaction_real.py`):
+turno 1 "mi perro se llama Toby y vivo en Lima", 8 turnos de relleno, pregunta
+final. Resultado: compactó en el turno 7 (1,923 → 334 tokens, 12 mensajes
+fuera), "Toby" ya no está en los mensajes crudos y el modelo responde bien
+desde el resumen.
+
+Bugs encontrados por la prueba real:
+- `keep_ratio >= threshold` hacía la compactación un no-op eterno (conservaba
+  todo lo que la disparaba; pasaba con `COMPACTION_THRESHOLD=0.05`).
+  `CompactionConfig` ahora lo rechaza con un error claro; `cli_agent.py` usa
+  `keep_ratio = threshold / 2`.
+- El resumen con tope de tokens bajo cortaba el JSON → "Failed to parse
+  structured output" y el JSON roto quedaba como texto del resumen. Ahora el
+  pedido incluye el presupuesto ("Keep the whole summary under N tokens") y un
+  JSON cortado se rescata con `from_json(allow_partial=True)` (se conservan
+  los campos completos). Repetida la prueba con 300 tokens: resumen limpio.
+
+`_update_memory` (base):
+- Le pasa al LLM las memorias actuales (`category: content`) y los mensajes
+  que salen; devuelve `MemoryMaintenanceOutput` con el contenido COMPLETO de
+  cada categoría que cambia (porque `create_or_update` reemplaza) y se guarda
+  con `memory.create_or_update`. Salida en prosa → no guarda nada.
+- `MemoryFactUpdate` sin `key` (la identidad es la categoría).
+- Config: `update_memory` (default True), `memory_max_tokens` (1000).
+- Helpers compartidos en la base: `_transcript(messages, cap)` y
+  `_ask(client, task, output_format, max_tokens)` (structured, JSON parcial o
+  texto); `SummaryCompaction` los usa en vez de sus copias.
+- Real: memoria guardada "Datos personales: El usuario vive en Lima y tiene un
+  perro llamado Toby." (sin la charla de relleno).
+Tests nuevos: `test_update_memory.py` (4, con `LocalMemoryRegistry` real) y
+JSON cortado en `test_summary_strategy.py`. Suite sin regresiones.
+
+## 2026-09-23 — Sesiones: `CoreSessionStore` + Agent sin estado (memoria desde el ctx)
+
+Decisiones de marvin: el framework no guarda nada por su cuenta; el host
+(servidor, CLI) hace load → run → save. El Agent es uno para todos: el backend
+de memoria se configura una vez y el RunContext dice user_id/session_id.
+Modelo de despliegue previsto: agente serializado en la base, deserializar →
+correr → morir (la config del agente no lleva usuario ni sesión).
+
+Session store:
+- `core/model/session.py`: `SessionInfo` (user_id, session_id, title,
+  updated_at, message_count, compactions).
+- `base/session_store.py`: `CoreSessionStore` (componente con ciclo de vida):
+  `load(user_id, session_id)`, `save(ctx)`, `list_sessions(user_id, limit)`,
+  `delete(...)`; valida ids ([A-Za-z0-9_-], 1-128) y rechaza cargar una
+  sesión guardada de otro usuario. Backends implementan `_load/_save/_list/
+  _delete`.
+- `capabilities/session_store/local/`: `LocalSessionStore(base_path)` →
+  `<base>/<user>/<session>.json` (RunContext) + `.meta.json` (SessionInfo),
+  escritura atómica. Registrado `maxai.session_store.LocalSessionStore`.
+- Reemplaza a `max_ai/persistence/` (RunContextStore por run_id, sin usuario);
+  borrados con sus tests y `tests/integration/test_ollama_approval_flow.py`
+  (Agent viejo). Respaldo en `scratchpad/backup_persistence/`.
+- Tests `tests/session_store/` (13), incluido pausa → save → otro proceso
+  load → aprobar → resume.
+
+Memoria sin estado:
+- `CoreMemoryRegistry`: user_id/session_id opcionales; `bind(user_id,
+  session_id)` devuelve una copia atada que comparte la conexión del backend;
+  operaciones sin atar → `MemoryError.unbound()`; hook `_validate_scope`.
+- Tools de memoria reciben `ToolContext | None` y operan sobre
+  `self._for_run(context)` (el usuario/sesión de la corrida; sin contexto, el
+  alcance propio). `FunctionAsTool` ahora acepta `ToolContext | None` como
+  primer parámetro (pasa None fuera de una corrida).
+- Local: `connect` ya no crea la carpeta del usuario (se crea al escribir);
+  Mongo: `_to_config` toma el alcance de la instancia. Configs con
+  user_id/session_id opcionales.
+- Agent: `_memory_for(ctx)` conecta el backend una vez y lo ata al ctx; lo
+  usan el prompt (MemoryLayer) y la compactación. Ya no existe
+  `_validate_memory_scope`.
+- `cli_agent.py`: `LocalMemoryRegistry(base_path=...)` sin usuario.
+- Tests `tests/agents/test_stateless_memory.py` (6): un Agent, Ana y Beto con
+  archivos y prompts separados; search cruza sesiones del mismo usuario y
+  nunca de otro; sin atar no toca storage; copias Mongo comparten cliente;
+  la config serializada no lleva usuario. `test_agent_capability_prompts`
+  actualizado (otra sesión → memoria propia vacía, no error).
+Suite: 314 passed (+19 nuevos), sin regresiones; scripts OK.
+Siguiente: parte B (CLI con store: guardar por turno, /resume, --session).
+
+## 2026-09-23 — CLI como host de sesiones: guardar por turno, --session, /resume, /new
+
+Solo la CLI (el framework no cambia): hace lo mismo que un servidor
+(load → run → save).
+- `run_repl(agent, store=..., user_id=..., session_id=...)` y `MaxAIApp`
+  con los mismos parámetros. Sin store, nada se guarda (como antes) y
+  `/resume` lo avisa. `initial_context` sigue para casos avanzados.
+- Arranque: con `session_id` carga del store y redibuja la conversación; si no
+  existe, empieza una nueva con ese id. Sin `session_id`, id nuevo
+  (`short_id`) y una línea "Session X · saved after every turn · resume it
+  with /resume or --session X".
+- Cada turno se guarda al terminar (también en pausa resuelta o interrumpido
+  y revertido); un fallo al guardar se muestra y no tumba la UI.
+- `/resume [id]`: selector con el mismo `QuestionForm` de ask_user (↑↓ enter,
+  "Other" para pegar un id, esc cancela); lista las otras sesiones del
+  usuario, más recientes primero, con "title — 5 min ago · 24 msgs · 1
+  compaction". `/new` y `/clear` abren una sesión nueva (antes /clear
+  reutilizaba el id y habría pisado la guardada). `/session` muestra el id.
+- Redibujado (`_replay`): mensajes del usuario, respuestas, una línea por tool
+  call, el plan; si hubo compactación, `PastSummaryBlock` plegado ("Earlier
+  conversation summarized · N messages", click muestra el resumen).
+- Bug encontrado con la captura: cerrar la app con el selector abierto
+  escribía en una pantalla ya destruida; ahora solo esc (nuestro token) se
+  trata como cancelación, el cierre de la app se propaga.
+- Ejemplo: `cli_agent.py` usa `LocalSessionStore(examples/local/sessions)`
+  (ignorado por git vía `user*/`) y `--session <id>`.
+Tests `tests/cli/test_sessions.py` (7): guardar por turno + reabrir con
+--session y continuar, id desconocido, selector cambia de sesión (más reciente
+primero), esc cancela, /new conserva la anterior, resumen al retomar sesión
+compactada, sin store no guarda. Suite 321 passed, sin regresiones; 10
+scripts CLI OK (`verify_cli_blocks` actualizado: /clear = sesión nueva).

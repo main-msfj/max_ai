@@ -20,9 +20,7 @@ from ....core.compaction import (
     split_recent_messages,
     turn_starts,
 )
-from ....core.messages import CoreMessage, UserMessage
-from ....types.run_context import RunContext
-from ....types.stacks import PromptCtx
+from ....core.messages import CoreMessage
 from ._model import SummaryCompactionConfig
 
 SUMMARY_TASK = (
@@ -30,7 +28,8 @@ SUMMARY_TASK = (
     "Merge the previous summary with the newer messages below. The newer "
     "messages win over the previous summary when they conflict. Keep the "
     "objectives, pending work, completed work, decisions and every fact "
-    "needed to continue. Return only the requested structured output.\n\n"
+    "needed to continue. Keep the whole summary under {budget} tokens: short "
+    "items, no repetition. Return only the requested structured output.\n\n"
     "Previous summary:\n{previous}\n\n"
     "Newer messages to merge:\n{transcript}"
 )
@@ -131,7 +130,8 @@ class SummaryCompaction(CoreCompaction):
     ) -> CompactionOutput:
         """Fold ``messages`` into ``previous``, chunking when they don't fit
         one request: chunk N's summary is chunk N+1's previous summary."""
-        rows = [self._row(message) for message in messages]
+        cap = self.config.message_cap_tokens
+        rows = [self._transcript([message], cap) for message in messages]
         chunks: list[list[str]] = [[]]
         used, limit = 0, self._input_budget(client)
         for row in rows:
@@ -162,34 +162,10 @@ class SummaryCompaction(CoreCompaction):
         client: CoreChatCompletionClient,
     ) -> CompactionOutput:
         task = SUMMARY_TASK.format(
+            budget=self.config.summary_max_tokens,
             previous=previous.model_dump_json(exclude_defaults=True) if previous else "None yet.",
             transcript=transcript,
         )
-        result = await client.run(
-            ctx=RunContext(messages=[UserMessage(source="compaction", content=task)]),
-            prompts=PromptCtx.model_construct(
-                stack=None, variables={}, rendered_layers={}, layer_usage={}, prompt_tokens=0,
-            ),
-            tools=None,
-            output_format=CompactionOutput,
-            stream=False,
-            max_tokens=self.config.summary_max_tokens,
-        )
-        structured = result.message.structured_output
-        if isinstance(structured, CompactionOutput):
-            return structured
-        if structured is not None:
-            return CompactionOutput.model_validate(structured.model_dump())
+        output = await self._ask(client, task, CompactionOutput, self.config.summary_max_tokens)
         # Models without structured output still return usable prose.
-        return CompactionOutput(summary=result.message.text().strip())
-
-    def _row(self, message: CoreMessage) -> str:
-        text = message.text()
-        calls = getattr(message, "tool_calls", None)
-        if calls:
-            text += " " + "; ".join(f"{c.tool_name}({c.parameters})" for c in calls)
-        tokens = self.token_counter.encode(text)
-        cap = self.config.message_cap_tokens
-        if len(tokens) > cap:
-            text = self.token_counter.decode(tokens[:cap]) + " …[truncated]"
-        return f"[{message.role}/{message.source}] {text.strip()}"
+        return output if isinstance(output, CompactionOutput) else CompactionOutput(summary=output)

@@ -67,8 +67,9 @@ async def test_memory_tools_execute_and_snapshot_refreshes(tmp_path):
         await agent.run("recall", run_context=ctx)
         assert "First line\nSecond line" in client.prompts[-1].rendered_layers[MemoryLayer]
         assert agent._registry.runs_on_host("create_or_update")
-        with pytest.raises(ValueError, match="must match"):
-            await agent.run("wrong session", run_context=RunContext(user_id="u", session_id="other"))
+        # Another session gets its own, empty memory: never "s"'s memories.
+        await agent.run("other session", run_context=RunContext(user_id="u", session_id="other"))
+        assert "First line" not in client.prompts[-1].rendered_layers[MemoryLayer]
 
 
 @pytest.mark.asyncio

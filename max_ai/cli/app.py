@@ -38,8 +38,12 @@ from ..core.event_type import (
 )
 from ..core.compaction import client_max_output_tokens, live_message_threshold_tokens
 from ..core.termination.cancellation import CancellationToken
+from ..base.session_store import CoreSessionStore
+from ..core.messages import HARNESS_SOURCE
+from ..core.model.session import SessionInfo
 from ..types.agent_response import AgentResponse
 from ..types.run_context import RunContext
+from ..ids import short_id
 from ..types.tool_call import ToolResult
 from .blocks import (
     ACCENT,
@@ -49,6 +53,7 @@ from .blocks import (
     AssistantBlock,
     CompactionBlock,
     NoteLine,
+    PastSummaryBlock,
     PlanBlock,
     Question,
     QuestionForm,
@@ -56,6 +61,8 @@ from .blocks import (
     ToolBlock,
     UserBlock,
     WelcomeBox,
+    time_ago,
+    tool_summary,
 )
 from .events import event_line
 from .widgets import CommandMenu, PromptEditor
@@ -64,7 +71,10 @@ COMMANDS = {
     "/help": "show commands and shortcuts",
     "/skills": "list the agent's skills",
     "/tools": "list the tools the agent can call",
-    "/clear": "start a fresh conversation (same user/session ids)",
+    "/resume": "pick a saved conversation and continue it",
+    "/new": "start a new conversation (the current one stays saved)",
+    "/session": "show this conversation's id and how to resume it",
+    "/clear": "start a new conversation (same as /new)",
     "/thinking": "show or hide thinking boxes",
     "/verbose": "show or hide runtime events",
     "/files": "toggle the file sidebar",
@@ -134,12 +144,19 @@ class MaxAIApp(App[None]):
         *,
         show_thinking: bool = True,
         initial_context: RunContext | None = None,
+        store: CoreSessionStore | None = None,
+        user_id: str | None = None,
+        session_id: str | None = None,
     ) -> None:
         super().__init__()
         self.agent = agent
         self.show_thinking = show_thinking
         self.verbose = False
-        self.context: RunContext | None = initial_context
+        # The CLI is a host: it loads, runs and saves; the agent keeps nothing.
+        self.store = store
+        self.user_id = user_id or (initial_context.user_id if initial_context else "user")
+        self._resume_id = session_id if initial_context is None else None
+        self.context: RunContext = initial_context or self._new_context(session_id)
         self._request_future: asyncio.Future[str] | None = None
         self._busy = False
         self._tokens_input = 0
@@ -200,6 +217,8 @@ class MaxAIApp(App[None]):
                 self._skills = list(await skills.get_skills())
             except Exception as error:  # noqa: BLE001 — a bad skill dir must not kill the UI
                 await self._write_system(f"Could not load skills: {error}", style="#f87171")
+        if self.store is not None:
+            await self._open_session_on_start()
         client = getattr(self.agent, "client", None)
         window = getattr(getattr(client, "config", None), "max_context_window", 0) or 0
         if getattr(self.agent, "compaction", None) is not None and window <= 0:
@@ -534,13 +553,17 @@ class MaxAIApp(App[None]):
                     body.append("asks approval · ", style="#fbbf24")
                 body.append(f"{first}\n", style="#a1a1aa")
             await self._mount(NoteLine(body))
-        elif command == "/clear":
-            ctx = self.context
-            self.context = RunContext(user_id=ctx.user_id, session_id=ctx.session_id) if ctx else None
-            await self._transcript().remove_children()
-            self._tools.clear()
-            self._plan = None
-            await self._write_system("New conversation.")
+        elif command in ("/new", "/clear"):
+            await self._switch_to(self._new_context())
+            await self._write_system(f"New conversation · session {self.context.session_id}.")
+        elif command == "/session":
+            await self._write_system(self._session_line())
+        elif command == "/resume":
+            if self.store is None:
+                await self._write_system("No session store configured: nothing is saved.",
+                                         style="#fbbf24")
+            else:
+                self._resume_picker(args.strip() or None)
         elif command == "/thinking":
             self.action_toggle_thinking()
             await self._write_system(f"Thinking {'shown' if self.show_thinking else 'hidden'}.")
@@ -842,12 +865,120 @@ class MaxAIApp(App[None]):
             questions.append(Question(record.id, text, options, values, item.get("header"), grouped))
         return questions
 
+    # -------- SESSIONS -----------------------------------------------------------
+    def _session_line(self) -> str:
+        sid = self.context.session_id
+        if self.store is None:
+            return f"Session {sid} (not saved: no session store configured)."
+        return f"Session {sid} · saved after every turn · resume it with /resume or --session {sid}"
+
+    async def _save_session(self) -> None:
+        if self.store is None:
+            return
+        try:
+            await self.store.save(self.context)
+        except Exception as error:  # noqa: BLE001 — a failed save must not kill the UI
+            await self._write_system(f"Could not save the session: {error}", style="#f87171")
+
+    async def _open_session_on_start(self) -> None:
+        sid = self._resume_id
+        if sid is None:
+            await self._write_system(self._session_line())
+            return
+        try:
+            ctx = await self.store.load(self.user_id, sid)
+        except Exception as error:  # noqa: BLE001
+            await self._write_system(f"Could not load session {sid}: {error}", style="#f87171")
+            return
+        if ctx is None:
+            await self._write_system(f"No saved session {sid}: starting a new one with that id.")
+            return
+        await self._switch_to(ctx)
+        await self._write_system(f"Resumed session {sid}.")
+
+    async def _switch_to(self, ctx: RunContext) -> None:
+        """Show ``ctx`` as the current conversation: clear and redraw it."""
+        self.context = ctx
+        await self._transcript().remove_children()
+        self._tools.clear()
+        self._plan = None
+        self._context_tokens = 0
+        await self._replay(ctx)
+        self._refresh_usage()
+
+    async def _replay(self, ctx: RunContext) -> None:
+        """Redraw a saved conversation from its messages (no model calls)."""
+        if ctx.compaction.compactions:
+            strategy = getattr(self.agent, "compaction", None)
+            summary = strategy.render(ctx.compaction.state) if strategy is not None else None
+            block = PastSummaryBlock(ctx.compaction.archived_messages, summary)
+            await self._mount(block)
+            block.collapse()
+        for message in ctx.messages:
+            if message.source == HARNESS_SOURCE or message.role in ("system", "tool"):
+                continue
+            if message.role == "user":
+                await self._mount(UserBlock(message.text()))
+            elif message.role == "assistant":
+                if message.text().strip():
+                    block = AssistantBlock()
+                    await self._mount(block)
+                    await block.write(message.text())
+                    await block.finish()
+                for call in getattr(message, "tool_calls", None) or []:
+                    line = Text("  ● ", style=ACCENT)
+                    line.append(call.tool_name, style="bold #d4d4d8")
+                    line.append(f"  {tool_summary(call.tool_name, call.parameters)}", style="#71717a")
+                    await self._mount(NoteLine(line))
+        if ctx.plan is not None and ctx.plan.steps:
+            self._plan = PlanBlock(ctx.plan)
+            await self._mount(self._plan)
+
+    @work(exclusive=True, group="agent")
+    async def _resume_picker(self, session_id: str | None) -> None:
+        """``/resume [id]``: pick a saved session (same form as ask_user)."""
+        if session_id is None:
+            sessions = [s for s in await self.store.list_sessions(self.user_id)
+                        if s.session_id != self.context.session_id]
+            if not sessions:
+                await self._write_system("No other saved conversations yet.")
+                return
+            question = Question(
+                record_id="resume", text="Resume which conversation?", header="Resume",
+                options=[(s.title or "(untitled)", self._session_detail(s)) for s in sessions],
+                values=[s.session_id for s in sessions],
+            )
+            self._busy, self._cancel = True, CancellationToken()
+            try:
+                session_id = (await self._ask_form([question])).get("resume", "").strip()
+            except asyncio.CancelledError:
+                # esc cancels our token; anything else (app exit) must propagate.
+                if self._cancel is None or not self._cancel.is_cancelled():
+                    raise
+                await self._write_system("Resume cancelled.")
+                return
+            finally:
+                self._busy, self._cancel = False, None
+                self._refresh_status()
+        ctx = await self.store.load(self.user_id, session_id) if session_id else None
+        if ctx is None:
+            await self._write_system(f"No saved session {session_id!r}.", style="#f87171")
+            return
+        await self._switch_to(ctx)
+        await self._write_system(f"Resumed session {session_id}.")
+
+    @staticmethod
+    def _session_detail(info: SessionInfo) -> str:
+        detail = f"{time_ago(info.updated_at)} · {info.message_count} msgs"
+        if info.compactions:
+            detail += f" · {info.compactions} compaction{'s' if info.compactions > 1 else ''}"
+        return detail
+
     def _ensure_context(self) -> RunContext:
-        if self.context is None:
-            ctx = RunContext()
-            ctx.session_id = ctx.session_id or ctx.run_id
-            self.context = ctx
         return self.context
+
+    def _new_context(self, session_id: str | None = None) -> RunContext:
+        return RunContext(user_id=self.user_id, session_id=session_id or short_id())
 
     @work(exclusive=True, group="agent")
     async def _run_turn(self, task: str) -> None:
@@ -894,6 +1025,7 @@ class MaxAIApp(App[None]):
             await self._write_system(f"Failed: {error}", style="#f87171")
         finally:
             await self._finish_assistant()
+            await self._save_session()
             self._cancel = None
             self._busy = False
             self._waiting = False
@@ -1030,13 +1162,22 @@ async def run_repl(
     *,
     show_thinking: bool = True,
     initial_context: RunContext | None = None,
+    store: CoreSessionStore | None = None,
+    user_id: str | None = None,
+    session_id: str | None = None,
 ) -> None:
     """Run the Textual interface for an already configured agent.
+
+    With a ``store`` the CLI acts as a host: it saves the conversation after
+    every turn and ``/resume`` (or ``session_id``) continues a saved one.
 
     ``show_thinking`` sets the initial state; ctrl+t or /thinking toggles it
     at runtime. ``initial_context`` pins ``user_id``/``session_id`` up front —
     needed when memory/knowledge is bound to a specific session, since
     otherwise the first turn gets a random ``session_id``.
     """
-    app = MaxAIApp(agent, show_thinking=show_thinking, initial_context=initial_context)
+    app = MaxAIApp(
+        agent, show_thinking=show_thinking, initial_context=initial_context,
+        store=store, user_id=user_id, session_id=session_id,
+    )
     await app.run_async()

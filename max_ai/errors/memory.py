@@ -11,6 +11,13 @@ class MemoryError(Exception):
         return cls(f"Missing required memory field: {field}")
 
     @classmethod
+    def unbound(cls):
+        return cls(
+            "Memory is not bound to a user/session: call bind(user_id, session_id) "
+            "or pass it to an Agent, which binds it to each run's RunContext."
+        )
+
+    @classmethod
     def invalid_type(cls, field: str, expected: str, actual: str):
         return cls(f"Memory field {field} expected {expected}, got {actual}")
 
