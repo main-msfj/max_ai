@@ -362,7 +362,7 @@ Gates accept or reject the model's proposed final response before the turn ends.
 
 ### Sessions
 
-The host loads/saves runs: `ctx = await store.load(user_id, session_id)` (or new `RunContext(user_id=..., session_id=...)`), `response = await agent.run(text, run_context=ctx)`, `await store.save(response.context)`. `LocalSessionStore` in max_ai.capabilities.session_store. The Agent never touches the store.
+The host loads/saves runs: `ctx = await store.load(user_id, session_id)` (or new `RunContext(user_id=..., session_id=...)`), `response = await agent.run(text, run_context=ctx)`, `await store.save(response.context)`. `LocalSessionStore` (JSON files) and `MongoDBSessionStore` (shared by every process or serverless invocation; `uri_env="MONGODB_URI"`) in max_ai.capabilities.session_store. The Agent never touches the store.
 
 ### Concurrency
 

@@ -36,8 +36,8 @@ First public version.
   network by default, resource limits; image in
   `max_ai/capabilities/executor/docker/Dockerfile`) and `ModalExecutor`.
 - Context compaction: `SummaryCompaction` and `SlidingWindowCompaction`.
-- Sessions: `CoreSessionStore` / `LocalSessionStore`; the host loads, runs and
-  saves.
+- Sessions: `CoreSessionStore`, `LocalSessionStore` and `MongoDBSessionStore`;
+  the host loads, runs and saves.
 - Serialization: `agent.serialize()` / `Agent.deserialize()` with no secrets
   and an allowlist for third-party components (`allow_providers`).
 - Structured output: `output_format` shapes only the accepted final answer.
