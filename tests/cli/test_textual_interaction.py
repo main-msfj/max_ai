@@ -118,3 +118,12 @@ def test_runtime_event_lines():
     skill = event_line(FileReadEvent(source="test", tool_call_id="s", path="skills/demo/SKILL.md", root_dir="/tmp", content_hash="abc"))
     assert "bash finished" in bash.plain
     assert "skills/demo/SKILL.md" in skill.plain
+
+
+def test_tool_summaries_stay_on_one_short_line():
+    from max_ai.cli.blocks import tool_summary
+
+    script = "cat > plan.py << 'EOF'\n" + "x = 1\n" * 200 + "EOF"
+    assert tool_summary("bash", {"command": script}) == "cat > plan.py << 'EOF' … (+201 lines)"
+    assert tool_summary("write_file", {"file_name": "a.py", "content": "x\n" * 300}) == "a.py"
+    assert len(tool_summary("bash", {"command": "echo " + "a" * 500})) == 100
