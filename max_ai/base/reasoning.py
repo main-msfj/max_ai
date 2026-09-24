@@ -26,6 +26,7 @@ orphaned tool calls / unanswered tool responses) before calling
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import time
@@ -244,21 +245,20 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
         completion_bus: EventBus | None = None,
         memory: CoreMemoryRegistry | None = None,
     ) -> t.Self:
-        """Wire runtime dependencies. Called by the agent inside ``run()``.
+        """A copy of this loop wired to one run's dependencies (client, tool
+        context, memory...). Called by the agent inside ``run()``.
 
-        Returns ``self`` so the agent can chain
-        ``loop.bind(...).execute_reasoning_loop(...)``.
-
-        Calling ``bind`` twice on the same instance overwrites the
-        previous wiring. The agent currently does this every run, so
-        a single user-provided instance shared across multiple
-        concurrent ``agent.run()`` calls is unsafe — to be revisited
-        when concurrent runs become a concern.
+        ``self`` is never modified: one loop definition serves every
+        concurrent run, and each run executes on its own bound copy. The
+        copy is shallow — config and guards are shared, they keep no run
+        state (that lives in ``loop_state`` and the ``RunContext``).
         """
         if dispatcher is None:
             raise ValueError("A tool dispatcher is required")
         if tool_context is None:
             raise ValueError("Dispatcher binding requires a ToolContext")
+        self = copy.copy(self)  # noqa: PLW0642 - wire the copy, never the shared loop
+        self._current_loop_state = None
         self._dispatcher = dispatcher
         self._tool_context = tool_context
         self._name = name

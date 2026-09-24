@@ -7,7 +7,9 @@ base/agent.py is left untouched.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+import weakref
 import time
 from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import aclosing
@@ -100,8 +102,12 @@ class Agent(ComponentBase[AgentSpec]):
 
     Defaults: LocalWorkspace, LocalExecutor and ReactLoop. The agent manages
     execution sessions internally and closes them on close(). Local execution
-    is not a sandbox. Do not share a reasoning instance
-    between concurrently running agents: bind() stores runtime dependencies.
+    is not a sandbox.
+
+    Concurrency: one Agent serves many runs at once. Each run executes on
+    its own bound copy of the reasoning loop, MCP connections are opened
+    once and shared, and only messages of the same (user_id, session_id)
+    wait for each other. ``close()`` waits for the active runs.
 
     ``serialize()`` turns the agent into storable data (``AgentSpec``) and
     ``Agent.deserialize(row)`` rebuilds it: store once, rebuild per request.
@@ -262,7 +268,14 @@ class Agent(ComponentBase[AgentSpec]):
                 *self.completion_handlers,
             ]
         )
-        self._turn_lock = asyncio.Lock()
+        # Runs of different sessions overlap; messages of one session queue.
+        self._session_locks: weakref.WeakValueDictionary[tuple[str, str], asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
+        self._active_runs = 0
+        self._idle = asyncio.Event()
+        self._idle.set()
+        self._mcp_lock = asyncio.Lock()
         self._closed = False
 
     def _register_capability_tools(self, tools: Sequence[CoreTool]) -> list[str]:
@@ -403,20 +416,24 @@ class Agent(ComponentBase[AgentSpec]):
         kwargs: dict[str, Any],
         task: list[CoreMessage] | None = None,
     ) -> AgentResponse:
-        """Discover MCP tools for this turn and close sessions in this task."""
-        mcp_names: list[str] = []
-        try:
+        """Make sure MCP tools are available, then run."""
+        await self._ensure_mcp()
+        return await self._drive_connected(
+            ctx, sink, cancellation_token, stream_tokens, kwargs, task
+        )
+
+    async def _ensure_mcp(self) -> None:
+        """Connect MCP servers once and share them with every run; a dropped
+        connection reconnects on the next run. Closed by ``close()``."""
+        if not self.mcp_servers:
+            return
+        async with self._mcp_lock:
             await self._mcp_manager.connect_all()
             for tool in self._mcp_manager.get_tools():
-                self._registry.register(tool, host=True)
-                mcp_names.append(tool.name)
-            return await self._drive_connected(
-                ctx, sink, cancellation_token, stream_tokens, kwargs, task
-            )
-        finally:
-            for name in mcp_names:
-                self._registry.unregister(name)
-            await self._mcp_manager.disconnect_all()
+                if self._registry.get(tool.name) is not tool:
+                    if self._registry.get(tool.name) is not None:
+                        self._registry.unregister(tool.name)
+                    self._registry.register(tool, host=True)
 
     async def _drive_connected(
         self,
@@ -559,11 +576,17 @@ class Agent(ComponentBase[AgentSpec]):
         stream_tokens: bool = False,
         **kwargs: Any,
     ) -> AsyncGenerator[CoreEvent | AgentResponse, None]:
-        async with self._turn_lock:
+        if self._closed:
+            raise RuntimeError("Agent is closed")
+        ctx = run_context if run_context is not None else RunContext()
+        ctx.session_id = ctx.session_id or ctx.run_id
+        key = (ctx.user_id, ctx.session_id)
+        lock = self._session_locks.get(key)
+        if lock is None:
+            lock = self._session_locks[key] = asyncio.Lock()
+        async with lock, self._tracking_run():
             if self._closed:
                 raise RuntimeError("Agent is closed")
-            ctx = run_context if run_context is not None else RunContext()
-            ctx.session_id = ctx.session_id or ctx.run_id
             if task is not None:
                 if any(not r.is_consumed for r in ctx.tool_state.records.values()):
                     raise ValueError(
@@ -652,10 +675,25 @@ class Agent(ComponentBase[AgentSpec]):
             async for chunk in stream:
                 yield chunk
 
+    @contextlib.asynccontextmanager
+    async def _tracking_run(self) -> AsyncGenerator[None, None]:
+        """Count active runs so close() waits for them."""
+        self._active_runs += 1
+        self._idle.clear()
+        try:
+            yield
+        finally:
+            self._active_runs -= 1
+            if self._active_runs == 0:
+                self._idle.set()
+
     async def close(self) -> None:
+        """Refuse new runs, wait for the active ones, then release MCP
+        connections and execution sessions."""
         self._closed = True
-        async with self._turn_lock:
-            await self._manager.close()
+        await self._idle.wait()
+        await self._mcp_manager.disconnect_all()
+        await self._manager.close()
 
     async def __aenter__(self) -> Self:
         return self

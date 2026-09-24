@@ -46,7 +46,9 @@ class MCPClientManager:
     async def connect(self, server_id: str) -> None:
         server = self._get_server(server_id)
         if server.worker is not None:
-            return
+            if not server.worker.done():
+                return
+            server.worker = None  # the connection died: open a new one
         ready = asyncio.get_running_loop().create_future()
         server.worker = asyncio.create_task(self._serve(server, ready))
         try:

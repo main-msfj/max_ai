@@ -75,7 +75,14 @@ async def test_agent_accepts_mcp_separately_and_cleans_up(monkeypatch, agent_cla
     monkeypatch.setattr(agent, "_drive_connected", fake_drive)
     assert await agent._drive(None, None, None, False, {}) == "finished"
     assert observed == [True]
-    assert agent._registry.get("docs_search") is None
+    if agent_class is BaseAgent:  # the old Agent connects and disconnects per run
+        assert agent._registry.get("docs_search") is None
+    else:  # one connection shared by every run, released by close()
+        assert await agent._drive(None, None, None, False, {}) == "finished"
+        assert observed == [True, True]
+        assert len(agent._mcp_manager.get_tools()) == 1
+        await agent.close()
+        assert all(s.worker is None for s in agent._mcp_manager._servers.values())
     assert agent.mcp_servers[0] == StdioMCPServerConfig.model_validate_json(
         agent.mcp_servers[0].model_dump_json()
     )

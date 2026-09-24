@@ -1,6 +1,6 @@
 # Max AI Framework Architecture
 
-This document maps the current `max_ai` Python package as implemented in this repository. The public agent runtime described here is `max_ai.agents.Agent`. The separate `max_ai.base.Agent` belongs to an older, lighter runtime and is not the entry point used by the current website quickstart.
+This document maps the current `max_ai` Python package as implemented in this repository. The public agent runtime is `max_ai.agents.Agent`, exported by `max_ai.agents`. A separate, older `Agent` remains in `max_ai.base.agent`; it is not the runtime used by the examples or current documentation.
 
 ## Runtime at a glance
 
@@ -39,32 +39,30 @@ The `Agent` composes the runtime. It creates a tool registry and dispatcher, sel
 
 | Package | Responsibility |
 | --- | --- |
-| `max_ai/agents` | Current orchestration entry point and run lifecycle. |
-| `max_ai/base` | Shared contracts for clients, tools, reasoning, workspace, executor, registries, and layers. Also contains the older `base.Agent`. |
-| `max_ai/core` | Runtime primitives: messages, events, tool registry and dispatch, environment/session management, prompt stack container, cancellation, and model configuration. |
-| `max_ai/types` | Pydantic schemas for agent responses, run contexts, completions, tool calls, and runtime state. |
-| `max_ai/errors` | Typed exceptions for clients, tools, MCP, and runtime failures. |
-| `max_ai/capabilities/clients` | Provider-specific model clients, currently Ollama, OpenAI, and OpenRouter. |
-| `max_ai/capabilities/reasoning` | Reasoning implementations; `react` contains the default `ReactLoop`. |
-| `max_ai/capabilities/tools` | Built-in tools, function adapters/decorator, filesystem tools, Bash, plans, user input, and Agent-as-tool. |
+| `max_ai/agents` | Public orchestration entry point, component composition, and run lifecycle. |
+| `max_ai/base` | Contracts for clients, tools, reasoning, workspace, executor, registries, layers, middleware, completion, and compaction; also contains the older `base.Agent`. |
+| `max_ai/core` | Runtime building blocks: messages, events, tool registry/dispatch, environments, process execution, middleware chain, prompt stack, cancellation, model schemas, and compaction accounting. |
+| `max_ai/types` | Pydantic models for responses, run context, message history, completions, tool calls, and runtime state. |
+| `max_ai/errors` | Typed exceptions for clients, tools, MCP, context, capabilities, and runtime failures. |
+| `max_ai/capabilities/clients` | Provider model clients: Ollama, OpenAI, and OpenRouter. |
+| `max_ai/capabilities/reasoning` | Reasoning implementations and guards; `react` contains the default `ReactLoop`. |
+| `max_ai/capabilities/tools` | Function decorator/adapters, filesystem, Bash, plan, user-input, and Agent-as-tool integrations. |
 | `max_ai/capabilities/executor` | Local, Docker, and Modal execution providers. |
 | `max_ai/capabilities/workspace` | Workspace providers; local disk implementation is under `workspace/local`. |
-| `max_ai/capabilities/memory` | Memory registry implementations, including local, MongoDB, and SQLite packages. |
-| `max_ai/capabilities/knowledge` | Knowledge registry implementations, including local and MongoDB packages. |
-| `max_ai/capabilities/skills` | Skill registry implementations and skill metadata/configuration. |
-| `max_ai/capabilities/context` | Context registry implementations, including local and SQLite packages. |
-| `max_ai/capabilities/stacks` | Prompt layers for policy, task analysis, rendering, skills, knowledge, and memory. |
-| `max_ai/capabilities/completion_gate` | Runtime completion checks integrated through the event bus. |
-| `max_ai/capabilities/context` | Context registry providers, including local and SQLite packages. |
-| `max_ai/capabilities/mcp` | MCP server config models, client manager, transports, tool adapters, and serialization helpers. |
-| `max_ai/capabilities/middleware` | Logging and console tracing middleware. |
-| `max_ai/core/embeddings` | Embedding helpers used by retrieval and context workflows. |
-| `max_ai/compaction` | Conversation compaction support for managing long contexts. |
+| `max_ai/capabilities/memory` | Memory registries with local, MongoDB, and SQLite backends. |
+| `max_ai/capabilities/knowledge` | Retrieval registries with local and MongoDB backends. |
+| `max_ai/capabilities/skills` | Skill registries and metadata/resource loading. |
+| `max_ai/capabilities/context` | Local and SQLite context registries; these are provider packages but are not a constructor input on the current public Agent. |
+| `max_ai/capabilities/session_store`, `quota_store` | Session and quota storage adapters. |
+| `max_ai/capabilities/stacks` | Prompt layers for policy, task analysis, rendering, skills, knowledge, memory, and session state. |
+| `max_ai/capabilities/completion_gate` | Built-in runtime checks for plans, Bash outputs, and unresolved command failures. |
+| `max_ai/capabilities/compaction` | Optional window and summary strategies for long conversations. |
+| `max_ai/capabilities/mcp` | MCP config models, client manager, transports, tool adapters, and serialization helpers. |
+| `max_ai/capabilities/middleware` | Logging, budget, and tracing middleware implementations. |
+| `max_ai/core/embeddings` | Lightweight embedding helpers used by retrieval workflows. |
 | `max_ai/loggers` | Framework logging setup and scoped logger helpers. |
-| `max_ai/persistence` | Run context persistence and filesystem-backed storage utilities. |
 | `max_ai/cli` | Textual terminal interface. |
-| `max_ai/ui` | FastAPI web interface and its static assets. |
-| `website` | Flask-hosted documentation site; separate from the agent UI. |
+| `website` | Flask-hosted static documentation site, separate from the agent runtime. |
 
 The public `Agent` constructor groups its accepted values by responsibility:
 
@@ -73,12 +71,13 @@ The public `Agent` constructor groups its accepted values by responsibility:
 | Required identity | `name`, `description`, `instructions` | Agent identity and behavioral instructions. |
 | Required model | `client` | A `CoreChatCompletionClient` implementation. |
 | Local Python tools | `toolset` | Sequence of `CoreTool` instances or callables. |
-| MCP connections | `mcp` or `mcp_servers` | Sequence of `MCPServerConfig`; choose one argument. |
-| Execution | `executor`, `workspace`, `idle_timeout` | Executor and workspace providers and session idle timeout. |
-| Optional capabilities | `skills`, `memory`, `knowledge` | Registries that add prompt context and, where applicable, tools. |
-| Run policy | `reasoning`, `max_iterations`, `output_format`, `completion_handlers` | Reasoning strategy, loop bound, structured response schema, and completion callbacks. |
+| MCP connections | `mcp` | Sequence of `MCPServerConfig`, separate from local Python `toolset`. |
+| Execution | `executor`, `workspace` | Executor and workspace providers; defaults are local implementations. Idle timeout comes from framework settings. |
+| Optional capabilities | `skills`, `memory`, `knowledge` | Registries that add prompt context and, where applicable, tools. Context registries exist but are not wired into this Agent constructor. |
+| Run policy | `reasoning`, `output_format`, `completion`, `completion_handlers` | Reasoning strategy, structured response schema, runtime gate options, and application completion handlers. |
+| Run controls | `compaction`, `middlewares` | Optional conversation compaction strategy and middleware hooks. |
 
-When omitted, the agent uses `ReactLoop`, `LocalExecutor`, `LocalWorkspace`, a 20 iteration limit, and a 300 second idle timeout. Its default prompt stack includes policy, task analysis, and rendering. Skills, knowledge, and memory layers are added only when their matching registries are supplied.
+When omitted, the agent uses `ReactLoop`, `LocalExecutor`, and `LocalWorkspace`. The iteration limit and executor-session idle timeout come from `max_ai.config.setting` (environment variables `MAX_LOOP_ITERATIONS` and `ENVIRONMENT_IDLE_TIMEOUT`). The default prompt stack includes policy, task analysis, rendering, and session state. Skills, knowledge, and memory layers are added only when their matching registries are supplied. The agent registers built-in filesystem, plan, and Bash tools unless the supplied toolset already uses those names; the ask-user tool is enabled by the reasoning configuration.
 
 ### Prompt construction and injection
 
@@ -107,13 +106,14 @@ The current `max_ai.agents.Agent` builds this stack in `_build_prompt_stack()` i
 3. `RenderingLayer` — static output formatting guidance.
 4. `SkillsLayer` — included when a skills registry is supplied; receives `loaded_skills` loaded during `prepare()`.
 5. `KnowledgeLayer` — included when knowledge registries are supplied; receives their retrieval tool names.
-6. `MemoryLayer` — included when a memory registry is supplied; receives the memory snapshot and available memory tool names.
+6. `MemoryLayer` — included when a memory registry is supplied; receives the memory snapshot and available memory tool names scoped to the current user/session.
+7. `SessionStateLayer` — always included; carries the current plan and compaction summary so they survive transcript compaction.
 
 Each layer receives the run variables and renders its own template. `CoreLayer` uses Jinja2 and validates its placeholder contract when constructed. `PromptCtx` keeps the source `LayerContainer`, input variables, and the rendered strings keyed by concrete layer type. The client then decides how to turn those strings into provider-native messages. Ollama concatenates non-empty layers with blank lines into a system message, followed by message history and current messages; other providers can assemble their request differently.
 
 Tool schemas are passed to `client.run()` separately from `PromptCtx`. The task and conversation history are also sent as `RunContext` messages, rather than being folded into a prompt layer. This separation lets prompt instructions, callable tools, and the conversation remain distinct inputs to the client.
 
-`CoreLayer` subclasses can use inline templates or template files, and `LayerContainer.build_default_stack(overrides=...)` can replace layers for code that uses that generic API. The current public `max_ai.agents.Agent` constructs its stack internally and does not expose a custom `prompt_layers` constructor argument.
+`CoreLayer` subclasses can use inline templates or template files. The generic `build_default_stack(overrides=...)` helper can replace default layers for code using that API. The current public `max_ai.agents.Agent` constructs its stack internally and does not expose a custom `prompt_layers` constructor argument.
 
 Capability providers generally follow a small package structure: `_model.py` contains the provider's Pydantic config model, while a separate module contains the implementation (for example, `memory/local/_model.py` and `memory/local/_registry.py`). Public `__init__.py` files expose the supported imports.
 
@@ -138,7 +138,7 @@ Common implementation/config pairs include:
 
 ## MCP: multiple servers and serializable configuration
 
-The agent accepts either `mcp` or `mcp_servers` as a sequence of server configuration models. Do not pass both. MCP is configured separately from `toolset`, so local Python tools and tools discovered from MCP servers have distinct configuration and lifecycle.
+The agent accepts `mcp` as a sequence of server configuration models. MCP is configured separately from `toolset`, so local Python tools and tools discovered from MCP servers have distinct configuration and lifecycle.
 
 `StdioMCPServerConfig` describes a process launched over stdio. `HTTPServerConfig` describes SSE or streamable HTTP connections. The models are Pydantic models and the package exports `serialize_mcp_servers()` and `deserialize_mcp_servers()` for JSON round trips. Treat credentials in config (such as HTTP tokens or headers) as secrets when persisting or sharing serialized payloads.
 
@@ -175,7 +175,7 @@ The project currently declares the Python MCP SDK dependency as `mcp>=2.0,<3` in
 
 Model clients implement the shared client contract and translate framework messages, tool definitions, streaming chunks, and usage into provider-specific requests. Their configuration models are kept alongside each implementation. The documented package imports are under `max_ai.capabilities.clients`.
 
-The same agent runtime can be integrated into the Textual CLI or FastAPI UI. Runtime events support streamed updates, approvals, and additional user input. `AgentResponse` represents completed and paused runs, while `max_ai.persistence` provides storage utilities for run context and continuation workflows.
+The same agent runtime can be integrated into the Textual CLI or an application built by the developer. Runtime events support streamed updates, approvals, and additional user input. `AgentResponse` represents completed and paused runs, and `RunContext` is a Pydantic model that applications can serialize and store using their chosen persistence layer. The repository does not include a `max_ai.persistence` or `max_ai.ui` package.
 
 ## Main implementation references
 
