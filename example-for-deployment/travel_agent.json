@@ -1,0 +1,154 @@
+{
+  "provider": "maxai.agents.Agent",
+  "component_type": "agent",
+  "version": 1,
+  "component_version": 1,
+  "description": "Connect a pluggable reasoning loop to workspace, skills and execution.",
+  "label": "Agent",
+  "config": {
+    "name": "TravelPlanner",
+    "description": "Plans trips working for Sara trips",
+    "instructions": "Help the user plan trips. user your tools and skill at will",
+    "client": {
+      "provider": "maxai.llm.OpenRouterChatCompletionClient",
+      "component_type": "client",
+      "version": 1,
+      "component_version": 1,
+      "description": "OpenRouter implementation on top of ``OpenAIChatCompletionClient``.",
+      "label": "OpenRouterChatCompletionClient",
+      "config": {
+        "model": "nvidia/nemotron-3-super-120b-a12b:free",
+        "api_key_env": "OPENROUTER_API_KEY",
+        "base_url": "https://openrouter.ai/api/v1",
+        "fallback_models": [
+          "qwen/qwen3.8-27b:free",
+          "google/gemma-4-31b-it:free"
+        ],
+        "reasoning": {
+          "effort": "low"
+        },
+        "app_name": "travel_agent",
+        "options": {},
+        "config": {
+          "max_context_window": 128000,
+          "max_output_tokens": 0,
+          "supports_vision": false,
+          "supports_audio": false,
+          "supports_function_calling": true,
+          "supports_thinking": false,
+          "tokenizer_base": "o200k_base"
+        }
+      }
+    },
+    "reasoning": {
+      "provider": "maxai.reasoning.ReactLoop",
+      "component_type": "reasoning",
+      "version": 1,
+      "component_version": 1,
+      "description": "ReAct loop: call the model, run any tool calls, repeat.",
+      "label": "ReactLoop",
+      "config": {
+        "max_connection_retries": 3
+      }
+    },
+    "workspace": {
+      "provider": "max_ai.capabilities.workspace.minio.MinIOWorkspace",
+      "component_type": "workspace",
+      "version": 1,
+      "component_version": 1,
+      "description": "Needs the endpoint, the bucket and the env vars holding the keys.",
+      "label": "MinIOWorkspace",
+      "config": {
+        "endpoint_url": "http://minio:9000",
+        "bucket": "workspaces",
+        "access_key_env": "MINIO_ACCESS_KEY",
+        "secret_key_env": "MINIO_SECRET_KEY"
+      }
+    },
+    "executor": {
+      "provider": "max_ai.capabilities.executor.modal.ModalExecutor",
+      "component_type": "executor",
+      "version": 1,
+      "component_version": 1,
+      "description": "ModalExecutor provides the Modalexecution implementation.",
+      "label": "ModalExecutor",
+      "config": {
+        "packages": [
+          "openpyxl",
+          "pandas"
+        ],
+        "app_name": "maxai-runtime",
+        "network": "none",
+        "lifetime": 3600,
+        "max_output_bytes": 1048576,
+        "uid": 1000
+      }
+    },
+    "skills": {
+      "provider": "max_ai.capabilities.skills.github.GithubSkillRegistry",
+      "component_type": "skills",
+      "version": 1,
+      "component_version": 1,
+      "description": "Skills cloned from a GitHub repository with ``git``.",
+      "label": "GithubSkillRegistry",
+      "config": {
+        "source": "trailofbits/skills-curated",
+        "skills": [
+          "openai-spreadsheet"
+        ],
+        "ref": "main",
+        "path": "plugins/openai-spreadsheet/skills"
+      }
+    },
+    "knowledge": [],
+    "toolset": [],
+    "mcp": [
+      {
+        "server_id": "exa",
+        "transport_protocol": "streamable-http",
+        "env": {},
+        "approval_mode": "auto_approval",
+        "resource_approval_mode": null,
+        "tool_approval_modes": {},
+        "timeout_seconds": 240.0,
+        "url": "https://mcp.exa.ai/mcp",
+        "headers": {},
+        "headers_env": {
+          "x-api-key": "EXA_API_KEY"
+        },
+        "token_env": null
+      }
+    ],
+    "gates": [
+      {
+        "provider": "maxai.completion.RuntimeCompletionGate",
+        "component_type": "completion",
+        "version": 1,
+        "component_version": 1,
+        "description": "Check plan closure, declared deliverables and unacknowledged failures.",
+        "label": "RuntimeCompletionGate",
+        "config": {
+          "enabled": true,
+          "plan_must_close": true,
+          "check_bash_outputs": true,
+          "nudge_bash_failures": true
+        }
+      }
+    ],
+    "middlewares": [
+      {
+        "provider": "max_ai.capabilities.middleware.TracingMiddleware",
+        "component_type": "middleware",
+        "version": 1,
+        "component_version": 1,
+        "description": "Trace what the agent does with OpenTelemetry.",
+        "label": "TracingMiddleware",
+        "config": {
+          "capture_content": true,
+          "max_content_chars": 20000
+        }
+      }
+    ],
+    "prompt_layers": []
+  }
+}
