@@ -19,9 +19,11 @@ from enum import Enum
 
 from pydantic import AwareDatetime, BaseModel, Field
 
+from ..core.embeddings.similarity import rank
 from ..errors.memory import MemoryError
 from ..types.tools import ToolApprovalMode
 from .capability import CoreAgentCapabilities
+from .embedding import CoreEmbedding
 from .tools import CoreTool, ToolContext
 
 
@@ -66,8 +68,11 @@ class CoreMemoryRegistry(CoreAgentCapabilities[BaseModel], ABC):
         tool_mode: MemoryToolMode = MemoryToolMode.FULL,
         *,
         context_days: int | None = 30,
+        embedding: CoreEmbedding | None = None,
     ) -> None:
         super().__init__()
+        # With an embedding, search_memory matches by meaning, not words.
+        self.embedding = embedding
         self.user_id: str | None = None
         self.session_id: str | None = None
         if user_id is not None or session_id is not None:
@@ -181,6 +186,22 @@ class CoreMemoryRegistry(CoreAgentCapabilities[BaseModel], ABC):
         if deleted:
             return f"Memory deleted: {category}"
         return f"Memory category not found: {category}"
+
+    semantic_min_score: t.ClassVar[float] = 0.3
+    semantic_limit: t.ClassVar[int] = 20
+
+    async def _rank_by_meaning(
+        self, text: str, candidates: t.Sequence[MemorySearchResult],
+    ) -> list[MemorySearchResult]:
+        """The candidates closest in meaning to ``text`` (needs ``embedding``)."""
+        if self.embedding is None or not candidates:
+            return list(candidates)
+        query, *vectors = await self.embedding.embed(
+            [text, *(f"{c.category}: {c.memory}" for c in candidates)]
+        )
+        ranked = rank(query, list(candidates), vectors,
+                      limit=self.semantic_limit, min_score=self.semantic_min_score)
+        return [candidate for _, candidate in ranked]
 
     async def search_memory(self, text: str) -> list[MemorySearchResult]:
         """Search other sessions without adding their memories to this session."""

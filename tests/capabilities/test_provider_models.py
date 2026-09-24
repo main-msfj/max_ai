@@ -28,8 +28,6 @@ import pytest
         ("executor.docker", "DockerExecutor", "DockerExecutorConfig", {}),
         ("executor.modal", "ModalExecutor", "ModalExecutorConfig", {"image": "example:latest"}),
         ("workspace.local", "LocalWorkspace", "LocalWorkspaceConfig", {}),
-        ("tools.agent_as_tool", "AgentAsTool", "AgentAsToolConfig",
-         {"agent": {"provider": "example.Agent", "config": {}}}),
     ],
 )
 def test_provider_config_is_in_model_module_and_round_trips(module, implementation, config, values):

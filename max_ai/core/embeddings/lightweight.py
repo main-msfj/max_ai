@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import functools
+import warnings
 import typing as t
 
 from ...errors.embeddings import EmbeddingError
 
-DEFAULT_LIGHTWEIGHT_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+# Multilingual (~50 languages, ~220MB, 384 dims): users rarely write only English.
+DEFAULT_LIGHTWEIGHT_EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
 
 @functools.lru_cache(maxsize=4)
@@ -17,7 +19,10 @@ def _get_text_embedding_model(model_name: str) -> t.Any:
     except ImportError as exc:  # pragma: no cover - depends on optional install
         raise EmbeddingError.dependency_missing() from exc
 
-    return TextEmbedding(model_name=model_name)
+    with warnings.catch_warnings():
+        # fastembed notes a pooling change for some models; nothing to act on.
+        warnings.simplefilter("ignore", UserWarning)
+        return TextEmbedding(model_name=model_name)
 
 
 def get_lightweight_embedding(

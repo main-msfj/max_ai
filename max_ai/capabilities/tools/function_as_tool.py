@@ -37,6 +37,7 @@ class FunctionAsTool(CoreTool):
         approval_mode: ToolApprovalMode | str = ToolApprovalMode.ASK_APPROVED,
         timeout_seconds: float = 300,
         max_retries: int = 3,
+        read_only: bool = False,
     ):
         """Create a tool from a Python function.
 
@@ -48,6 +49,8 @@ class FunctionAsTool(CoreTool):
             approval_mode: Whether approval is required before execution.
             timeout_seconds: Max execution time in seconds.
             max_retries: Consumed by the executor on ToolRetry.
+            read_only: The function has no side effects, so the agent may run
+                it at the same time as other read-only calls.
         """
         self.func = func
         super().__init__(
@@ -57,6 +60,7 @@ class FunctionAsTool(CoreTool):
             approval_mode=approval_mode,
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
+            read_only=read_only,
         )
 
         self.signature = inspect.signature(func)

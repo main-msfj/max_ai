@@ -17,7 +17,7 @@ from max_ai.base.completion_gate import (
 )
 from max_ai.capabilities.clients.openai.client import OpenAIChatCompletionClient
 from max_ai.capabilities.compaction import SummaryCompaction
-from max_ai.capabilities.completion_gate import RuntimeGateConfig
+from max_ai.capabilities.completion_gate import RuntimeCompletionGate, RuntimeGateConfig
 from max_ai.capabilities.mcp import HTTPServerConfig
 from max_ai.capabilities.memory import LocalMemoryRegistry
 from max_ai.capabilities.reasoning.guards import RepetitionGuard
@@ -54,7 +54,7 @@ def full_agent(tmp_path, **extra) -> Agent:
         memory=LocalMemoryRegistry(base_path=tmp_path / "data"),
         compaction=SummaryCompaction(threshold=0.8, keep_ratio=0.4),
         reasoning=ReactLoop(max_loop_iterations=12, guards=[RepetitionGuard(max_repeats=4)]),
-        completion=RuntimeGateConfig(plan_must_close=False),
+        gates=[RuntimeCompletionGate(RuntimeGateConfig(plan_must_close=False)), *extra.pop("gates", [])],
         output_format=Invoice,
         mcp=[HTTPServerConfig(server_id="docs", url="http://localhost:9000/mcp", token_env="DOCS_TOKEN")],
         **extra,
@@ -70,7 +70,7 @@ def test_an_agent_round_trips_through_json(tmp_path):
     assert isinstance(agent.compaction, SummaryCompaction)
     assert agent.reasoning.max_loop_iterations == 12
     assert agent.reasoning.guards[0].max_repeats == 4
-    assert agent.completion.plan_must_close is False
+    assert agent.gates[0].config.plan_must_close is False
     assert agent.mcp_servers[0].token_env == "DOCS_TOKEN"
     assert agent.serialize().model_dump_json() == row  # stable
 
@@ -144,13 +144,29 @@ class NotStorableGate(CompletionBase):
 
 
 def test_developer_gates_are_stored_by_provider(tmp_path):
-    row = full_agent(tmp_path, completion_handlers=[ApprovedByFinance(500)]).serialize().model_dump_json()
+    row = full_agent(tmp_path, gates=[ApprovedByFinance(500)]).serialize().model_dump_json()
     with pytest.raises(PermissionError, match="allow_providers"):
         Agent.deserialize(row)
 
     component.allow_providers(ApprovedByFinance.__module__ + ".")
-    gate = Agent.deserialize(row).completion_handlers[0]
+    runtime, gate = Agent.deserialize(row).gates
+    assert isinstance(runtime, RuntimeCompletionGate)
     assert isinstance(gate, ApprovedByFinance) and gate.min_total == 500
 
-    with pytest.raises(TypeError, match="completion handler 'NotStorableGate'"):
-        full_agent(tmp_path, completion_handlers=[NotStorableGate()]).serialize()
+    with pytest.raises(TypeError, match="gate 'NotStorableGate'"):
+        full_agent(tmp_path, gates=[NotStorableGate()]).serialize()
+
+
+def test_the_framework_gate_is_always_there_and_gets_the_workspace(tmp_path):
+    workspace = LocalWorkspace(root=tmp_path)
+    default = Agent(name="a", description="d", instructions="i",
+                    client=OpenAIChatCompletionClient(model="gpt-4o-mini"), workspace=workspace)
+    assert [type(g) for g in default.gates] == [RuntimeCompletionGate]
+    assert default.gates[0]._workspace is workspace
+
+    mine = RuntimeCompletionGate(RuntimeGateConfig(check_bash_outputs=False))
+    custom = Agent(name="a", description="d", instructions="i", workspace=workspace,
+                   client=OpenAIChatCompletionClient(model="gpt-4o-mini"), gates=[ApprovedByFinance(), mine])
+    assert custom.gates[1] is mine  # yours is used (not a second one), in your order
+    assert sum(isinstance(g, RuntimeCompletionGate) for g in custom.gates) == 1
+    assert mine._workspace is workspace

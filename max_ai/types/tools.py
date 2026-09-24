@@ -4,9 +4,6 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from ..capabilities.tools.agent_as_tool._model import (
-    AgentAsToolConfig as AgentAsToolConfig,
-)
 
 
 # -------- TOOLS BASE MODEL -----------------------------------------------------------

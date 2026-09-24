@@ -6,6 +6,7 @@ import asyncio
 import os
 from typing import Any
 
+from ....base.embedding import CoreEmbedding
 from ....base.memory import (
     CoreMemoryRegistry,
     MemoryRecord,
@@ -34,8 +35,10 @@ class MongoDBMemoryRegistry(CoreMemoryRegistry):
         server_selection_timeout_ms: int = 5000,
         context_days: int | None = 30,
         search_limit: int = 20,
+        embedding: CoreEmbedding | None = None,
     ) -> None:
-        super().__init__(user_id, session_id, tool_mode, context_days=context_days)
+        super().__init__(user_id, session_id, tool_mode, context_days=context_days,
+                         embedding=embedding)
         self._mongo_config = MongoDBMemoryRegistryConfig(
             user_id=self.user_id, session_id=self.session_id, tool_mode=tool_mode,
             context_days=context_days, search_limit=search_limit,
@@ -49,13 +52,16 @@ class MongoDBMemoryRegistry(CoreMemoryRegistry):
 
     def _to_config(self) -> MongoDBMemoryRegistryConfig:
         # Scope comes from the instance: a bound copy shares _mongo_config.
+        embedding = self.embedding.serialize().model_dump(exclude_none=True) if self.embedding else None
         return self._mongo_config.model_copy(
-            update={"user_id": self.user_id, "session_id": self.session_id}, deep=True,
+            update={"user_id": self.user_id, "session_id": self.session_id, "embedding": embedding},
+            deep=True,
         )
 
     @classmethod
     def _from_config(cls, config: MongoDBMemoryRegistryConfig) -> "MongoDBMemoryRegistry":
-        return cls(**config.model_dump())
+        embedding = CoreEmbedding.deserialize(config.embedding) if config.embedding else None
+        return cls(**config.model_dump(exclude={"embedding"}), embedding=embedding)
 
     # -------- CONNECTION -----------------------------------------------------------
     async def connect(self) -> None:
@@ -142,8 +148,18 @@ class MongoDBMemoryRegistry(CoreMemoryRegistry):
         )
         return result.deleted_count > 0
 
+    # With an embedding, the user's most recent memories are ranked by meaning.
+    semantic_candidates: int = 500
+
     async def _search_memory(self, text: str) -> list[MemorySearchResult]:
         await self._ensure_connected()
+        if self.embedding is not None:
+            cursor = self._collection.find(
+                {"user_id": self.user_id, "session_id": {"$ne": self.session_id}}, {"_id": 0},
+                collation={"locale": "simple"},
+            ).sort("updated", -1).limit(self.semantic_candidates)
+            candidates = [MemorySearchResult.model_validate(doc) async for doc in cursor]
+            return (await self._rank_by_meaning(text, candidates))[: self.search_limit]
         cursor = self._collection.find(
             {"user_id": self.user_id, "session_id": {"$ne": self.session_id},
              "$text": {"$search": text}},

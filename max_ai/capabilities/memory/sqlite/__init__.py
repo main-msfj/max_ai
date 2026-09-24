@@ -1,18 +1,6 @@
-"""SQLite memory provider; the runtime is loaded only when requested."""
-
-import typing as t
+"""Memory in a local SQLite file, with stored vectors for search by meaning."""
 
 from ._model import SQLiteMemoryRegistryConfig
-
-if t.TYPE_CHECKING:
-    from ._registry import SQLiteMemoryRegistry
+from ._registry import SQLiteMemoryRegistry
 
 __all__ = ["SQLiteMemoryRegistry", "SQLiteMemoryRegistryConfig"]
-
-
-def __getattr__(name: str) -> t.Any:
-    if name == "SQLiteMemoryRegistry":
-        from ._registry import SQLiteMemoryRegistry
-
-        return SQLiteMemoryRegistry
-    raise AttributeError(name)

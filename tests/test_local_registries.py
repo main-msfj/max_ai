@@ -37,61 +37,37 @@ from max_ai.types.workspace import WorkspaceDirectory
 # =====================================================================
 @pytest.mark.asyncio
 async def test_local_memory_registry_round_trip(tmp_path: Path):
-    """update_fact → get_context returns what we wrote, in correct shape."""
-    mem = LocalMemoryRegistry(
-        user_id="u1",
-        base_path=tmp_path,
-        tool_mode=MemoryToolMode.FULL,
-    )
+    """create_or_update → get_context returns what we wrote, per category."""
+    mem = LocalMemoryRegistry(base_path=tmp_path, tool_mode=MemoryToolMode.FULL).bind("u1", "s1")
 
     async with mem:
-        # First read on a new user is empty, not an error.
-        initial = await mem.get_context()
-        assert initial == []
+        assert await mem.get_context() == []  # a new user starts empty
 
-        # Write two facts.
-        await mem.update_fact("user_identity", "Software engineer in Buenos Aires")
-        await mem.update_fact("language", "Spanish, prefers technical English")
+        await mem.create_or_update("identity", "Software engineer in Buenos Aires")
+        await mem.create_or_update("language", "Spanish, prefers technical English")
+        by_category = {r.category: r for r in await mem.get_context()}
+        assert by_category["identity"].memory == "Software engineer in Buenos Aires"
+        assert isinstance(by_category["language"].updated, datetime)
 
-        # Read back.
-        all_facts = await mem.get_context()
-        assert len(all_facts) == 2
+        # Updating a category replaces it.
+        await mem.create_or_update("language", "English only")
+        by_category = {r.category: r for r in await mem.get_context()}
+        assert len(by_category) == 2 and by_category["language"].memory == "English only"
 
-        by_key = {f.key: f for f in all_facts}
-        assert by_key["user_identity"].category == "general"
-        assert by_key["user_identity"].content == "Software engineer in Buenos Aires"
-        assert by_key["language"].content == "Spanish, prefers technical English"
-        assert isinstance(by_key["language"].last_updated, datetime)
+        assert await mem.delete_memory("language") == "Memory deleted: language"
+        assert [r.category for r in await mem.get_context()] == ["identity"]
+        assert "not found" in await mem.delete_memory("never_existed")
 
-        # Update existing key overwrites.
-        await mem.update_fact("language", "English only")
-        updated = await mem.get_context()
-        assert len(updated) == 2  # still two
-        by_key = {f.key: f for f in updated}
-        assert by_key["language"].content == "English only"
-
-        # Delete removes it.
-        await mem.delete_fact("language")
-        after_delete = await mem.get_context()
-        assert len(after_delete) == 1
-        assert after_delete[0].key == "user_identity"
-
-        # Delete missing key is silent no-op.
-        await mem.delete_fact("never_existed")  # must not raise
-
-    # File should exist on disk after writes.
-    user_file = tmp_path / "memory" / "u1.json"
-    assert user_file.is_file()
+    assert (tmp_path / "memory" / "u1" / "s1.json").is_file()
 
 
 @pytest.mark.asyncio
-async def test_local_memory_rejects_invalid_keys(tmp_path: Path):
-    mem = LocalMemoryRegistry(user_id="u1", base_path=tmp_path)
+async def test_local_memory_rejects_empty_categories(tmp_path: Path):
+    mem = LocalMemoryRegistry(base_path=tmp_path).bind("u1", "s1")
     async with mem:
-        with pytest.raises(MemoryError):
-            await mem.update_fact("", "value")
-        with pytest.raises(MemoryError):
-            await mem.update_fact("   ", "value")
+        for category in ("", "   "):
+            with pytest.raises(MemoryError):
+                await mem.create_or_update(category, "value")
 
 
 # =====================================================================
@@ -285,11 +261,12 @@ async def test_local_skill_registry_loads_skill(tmp_path: Path, monkeypatch: pyt
         assert (cached_skill / "references" / "notes.md").is_file()
         assert (cached_skill / "scripts" / "greetings.py").is_file()
 
+        user_root = server_root.resolve() / "tmp" / "u1"
         directory = WorkspaceDirectory(
-            root=server_root.resolve() / "tmp" / "u1",
-            tool_dir=server_root.resolve() / "tmp" / "u1" / "tools",
-            skill_dir=server_root.resolve() / "tmp" / "u1" / "skills",
-            artifacts_dir=server_root.resolve() / "tmp" / "u1" / "artifacts",
+            root=user_root,
+            workspace_dir=user_root / "workspace",
+            skill_dir=user_root / "skills",
+            artifacts_dir=user_root / "workspace",
         )
         session_skills = reg.materialize(directory)
         assert session_skills == directory.skill_dir

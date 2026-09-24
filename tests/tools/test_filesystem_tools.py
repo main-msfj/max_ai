@@ -1,3 +1,6 @@
+"""Filesystem tools: one workspace per user, a scratchpad per session, and no
+way out of either (traversal, symlinks, other users)."""
+
 from __future__ import annotations
 
 import hashlib
@@ -8,20 +11,13 @@ import pytest
 
 from max_ai.base.tools import ToolContext
 from max_ai.capabilities.tools.file_system import FileSystemTools
-from max_ai.capabilities.workspace.local import WorkspaceLocal
-from max_ai.capabilities.workspace.local._filesystem import UserFileSystem
-from max_ai.config import setting
+from max_ai.capabilities.workspace.local import LocalWorkspace, UserFileSystem
 from max_ai.types.tool_call import ToolCallRecord
 from max_ai.types.tools import ToolApprovalMode
 
 
 def context(user_id: str, session_id: str, **deps: object) -> ToolContext:
-    return ToolContext(
-        run_id="run-test",
-        user_id=user_id,
-        session_id=session_id,
-        deps=deps,
-    )
+    return ToolContext(run_id="run-test", user_id=user_id, session_id=session_id, deps=deps)
 
 
 def get_tool(tools: FileSystemTools, name: str):
@@ -29,481 +25,243 @@ def get_tool(tools: FileSystemTools, name: str):
 
 
 async def invoke(tools: FileSystemTools, name: str, ctx: ToolContext, **params):
-    tool = get_tool(tools, name)
     record = ToolCallRecord(tool_name=name, parameters=params)
-    return await tool.execute(record, ctx)
+    return await get_tool(tools, name).execute(record, ctx)
 
 
-@pytest.mark.asyncio
-async def test_user_scope_conversations_find_write_and_cross_conversation_edit(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "Workspace"
+def refused(result) -> bool:
+    """Refused by the filesystem, not by a mistyped tool parameter."""
+    return result.success is False and "Invalid parameters" not in (result.error or "")
+
+
+@pytest.fixture
+def root(tmp_path: Path) -> Path:
+    return tmp_path / "Workspace"
+
+
+# -------- SCOPE -----------------------------------------------------------
+async def test_sessions_share_the_user_workspace_and_users_never_meet(root):
     tools = FileSystemTools(root)
-    u1_s1 = context("u1", "s1")
-    u1_s2 = context("u1", "s2")
-    u2_s1 = context("u2", "s1")
+    first = await invoke(tools, "write_file", context("u1", "s1"), file_name="reports/a.txt", content="uno")
+    assert first.success and first.result["path"] == "workspace/reports/a.txt"
+    assert (root / "u1" / "workspace" / "reports" / "a.txt").read_text() == "uno"
 
-    first = await invoke(
-        tools,
-        "write_file",
-        u1_s1,
-        path="reports/summary.txt",
-        content="first report",
-    )
-    second = await invoke(
-        tools,
-        "write_file",
-        u1_s2,
-        path="reports/summary.txt",
-        content="second report",
-    )
-    other_user = await invoke(
-        tools,
-        "write_file",
-        u2_s1,
-        path="reports/summary.txt",
-        content="private report",
-    )
-    assert first.success and second.success and other_user.success
-    assert first.result["path"] == "s1/reports/summary.txt"
-    assert (root / "u1" / "s2" / "reports" / "summary.txt").read_text() == "second report"
-
-    found = await invoke(tools, "find_files", u1_s2, pattern="summary.txt")
-    assert found.success
-    assert [item["path"] for item in found.result["items"]] == [
-        "s1/reports/summary.txt",
-        "s2/reports/summary.txt",
-    ]
-
-    read_previous_session = await invoke(
-        tools,
-        "read_file",
-        u1_s2,
-        path="s1/reports/summary.txt",
-    )
-    assert read_previous_session.success
-    assert read_previous_session.result["content"] == "first report"
-
-    digest = hashlib.sha256(b"first report").hexdigest()
-    edited = await invoke(
-        tools,
-        "edit_file",
-        u1_s2,
-        path="s1/reports/summary.txt",
-        old_text="first",
-        new_text="updated",
-        expected_sha256=digest,
-    )
+    # Another session of the same user sees and edits the same workspace.
+    read = await invoke(tools, "read_file", context("u1", "s2"), file_name="reports/a.txt")
+    assert read.success and read.result["content"] == "uno"
+    edited = await invoke(tools, "edit_file", context("u1", "s2"), file_name="reports/a.txt",
+                          old_text="uno", new_text="dos",
+                          expected_sha256=hashlib.sha256(b"uno").hexdigest())
     assert edited.success
-    reread = await invoke(
-        tools,
-        "read_file",
-        u1_s1,
-        path="s1/reports/summary.txt",
-    )
-    assert reread.success and reread.result["content"] == "updated report"
 
-    other_user_list = await invoke(tools, "find_files", u2_s1, pattern="summary.txt")
-    assert other_user_list.success
-    assert [item["path"] for item in other_user_list.result["items"]] == [
-        "s1/reports/summary.txt"
-    ]
-    assert other_user_list.result["items"][0]["bytes"] == len("private report")
+    # Another user has their own workspace and can't see this one.
+    other = await invoke(tools, "read_file", context("u2", "s1"), file_name="reports/a.txt")
+    assert refused(other)
+    found = await invoke(tools, "find_files", context("u2", "s1"), file_name="a.txt")
+    assert found.success and found.result["items"] == []
 
 
-@pytest.mark.asyncio
-async def test_traversal_absolute_paths_and_cross_user_access_are_rejected(
-    tmp_path: Path,
-) -> None:
-    tools = FileSystemTools(tmp_path / "Workspace")
-    writer = await invoke(
-        tools,
-        "write_file",
-        context("alice", "s1"),
-        path="secret.txt",
-        content="private",
-    )
-    assert writer.success
-
-    for path in ("../alice/s1/secret.txt", "/alice/s1/secret.txt"):
-        result = await invoke(
-            tools, "read_file", context("bob", "s1"), path=path
-        )
-        assert result.success is False
-        assert result.error
+async def test_scratchpad_belongs_to_its_session(root):
+    tools = FileSystemTools(root)
+    written = await invoke(tools, "write_file", context("u1", "s1"), file_name="scratchpad/n.txt", content="tmp")
+    assert written.success and written.result["path"] == "scratchpad/s1/n.txt"
+    assert (await invoke(tools, "read_file", context("u1", "s1"), file_name="scratchpad/n.txt")).success
+    assert refused(await invoke(tools, "read_file", context("u1", "s2"), file_name="scratchpad/n.txt"))
 
 
-@pytest.mark.asyncio
-async def test_symlinks_hardlinks_and_nonregular_files_are_rejected(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "Workspace"
+async def test_paths_returned_by_the_tools_can_be_passed_back(root):
     tools = FileSystemTools(root)
     ctx = context("u1", "s1")
-    created = await invoke(tools, "write_file", ctx, path="source.txt", content="safe")
-    assert created.success
-    source = root / "u1" / "s1" / "source.txt"
+    await invoke(tools, "write_file", ctx, file_name="reports/a.txt", content="hola")
+    await invoke(tools, "write_file", ctx, file_name="scratchpad/n.txt", content="tmp")
+    found = await invoke(tools, "find_files", ctx, file_name="a.txt")
+    returned = found.result["items"][0]["path"]  # "workspace/reports/a.txt"
+    assert (await invoke(tools, "read_file", ctx, file_name=returned)).result["content"] == "hola"
+    listed = await invoke(tools, "list_directory", ctx, path="workspace/reports")
+    assert [item["path"] for item in listed.result["items"]] == ["workspace/reports/a.txt"]
+    scratch = await invoke(tools, "read_file", ctx, file_name="scratchpad/s1/n.txt")
+    assert scratch.result["content"] == "tmp"
+
+
+# -------- ESCAPES -----------------------------------------------------------
+async def test_traversal_absolute_and_blocked_paths_are_refused(root):
+    tools = FileSystemTools(root)
+    assert (await invoke(tools, "write_file", context("alice", "s1"), file_name="secret.txt", content="x")).success
+    bob = context("bob", "s1")
+    for path in ("../alice/workspace/secret.txt", "/alice/workspace/secret.txt",
+                 "reports/../../alice/workspace/secret.txt", "tools/x.py", "artifacts/x", ".hidden/x"):
+        assert refused(await invoke(tools, "read_file", bob, file_name=path)), path
+    for path in ("../escape.txt", "/etc/passwd", ".env"):
+        assert refused(await invoke(tools, "write_file", bob, file_name=path, content="x")), path
+    assert not (root / "escape.txt").exists()
+
+
+async def test_symlinks_hardlinks_and_special_files_are_refused(root, tmp_path):
+    tools = FileSystemTools(root)
+    ctx = context("u1", "s1")
+    assert (await invoke(tools, "write_file", ctx, file_name="source.txt", content="safe")).success
+    workspace = root / "u1" / "workspace"
     outside = tmp_path / "outside.txt"
     outside.write_text("secret", encoding="utf-8")
-    (source.parent / "linked.txt").symlink_to(outside)
-    os.link(source, source.parent / "hardlinked.txt")
-    os.mkfifo(source.parent / "pipe.txt")
+    (workspace / "linked.txt").symlink_to(outside)
+    (workspace / "linked-dir").symlink_to(tmp_path, target_is_directory=True)
+    os.link(workspace / "source.txt", workspace / "hardlinked.txt")
+    os.mkfifo(workspace / "pipe.txt")
 
-    for path in ("s1/linked.txt", "s1/hardlinked.txt", "s1/pipe.txt"):
-        result = await invoke(tools, "read_file", ctx, path=path)
-        assert result.success is False
+    for path in ("linked.txt", "linked-dir/outside.txt", "hardlinked.txt", "pipe.txt"):
+        assert refused(await invoke(tools, "read_file", ctx, file_name=path)), path
+    assert refused(await invoke(tools, "write_file", ctx, file_name="linked-dir/new.txt", content="x"))
+    assert not (tmp_path / "new.txt").exists()
 
 
-@pytest.mark.asyncio
-async def test_symlinked_user_and_conversation_roots_cannot_cross_users(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "Workspace"
-    victim_conversation = root / "user-2" / "conversation-2"
-    victim_conversation.mkdir(parents=True)
-    (victim_conversation / "secret.txt").write_text("private", encoding="utf-8")
-    (root / "linked-user").symlink_to(root / "user-2", target_is_directory=True)
+async def test_a_symlinked_user_or_workspace_cannot_reach_another_user(root):
+    victim = root / "victim" / "workspace"
+    victim.mkdir(parents=True)
+    (victim / "secret.txt").write_text("private", encoding="utf-8")
+    (root / "linked-user").symlink_to(root / "victim", target_is_directory=True)
+    (root / "mallory").mkdir()
+    (root / "mallory" / "workspace").symlink_to(victim, target_is_directory=True)
 
     tools = FileSystemTools(root)
+    for user in ("linked-user", "mallory"):
+        ctx = context(user, "s1")
+        assert refused(await invoke(tools, "read_file", ctx, file_name="secret.txt")), user
+        assert refused(await invoke(tools, "write_file", ctx, file_name="attempt.txt", content="x")), user
+    assert not (victim / "attempt.txt").exists()
+    with pytest.raises(ValueError):
+        UserFileSystem(root).user_root("linked-user")
+
+
+def test_ids_must_be_single_safe_segments(root):
     filesystem = UserFileSystem(root)
-
-    linked_user_write = await invoke(
-        tools,
-        "write_file",
-        context("linked-user", "conversation-2"),
-        path="attempt.txt",
-        content="must not escape",
-    )
-    assert linked_user_write.success is False
-    linked_user_read = await invoke(
-        tools,
-        "read_file",
-        context("linked-user", "conversation-2"),
-        path="conversation-2/secret.txt",
-    )
-    assert linked_user_read.success is False
+    assert filesystem.workspace_root("user-1") == root.resolve() / "user-1" / "workspace"
+    assert filesystem.scratchpad_root("user-1", "s_1") == root.resolve() / "user-1" / "scratchpad" / "s_1"
+    for bad in ("../other", "a/b", "", "."):
+        with pytest.raises(ValueError):
+            filesystem.user_root(bad)
     with pytest.raises(ValueError):
-        filesystem.user_root("linked-user")
+        filesystem.scratchpad_root("user-1", "session/other")
+
+
+async def test_reserved_names_are_not_session_ids(root):
+    filesystem = UserFileSystem(root)
+    tools = FileSystemTools(filesystem)
+    for reserved in ("tools", "skills", "artifacts"):
+        with pytest.raises(ValueError, match="reserved"):
+            filesystem.scratchpad_root("user-1", reserved)
+        write = await invoke(tools, "write_file", context("user-1", reserved),
+                             file_name="scratchpad/note.txt", content="x")
+        assert refused(write)
+
+
+async def test_internal_temporary_files_are_invisible(root):
+    tools = FileSystemTools(root)
+    ctx = context("u1", "s1")
+    workspace = root / "u1" / "workspace"
+    workspace.mkdir(parents=True)
+    (workspace / "visible.txt").write_text("published", encoding="utf-8")
+    temp = ".maxai-0123456789abcdef01234567.tmp"
+    (workspace / temp).write_text("partially written", encoding="utf-8")
+
+    listed = await invoke(tools, "list_directory", ctx)
+    assert [item["path"] for item in listed.result["items"]] == ["workspace/visible.txt"]
+    assert (await invoke(tools, "find_files", ctx, file_name="*.tmp")).result["items"] == []
+    assert (await invoke(tools, "search_text", ctx, query="partially")).result["matches"] == []
+    assert refused(await invoke(tools, "read_file", ctx, file_name=temp))
+
+
+def test_materialize_refuses_symlinked_user_and_runtime_dirs(root, tmp_path):
+    workspace = LocalWorkspace(root=root)
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    root.mkdir(exist_ok=True)
+    (root / "linked-user").symlink_to(victim, target_is_directory=True)
     with pytest.raises(ValueError):
-        filesystem.conversation_root("linked-user", "conversation-2")
-
-    user_root = root / "user-1"
-    user_root.mkdir()
-    (user_root / "linked-conversation").symlink_to(
-        victim_conversation, target_is_directory=True
-    )
-    linked_conversation_write = await invoke(
-        tools,
-        "write_file",
-        context("user-1", "linked-conversation"),
-        path="attempt.txt",
-        content="must not escape",
-    )
-    assert linked_conversation_write.success is False
-    linked_conversation_read = await invoke(
-        tools,
-        "read_file",
-        context("user-1", "linked-conversation"),
-        path="linked-conversation/secret.txt",
-    )
-    assert linked_conversation_read.success is False
+        workspace.materialize("linked-user", "s1")
+    (root / "alice").mkdir()
+    (root / "alice" / "skills").symlink_to(victim, target_is_directory=True)
     with pytest.raises(ValueError):
-        filesystem.conversation_root("user-1", "linked-conversation")
-    assert not (victim_conversation / "attempt.txt").exists()
+        workspace.materialize("alice", "s1")
+    with pytest.raises(ValueError):
+        workspace.materialize("../victim", "s1")
+    assert list(victim.iterdir()) == []
 
 
-@pytest.mark.asyncio
-async def test_binary_files_return_metadata_and_are_skipped_by_search(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "Workspace"
+# -------- CONTENT -----------------------------------------------------------
+async def test_binary_files_return_metadata_and_are_skipped_by_search(root):
     tools = FileSystemTools(root)
     ctx = context("u1", "s1")
     binary = b"needle\x00binary payload"
-    binary_path = root / "u1" / "s1" / "binary.dat"
-    binary_path.parent.mkdir(parents=True)
-    binary_path.write_bytes(binary)
+    path = root / "u1" / "workspace" / "binary.dat"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(binary)
 
-    read = await invoke(tools, "read_file", ctx, path="s1/binary.dat")
-    assert read.success
-    assert read.result["binary"] is True
-    assert read.result["bytes"] == len(binary)
+    read = await invoke(tools, "read_file", ctx, file_name="binary.dat")
+    assert read.success and read.result["binary"] is True and "content" not in read.result
     assert read.result["sha256"] == hashlib.sha256(binary).hexdigest()
-    assert "content" not in read.result
-
-    searched = await invoke(tools, "search_text", ctx, query="needle")
-    assert searched.success and searched.result["matches"] == []
+    assert (await invoke(tools, "search_text", ctx, query="needle")).result["matches"] == []
 
 
-@pytest.mark.asyncio
-async def test_write_file_is_create_only(tmp_path: Path) -> None:
-    tools = FileSystemTools(tmp_path / "Workspace")
-    ctx = context("u1", "s1")
-    created = await invoke(
-        tools, "write_file", ctx, path="note.txt", content="original"
-    )
-    duplicate = await invoke(
-        tools, "write_file", ctx, path="note.txt", content="replacement"
-    )
-
-    assert created.success
-    assert duplicate.success is False
-    current = await invoke(tools, "read_file", ctx, path="s1/note.txt")
-    assert current.success and current.result["content"] == "original"
-
-
-@pytest.mark.asyncio
-async def test_stale_digest_does_not_modify_file(tmp_path: Path) -> None:
-    tools = FileSystemTools(tmp_path / "Workspace")
-    ctx = context("u1", "s1")
-    created = await invoke(tools, "write_file", ctx, path="note.txt", content="original")
-    assert created.success
-
-    edited = await invoke(
-        tools,
-        "edit_file",
-        ctx,
-        path="s1/note.txt",
-        old_text="original",
-        new_text="changed",
-        expected_sha256="0" * 64,
-    )
-    assert edited.success is False
-    current = await invoke(tools, "read_file", ctx, path="s1/note.txt")
-    assert current.success and current.result["content"] == "original"
-
-
-@pytest.mark.asyncio
-async def test_edit_rejects_ambiguous_exact_replacement(tmp_path: Path) -> None:
-    tools = FileSystemTools(tmp_path / "Workspace")
-    ctx = context("u1", "s1")
-    content = "repeat this, then repeat this"
-    created = await invoke(
-        tools, "write_file", ctx, path="note.txt", content=content
-    )
-    assert created.success
-
-    edited = await invoke(
-        tools,
-        "edit_file",
-        ctx,
-        path="s1/note.txt",
-        old_text="repeat",
-        new_text="replace",
-        expected_sha256=hashlib.sha256(content.encode("utf-8")).hexdigest(),
-    )
-    assert edited.success is False
-    current = await invoke(tools, "read_file", ctx, path="s1/note.txt")
-    assert current.success and current.result["content"] == content
-
-
-@pytest.mark.asyncio
-async def test_read_and_listing_limits_are_reported(tmp_path: Path) -> None:
-    tools = FileSystemTools(tmp_path / "Workspace")
-    ctx = context("u1", "s1")
-    for name in ("a.txt", "b.txt"):
-        result = await invoke(tools, "write_file", ctx, path=name, content="alpha\nbeta")
-        assert result.success
-
-    listed = await invoke(tools, "list_files", ctx, path="s1", limit=1)
-    assert listed.success
-    assert len(listed.result["items"]) == 1
-    assert listed.result["truncated"] is True
-
-    read = await invoke(
-        tools, "read_file", ctx, path="s1/a.txt", max_bytes=3
-    )
-    assert read.success
-    assert read.result["content"] == "alp"
-    assert read.result["truncated"] is True
-    assert read.result["sha256"] == hashlib.sha256(b"alpha\nbeta").hexdigest()
-
-    searched = await invoke(
-        tools, "search_text", ctx, query="a", path="s1", limit=1
-    )
-    assert searched.success
-    assert len(searched.result["matches"]) == 1
-    assert searched.result["truncated"] is True
-
-
-def test_tool_schemas_hide_context_and_root_and_approval_modes(tmp_path: Path) -> None:
-    tools = FileSystemTools(tmp_path / "explicit-root")
-    assert [tool.name for tool in tools.tools] == [
-        "list_files",
-        "find_files",
-        "search_text",
-        "read_file",
-        "write_file",
-        "edit_file",
-    ]
-    for tool in tools.tools:
-        properties = tool.parameters.get("properties", {})
-        assert "context" not in properties
-        assert "user_id" not in properties
-        assert "session_id" not in properties
-        assert "root" not in properties
-        assert "filesystem_root" not in properties
-    assert get_tool(tools, "list_files").approval_mode == ToolApprovalMode.AUTO_APPROVED
-    assert get_tool(tools, "read_file").approval_mode == ToolApprovalMode.AUTO_APPROVED
-    assert get_tool(tools, "write_file").approval_mode == ToolApprovalMode.ASK_APPROVED
-    assert get_tool(tools, "edit_file").approval_mode == ToolApprovalMode.ASK_APPROVED
-
-
-@pytest.mark.asyncio
-async def test_explicit_root_overrides_dependency_root_and_dependency_root_is_used(
-    tmp_path: Path,
-) -> None:
-    explicit_root = tmp_path / "explicit"
-    dependency_root = tmp_path / "dependency"
-    tools = FileSystemTools(explicit_root)
-    result = await invoke(
-        tools,
-        "write_file",
-        context("u1", "s1", filesystem_root=dependency_root),
-        path="explicit.txt",
-        content="explicit",
-    )
-    assert result.success
-    assert (explicit_root / "u1" / "s1" / "explicit.txt").exists()
-    assert not dependency_root.exists()
-
-    dependency_tools = FileSystemTools()
-    result = await invoke(
-        dependency_tools,
-        "write_file",
-        context("u1", "s1", filesystem_root=dependency_root),
-        path="dependency.txt",
-        content="dependency",
-    )
-    assert result.success
-    assert (dependency_root / "u1" / "s1" / "dependency.txt").exists()
-
-
-def test_user_filesystem_validates_single_segment_ids(tmp_path: Path) -> None:
-    filesystem = UserFileSystem(tmp_path / "Workspace")
-    user_root = filesystem.user_root("user-1")
-    assert user_root == (tmp_path / "Workspace" / "user-1").resolve()
-    assert user_root.is_dir()
-    conversation_root = filesystem.conversation_root("user-1", "session_1")
-    assert conversation_root == (
-        tmp_path / "Workspace" / "user-1" / "session_1"
-    ).resolve()
-    assert conversation_root.is_dir()
-    with pytest.raises(ValueError):
-        filesystem.user_root("../other")
-    with pytest.raises(ValueError):
-        filesystem.conversation_root("user-1", "session/other")
-
-
-@pytest.mark.asyncio
-async def test_conversation_roots_reject_reserved_ids_before_materializing(
-    tmp_path: Path,
-) -> None:
-    filesystem = UserFileSystem(tmp_path / "Workspace")
-    tools = FileSystemTools(filesystem)
-
-    for reserved_id in ("tools", "skills", "artifacts"):
-        with pytest.raises(ValueError, match="reserved"):
-            filesystem.conversation_root("user-1", reserved_id)
-        write = await invoke(
-            tools,
-            "write_file",
-            context("user-1", reserved_id),
-            path="note.txt",
-            content="must be rejected",
-        )
-        assert write.success is False
-
-    assert not (tmp_path / "Workspace" / "user-1").exists()
-
-
-def test_root_materialization_rejects_symlinked_user_and_conversation_dirs(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "Workspace"
-    filesystem = UserFileSystem(root)
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    root.mkdir()
-    (root / "linked-user").symlink_to(outside, target_is_directory=True)
-
-    with pytest.raises(ValueError):
-        filesystem.user_root("linked-user")
-
-    (root / "user-1").mkdir()
-    (root / "user-1" / "linked-conversation").symlink_to(
-        outside, target_is_directory=True
-    )
-    with pytest.raises(ValueError):
-        filesystem.conversation_root("user-1", "linked-conversation")
-
-
-@pytest.mark.asyncio
-async def test_internal_temporary_files_are_hidden_from_paths_and_scans(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "Workspace"
+async def test_write_is_create_only_and_edits_need_the_current_digest(root):
     tools = FileSystemTools(root)
     ctx = context("u1", "s1")
-    conversation = root / "u1" / "s1"
-    conversation.mkdir(parents=True)
-    (conversation / "visible.txt").write_text("published", encoding="utf-8")
-    temp_name = ".maxai-0123456789abcdef01234567.tmp"
-    (conversation / temp_name).write_text("partially written", encoding="utf-8")
+    assert (await invoke(tools, "write_file", ctx, file_name="note.txt", content="original")).success
+    assert refused(await invoke(tools, "write_file", ctx, file_name="note.txt", content="replacement"))
+    stale = await invoke(tools, "edit_file", ctx, file_name="note.txt", old_text="original",
+                         new_text="changed", expected_sha256="0" * 64)
+    assert refused(stale)
+    current = await invoke(tools, "read_file", ctx, file_name="note.txt")
+    assert current.result["content"] == "original"
 
-    listed = await invoke(tools, "list_files", ctx, path="s1")
-    assert listed.success
-    assert [item["path"] for item in listed.result["items"]] == [
-        "s1/visible.txt"
+
+async def test_ambiguous_edits_and_deletes_with_a_stale_digest_are_refused(root):
+    tools = FileSystemTools(root)
+    ctx = context("u1", "s1")
+    content = "repeat this, then repeat this"
+    await invoke(tools, "write_file", ctx, file_name="note.txt", content=content)
+    digest = hashlib.sha256(content.encode()).hexdigest()
+    assert refused(await invoke(tools, "edit_file", ctx, file_name="note.txt", old_text="repeat",
+                                new_text="replace", expected_sha256=digest))
+    assert refused(await invoke(tools, "delete_file", ctx, file_name="note.txt", expected_sha256="0" * 64))
+    assert (await invoke(tools, "delete_file", ctx, file_name="note.txt", expected_sha256=digest)).success
+    assert not (root / "u1" / "workspace" / "note.txt").exists()
+
+
+async def test_read_list_and_search_report_their_limits(root):
+    tools = FileSystemTools(root)
+    ctx = context("u1", "s1")
+    for name in ("a.txt", "b.txt"):
+        assert (await invoke(tools, "write_file", ctx, file_name=name, content="alpha\nbeta")).success
+
+    listed = await invoke(tools, "list_directory", ctx, limit=1)
+    assert len(listed.result["items"]) == 1 and listed.result["truncated"] is True
+    read = await invoke(tools, "read_file", ctx, file_name="a.txt", max_bytes=3)
+    assert (read.result["content"], read.result["truncated"]) == ("alp", True)
+    assert read.result["sha256"] == hashlib.sha256(b"alpha\nbeta").hexdigest()
+    searched = await invoke(tools, "search_text", ctx, query="a", limit=1)
+    assert len(searched.result["matches"]) == 1 and searched.result["truncated"] is True
+
+
+# -------- SCHEMAS & ROOTS -----------------------------------------------------------
+def test_schemas_hide_the_context_and_writes_ask_for_approval(root):
+    tools = FileSystemTools(root)
+    assert [tool.name for tool in tools.tools] == [
+        "list_directory", "find_files", "search_text", "read_file", "write_file",
+        "edit_file", "create_directory", "file_info", "delete_file",
     ]
-
-    found = await invoke(tools, "find_files", ctx, pattern="maxai")
-    assert found.success and found.result["items"] == []
-    searched = await invoke(tools, "search_text", ctx, query="partially written")
-    assert searched.success and searched.result["matches"] == []
-
-    read_temp = await invoke(
-        tools, "read_file", ctx, path=f"s1/{temp_name}"
-    )
-    assert read_temp.success is False
+    for tool in tools.tools:
+        properties = set(tool.parameters.get("properties", {}))
+        assert not properties & {"context", "user_id", "session_id", "root", "filesystem_root"}
+    approvals = {tool.name: tool.approval_mode for tool in tools.tools}
+    assert {n for n, mode in approvals.items() if mode == ToolApprovalMode.ASK_APPROVED} == {
+        "write_file", "edit_file", "delete_file",
+    }
 
 
-def test_workspace_materialize_rejects_traversal_and_runtime_symlinks(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "Workspace"
-    workspace = WorkspaceLocal(root)
-
-    with pytest.raises(ValueError):
-        workspace.map_directory("../victim")
-    assert not root.exists()
-
-    victim = root / "victim"
-    victim.mkdir(parents=True)
-    (root / "linked-user").symlink_to(victim, target_is_directory=True)
-    with pytest.raises(ValueError):
-        workspace.materialize("linked-user")
-    assert list(victim.iterdir()) == []
-
-    user_root = root / "alice"
-    user_root.mkdir()
-    (user_root / "tools").symlink_to(victim, target_is_directory=True)
-    with pytest.raises(ValueError):
-        workspace.materialize("alice")
-    assert list(victim.iterdir()) == []
-
-
-@pytest.mark.parametrize(
-    "directory_setting", ("tool_dir", "skill_dir", "artifacts_dir")
-)
-def test_workspace_materialize_validates_runtime_directory_names(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, directory_setting: str
-) -> None:
-    root = tmp_path / "Workspace"
-    monkeypatch.setattr(setting, directory_setting, "../outside")
-    workspace = WorkspaceLocal(root)
-
-    with pytest.raises(ValueError):
-        workspace.materialize("alice")
-    assert not root.exists()
+async def test_an_explicit_root_wins_over_the_dependency_root(tmp_path):
+    explicit, dependency = tmp_path / "explicit", tmp_path / "dependency"
+    ctx = context("u1", "s1", filesystem_root=dependency)
+    assert (await invoke(FileSystemTools(explicit), "write_file", ctx, file_name="e.txt", content="x")).success
+    assert (explicit / "u1" / "workspace" / "e.txt").exists() and not dependency.exists()
+    assert (await invoke(FileSystemTools(), "write_file", ctx, file_name="d.txt", content="x")).success
+    assert (dependency / "u1" / "workspace" / "d.txt").exists()

@@ -68,6 +68,7 @@ class CoreTool(ComponentBase[BaseModel], ABC):
         approval_mode: ToolApprovalMode | str = ToolApprovalMode.ASK_APPROVED,
         timeout_seconds: float = 300,
         max_retries: int = 3,
+        read_only: bool = False,
     ):
         self.name = name
         self.version = version
@@ -75,6 +76,8 @@ class CoreTool(ComponentBase[BaseModel], ABC):
         self.approval_mode = approval_mode
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
+        # No side effects: may run at the same time as other read-only calls.
+        self.read_only = read_only
 
         # Lazily-built schema validator
         self._schema_validator: Draft202012Validator | None = None

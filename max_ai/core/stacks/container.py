@@ -18,7 +18,7 @@ from ...errors.manager import LayerContainerError
 from ...loggers import ScopedLogger
 
 if t.TYPE_CHECKING:
-    from ...base.agent import Agent
+    from ...agents.agent import Agent
 
 # The canonical set of framework layers. Order here is the insertion
 # order into the stack — it is NOT the order in the final prompt

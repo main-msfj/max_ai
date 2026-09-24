@@ -1,265 +1,203 @@
-"""SQLite-backed memory registry, aligned to the corrected base contract.
+"""Memory in one SQLite file: a row per (user, session, category).
 
-It implements ONLY the storage surface plus a recall() override that uses
-the persisted vectors (the base recall would re-embed every row). Tools,
-merge/dedup, batch convenience, update_fact, validation and cosine all come
-from the base now — they were deleted here to avoid drift.
-
-Notable: connect() migrates older DBs (pre confidence/source/expires_at)
-via ALTER TABLE, so existing memory files keep working.
+With an ``embedding``, each memory's vector is stored next to it when it's
+written, so ``search_memory`` ranks by meaning without re-embedding stored
+memories (after a restart too). Rows from before the embedding was set, or
+from another model, get their vector on the next search.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import sqlite3
+import threading
 import typing as t
-from datetime import datetime
 from pathlib import Path
 
+from ....base.embedding import CoreEmbedding
 from ....base.memory import (
     CoreMemoryRegistry,
-    EmbedMany,
-    EmbedOne,
     MemoryRecord,
+    MemorySearchResult,
     MemoryToolMode,
-    MergePolicy,
-    RecallQuery,
 )
-from ....core.embeddings import (
-    get_lightweight_embedding,
-    get_lightweight_embeddings,
-)
+from ....core.embeddings import pack_vector, rank, unpack_vector
 from ._model import SQLiteMemoryRegistryConfig
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS memory (
+    user_id    TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    category   TEXT NOT NULL,
+    memory     TEXT NOT NULL,
+    updated    TEXT NOT NULL,
+    vector     BLOB,
+    model_id   TEXT,
+    PRIMARY KEY (user_id, session_id, category)
+);
+CREATE INDEX IF NOT EXISTS memory_by_user ON memory (user_id, updated DESC);
+"""
 
 
 class SQLiteMemoryRegistry(CoreMemoryRegistry):
+    """One connection shared by every run's bound copy; SQLite calls run in
+    a thread so they never block other runs. Fits one process (or a few
+    on one machine); for many servers use MongoDB."""
+
     component_schema = SQLiteMemoryRegistryConfig
     component_type = "memory"
+    component_provider_override = "max_ai.capabilities.memory.sqlite.SQLiteMemoryRegistry"
 
-    """SQLite durable memory for a single user. Ready to be swapped for
-    sqlite-vec later without touching the contract."""
+    # Search looks at the user's most recent memories from other sessions.
+    search_candidates: t.ClassVar[int] = 2000
 
     def __init__(
         self,
-        user_id: str,
-        base_path: str | Path,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        base_path: str | Path | None = None,
         tool_mode: MemoryToolMode = MemoryToolMode.FULL,
         *,
         db_name: str = "memory.sqlite3",
-        merge_similarity_threshold: float = 0.85,
         context_days: int | None = 30,
-        embed_one: EmbedOne | None = None,
-        embed_many: EmbedMany | None = None,
+        search_limit: int = 20,
+        embedding: CoreEmbedding | None = None,
     ) -> None:
-        super().__init__(
-            user_id=user_id,
-            tool_mode=tool_mode,
-            merge_policy=MergePolicy(similarity_threshold=merge_similarity_threshold),
-            embed_one=embed_one or get_lightweight_embedding,
-            embed_many=embed_many or get_lightweight_embeddings,
-            context_days=context_days,
-        )
+        if base_path is None:
+            raise ValueError("SQLiteMemoryRegistry needs a base_path")
         self.base_path = Path(base_path).expanduser().resolve()
-        self.db_name = self.require_type(db_name, str, "db_name")
-        self._conn: sqlite3.Connection | None = None
-        self._lock = asyncio.Lock()  # serializes the shared connection
+        self.db_name = db_name
+        self.search_limit = search_limit
+        super().__init__(user_id, session_id, tool_mode,
+                         context_days=context_days, embedding=embedding)
+        self._db: sqlite3.Connection | None = None
+        self._lock = threading.Lock()
 
-    # -------- COMPONENT SERIALIZATION -----------------------------------------------------------
+    @property
+    def path(self) -> Path:
+        return self.base_path / self.db_name
+
     def _to_config(self) -> SQLiteMemoryRegistryConfig:
         return SQLiteMemoryRegistryConfig(
-            user_id=self.user_id,
-            base_path=str(self.base_path),
-            tool_mode=self.tool_mode,
-            db_name=self.db_name,
-            merge_similarity_threshold=self.merge_policy.similarity_threshold,
-            context_days=self.context_days,
+            base_path=str(self.base_path), db_name=self.db_name,
+            user_id=self.user_id, session_id=self.session_id, tool_mode=self.tool_mode,
+            context_days=self.context_days, search_limit=self.search_limit,
+            embedding=self.embedding.serialize().model_dump(exclude_none=True) if self.embedding else None,
         )
 
     @classmethod
-    def _from_config(cls, config: SQLiteMemoryRegistryConfig) -> "SQLiteMemoryRegistry":
-        return cls(
-            user_id=config.user_id,
-            base_path=config.base_path,
-            tool_mode=config.tool_mode,
-            db_name=config.db_name,
-            merge_similarity_threshold=config.merge_similarity_threshold,
-            context_days=config.context_days,
-        )
+    def _from_config(cls, config: SQLiteMemoryRegistryConfig) -> SQLiteMemoryRegistry:
+        embedding = CoreEmbedding.deserialize(config.embedding) if config.embedding else None
+        return cls(**config.model_dump(exclude={"embedding"}), embedding=embedding)
 
-    @property
-    def db_path(self) -> Path:
-        return self.base_path / "backend-local" / self.db_name
-
-    # -------- CONNECTION LIFECYCLE -----------------------------------------------------------
+    # -------- CONNECTION -----------------------------------------------------------
     async def connect(self) -> None:
-        def _open() -> sqlite3.Connection:
-            self.db_path.parent.mkdir(parents=True, exist_ok=True)
-            conn = sqlite3.connect(self.db_path, check_same_thread=False)
-            conn.row_factory = sqlite3.Row
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS memory (
-                    user_id      TEXT NOT NULL,
-                    key          TEXT NOT NULL,
-                    category     TEXT NOT NULL,
-                    content      TEXT NOT NULL,
-                    confidence   REAL NOT NULL DEFAULT 1.0,
-                    source       TEXT,
-                    last_updated TEXT NOT NULL,
-                    expires_at   TEXT,
-                    vector       TEXT NOT NULL,
-                    PRIMARY KEY (user_id, key)
-                )
-                """
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_memory_user_category "
-                "ON memory (user_id, category)"
-            )
-            conn.commit()
-            return conn
+        def open_db() -> sqlite3.Connection:
+            self.base_path.mkdir(parents=True, exist_ok=True)
+            db = sqlite3.connect(self.path, check_same_thread=False)
+            db.execute("PRAGMA journal_mode=WAL")
+            db.executescript(_SCHEMA)
+            return db
 
-        self._conn = await asyncio.to_thread(_open)
+        if self._db is None:
+            self._db = await asyncio.to_thread(open_db)
 
     async def disconnect(self) -> None:
-        if self._conn is not None:
-            conn, self._conn = self._conn, None
-            await asyncio.to_thread(conn.close)
+        db, self._db = self._db, None
+        if db is not None:
+            await asyncio.to_thread(db.close)
 
-    async def _db(self) -> sqlite3.Connection:
+    async def _run(self, work: t.Callable[[sqlite3.Connection], t.Any]) -> t.Any:
+        """``work`` in a thread, holding the lock, inside one transaction."""
         await self._ensure_connected()
-        if self._conn is None:
-            from ...errors.memory import MemoryError
-            raise MemoryError("SQLite memory is not connected.")
-        return self._conn
+        db = self._db
+        assert db is not None
 
-    # -------- STORAGE SURFACE (contract) -----------------------------------------------------------
-    async def _read_all(self) -> list[MemoryRecord]:
-        conn = await self._db()
+        def locked() -> t.Any:
+            with self._lock, db:
+                return work(db)
 
-        def _run() -> list[MemoryRecord]:
-            rows = conn.execute(
-                """
-                SELECT key, category, content, confidence, source,
-                       last_updated, expires_at
-                FROM memory WHERE user_id = ?
-                ORDER BY last_updated DESC
-                """,
-                (self.user_id,),
-            ).fetchall()
-            return [self._row_to_record(r) for r in rows]
+        return await asyncio.to_thread(locked)
 
-        async with self._lock:
-            records = await asyncio.to_thread(_run)
-        return [r for r in records if not r.is_expired()]
+    # -------- STORAGE -----------------------------------------------------------
+    async def _read_session(self) -> list[MemoryRecord]:
+        rows = await self._run(lambda db: db.execute(
+            "SELECT category, memory, updated FROM memory WHERE user_id=? AND session_id=?",
+            (self.user_id, self.session_id),
+        ).fetchall())
+        return [MemoryRecord(category=c, memory=m, updated=u) for c, m, u in rows]
 
-    async def _write_many(self, records: list[MemoryRecord]) -> None:
-        if not records:
-            return
-        conn = await self._db()
-        # One batch embedding call for all records, not one per record.
-        vectors = self._embed_many([f"{r.category}\n{r.content}" for r in records])
-        payload = [
-            (
-                self.user_id,
-                r.key,
-                r.category,
-                r.content,
-                r.confidence,
-                r.source,
-                r.last_updated.isoformat(),
-                r.expires_at.isoformat() if r.expires_at else None,
-                json.dumps(vec),
+    async def _write_memory(self, record: MemoryRecord) -> bool:
+        vector = model_id = None
+        if self.embedding is not None:
+            vector = pack_vector(await self.embedding.embed_one(_text(record.category, record.memory)))
+            model_id = self.embedding.model_id
+
+        def write(db: sqlite3.Connection) -> bool:
+            key = (self.user_id, self.session_id, record.category)
+            existed = db.execute(
+                "SELECT 1 FROM memory WHERE user_id=? AND session_id=? AND category=?", key,
+            ).fetchone()
+            db.execute(
+                "INSERT INTO memory VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (user_id, session_id, category) DO UPDATE SET "
+                "memory=excluded.memory, updated=excluded.updated, "
+                "vector=excluded.vector, model_id=excluded.model_id",
+                (*key, record.memory, record.updated.isoformat(), vector, model_id),
             )
-            for r, vec in zip(records, vectors)
-        ]
+            return existed is None
 
-        def _run() -> None:
-            conn.executemany(
-                """
-                INSERT INTO memory
-                    (user_id, key, category, content, confidence, source,
-                     last_updated, expires_at, vector)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(user_id, key) DO UPDATE SET
-                    category     = excluded.category,
-                    content      = excluded.content,
-                    confidence   = excluded.confidence,
-                    source       = excluded.source,
-                    last_updated = excluded.last_updated,
-                    expires_at   = excluded.expires_at,
-                    vector       = excluded.vector
-                """,
-                payload,
-            )
-            conn.commit()
+        return await self._run(write)
 
-        async with self._lock:
-            await asyncio.to_thread(_run)
+    async def _delete_memory(self, category: str) -> bool:
+        deleted = await self._run(lambda db: db.execute(
+            "DELETE FROM memory WHERE user_id=? AND session_id=? AND category=?",
+            (self.user_id, self.session_id, category),
+        ).rowcount)
+        return deleted > 0
 
-    async def _delete_many(self, keys: list[str]) -> None:
-        if not keys:
-            return
-        conn = await self._db()
+    async def _search_memory(self, text: str) -> list[MemorySearchResult]:
+        """Other sessions of this user: by meaning with an embedding, else by words."""
+        rows = await self._run(lambda db: db.execute(
+            "SELECT session_id, category, memory, updated, vector, model_id FROM memory "
+            "WHERE user_id=? AND session_id<>? ORDER BY updated DESC LIMIT ?",
+            (self.user_id, self.session_id, self.search_candidates),
+        ).fetchall())
+        results = [MemorySearchResult(session_id=s, category=c, memory=m, updated=u)
+                   for s, c, m, u, _, _ in rows]
+        if self.embedding is None:
+            needle = text.strip().lower()
+            matches = [r for r in results if needle in r.category.lower() or needle in r.memory.lower()]
+            return matches[: self.search_limit]
 
-        def _run() -> None:
-            conn.executemany(
-                "DELETE FROM memory WHERE user_id = ? AND key = ?",
-                [(self.user_id, k) for k in keys],
-            )
-            conn.commit()
+        vectors = await self._vectors(results, [(v, model) for *_, v, model in rows])
+        query = await self.embedding.embed_one(text)
+        ranked = rank(query, results, vectors, limit=self.search_limit,
+                      min_score=self.semantic_min_score)
+        return [result for _, result in ranked]
 
-        async with self._lock:
-            await asyncio.to_thread(_run)
+    async def _vectors(
+        self, results: list[MemorySearchResult], stored: list[tuple[bytes | None, str | None]],
+    ) -> list[list[float]]:
+        """Stored vectors; missing or other-model ones are embedded and saved."""
+        assert self.embedding is not None
+        model_id = self.embedding.model_id
+        stale = [i for i, (vector, model) in enumerate(stored) if vector is None or model != model_id]
+        fresh = await self.embedding.embed([_text(results[i].category, results[i].memory) for i in stale])
+        if stale:
+            await self._run(lambda db: db.executemany(
+                "UPDATE memory SET vector=?, model_id=? WHERE user_id=? AND session_id=? AND category=?",
+                [(pack_vector(vector), model_id, self.user_id, results[i].session_id, results[i].category)
+                 for i, vector in zip(stale, fresh)],
+            ))
+        vectors = [unpack_vector(v) if v is not None and m == model_id else [] for v, m in stored]
+        for i, vector in zip(stale, fresh):
+            vectors[i] = vector
+        return vectors
 
-    # -------- RETRIEVAL (override: rank against persisted vectors) -----------------------------------------------------------
-    async def recall(self, query: RecallQuery) -> list[MemoryRecord]:
-        conn = await self._db()
-        clean_category = query.category.strip() if query.category else None
 
-        def _run() -> list[tuple[MemoryRecord, str]]:
-            sql = (
-                "SELECT key, category, content, confidence, source, "
-                "last_updated, expires_at, vector FROM memory WHERE user_id = ?"
-            )
-            params: list[t.Any] = [self.user_id]
-            if clean_category:
-                sql += " AND category = ?"
-                params.append(clean_category)
-            rows = conn.execute(sql, params).fetchall()
-            return [(self._row_to_record(r), r["vector"]) for r in rows]
+def _text(category: str, memory: str) -> str:
+    return f"{category}: {memory}"
 
-        async with self._lock:
-            staged = await asyncio.to_thread(_run)
 
-        candidates = [
-            (rec, vec) for rec, vec in staged
-            if not rec.is_expired() and rec.confidence >= query.min_confidence
-        ]
-
-        if not query.text:
-            candidates.sort(key=lambda c: c[0].last_updated, reverse=True)
-            return [rec for rec, _ in candidates[: query.limit]]
-
-        qv = self._embed_one(query.text)
-        scored = [(self._cosine(qv, json.loads(vec)), rec) for rec, vec in candidates]
-        scored = [s for s in scored if s[0] > 0]
-        scored.sort(key=lambda s: s[0], reverse=True)
-        return [rec for _, rec in scored[: query.limit]]
-
-    # -------- HELPERS -----------------------------------------------------------
-    @staticmethod
-    def _row_to_record(row: sqlite3.Row) -> MemoryRecord:
-        return MemoryRecord(
-            key=row["key"],
-            category=row["category"],
-            content=row["content"],
-            confidence=row["confidence"],
-            source=row["source"],
-            last_updated=datetime.fromisoformat(row["last_updated"]),
-            expires_at=(
-                datetime.fromisoformat(row["expires_at"]) if row["expires_at"] else None
-            ),
-        )
+__all__ = ["SQLiteMemoryRegistry"]

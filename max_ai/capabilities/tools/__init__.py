@@ -18,7 +18,6 @@ __all__ = [
     "FileSystemTools",
     "FileSystem",
     "UserFileSystem",
-    "AgentAsTool",
 ]
 
 _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
@@ -30,12 +29,10 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "FileSystem": ("max_ai.capabilities.tools.file_system", "FileSystem"),
     "FileSystemTools": ("max_ai.capabilities.tools.file_system", "FileSystemTools"),
     "UserFileSystem": ("max_ai.capabilities.tools.file_system", "UserFileSystem"),
-    "AgentAsTool": ("max_ai.capabilities.tools.agent_as_tool", "AgentAsTool"),
 }
 
 if t.TYPE_CHECKING:  # static analyzers see the real symbols
     from ...base.tools import CoreRuntimeTool, CoreTool
-    from .agent_as_tool import AgentAsTool
     from .bash import BashTool
     from .decorator import tool
     from .file_system import FileSystem, FileSystemTools, UserFileSystem

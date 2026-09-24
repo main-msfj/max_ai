@@ -61,18 +61,34 @@ class MCPClientManager:
         try:
             async with create_mcp_client(server.config) as client:
                 ready.set_result(await self._discover_server_tools(server.config, client))
-                while True:
-                    request = await server.requests.get()
-                    if request is None:
-                        break
-                    method, args, future = request
-                    if future.done():
-                        continue
+                # This task owns the connection; each call runs in its own
+                # subtask so parallel tool calls don't wait for each other.
+                calls: set[asyncio.Task[None]] = set()
+
+                async def answer(method: str, args: tuple, future: asyncio.Future) -> None:
                     try:
-                        future.set_result(await getattr(client, method)(*args))
+                        result = await getattr(client, method)(*args)
+                        if not future.done():
+                            future.set_result(result)
                     except BaseException as exc:
                         if not future.done():
                             future.set_exception(exc)
+
+                try:
+                    while True:
+                        request = await server.requests.get()
+                        if request is None:
+                            break
+                        method, args, future = request
+                        if future.done():
+                            continue
+                        call = asyncio.create_task(answer(method, args, future))
+                        calls.add(call)
+                        call.add_done_callback(calls.discard)
+                finally:
+                    for call in list(calls):
+                        call.cancel()
+                    await asyncio.gather(*calls, return_exceptions=True)
         except BaseException as exc:
             if not ready.done():
                 ready.set_exception(exc)
@@ -148,6 +164,7 @@ class MCPClientManager:
                 server_id=config.server_id,
                 approval_mode=self._approval_mode_for_tool(config, tool_def),
                 timeout_seconds=config.timeout_seconds,
+                read_only=self._is_read_only(tool_def),
             ))
         resources, templates = await self._list_resources(client)
         if resources or templates:
@@ -160,6 +177,15 @@ class MCPClientManager:
                 timeout_seconds=config.timeout_seconds,
             ))
         return discovered
+
+    @staticmethod
+    def _is_read_only(tool_def: t.Any) -> bool:
+        """The server says the tool only reads (MCP ``readOnlyHint``)."""
+        annotations = getattr(tool_def, "annotations", None)
+        return bool(
+            annotations is not None and annotations.read_only_hint is True
+            and annotations.destructive_hint is not True
+        )
 
     @staticmethod
     def _approval_mode_for_tool(config: MCPServerConfig, tool_def: t.Any) -> ToolApprovalMode:

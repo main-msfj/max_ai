@@ -6,10 +6,10 @@ Each knowledge source is a single JSON file under
 ``KnowledgeBlock`` entries. The agent uses ``search`` to pull relevant
 blocks for a query.
 
-Search uses local embedding cosine similarity — the same lightweight
-embedding helper used by the SQLite memory backends. Block
-content is embedded at search time (these registries store no
-precomputed vectors on disk).
+Search uses cosine similarity of this registry's ``embedding`` (default:
+the local multilingual ``FastEmbedEmbedding``). Blocks are embedded at
+search time in one batch; the embedding caches their vectors, so only new
+or changed blocks are embedded again (nothing is stored on disk).
 
 The registry is read-only from the agent's perspective. Block ingestion
 (chunking, vectorization, writing to disk) happens externally —
@@ -22,12 +22,12 @@ other. Intended for local development and tests.
 from __future__ import annotations
 
 import json
-import math
 from pathlib import Path
 
+from ....base.embedding import CoreEmbedding
 from ....base.knowledge import CoreKnowledgeRegistry, KnowledgeToolMode
 from ....core import KnowledgeBlock
-from ....core.embeddings import get_lightweight_embedding
+from ....core.embeddings import FastEmbedEmbedding, rank
 from ._model import LocalKnowledgeRegistryConfig
 
 
@@ -68,11 +68,14 @@ class LocalKnowledgeRegistry(CoreKnowledgeRegistry):
         description: str,
         base_path: str | Path,
         tool_mode: KnowledgeToolMode = KnowledgeToolMode.FULL,
+        embedding: CoreEmbedding | None = None,
     ) -> None:
         super().__init__(
             name=name, description=description, tool_mode=tool_mode
         )
         self.base_path: Path = Path(base_path).expanduser().resolve()
+        # Default: the local multilingual model (``maxai[embeddings]``).
+        self.embedding = embedding if embedding is not None else FastEmbedEmbedding()
 
     def _to_config(self) -> LocalKnowledgeRegistryConfig:
         return LocalKnowledgeRegistryConfig(
@@ -80,6 +83,7 @@ class LocalKnowledgeRegistry(CoreKnowledgeRegistry):
             description=self.description,
             base_path=str(self.base_path),
             tool_mode=self.tool_mode,
+            embedding=self.embedding.serialize().model_dump(exclude_none=True),
         )
 
     @classmethod
@@ -89,6 +93,7 @@ class LocalKnowledgeRegistry(CoreKnowledgeRegistry):
             description=config.description,
             base_path=config.base_path,
             tool_mode=config.tool_mode,
+            embedding=CoreEmbedding.deserialize(config.embedding) if config.embedding else None,
         )
 
     # -------- PATH HELPERS -----------------------------------------------------------
@@ -115,8 +120,8 @@ class LocalKnowledgeRegistry(CoreKnowledgeRegistry):
     ) -> list[KnowledgeBlock]:
         """Search this knowledge source for relevant blocks.
 
-        Embeds the query and each block's ``content`` with the local
-        lightweight embedding model and scores by cosine similarity,
+        Embeds the query and each block's ``content`` with this
+        registry's embedding and scores by cosine similarity,
         purely to rank/filter — the score itself is never returned or
         stored (see the class docstring). Blocks with non-positive
         similarity are dropped; the rest are sorted by score
@@ -132,35 +137,11 @@ class LocalKnowledgeRegistry(CoreKnowledgeRegistry):
         if not blocks:
             return []
 
-        query_vector = get_lightweight_embedding(query)
-
-        scored: list[tuple[float, KnowledgeBlock]] = []
-        for block in blocks:
-            block_vector = get_lightweight_embedding(block.content)
-            score = self._cosine_similarity(query_vector, block_vector)
-            if score <= 0:
-                continue
-            scored.append((score, block))
-
-        scored.sort(key=lambda pair: pair[0], reverse=True)
-        return [block for _, block in scored[:limit]]
+        # One batch; blocks already embedded come from the embedding's cache.
+        query_vector, *vectors = await self.embedding.embed([query, *(b.content for b in blocks)])
+        return [block for _, block in rank(query_vector, blocks, vectors, limit=limit)]
 
     # -------- INTERNALS -----------------------------------------------------------
-    @staticmethod
-    def _cosine_similarity(left: list[float], right: list[float]) -> float:
-        """Cosine similarity between two embedding vectors.
-
-        Returns 0.0 for empty, mismatched-length, or zero-norm vectors.
-        """
-        if not left or not right or len(left) != len(right):
-            return 0.0
-        dot = sum(a * b for a, b in zip(left, right))
-        left_norm = math.sqrt(sum(a * a for a in left))
-        right_norm = math.sqrt(sum(b * b for b in right))
-        if left_norm == 0 or right_norm == 0:
-            return 0.0
-        return dot / (left_norm * right_norm)
-
     def _read_all(self) -> list[KnowledgeBlock]:
         """Load every block in the source file.
 

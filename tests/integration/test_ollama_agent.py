@@ -15,7 +15,7 @@ import urllib.request
 
 import pytest
 
-from max_ai.base.agent import Agent
+from max_ai.agents import Agent
 from max_ai.capabilities.clients.ollama.client import OllamaChatCompletionClient
 from max_ai.capabilities.tools.function_as_tool import FunctionAsTool
 from max_ai.core.messages import AssistantMessage, ToolMessage, UserMessage

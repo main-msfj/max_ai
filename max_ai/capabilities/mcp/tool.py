@@ -52,6 +52,7 @@ class MCPTool(CoreTool):
         approval_mode: ToolApprovalMode | str = ToolApprovalMode.ASK_APPROVED,
         timeout_seconds: float = 240.0,
         max_retries: int = 3,
+        read_only: bool = False,
     ) -> None:
         self.mcp_tool_name = mcp_tool_name
         self.client_manager = client_manager
@@ -64,6 +65,7 @@ class MCPTool(CoreTool):
             approval_mode=approval_mode,
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
+            read_only=read_only,
         )
 
     @property
@@ -184,6 +186,7 @@ class MCPResourceTool(CoreTool):
             description=self._build_description(),
             approval_mode=approval_mode,
             timeout_seconds=timeout_seconds,
+            read_only=True,  # reading a resource changes nothing
         )
         self._parameter_schema: dict[str, t.Any] = {
             "type": "object",

@@ -5,27 +5,17 @@ description = "A framework project for llm framework"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi>=0.135.1",
-    "flask>=3.1.3",
+    "httpx>=0.27.2",
     "jinja2>=3.1.6",
     "jsonschema>=4.26.0",
-    "mcp>=2.0,<3",
+    "mcp>=2.2,<3",
     "ollama>=0.6.1",
-    "openai>=2.24.0",
-    "opentelemetry-distro>=0.60b1",
-    "opentelemetry-exporter-otlp>=1.39.1",
-    "pydantic>=2.12.5",
-    "pydantic-settings>=2.12.0",
-    "pytest>=9.0.3",
-    "pytest-asyncio>=1.3.0",
-    "python-frontmatter>=1.1.0",
+    "openai>=2.32.0",
+    "opentelemetry-api>=1.41.0",
+    "pydantic>=2.13.3",
+    "pydantic-settings>=2.14.0",
     "pyyaml>=6.0.3",
-    "qdrant-client[fastembed]>=1.17.0",
-    "redis>=7.2.0",
-    "requests>=2.32.5",
-    "ruff>=0.16.8",
     "tiktoken>=0.12.0",
-    "textual>=4.0.0",
 ]
 
 [build-system]
@@ -50,22 +40,30 @@ markers = [
 [dependency-groups]
 dev = [
     "hatchling>=1.29.0",
-    "mcp>=2.0,<3",
-    "pyjwt>=2.11.0",
-]
-
-ui = [
-    "uvicorn[standard]>=0.34.0",
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.3.0",
+    "python-dotenv>=1.2.2",
+    "ruff>=0.16.8",
+    "maxai[cli,embeddings,tracing,mongodb]",
 ]
 
 [project.optional-dependencies]
+# The terminal UI (max_ai.cli).
+cli = [
+    "textual>=8.2.8",
+]
+# Local embeddings for knowledge/memory search (downloads a small model once).
+embeddings = [
+    "fastembed>=0.7.4",
+]
+# Sending TracingMiddleware spans to Langfuse or any OTLP backend.
+tracing = [
+    "opentelemetry-sdk>=1.41.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.41.0",
+]
 mongodb = [
     "pymongo>=4.13,<5",
 ]
 runtime-modal = [
     "modal>=1.0,<2",
-]
-artifacts-azure = [
-    "azure-storage-blob>=12,<13",
-    "azure-identity>=1,<2",
 ]

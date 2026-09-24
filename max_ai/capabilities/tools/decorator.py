@@ -15,6 +15,7 @@ def tool(
     name: str | None = None,
     description: str | None = None,
     approval_mode: str | ToolApprovalMode = ToolApprovalMode.AUTO_APPROVED,
+    read_only: bool = False,
 ) -> t.Callable[[t.Callable[..., t.Any]], FunctionAsTool]: ...
 
 
@@ -25,6 +26,7 @@ def tool(
     name: str | None = None,
     description: str | None = None,
     approval_mode: str | ToolApprovalMode = ToolApprovalMode.AUTO_APPROVED,
+    read_only: bool = False,
 ) -> FunctionAsTool: ...
 
 
@@ -34,6 +36,7 @@ def tool(
     name: str | None = None,
     description: str | None = None,
     approval_mode: str | ToolApprovalMode = ToolApprovalMode.AUTO_APPROVED,
+    read_only: bool = False,
 ) -> FunctionAsTool | t.Callable[[t.Callable[..., t.Any]], FunctionAsTool]:
     """Wrap a function as a FunctionAsTool.
 
@@ -52,6 +55,7 @@ def tool(
         approval: When the tool requires user approval. Defaults to AUTO_APPROVED
             — decorated functions are assumed to be local, non-destructive helpers.
             Use ASK_APPROVED explicitly for tools that modify state.
+        read_only: No side effects: may run in parallel with other read-only calls.
     """
 
     def decorator(fn: t.Callable[..., t.Any]) -> FunctionAsTool:
@@ -60,6 +64,7 @@ def tool(
             name=name,
             description=description,
             approval_mode=approval_mode,
+            read_only=read_only,
         )
 
     return decorator(func) if func is not None else decorator

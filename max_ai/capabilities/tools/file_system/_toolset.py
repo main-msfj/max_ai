@@ -55,6 +55,7 @@ class FileSystemTools:
             name="list_directory",
             description="List a folder in your workspace. Use paths relative to the workspace.",
             approval_mode=ToolApprovalMode.AUTO_APPROVED,
+            read_only=True,
         )
         def list_directory(
             context: ToolContext, path: str = "", limit: int = 200
@@ -78,6 +79,7 @@ class FileSystemTools:
             name="find_files",
             description="Find a file name or glob anywhere in your workspace.",
             approval_mode=ToolApprovalMode.AUTO_APPROVED,
+            read_only=True,
         )
         def find_files(
             context: ToolContext,
@@ -104,6 +106,7 @@ class FileSystemTools:
             name="search_text",
             description="Search text anywhere in your workspace.",
             approval_mode=ToolApprovalMode.AUTO_APPROVED,
+            read_only=True,
         )
         def search_text(
             context: ToolContext,
@@ -130,6 +133,7 @@ class FileSystemTools:
             name="read_file",
             description="Read a file from your workspace.",
             approval_mode=ToolApprovalMode.AUTO_APPROVED,
+            read_only=True,
         )
         def read_file(
             context: ToolContext,
@@ -242,6 +246,7 @@ class FileSystemTools:
             name="file_info",
             description="Inspect a file or directory in your workspace.",
             approval_mode=ToolApprovalMode.AUTO_APPROVED,
+            read_only=True,
         )
         def file_info(
             context: ToolContext, file_name: str
@@ -311,7 +316,9 @@ class FileSystemTools:
         """Keep the user root out of model-visible tool arguments."""
         if path == "" and allow_empty:
             return "workspace"
-        parts = UserFileSystem._visible_parts(path)
+        parts = FileSystemTools._as_given(context, UserFileSystem._visible_parts(path))
+        if not parts:
+            return "workspace"
         if parts[0] == "skills":
             return "/".join(parts)
         if parts[0] == "scratchpad":
@@ -322,10 +329,21 @@ class FileSystemTools:
     @staticmethod
     def _write_target(context: ToolContext, path: str) -> str:
         """Resolve a write_file/create_directory path to its full location."""
-        parts = UserFileSystem._visible_parts(path)
+        parts = FileSystemTools._as_given(context, UserFileSystem._visible_parts(path))
         if parts and parts[0] == "scratchpad":
+            UserFileSystem._safe_session_id(context.session_id)
             return "/".join(("scratchpad", context.session_id, *parts[1:]))
         return "/".join(("workspace", *parts))
+
+    @staticmethod
+    def _as_given(context: ToolContext, parts: tuple[str, ...]) -> tuple[str, ...]:
+        """Accept paths exactly as the tools return them: ``workspace/x`` is
+        ``x`` and ``scratchpad/<this session>/x`` is ``scratchpad/x``."""
+        if parts and parts[0] == "workspace":
+            return parts[1:]
+        if parts[:2] == ("scratchpad", context.session_id):
+            return ("scratchpad", *parts[2:])
+        return parts
 
     @staticmethod
     def _tool_call_id(context: ToolContext) -> str:

@@ -49,7 +49,7 @@ The `Agent` composes the runtime. It creates a tool registry and dispatcher, sel
 | `max_ai/capabilities/tools` | Function decorator/adapters, filesystem, Bash, plan, user-input, and Agent-as-tool integrations. |
 | `max_ai/capabilities/executor` | Local, Docker, and Modal execution providers. |
 | `max_ai/capabilities/workspace` | Workspace providers; local disk implementation is under `workspace/local`. |
-| `max_ai/capabilities/memory` | Memory registries with local, MongoDB, and SQLite backends. |
+| `max_ai/capabilities/memory` | Local and MongoDB memory registries. The legacy SQLite module still has imports from an older memory contract and is not currently usable. |
 | `max_ai/capabilities/knowledge` | Retrieval registries with local and MongoDB backends. |
 | `max_ai/capabilities/skills` | Skill registries and metadata/resource loading. |
 | `max_ai/capabilities/context` | Local and SQLite context registries; these are provider packages but are not a constructor input on the current public Agent. |
@@ -75,7 +75,7 @@ The public `Agent` constructor groups its accepted values by responsibility:
 | Execution | `executor`, `workspace` | Executor and workspace providers; defaults are local implementations. Idle timeout comes from framework settings. |
 | Optional capabilities | `skills`, `memory`, `knowledge` | Registries that add prompt context and, where applicable, tools. Context registries exist but are not wired into this Agent constructor. |
 | Run policy | `reasoning`, `output_format`, `completion`, `completion_handlers` | Reasoning strategy, structured response schema, runtime gate options, and application completion handlers. |
-| Run controls | `compaction`, `middlewares` | Optional conversation compaction strategy and middleware hooks. |
+| Run controls | `compaction`, `middlewares`, `prompt_layers` | Optional conversation compaction strategy, middleware hooks, and prompt layer overrides/extensions. |
 
 When omitted, the agent uses `ReactLoop`, `LocalExecutor`, and `LocalWorkspace`. The iteration limit and executor-session idle timeout come from `max_ai.config.setting` (environment variables `MAX_LOOP_ITERATIONS` and `ENVIRONMENT_IDLE_TIMEOUT`). The default prompt stack includes policy, task analysis, rendering, and session state. Skills, knowledge, and memory layers are added only when their matching registries are supplied. The agent registers built-in filesystem, plan, and Bash tools unless the supplied toolset already uses those names; the ask-user tool is enabled by the reasoning configuration.
 
@@ -99,7 +99,7 @@ Agent fields + optional registry data
  client.format_messages() → provider API
 ```
 
-The current `max_ai.agents.Agent` builds this stack in `_build_prompt_stack()` in this order:
+The current `max_ai.agents.Agent` builds this stack in `_build_prompt_stack()` in this order. Pass `prompt_layers` to replace a default layer by its concrete type or append a custom layer in the order supplied:
 
 1. `AgentPolicyLayer` — uses `name`, `description`, and `instructions` from the agent constructor.
 2. `TaskAnalysisLayer` — static task analysis guidance.
@@ -113,7 +113,7 @@ Each layer receives the run variables and renders its own template. `CoreLayer` 
 
 Tool schemas are passed to `client.run()` separately from `PromptCtx`. The task and conversation history are also sent as `RunContext` messages, rather than being folded into a prompt layer. This separation lets prompt instructions, callable tools, and the conversation remain distinct inputs to the client.
 
-`CoreLayer` subclasses can use inline templates or template files. The generic `build_default_stack(overrides=...)` helper can replace default layers for code using that API. The current public `max_ai.agents.Agent` constructs its stack internally and does not expose a custom `prompt_layers` constructor argument.
+`CoreLayer` subclasses can use inline templates or template files. The public Agent accepts `prompt_layers: Sequence[CoreLayer]`; an instance whose concrete class matches a built-in layer replaces it in place, while a new class is appended. Duplicate overrides of one type are rejected. Component-based custom layers can be serialized; define an importable provider path and config, and call `allow_providers("your_package.")` before deserializing trusted custom providers.
 
 Capability providers generally follow a small package structure: `_model.py` contains the provider's Pydantic config model, while a separate module contains the implementation (for example, `memory/local/_model.py` and `memory/local/_registry.py`). Public `__init__.py` files expose the supported imports.
 

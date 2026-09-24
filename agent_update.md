@@ -2994,3 +2994,44 @@ Pendiente para la próxima sesión: `TracingMiddleware` con spans de OpenTelemet
 - MCP: `_ensure_mcp()` conecta una vez (con lock) y registra las tools una vez; conexión compartida hasta `close()`. `MCPClientManager.connect` reconecta si el worker murió.
 - Tests: tests/agents/test_concurrency.py (4): 10 usuarios a la vez ~0.9s vs 6s en serie, aislamiento (tool context, workspace, eventos del stream, memoria en el prompt), misma sesión en orden, loop compartido intacto, MCP con 8 runs simultáneos = 1 conexión. tests/mcp/test_agent_mcp.py actualizado al nuevo comportamiento. Prueba real OpenAI: 5 usuarios 4.2s vs 11.7s, cada uno con su dato.
 - Pendiente: versión/concurrencia optimista en CoreSessionStore para varios procesos sobre la misma sesión.
+
+## Salud del repo (parte 1)
+- Suite: de 42 fallos + ~6 archivos sin cargar a 418 pasan, 0 fallan; quedan 3 errores de carga en lo que el usuario decidió conservar (tests/v2, tests/cli/test_repl.py, tests/capabilities/test_sqlite_memory.py).
+- test_filesystem_tools.py reescrito (16) para el diseño actual (un workspace por usuario, scratchpad por sesión). Los tests viejos de seguridad pasaban por el motivo equivocado (parámetro inválido `path`); ahora `refused()` exige que el rechazo venga del filesystem. Traversal, absolutas, symlinks, hardlinks, FIFOs, usuarios/workspaces enlazados: todo protegido.
+- Bug arreglado: las rutas devueltas por las tools (`workspace/x`, `scratchpad/<sesión>/x`) no se podían pasar de vuelta (`workspace/workspace/x`). `FileSystemTools._as_given` las acepta. write_file al scratchpad valida el session_id como read.
+- Bug arreglado: los scripts de los skills no se alcanzaban desde bash (el prompt decía `$WORKSPACE/skills`, los SKILL.md `skills/...`, pero los skills viven en `<user>/skills`, fuera del workspace). Bash exporta `$SKILLS`; SkillsLayer y los SKILL.md de ejemplo usan `$SKILLS/<skill>/...`. Probado real: gpt-5.6-luna generó un .docx con create-report.
+- test_bash_tool.py reescrito (6): allow/ask/deny (compuestos incluidos), denegados nunca corren, expected_outputs.
+- test_local_registries.py y test_layers.py portados al API actual.
+- Nuevo tests/agents/test_agent_lifecycle.py (8): los flujos que cubrían los tests del Agent viejo (run, stream, error, cancelación, aprobar/rechazar/mixto, ask_user, final_message).
+- Borrados (decisión del usuario): max_ai/base/agent.py (Agent viejo, roto: usaba conversation_dir), AgentAsTool, AgentConfig y sus tests. `max_ai.base.Agent` apunta al Agent nuevo. README con imports nuevos.
+- Pendiente: README desactualizado en general, dependencias sin usar en pyproject, CI.
+
+## Firma del Agent ordenada, `gates` y dependencias
+- Firma: `Agent(name, description, instructions, client, *, toolset, mcp, memory, knowledge, skills, reasoning, compaction, middlewares, gates, output_format, prompt_layers, workspace, executor)` — de lo más usado a lo menos; la infraestructura (workspace, executor) al final porque tiene defaults.
+- `completion` + `completion_handlers` → un solo `gates=[...]`. El `RuntimeCompletionGate` del framework siempre está (se agrega primero si no lo pasas; si lo pasas con tus opciones se usa el tuyo). El Agent le inyecta el workspace (`bind_workspace`). `RuntimeCompletionGate(config=None, *, workspace=None)` y `_from_config`. `AgentSpec.gates` reemplaza `completion`/`completion_handlers`.
+- pyproject: núcleo = httpx, jinja2, jsonschema, mcp, ollama, openai, opentelemetry-api, pydantic, pydantic-settings, pyyaml, tiktoken. Extras: cli (textual), embeddings (fastembed, en lugar de qdrant-client[fastembed]), tracing (otel sdk + exporter OTLP/HTTP), mongodb, runtime-modal. Grupo dev: pytest, pytest-asyncio, ruff, hatchling, python-dotenv + los extras. Fuera: fastapi, flask, redis, requests, python-frontmatter, opentelemetry-distro, pyjwt, uvicorn (grupo ui), extra azure. `uv lock` + `uv sync --group dev`; suite igual (419).
+- README: actualizándolo un subagente (Haiku) con el API actual.
+
+## Tools en paralelo y CoreEmbedding
+- `CoreTool(read_only=...)`: las llamadas de solo lectura consecutivas de una respuesta corren a la vez (dispatcher `_batches`); cualquier otra corre sola y en orden ("write A, read A" respeta el orden). Tope `setting.max_parallel_tools` (env MAX_PARALLEL_TOOLS, 8). Resultados al transcript en orden de llamada.
+- Solo lectura: read_file, list_directory, find_files, search_text, file_info; MCP con `readOnlyHint` (y no destructive); `MCPResourceTool`; `FunctionAsTool(read_only=True)` / `@tool(read_only=True)`.
+- Un lote de solo lectura comparte UN lease del EnvironmentManager (antes el lock por usuario las serializaba); `dispatch(..., session=)`.
+- MCP: la tarea dueña de la conexión atiende cada llamada en su subtarea (antes esperaba una por una).
+- Real (gpt-5.6-luna, tool de 1s, 4 ciudades): 4.0s en serie → 1.0s en paralelo. Tests: tests/tools/test_parallel_tools.py (5).
+- Hallazgo pendiente: `ToolResult.started_at/completed_at` no reflejan la ejecución real de la tool.
+- `CoreEmbedding` (base/embedding.py): `embed()` valida, divide en lotes y cachea (LRU por modelo+texto); implementaciones escriben `_embed`. En core/embeddings: `FastEmbedEmbedding` (local, default multilingüe `paraphrase-multilingual-MiniLM-L12-v2`: el anterior all-MiniLM-L6-v2 solo entendía inglés — "el gato duerme" 0.06 vs 0.96 ahora), `OpenAIEmbedding` (api_key_env; para serverless), `cosine_similarity`, `rank`.
+- LocalKnowledgeRegistry(embedding=...) (default FastEmbed): una sola llamada por búsqueda con caché (antes re-embebía cada bloque uno por uno en cada búsqueda). Serializa el embedding.
+- Memoria: `CoreMemoryRegistry(embedding=...)` + `_rank_by_meaning`. Local: con embedding busca por significado en las demás sesiones del usuario; sin embedding, por palabras como antes. MongoDB: con embedding reordena los 500 recuerdos más recientes del usuario. Ejemplos 01/02 activan la memoria semántica.
+- Tests: tests/test_embeddings_component.py (6, incluye el modelo real: "does the user eat meat?" encuentra "El usuario es vegetariano").
+- ROADMAP.md: multiagente, clientes nativos, versionado del session store, búsqueda en conversaciones, guardrails.
+
+## Suite en verde y tiempos reales de las tools
+- Borrados (decisión del usuario): tests/v2, tests/cli/test_repl.py, tests/capabilities/test_sqlite_memory.py. Suite: 431 pasan, 0 fallan, 0 errores de carga. (El código de SQLiteMemoryRegistry sigue en el repo, roto.)
+- Bug: `ToolResult.started_at` se asignaba al crear el resultado (cuando la tool ya había terminado) y `completed_at` en el mismo instante → duración ~0 siempre (la CLI mostraba "0ms" en todas las tools). El dispatcher ahora estampa `started_at = record.started_at` (inicio real de la ejecución) y `completed_at` al cerrar. Test en test_parallel_tools.py.
+
+## Memoria y knowledge SQLite (diseño nuevo)
+- `capabilities/memory/sqlite/`: `SQLiteMemoryRegistry` reescrito sobre el contrato actual (el viejo usaba RecallQuery/EmbedMany). Una fila por (user_id, session_id, category); sin estado, `bind()` por run; una conexión WAL compartida por las copias ligadas, lock + transacción por operación, SQLite en un hilo (`asyncio.to_thread`). Con `embedding`: el vector se guarda al escribir; `search_memory` (otras sesiones del usuario) solo embebe la consulta; filas sin vector o de otro modelo se embeben una vez y se guardan. Sin embedding: por palabras.
+- `capabilities/knowledge/sqlite/`: `SQLiteKnowledgeRegistry` nuevo. Una fila por (source, block_id); `upsert_block`/`delete_block` (API de la aplicación) embeben al escribir; `search` solo embebe la consulta; cambio de modelo → re-embebe. Embedding por defecto FastEmbed; `min_score` configurable.
+- `core/embeddings/vectors.py`: `pack_vector`/`unpack_vector` (float32).
+- Tests: tests/capabilities/test_sqlite_registries.py (10): CRUD y aislamiento, búsqueda por palabras, vectores reutilizados tras reabrir, backfill y cambio de modelo, 50 escrituras concurrentes, serialización, fuentes aisladas, modelo real (pregunta en inglés → documento en español).
+- Real (gpt-5.6-luna): guardó una alergia en chat-1, la encontró con search_memory en chat-2, y respondió en inglés desde un documento en español del knowledge.

@@ -1,16 +1,20 @@
-"""Serializable configuration for SQLiteMemoryRegistryConfig."""
+"""Serializable configuration for SQLiteMemoryRegistry."""
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from typing import Any
+
+from pydantic import BaseModel, Field
 
 from ....base.memory import MemoryToolMode
 
 
 class SQLiteMemoryRegistryConfig(BaseModel):
-    user_id: str
     base_path: str
+    db_name: str = Field(default="memory.sqlite3", min_length=1)
+    user_id: str | None = None
+    session_id: str | None = None
     tool_mode: MemoryToolMode = MemoryToolMode.FULL
-    db_name: str = "memory.sqlite3"
-    merge_similarity_threshold: float = 0.85
-    context_days: int | None = 30
+    context_days: int | None = Field(default=30, ge=0)
+    search_limit: int = Field(default=20, ge=1, le=100)
+    embedding: dict[str, Any] | None = None  # a serialized CoreEmbedding

@@ -81,16 +81,22 @@ class RuntimeCompletionGate(CompletionBase):
     component_provider_override = "maxai.completion.RuntimeCompletionGate"
 
     def __init__(
-        self, workspace: WorkspaceBase, config: RuntimeGateConfig | None = None,
+        self, config: RuntimeGateConfig | None = None, *, workspace: WorkspaceBase | None = None,
     ) -> None:
         super().__init__()
-        # The workspace is a runtime dependency (the Agent injects it);
-        # only the options are config.
-        self._workspace = workspace
         self.config = config or RuntimeGateConfig()
+        # A runtime dependency, not config: the Agent injects its workspace.
+        self._workspace = workspace
+
+    def bind_workspace(self, workspace: WorkspaceBase) -> None:
+        self._workspace = workspace
 
     def _to_config(self) -> RuntimeGateConfig:
         return self.config.model_copy()
+
+    @classmethod
+    def _from_config(cls, config: RuntimeGateConfig) -> "RuntimeCompletionGate":
+        return cls(config)
 
     def on_final_response(self, ctx: RunContext) -> CompletionDecision:
         if not self.config.enabled:

@@ -36,6 +36,7 @@ from max_ai.capabilities.skills.local import LocalSkillRegistry
 from max_ai.capabilities.tools.function_as_tool import FunctionAsTool
 from max_ai.capabilities.middleware import TracingMiddleware, configure_langfuse
 from max_ai.cli import run_cli
+from max_ai.core.embeddings import FastEmbedEmbedding
 from max_ai.core.model.llm import ModelConfig
 from max_ai.types.tools import ToolApprovalMode
 
@@ -74,7 +75,10 @@ async def main() -> None:
             FunctionAsTool(send_email, approval_mode=ToolApprovalMode.ASK_APPROVED),
         ],
         # Backend only: each run binds it to its RunContext's user and session.
-        memory=LocalMemoryRegistry(base_path=LOCAL_DIR, tool_mode=MemoryToolMode.FULL),
+        memory=LocalMemoryRegistry(
+            base_path=LOCAL_DIR, tool_mode=MemoryToolMode.FULL,
+            embedding=FastEmbedEmbedding(),  # search_memory by meaning, in any language
+        ),
         knowledge=[
             LocalKnowledgeRegistry(
                 name="framework",

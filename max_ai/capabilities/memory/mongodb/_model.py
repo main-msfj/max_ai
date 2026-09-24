@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 from ....base.memory import MemoryToolMode
@@ -13,6 +15,7 @@ class MongoDBMemoryRegistryConfig(BaseModel):
     tool_mode: MemoryToolMode = MemoryToolMode.FULL
     context_days: int | None = Field(default=30, ge=0)
     search_limit: int = Field(default=20, ge=1, le=100, strict=True)
+    embedding: dict[str, Any] | None = None  # a serialized CoreEmbedding
 
     # Connection. Stores the env var name, never the URI or credentials.
     database: str = Field(default="max_ai", min_length=1)

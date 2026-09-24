@@ -222,6 +222,7 @@ class BashTool(CoreRuntimeTool):
             env = os.environ.copy()
             env["WORKSPACE"] = str(runtime.cwd)
             env["SCRATCHPAD"] = str(runtime.scratch)
+            env["SKILLS"] = str(runtime.skills)
             expected_outputs = tool_request.parameters.get("expected_outputs", [])
             before = {
                 path: self._output_snapshot(runtime.cwd, path)

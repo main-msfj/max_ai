@@ -13,8 +13,7 @@ class EmbeddingError(Exception):
     @classmethod
     def dependency_missing(cls) -> "EmbeddingError":
         return cls(
-            "fastembed is required for lightweight embeddings. Install "
-            "qdrant-client[fastembed] or fastembed.",
+            "fastembed is required for local embeddings: pip install 'maxai[embeddings]'.",
             kind="dependency_missing",
         )
 

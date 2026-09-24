@@ -56,7 +56,7 @@ __all__ = [
 def __getattr__(name: str):
     """Lazily expose heavy exports without creating import cycles."""
     if name == "Agent":
-        from .agent import Agent
+        from ..agents.agent import Agent
 
         return Agent
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

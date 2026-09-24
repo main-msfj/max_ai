@@ -2,10 +2,12 @@
 
 import asyncio
 import json
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from ...base.middleware import MiddlewareContext, ToolRequest
 from ...base.tools import ToolContext
+from ...config import setting
 from ...types.tool_call import ToolCallRecord, ToolResult
 from ...types.tools import ToolApprovalMode
 from ..event_type import (
@@ -20,6 +22,7 @@ from ..termination import CancellationToken
 from .registry import ToolRegistry
 
 if TYPE_CHECKING:
+    from ...base.executor import ExecutionSession
     from ..environment.manager import EnvironmentManager
     from ..middleware.chain import MiddlewareChain
 
@@ -42,8 +45,23 @@ class ToolDispatcher:
         self.middleware = middleware
         self._active: set[str] = set()
 
+    def _batches(self, records: list[ToolCallRecord]) -> list[list[ToolCallRecord]]:
+        """Consecutive read-only calls form one batch that runs at once; any
+        other call runs alone, so "write A, read A" keeps its order."""
+        batches: list[list[ToolCallRecord]] = []
+        previous_read_only = False
+        for record in records:
+            read_only = bool(getattr(self.registry.get(record.tool_name), "read_only", False))
+            if read_only and previous_read_only:
+                batches[-1].append(record)
+            else:
+                batches.append([record])
+            previous_read_only = read_only
+        return batches
+
     async def dispatch_many(self, records, context, cancellation_token=None):
-        """Stream tool events and transcript results, preserving call order."""
+        """Stream tool events and transcript results, preserving call order.
+        Read-only calls next to each other run concurrently."""
         queue = asyncio.Queue()
         sentinel = object()
         call_context = ToolContext(
@@ -52,20 +70,38 @@ class ToolDispatcher:
             emit_event=queue.put_nowait,
         )
 
+        limit = asyncio.Semaphore(setting.max_parallel_tools)
+
+        async def run(record, session=None):
+            async with limit:
+                return await self.dispatch(record, call_context, cancellation_token, session)
+
+        async def run_batch(batch):
+            sandboxed = {r.id for r in batch if not self.registry.runs_on_host(r.tool_name)}
+            if len(batch) == 1 or not sandboxed or self.manager is None:
+                return await asyncio.gather(*(run(record) for record in batch))
+            # Read-only calls share one execution lease: nothing to sync between them.
+            async with self.manager.acquire(context.user_id, context.session_id) as session:
+                return await asyncio.gather(*(
+                    run(record, session if record.id in sandboxed else None) for record in batch
+                ))
+
         async def produce():
             try:
-                for record in records:
+                for batch in self._batches(list(records)):
                     if cancellation_token is not None and cancellation_token.is_cancelled():
                         raise asyncio.CancelledError()
-                    result = await self.dispatch(record, call_context, cancellation_token)
-                    if result is not None:
-                        queue.put_nowait(ToolMessage(
-                            source=record.tool_name, tool_call_id=record.id,
-                            tool_name=record.tool_name, success=result.success,
-                            error=result.error,
-                            content=json.dumps(result.result, ensure_ascii=False, default=str)
-                            if result.success else result.error or "Tool failed",
-                        ))
+                    results = await run_batch(batch)
+                    # Results enter the transcript in call order, whatever finished first.
+                    for record, result in zip(batch, results):
+                        if result is not None:
+                            queue.put_nowait(ToolMessage(
+                                source=record.tool_name, tool_call_id=record.id,
+                                tool_name=record.tool_name, success=result.success,
+                                error=result.error,
+                                content=json.dumps(result.result, ensure_ascii=False, default=str)
+                                if result.success else result.error or "Tool failed",
+                            ))
             finally:
                 queue.put_nowait(sentinel)
 
@@ -84,7 +120,10 @@ class ToolDispatcher:
         record: ToolCallRecord,
         context: ToolContext,
         cancellation_token: CancellationToken | None = None,
+        session: "ExecutionSession | None" = None,
     ) -> ToolResult | None:
+        """Run one call. ``session`` is an execution lease the caller already
+        holds (shared by a batch of read-only calls); otherwise one is taken."""
         if record.id in self._active or record.is_executing:
             raise ValueError(
                 "Tool call is already executing; resolve stale state first"
@@ -93,16 +132,21 @@ class ToolDispatcher:
             return record.result
         self._active.add(record.id)
         try:
-            return await self._dispatch(record, context, cancellation_token)
+            return await self._dispatch(record, context, cancellation_token, session)
         finally:
             self._active.discard(record.id)
 
-    async def _dispatch(self, record, context, cancellation_token):
+    async def _dispatch(self, record, context, cancellation_token, shared_session=None):
         def emit(event):
             if context.emit_event is not None:
                 context.emit_event(event)
 
         def finish(result):
+            # The result is built after the tool ran: stamp the real start/end.
+            now = datetime.now(timezone.utc)
+            result = result.model_copy(
+                update={"started_at": record.started_at or now, "completed_at": now}
+            )
             if record.is_executing:
                 record.mark_consumed(result)
             else:
@@ -241,6 +285,10 @@ class ToolDispatcher:
         async def invoke():
             if self.registry.runs_on_host(tool.name):
                 return await tool.execute(record, call_context, cancellation_token)
+            if shared_session is not None:
+                return await self.manager.executor.run_tool(
+                    shared_session, tool, record, call_context, cancellation_token,
+                )
             async with self.manager.acquire(context.user_id, context.session_id) as session:
                 return await self.manager.executor.run_tool(
                     session, tool, record, call_context, cancellation_token,

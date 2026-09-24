@@ -6,6 +6,7 @@ import json
 import re
 from pathlib import Path
 
+from ....base.embedding import CoreEmbedding
 from ....base.memory import (
     CoreMemoryRegistry,
     MemoryRecord,
@@ -48,13 +49,14 @@ class LocalMemoryRegistry(CoreMemoryRegistry):
         tool_mode: MemoryToolMode = MemoryToolMode.FULL,
         *,
         context_days: int | None = 30,
+        embedding: CoreEmbedding | None = None,
     ) -> None:
         if base_path is None:
             raise ValueError("LocalMemoryRegistry needs a base_path")
         self.base_path: Path = Path(base_path).expanduser().resolve()
         super().__init__(
             user_id=user_id, session_id=session_id,
-            tool_mode=tool_mode, context_days=context_days,
+            tool_mode=tool_mode, context_days=context_days, embedding=embedding,
         )
 
     def _validate_scope(self) -> None:
@@ -71,6 +73,7 @@ class LocalMemoryRegistry(CoreMemoryRegistry):
             base_path=str(self.base_path),
             tool_mode=self.tool_mode,
             context_days=self.context_days,
+            embedding=self.embedding.serialize().model_dump(exclude_none=True) if self.embedding else None,
         )
 
     @classmethod
@@ -81,6 +84,7 @@ class LocalMemoryRegistry(CoreMemoryRegistry):
             base_path=config.base_path,
             tool_mode=config.tool_mode,
             context_days=config.context_days,
+            embedding=CoreEmbedding.deserialize(config.embedding) if config.embedding else None,
         )
 
     @property
@@ -164,19 +168,15 @@ class LocalMemoryRegistry(CoreMemoryRegistry):
         return True
 
     async def _search_memory(self, text: str) -> list[MemorySearchResult]:
+        """Other sessions' memories: by meaning with an embedding, else by words."""
         await self._ensure_connected()
         needle = text.strip().lower()
-        results: list[MemorySearchResult] = []
-        for path in sorted(self._user_dir.glob("*.json")):
-            session_id = path.stem
-            for record in self._load_store(path).values():
-                if needle in record.category.lower() or needle in record.memory.lower():
-                    results.append(
-                        MemorySearchResult(
-                            category=record.category,
-                            memory=record.memory,
-                            updated=record.updated,
-                            session_id=session_id,
-                        )
-                    )
-        return results
+        candidates = [
+            MemorySearchResult(category=record.category, memory=record.memory,
+                               updated=record.updated, session_id=path.stem)
+            for path in sorted(self._user_dir.glob("*.json")) if path.stem != self.session_id
+            for record in self._load_store(path).values()
+        ]
+        if self.embedding is not None:
+            return await self._rank_by_meaning(text, candidates)
+        return [c for c in candidates if needle in c.category.lower() or needle in c.memory.lower()]

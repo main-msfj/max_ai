@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     # loop and the executor sessions read them unless set on the component.
     max_loop_iterations: int = Field(default=20, ge=1)
     environment_idle_timeout: float = Field(default=300, ge=0)
+    # Read-only tool calls of one model reply that may run at once (MAX_PARALLEL_TOOLS).
+    max_parallel_tools: int = Field(default=8, ge=1)
 
     # Context compaction budgets. Environment overrides use the uppercase
     # field names, e.g. COMPACTION_PROMPT_BUDGET_TOKENS=6000.

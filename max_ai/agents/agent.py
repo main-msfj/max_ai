@@ -20,7 +20,7 @@ from pydantic import BaseModel
 
 from ..base.clients import CoreChatCompletionClient
 from ..base.compaction import CoreCompaction
-from ..base.completion_gate import CompletionDecision
+from ..base.completion_gate import CompletionBase, CompletionDecision
 from ..base.component import ComponentBase
 from ..base.executor import ExecutorBase
 from ..base.knowledge import CoreKnowledgeRegistry
@@ -31,7 +31,7 @@ from ..base.reasoning import BaseReasoning
 from ..base.skills import CoreSkillRegistry
 from ..base.tools import CoreTool, ToolContext
 from ..base.workspace import WorkspaceBase
-from ..capabilities.completion_gate import RuntimeCompletionGate, RuntimeGateConfig
+from ..capabilities.completion_gate import RuntimeCompletionGate
 from ..capabilities.executor.local import LocalExecutor
 from ..capabilities.mcp import MCPClientManager, MCPServerConfig
 from ..capabilities.mcp._model import deserialize_mcp_servers, serialize_mcp_servers
@@ -54,7 +54,7 @@ from ..config import setting
 from ..core.compaction import TokenCounter
 from ..core.environment.manager import EnvironmentManager
 from ..core.event_type import CoreEvent, ModelStreamChunkEvent
-from ..core.events_bus import CompletionHandler, EventBus
+from ..core.events_bus import EventBus
 from ..core.executor.reference import ToolReference
 from ..core.messages import (
     CoreMessage,
@@ -124,19 +124,20 @@ class Agent(ComponentBase[AgentSpec]):
         instructions: str,
         client: CoreChatCompletionClient,
         *,
+        # Most used first; the infrastructure (workspace, executor) has defaults.
         toolset: Sequence[CoreTool | Callable[..., Any]] | None = None,
         mcp: Sequence[MCPServerConfig] | None = None,
-        executor: ExecutorBase | None = None,
-        workspace: WorkspaceBase | None = None,
-        skills: CoreSkillRegistry | None = None,
         memory: CoreMemoryRegistry | None = None,
         knowledge: Sequence[CoreKnowledgeRegistry] | None = None,
+        skills: CoreSkillRegistry | None = None,
         reasoning: BaseReasoning | None = None,
-        output_format: type[BaseModel] | None = None,
-        completion_handlers: Sequence[CompletionHandler] | None = None,
-        completion: RuntimeGateConfig | None = None,
         compaction: CoreCompaction | None = None,
         middlewares: Sequence[CoreMiddleware] | None = None,
+        gates: Sequence[CompletionBase] | None = None,
+        output_format: type[BaseModel] | None = None,
+        prompt_layers: Sequence[CoreLayer] | None = None,
+        workspace: WorkspaceBase | None = None,
+        executor: ExecutorBase | None = None,
     ) -> None:
         self._validate_configuration(executor, reasoning)
         if compaction is not None and not isinstance(compaction, CoreCompaction):
@@ -164,8 +165,9 @@ class Agent(ComponentBase[AgentSpec]):
         for config in self.mcp_servers:
             self._mcp_manager.add_server(config)
         self._configure_capabilities(memory, skills, knowledge)
-        self._configure_runtime(completion_handlers, completion)
-        self._stack = self._build_prompt_stack()
+        self._configure_runtime(gates)
+        self.prompt_layers = list(prompt_layers or ())
+        self._stack = self._build_prompt_stack(self.prompt_layers)
 
     @staticmethod
     def _validate_configuration(
@@ -252,22 +254,25 @@ class Agent(ComponentBase[AgentSpec]):
 
     def _configure_runtime(
         self,
-        completion_handlers: Sequence[CompletionHandler] | None,
-        completion: RuntimeGateConfig | None,
+        gates: Sequence[CompletionBase] | None,
     ) -> None:
         """Connect dispatch, completion checks and turn synchronization."""
         self.dispatcher = ToolDispatcher(
             self._registry, source=self.name, manager=self._manager,
             middleware=self._middleware,
         )
-        self.completion = completion or RuntimeGateConfig()
-        self.completion_handlers = list(completion_handlers or [])
-        self.completion_bus = EventBus(
-            handlers=[
-                RuntimeCompletionGate(self.workspace, self.completion),
-                *self.completion_handlers,
-            ]
-        )
+        # The framework's gate is always there (first); pass your own
+        # RuntimeCompletionGate in ``gates`` to change its options.
+        self.gates = list(gates or [])
+        for gate in self.gates:
+            if not isinstance(gate, CompletionBase):
+                raise TypeError("gates must implement CompletionBase")
+        runtime = next((g for g in self.gates if isinstance(g, RuntimeCompletionGate)), None)
+        if runtime is None:
+            runtime = RuntimeCompletionGate()
+            self.gates.insert(0, runtime)
+        runtime.bind_workspace(self.workspace)
+        self.completion_bus = EventBus(handlers=list(self.gates))
         # Runs of different sessions overlap; messages of one session queue.
         self._session_locks: weakref.WeakValueDictionary[tuple[str, str], asyncio.Lock] = (
             weakref.WeakValueDictionary()
@@ -284,7 +289,10 @@ class Agent(ComponentBase[AgentSpec]):
             self._registry.register(tool, host=True)
         return [tool.name for tool in tools]
 
-    def _build_prompt_stack(self) -> LayerContainer:
+    def _build_prompt_stack(
+        self,
+        overrides: Sequence[CoreLayer] = (),
+    ) -> LayerContainer:
         """Only configured capabilities contribute layers; context is deferred."""
         layers: list[CoreLayer] = [
             AgentPolicyLayer(),
@@ -299,6 +307,24 @@ class Agent(ComponentBase[AgentSpec]):
             layers.append(MemoryLayer())
         # Compaction summary and plan: must survive compaction of the transcript.
         layers.append(SessionStateLayer())
+
+        replacements: dict[type[CoreLayer], CoreLayer] = {}
+        for layer in overrides:
+            if not isinstance(layer, CoreLayer):
+                raise TypeError("prompt_layers must contain CoreLayer instances")
+            layer_type = type(layer)
+            if layer_type in replacements:
+                raise ValueError(
+                    f"Duplicate prompt layer override: {layer_type.__name__}"
+                )
+            replacements[layer_type] = layer
+
+        for index, layer in enumerate(layers):
+            replacement = replacements.pop(type(layer), None)
+            if replacement is not None:
+                layers[index] = replacement
+        # Custom layer types extend the standard stack in caller-provided order.
+        layers.extend(replacements.values())
         return LayerContainer(layers)
 
     # -------- SERIALIZATION ------------------------------------------------------------
@@ -320,12 +346,10 @@ class Agent(ComponentBase[AgentSpec]):
             compaction=dump(self.compaction) if self.compaction is not None else None,
             toolset=[dump(_storable(tool, "tool")) for tool in self.toolset],
             mcp=json.loads(serialize_mcp_servers(self.mcp_servers)),
-            completion=self.completion.model_dump(),
-            completion_handlers=[
-                dump(_storable(gate, "completion handler")) for gate in self.completion_handlers
-            ],
+            gates=[dump(_storable(gate, "gate")) for gate in self.gates],
             output_format=schema_of(self.output_format) if self.output_format else None,
             middlewares=[dump(_storable(m, "middleware")) for m in self.middlewares],
+            prompt_layers=[dump(_storable(layer, "prompt layer")) for layer in self.prompt_layers],
         )
 
     @classmethod
@@ -349,12 +373,10 @@ class Agent(ComponentBase[AgentSpec]):
             output_format=(
                 model_from_schema(config.output_format) if config.output_format else None
             ),
-            completion_handlers=[
-                load(gate, ComponentBase) for gate in config.completion_handlers
-            ],
-            completion=RuntimeGateConfig.model_validate(config.completion),
+            gates=[load(gate, CompletionBase) for gate in config.gates],
             compaction=load(config.compaction, CoreCompaction),
             middlewares=[load(m, CoreMiddleware) for m in config.middlewares],
+            prompt_layers=[load(layer, CoreLayer) for layer in config.prompt_layers],
         )
 
     @property

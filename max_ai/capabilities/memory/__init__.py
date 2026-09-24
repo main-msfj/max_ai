@@ -1,18 +1,8 @@
-"""Memory registry backends.
-
-``SQLiteMemoryRegistry`` is lazy-loaded (PEP 562): it's stale against the
-current ``base/memory.py`` contract (references a ``RecallQuery`` type that
-no longer exists) and would break importing this package eagerly. Fix it
-in sqlite.py, then this stays a plain re-export — no change needed here.
-"""
-
-import typing as t
+"""Memory registry backends: local JSON files, SQLite and MongoDB."""
 
 from .local import LocalMemoryRegistry, LocalMemoryRegistryConfig
 from .mongodb import MongoDBMemoryRegistry, MongoDBMemoryRegistryConfig
-
-if t.TYPE_CHECKING:
-    from .sqlite import SQLiteMemoryRegistry, SQLiteMemoryRegistryConfig
+from .sqlite import SQLiteMemoryRegistry, SQLiteMemoryRegistryConfig
 
 __all__ = [
     "LocalMemoryRegistry",
@@ -22,11 +12,3 @@ __all__ = [
     "SQLiteMemoryRegistry",
     "SQLiteMemoryRegistryConfig",
 ]
-
-
-def __getattr__(name: str) -> t.Any:
-    if name in {"SQLiteMemoryRegistry", "SQLiteMemoryRegistryConfig"}:
-        from . import sqlite
-
-        return getattr(sqlite, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
