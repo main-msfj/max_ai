@@ -192,6 +192,8 @@ class Agent(ComponentBase[AgentSpec]):
             else LocalWorkspace(root=setting.root_dir / ".agents")
         )
         self.executor = executor if executor is not None else LocalExecutor()
+        # Known at build time: the prompt tells the model where commands run.
+        self._environment = self.executor.describe_environment()
         # Idle sessions close after setting.environment_idle_timeout.
         self._manager = EnvironmentManager(self.executor, self.workspace)
 
@@ -404,6 +406,8 @@ class Agent(ComponentBase[AgentSpec]):
             "description": self.description,
             "instructions": self.instructions,
         }
+        if self._environment:
+            variables["execution_environment"] = self._environment
         if self.skills is not None:
             variables["loaded_skills"] = self._skill_blocks
         if self.knowledge:

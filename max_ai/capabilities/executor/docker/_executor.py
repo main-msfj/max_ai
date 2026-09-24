@@ -47,6 +47,13 @@ max_output_bytes : int
         self._locks = {}
         self._closed = {}
 
+    def describe_environment(self) -> str:
+        """Describe the environment exposed by ``DockerExecutor``."""
+        network = ("with no network access: pip install and downloads fail"
+                   if self.network == "none" else "with network access")
+        return (f"Commands run in an isolated Docker container ({self.image}) as a non-root "
+                f"user, {network}. Only the workspace and /tmp are writable.")
+
     def _to_config(self) -> DockerExecutorConfig:
         """Build the serializable configuration for ``DockerExecutor``."""
         return DockerExecutorConfig(

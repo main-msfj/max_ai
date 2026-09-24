@@ -8,8 +8,8 @@ import sys
 from pathlib import Path
 
 from ...base.tools import ToolContext
-from ...base.workspace import Workspace
 from ...capabilities.executor.local import LocalExecutor
+from ...capabilities.workspace.local import LocalWorkspace
 from ...types.tool_call import ToolCallRecord, ToolResult
 from .reference import ToolReference
 
@@ -20,7 +20,7 @@ async def invoke(payload):
     root = Path(payload["workspace_path"])
     if root != Path(os.environ["WORKSPACE"]) or root.name != context_data["user_id"]:
         raise ValueError("Worker workspace identity mismatch")
-    workspace = Workspace(root=root.parent)
+    workspace = LocalWorkspace(root=root.parent)
     tool = ToolReference.model_validate(payload["reference"]).build()
     if tool.name != record.tool_name:
         raise ValueError("Remote tool name differs from approved tool")
