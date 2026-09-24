@@ -9,6 +9,7 @@ Run with: pytest -m integration tests/integration/test_ollama_agent.py
 
 from __future__ import annotations
 
+import json
 import os
 import urllib.error
 import urllib.request
@@ -28,18 +29,20 @@ MODEL = "qwen3:4b-instruct-2507-q4_K_M"
 
 # -------- HEALTH CHECK -----------------------------------------------------------
 def _ollama_reachable() -> bool:
+    """Ollama answers and has the model pulled."""
     try:
         with urllib.request.urlopen(f"{OLLAMA_HOST}/api/tags", timeout=2) as r:
-            return r.status == 200
-    except (urllib.error.URLError, OSError):
+            models = {m.get("name") for m in json.load(r).get("models", [])}
+    except (urllib.error.URLError, OSError, ValueError):
         return False
+    return MODEL in models
 
 
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
         not _ollama_reachable(),
-        reason=f"Ollama not reachable at {OLLAMA_HOST}",
+        reason=f"Ollama not reachable at {OLLAMA_HOST} or {MODEL} not pulled",
     ),
 ]
 

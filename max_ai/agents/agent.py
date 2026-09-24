@@ -438,11 +438,17 @@ class Agent(ComponentBase[AgentSpec]):
         kwargs: dict[str, Any],
         task: list[CoreMessage] | None = None,
     ) -> AgentResponse:
-        """Make sure MCP tools are available, then run."""
+        """Make sure MCP tools are available, then run. A remote workspace
+        brings the user's files in first and sends the changes back after,
+        also when the run pauses or fails."""
         await self._ensure_mcp()
-        return await self._drive_connected(
-            ctx, sink, cancellation_token, stream_tokens, kwargs, task
-        )
+        await self.workspace.download(ctx.user_id, ctx.session_id)
+        try:
+            return await self._drive_connected(
+                ctx, sink, cancellation_token, stream_tokens, kwargs, task
+            )
+        finally:
+            await asyncio.shield(self.workspace.upload(ctx.user_id, ctx.session_id))
 
     async def _ensure_mcp(self) -> None:
         """Connect MCP servers once and share them with every run; a dropped
@@ -716,6 +722,7 @@ class Agent(ComponentBase[AgentSpec]):
         await self._idle.wait()
         await self._mcp_manager.disconnect_all()
         await self._manager.close()
+        await self.workspace.disconnect()
 
     async def __aenter__(self) -> Self:
         return self

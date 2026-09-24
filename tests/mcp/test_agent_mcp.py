@@ -6,6 +6,7 @@ from mcp.server import MCPServer
 
 from max_ai.agents import Agent
 from max_ai.capabilities.mcp import MCPClientManager, StdioMCPServerConfig
+from max_ai.types.run_context import RunContext
 from max_ai.types.tool_call import ToolCallRecord
 from max_ai.types.tools import ToolApprovalMode
 
@@ -71,10 +72,10 @@ async def test_agent_shares_one_mcp_connection_until_close(monkeypatch):
         return "finished"
 
     monkeypatch.setattr(agent, "_drive_connected", fake_drive)
-    assert await agent._drive(None, None, None, False, {}) == "finished"
+    assert await agent._drive(RunContext(user_id="u"), None, None, False, {}) == "finished"
     assert observed == [True]
     # One connection shared by every run, released by close().
-    assert await agent._drive(None, None, None, False, {}) == "finished"
+    assert await agent._drive(RunContext(user_id="u"), None, None, False, {}) == "finished"
     assert observed == [True, True]
     assert len(agent._mcp_manager.get_tools()) == 1
     await agent.close()
