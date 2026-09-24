@@ -11,7 +11,12 @@ from pydantic import BaseModel
 from max_ai.base.embedding import CoreEmbedding
 from max_ai.capabilities.knowledge.local import LocalKnowledgeRegistry
 from max_ai.capabilities.memory.local import LocalMemoryRegistry
-from max_ai.core.embeddings import FastEmbedEmbedding, OpenAIEmbedding, cosine_similarity, rank
+from max_ai.core.embeddings import (
+    FastEmbedEmbedding,
+    OpenAIEmbedding,
+    cosine_similarity,
+    rank,
+)
 from max_ai.errors.embeddings import EmbeddingError
 
 VOCABULARY = ["cat", "dog", "food", "vegetarian", "meat", "short", "answers"]

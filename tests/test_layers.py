@@ -13,6 +13,7 @@ parse — the test fails immediately. That's all this suite is for.
 
 
 
+from max_ai.base.memory import MemoryRecord
 from max_ai.capabilities.stacks.agent_policy_layer import AgentPolicyLayer
 from max_ai.capabilities.stacks.context_layer import ContextLayer
 from max_ai.capabilities.stacks.knowledge_layer import KnowledgeLayer
@@ -20,7 +21,6 @@ from max_ai.capabilities.stacks.memory_layer import MemoryLayer
 from max_ai.capabilities.stacks.rendering_layer import RenderingLayer
 from max_ai.capabilities.stacks.skills_layer import SkillsLayer
 from max_ai.capabilities.stacks.task_analysis_layer import TaskAnalysisLayer
-from max_ai.base.memory import MemoryRecord
 from max_ai.core.blocks import SkillBlock
 
 

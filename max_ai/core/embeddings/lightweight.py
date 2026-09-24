@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import functools
-import warnings
 import typing as t
+import warnings
 
 from ...errors.embeddings import EmbeddingError
 

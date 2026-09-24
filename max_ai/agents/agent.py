@@ -9,8 +9,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import weakref
 import time
+import weakref
 from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import aclosing
 from types import TracebackType

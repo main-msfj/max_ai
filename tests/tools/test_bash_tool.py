@@ -5,8 +5,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from max_ai.base.tools import ToolContext
 from max_ai.capabilities.tools.bash import BashTool
 from max_ai.types.tool_call import ToolCallRecord

@@ -26,3 +26,10 @@ __pycache__/
 *.bak
 *.backup
 *.swp
+
+# Personal notes, research and the project website (kept out of the repo)
+website/
+agent_update.md
+architecture.md
+a-harness-max-ai/
+ai-harness-research/

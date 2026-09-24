@@ -542,3 +542,7 @@ tests/               Unit, integration, executor, reasoning, and tool tests
 - Approval is represented as state, not as an exception.
 - Sandboxed execution is required for skills.
 - Events are first-class so UIs and debuggers can observe a run without scraping text output.
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).

@@ -26,7 +26,13 @@ from opentelemetry import trace
 from opentelemetry.trace import Span, SpanKind, Status, StatusCode
 from pydantic import Field
 
-from ...base.middleware import CoreMiddleware, MiddlewareConfig, MiddlewareContext, ModelRequest, ToolRequest
+from ...base.middleware import (
+    CoreMiddleware,
+    MiddlewareConfig,
+    MiddlewareContext,
+    ModelRequest,
+    ToolRequest,
+)
 
 if t.TYPE_CHECKING:
     from opentelemetry.sdk.trace import TracerProvider

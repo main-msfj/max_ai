@@ -5,7 +5,6 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 
-
 # -------- TOOLS BASE MODEL -----------------------------------------------------------
 class RuntimeDirs(t.NamedTuple):
     root: Path

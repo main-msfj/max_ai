@@ -33,10 +33,10 @@ from max_ai.capabilities.clients.openrouter import OpenRouterChatCompletionClien
 from max_ai.capabilities.compaction import SummaryCompaction
 from max_ai.capabilities.knowledge.local import LocalKnowledgeRegistry
 from max_ai.capabilities.memory.local import LocalMemoryRegistry
+from max_ai.capabilities.middleware import TracingMiddleware, configure_langfuse
 from max_ai.capabilities.session_store import LocalSessionStore
 from max_ai.capabilities.skills.local import LocalSkillRegistry
 from max_ai.capabilities.tools.function_as_tool import FunctionAsTool
-from max_ai.capabilities.middleware import TracingMiddleware, configure_langfuse
 from max_ai.cli import run_cli
 from max_ai.core.embeddings import FastEmbedEmbedding
 from max_ai.core.model.llm import ModelConfig
