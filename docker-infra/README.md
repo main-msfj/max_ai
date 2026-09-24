@@ -4,10 +4,11 @@ Requiere Docker Engine y Docker Compose 2.20.3 o superior, por el uso de `includ
 
 ```text
 docker-infra/
-├── compose.yaml           # Reúne los tres grupos
+├── compose.yaml           # Reúne los grupos
 ├── .env.example           # Imágenes, puertos y credenciales locales
 ├── llm/compose.yaml       # Ollama
 ├── backend/compose.yaml   # MongoDB y Mongo Express
+├── observability/compose.yaml # Langfuse y sus dependencias
 └── mcp/compose.yaml       # DuckDuckGo MCP por stdio
 
 llm-models/ollama/          # Datos de Ollama, fuera de Git
@@ -24,7 +25,7 @@ docker compose --profile mcp pull
 docker compose up -d --wait
 ```
 
-`pull` descarga las cuatro imágenes. `up` inicia MongoDB, Mongo Express y Ollama; DuckDuckGo se
+`pull` descarga las imágenes del perfil MCP. `up` inicia MongoDB, Mongo Express y Ollama; DuckDuckGo se
 inicia desde el cliente MCP con el comando de la sección siguiente. Cada grupo
 tiene su propia red. Los puertos publicados están enlazados a `127.0.0.1`.
 
@@ -66,6 +67,10 @@ Abre <http://localhost:8081> e inicia sesión con los valores predeterminados:
 - Usuario web: `maxai`
 - Contraseña web: `maxai-local-ui`
 
+El primer acceso muestra el diálogo de autenticación HTTP del navegador.
+Una respuesta `401 Unauthorized` antes de iniciar sesión es normal; las
+credenciales anteriores corresponden a la interfaz web, no a MongoDB.
+
 Puedes explorar las bases, abrir una colección y ver sus documentos. La base
 `max_ai` aparecerá cuando la aplicación haya guardado datos. La interfaz también
 permite editar documentos y colecciones.
@@ -75,6 +80,26 @@ Mongo Express espera a que MongoDB esté saludable y se conecta por la red
 web tiene credenciales independientes, configurables con
 `MONGO_EXPRESS_USERNAME` y `MONGO_EXPRESS_PASSWORD`; el puerto se cambia con
 `MONGO_EXPRESS_PORT`.
+
+### Desde un devcontainer
+
+`localhost` dentro del devcontainer es el propio devcontainer, no el host de
+Docker. El script `.devcontainer/post-start.sh` conecta el devcontainer a las
+redes de infraestructura que ya existan y abre puentes locales para las
+interfaces en los puertos 8081 y 3000. Si levantaste Compose después de abrir
+el devcontainer, conecta la red del backend desde su terminal:
+
+```bash
+docker compose -f docker-infra/compose.yaml up -d --wait mongodb mongo-express
+docker network connect max-ai-infra_backend "$(hostname)"
+export MONGODB_URI='mongodb://maxai:maxai-local-dev@mongodb:27017/max_ai?authSource=admin'
+```
+
+La URI mostrada usa las credenciales locales predeterminadas; ajústala si
+cambiaste `docker-infra/.env`. El nombre `mongodb` resuelve solo desde
+contenedores unidos a esa red. Dentro del devcontainer, Mongo Express responde
+en `http://localhost:8081` mediante el puente local. La publicación de Compose
+escucha únicamente en `127.0.0.1` del host de Docker.
 
 Para agregarlo a una instalación existente, desde `docker-infra`:
 
@@ -167,11 +192,24 @@ docker compose --profile observability up -d --wait
 ```
 
 - UI: http://localhost:3000 — usuario `admin@maxai.local`, contraseña `maxai-local-ui`.
+- Consola MinIO: http://localhost:9091 — usuario `minio`, contraseña
+  `LANGFUSE_MINIO_PASSWORD` de `docker-infra/.env` (por defecto `maxai-local-dev`).
+- API MinIO: http://localhost:9090; Ollama API: http://localhost:11434/api/tags;
+  Mongo Express: http://localhost:8081.
 - El primer arranque crea la organización `MaxAI`, el proyecto `max_ai` y sus
   claves (`pk-lf-maxai-local` / `sk-lf-maxai-local`). Cambiarlas en `.env`
   después no cambia las ya creadas.
-- Solo la UI (3000) y MinIO (9090, para archivos adjuntos) se publican, en
+- La UI (3000), MinIO (9090 y consola 9091) se publican en
   `127.0.0.1`. Postgres, ClickHouse y Redis quedan dentro de la red `observability`.
+
+Estas direcciones `localhost` corresponden al host de Docker. Dentro del
+devcontainer, Mongo Express y Langfuse también responden en
+`http://localhost:8081` y `http://localhost:3000`, respectivamente, gracias
+a los puentes locales. Las direcciones de servicio siguen disponibles en
+`http://mongo-express:8081`, `http://langfuse-web:3000`,
+`http://langfuse-minio:9001` y `http://ollama:11434/api/tags` si el contenedor
+está conectado a las redes de Compose. VS Code reenvía los puertos 8081 y 3000
+del devcontainer al equipo local al abrir o recargar la ventana.
 
 Para enviar trazas desde el agente, en el `.env` de la raíz del repositorio:
 
@@ -181,9 +219,50 @@ LANGFUSE_PUBLIC_KEY=pk-lf-maxai-local
 LANGFUSE_SECRET_KEY=sk-lf-maxai-local
 ```
 
+Si el agente corre dentro del devcontainer, configura
+`LANGFUSE_HOST=http://langfuse-web:3000` y conecta el devcontainer a la red
+`max-ai-infra_observability`. Las credenciales de ejemplo son para desarrollo
+local; utiliza las de tu `.env` si las cambiaste.
+
+### Abrir las interfaces desde VS Code
+
+Si VS Code está conectado a un devcontainer o a una máquina remota,
+`localhost` en el navegador de tu equipo no necesariamente es el host de
+Docker. Ejecuta **Developer: Reload Window** en VS Code para aplicar
+`forwardPorts` de `.devcontainer/devcontainer.json`. Después abre la pestaña
+**Ports** del panel inferior y usa **Open in Browser** sobre **Mongo Express**,
+**Langfuse** o **MinIO Console**. Usa la dirección local que muestre esa
+pestaña: puede tener un puerto distinto o un dominio reenviado.
+
+Si un puerto no aparece, en **Ports** elige **Forward a Port** y escribe
+`8081` para Mongo Express o `3000` para Langfuse. Desde el propio
+devcontainer puedes comprobar los puentes con `curl -I http://localhost:8081`
+(responde 401 hasta iniciar sesión) y `curl -I http://localhost:3000`
+(responde 200). Si no responden, ejecuta
+`bash /max_ai/.devcontainer/post-start.sh` en el devcontainer para reconectar
+las redes y reiniciar los puentes.
+
 Con esas variables, `examples/01_agent_with_openai.py` y `02_...` activan el
 tracing solos. En código: `provider = configure_langfuse()` y
 `Agent(..., middlewares=[TracingMiddleware()])`.
 
 Para detenerlo: `docker compose --profile observability down` (agrega `-v` para
 borrar también las trazas guardadas).
+
+## Probar todo junto
+
+Con MongoDB y Langfuse arriba, `examples/03_agent_with_mongodb.py` abre la CLI
+con memoria, knowledge y cuotas en MongoDB y trazas en Langfuse:
+
+```bash
+docker compose up -d --wait mongodb mongo-express
+docker compose --profile observability up -d --wait
+cd .. && .venv/bin/python -m examples.03_agent_with_mongodb
+```
+
+Si ejecutas este ejemplo desde un devcontainer, usa primero la conexión a la
+red y `MONGODB_URI` de la sección anterior; el valor por defecto del ejemplo
+apunta a `localhost` y no llega al MongoDB de Compose desde otro contenedor.
+
+Los datos se ven en Mongo Express (http://localhost:8081, usuario `maxai`,
+contraseña `maxai-local-ui`) y las trazas en Langfuse (http://localhost:3000).

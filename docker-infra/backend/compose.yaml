@@ -25,7 +25,7 @@ services:
       start_period: 30s
 
   mongo-express:
-    image: ${MONGO_EXPRESS_IMAGE:-mongo-express:1.0.2-20-alpine}
+    image: ${MONGO_EXPRESS_IMAGE:-mongo-express:1.0.2-20-alpine3.19}
     restart: unless-stopped
     depends_on:
       mongodb:

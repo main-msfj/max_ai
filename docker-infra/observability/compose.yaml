@@ -131,6 +131,7 @@ services:
       MINIO_ROOT_PASSWORD: ${LANGFUSE_MINIO_PASSWORD:-maxai-local-dev}
     ports:
       - "127.0.0.1:${LANGFUSE_MINIO_PORT:-9090}:9000"
+      - "127.0.0.1:${LANGFUSE_MINIO_CONSOLE_PORT:-9091}:9001"
     volumes:
       - langfuse-minio-data:/data
     networks: [observability]

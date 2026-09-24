@@ -7,8 +7,10 @@ import os
 import uuid
 
 import pytest
+from pydantic import BaseModel
 
 from max_ai.agents import Agent
+from max_ai.base.embedding import CoreEmbedding
 from max_ai.capabilities.middleware import BudgetMiddleware
 from max_ai.capabilities.quota_store.mongodb import MongoDBQuotaStore
 from max_ai.capabilities.workspace.local import LocalWorkspace
@@ -17,6 +19,32 @@ from max_ai.core.model.llm import ModelConfig
 from max_ai.core.model.quota import QuotaLimits, QuotaUsage
 from max_ai.types.completions import ChatCompletionResult, Usage
 from max_ai.types.run_context import RunContext
+
+
+class NoConfig(BaseModel):
+    pass
+
+
+class WordsEmbedding(CoreEmbedding):
+    """One dimension per known word: enough to test ranking without a model."""
+
+    component_schema = NoConfig
+    words = ["refund", "money", "shipping", "days"]
+
+    @property
+    def model_id(self) -> str:
+        return "words"
+
+    def _to_config(self) -> NoConfig:
+        return NoConfig()
+
+    @classmethod
+    def _from_config(cls, config: NoConfig) -> "WordsEmbedding":
+        return cls()
+
+    async def _embed(self, texts):
+        return [[float(w in t.lower()) for w in self.words] for t in texts]
+
 
 pytestmark = pytest.mark.skipif(not os.getenv("MONGODB_URI"), reason="needs MONGODB_URI")
 
@@ -65,3 +93,19 @@ async def test_a_quota_in_mongodb_stops_new_agent_instances(tmp_path, collection
     assert finish == ["stop", "stop", "budget_exceeded"]
     await store._collection.drop()
     await store.disconnect()
+
+
+async def test_knowledge_in_mongodb_searches_by_meaning(collection):
+    from max_ai.capabilities.knowledge.mongodb import MongoDBKnowledgeRegistry
+    from max_ai.core import KnowledgeBlock
+
+    knowledge = MongoDBKnowledgeRegistry(name="shop", description="d", collection=collection,
+                                         embedding=WordsEmbedding())
+    await knowledge.upsert_block("refunds", KnowledgeBlock(content="Refunds within 30 days"))
+    await knowledge.upsert_block("shipping", KnowledgeBlock(content="Shipping takes 3 days"))
+    found = await knowledge.search("how do I get my money back? refund", limit=1)
+    assert [b.content for b in found] == ["Refunds within 30 days"]
+    stored = await knowledge._collection.find_one({"block_id": "refunds"})
+    assert stored["vector"] and stored["model_id"] == "words"
+    await knowledge._collection.drop()
+    await knowledge.disconnect()

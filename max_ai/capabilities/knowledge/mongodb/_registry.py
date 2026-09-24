@@ -6,8 +6,11 @@ import asyncio
 import os
 from typing import Any
 
+from ....base.embedding import CoreEmbedding
 from ....base.knowledge import CoreKnowledgeRegistry, KnowledgeToolMode
 from ....core import KnowledgeBlock
+from ....core.embeddings import rank
+from ...mongodb_vector import MongoVectorIndex
 from ._model import MongoDBKnowledgeRegistryConfig
 
 
@@ -28,23 +31,31 @@ class MongoDBKnowledgeRegistry(CoreKnowledgeRegistry):
         collection: str = "knowledge",
         uri_env: str = "MONGODB_URI",
         server_selection_timeout_ms: int = 5000,
+        embedding: CoreEmbedding | None = None,
+        min_score: float = 0.2,
     ) -> None:
         super().__init__(name, description, tool_mode)
         self._mongo_config = MongoDBKnowledgeRegistryConfig(
             name=self.name, description=self.description, tool_mode=tool_mode,
             database=database, collection=collection, uri_env=uri_env,
-            server_selection_timeout_ms=server_selection_timeout_ms,
+            server_selection_timeout_ms=server_selection_timeout_ms, min_score=min_score,
         )
+        # With an embedding: vectors stored with each block, search by meaning
+        # ($vectorSearch when the server has it, else ranked in Python).
+        self.embedding = embedding
+        self._vector_index = MongoVectorIndex(f"{collection}_vector", ["source", "model_id"])
         self._mongo_lock = asyncio.Lock()
         self._mongo_client: Any = None
         self._collection: Any = None
 
     def _to_config(self) -> MongoDBKnowledgeRegistryConfig:
-        return self._mongo_config.model_copy(deep=True)
+        embedding = self.embedding.serialize().model_dump(exclude_none=True) if self.embedding else None
+        return self._mongo_config.model_copy(update={"embedding": embedding}, deep=True)
 
     @classmethod
     def _from_config(cls, config: MongoDBKnowledgeRegistryConfig) -> "MongoDBKnowledgeRegistry":
-        return cls(**config.model_dump())
+        embedding = CoreEmbedding.deserialize(config.embedding) if config.embedding else None
+        return cls(**config.model_dump(exclude={"embedding"}), embedding=embedding)
 
     # -------- CONNECTION -----------------------------------------------------------
     async def connect(self) -> None:
@@ -103,6 +114,8 @@ class MongoDBKnowledgeRegistry(CoreKnowledgeRegistry):
         if not isinstance(query, str) or not query.strip():
             return []
         await self._ensure_connected()
+        if self.embedding is not None:
+            return await self._search_by_meaning(query, limit)
         cursor = self._collection.find(
             {"source": self.name, "$text": {"$search": query.strip()}},
             {"_id": 0, "content": 1, "tokens": 1, "metadata": 1,
@@ -110,6 +123,46 @@ class MongoDBKnowledgeRegistry(CoreKnowledgeRegistry):
             collation={"locale": "simple"},
         ).sort([("score", {"$meta": "textScore"}), ("block_id", 1)]).limit(limit)
         return [KnowledgeBlock.model_validate(doc) async for doc in cursor]
+
+    # Without a vector index, at most this many blocks are ranked in Python.
+    max_candidates: int = 5000
+
+    async def _search_by_meaning(self, query: str, limit: int) -> list[KnowledgeBlock]:
+        assert self.embedding is not None
+        await self._embed_missing()
+        model_id = self.embedding.model_id
+        query_vector = await self.embedding.embed_one(query)
+        fields = {"content": 1, "tokens": 1, "metadata": 1}
+        min_score = self._mongo_config.min_score
+        found = await self._vector_index.search(
+            self._collection, query_vector, filter={"source": self.name, "model_id": model_id},
+            limit=limit, min_score=min_score, projection=fields,
+        )
+        if found is None:  # no vector index here: rank in Python
+            cursor = self._collection.find(
+                {"source": self.name, "model_id": model_id}, {**fields, "vector": 1, "_id": 0},
+            ).limit(self.max_candidates)
+            docs = [doc async for doc in cursor]
+            ranked = rank(query_vector, docs, [d["vector"] for d in docs], limit=limit, min_score=min_score)
+            found = [doc for _, doc in ranked]
+        return [KnowledgeBlock(content=d["content"], tokens=d.get("tokens", 0),
+                               metadata=d.get("metadata", {})) for d in found]
+
+    async def _embed_missing(self) -> None:
+        """Blocks written before the embedding (or with another model) get
+        their vector once, and keep it."""
+        assert self.embedding is not None
+        model_id = self.embedding.model_id
+        cursor = self._collection.find(
+            {"source": self.name, "$or": [{"model_id": {"$ne": model_id}}, {"vector": {"$exists": False}}]},
+            {"_id": 0, "block_id": 1, "content": 1},
+        )
+        stale = [doc async for doc in cursor]
+        for doc, vector in zip(stale, await self.embedding.embed([d["content"] for d in stale])):
+            await self._collection.update_one(
+                {"source": self.name, "block_id": doc["block_id"]},
+                {"$set": {"vector": vector, "model_id": model_id}},
+            )
 
     # -------- INGESTION (application API, not an agent tool) -----------------------------
     @staticmethod
@@ -126,7 +179,11 @@ class MongoDBKnowledgeRegistry(CoreKnowledgeRegistry):
         if not isinstance(block, KnowledgeBlock):
             raise TypeError("block must be a KnowledgeBlock")
         await self._ensure_connected()
-        fields = {"$set": block.model_dump()}
+        document = block.model_dump()
+        if self.embedding is not None:
+            document["vector"] = await self.embedding.embed_one(block.content)
+            document["model_id"] = self.embedding.model_id
+        fields = {"$set": document}
         try:
             result = await self._collection.update_one(
                 identity, fields, upsert=True, collation={"locale": "simple"},

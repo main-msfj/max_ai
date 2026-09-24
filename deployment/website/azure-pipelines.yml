@@ -4,6 +4,10 @@ trigger:
   branches:
     include:
       - main
+  paths:
+    include:
+      - website/**
+      - deployment/website/**
 
 parameters:
   - name: appLocation

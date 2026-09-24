@@ -6,6 +6,18 @@
     },
     "workspaceFolder": "/max_ai",
     "workspaceMount": "source=${localWorkspaceFolder},target=/max_ai,type=bind,consistency=cached",
+    "forwardPorts": [
+        8081,
+        3000,
+        "langfuse-minio:9001",
+        "ollama:11434"
+    ],
+    "portsAttributes": {
+        "8081": { "label": "Mongo Express" },
+        "3000": { "label": "Langfuse" },
+        "langfuse-minio:9001": { "label": "MinIO Console" },
+        "ollama:11434": { "label": "Ollama API" }
+    },
     "runArgs": [
         "--network=llm-vnet",
         "--gpus=all",
