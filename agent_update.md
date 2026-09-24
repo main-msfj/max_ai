@@ -2973,3 +2973,16 @@ JSON Schema (punto 4), test con MCP real.
 - Tests: tests/test_runtime_settings.py (2).
 
 Pendiente para la próxima sesión: `TracingMiddleware` con spans de OpenTelemetry (convenciones GenAI), probado con Langfuse como backend (OTLP). Después: CoreEmbedding en core/embeddings, archivo/búsqueda de conversaciones en el session store.
+
+## Trazas: TracingMiddleware (OpenTelemetry) + Langfuse
+- `capabilities/middleware/tracing.py`: `TracingMiddleware(capture_content=True, max_content_chars=20000, tracer_provider=None)`. Una traza por run: `invoke_agent <agent>` (user.id, session.id, input/output, finish_reason, tokens) con hijos `chat <model>` (tokens, finish_reasons, costo si hay precios, input/output) y `execute_tool <name>` (argumentos, resultado, error). Atributos `gen_ai.*` (convenciones GenAI de OTel) + `langfuse.*` (tipo agent/generation/tool, trace input/output, cost_details, level). Sin provider configurado los spans son no-op.
+- Los spans vivos no van al RunContext: quedan en memoria por run_id y terminan con el run. Una pausa cierra la traza; la reanudación abre otra con el mismo session.id.
+- Nuevo hook `on_run_error(mw, error)`: el Agent lo llama si el run se cae o se cancela (antes el span quedaba abierto y el error no aparecía). La cadena lo entrega a todos aunque alguno falle.
+- `configure_langfuse()`: TracerProvider + BatchSpanProcessor + OTLP/HTTP a `{LANGFUSE_HOST}/api/public/otel/v1/traces` con Basic auth desde LANGFUSE_PUBLIC_KEY/SECRET_KEY. Devuelve el provider: `force_flush()` antes de que termine una Lambda, `shutdown()` al salir.
+- Ejemplos 01/02: si hay LANGFUSE_PUBLIC_KEY, activan el tracing solos.
+- Tests: tests/middleware/test_tracing.py (5). Prueba real con gpt-5.6-luna (exporter en memoria): árbol correcto. Pendiente: probar contra Langfuse real (faltan las claves en .env).
+
+## Langfuse en Docker (probado de punta a punta)
+- `docker-infra/observability/compose.yaml` (incluido en compose.yaml, perfil `observability`): Langfuse v4 (web + worker) con Postgres 17, ClickHouse 25.12, Redis 7 y MinIO, basado en el compose oficial. El primer arranque crea org `MaxAI`, proyecto `max_ai`, claves `pk-lf-maxai-local`/`sk-lf-maxai-local` y el usuario de la UI (admin@maxai.local / maxai-local-ui). Solo UI (3000) y MinIO (9090) publicados en 127.0.0.1. Documentado en docker-infra/README.md; variables en .env.example.
+- Prueba real (gpt-5.6-luna → configure_langfuse → Langfuse 4.43 local): Langfuse reconoce AGENT/GENERATION/TOOL, usuario, sesión, input/output, tokens y costo (desde los precios del ModelConfig). Lectura por `GET /api/public/v2/observations` (en v4 `/api/public/traces` ya no existe).
+- TracingMiddleware: `user.id`/`session.id` ahora también en los spans hijos (Langfuse v4 filtra por observación).

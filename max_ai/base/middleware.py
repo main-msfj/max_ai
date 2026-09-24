@@ -9,7 +9,7 @@ responses in reverse, like layers of an onion::
                   │                              (on_model_error if it fails)
                   ├─ on_tool_request  → tool  → on_tool_response
                   ├─ on_final_response        (the answer the gates accepted)
-    on_run_end ───┘
+    on_run_end ───┘   (on_run_error instead if the run crashes or is cancelled)
 
 Differences with the other extension points: EventBus handlers only
 observe, completion gates decide whether a turn is done, middleware can
@@ -132,6 +132,9 @@ class CoreMiddleware(ComponentBase[MiddlewareConfig]):
 
     async def on_run_end(self, mw: MiddlewareContext, response: AgentResponse) -> None:
         """The run ended (finished, paused or stopped)."""
+
+    async def on_run_error(self, mw: MiddlewareContext, error: BaseException) -> None:
+        """The run crashed or was cancelled; the error is raised after this."""
 
     # -------- MODEL -----------------------------------------------------------
     async def on_model_request(self, mw: MiddlewareContext, request: ModelRequest) -> ModelRequest:

@@ -154,3 +154,36 @@ principal para mantener el mismo proyecto y los mismos volúmenes.
 - [Mongo Express](https://github.com/mongo-express/mongo-express-docker)
 - [DuckDuckGo en el catálogo MCP](https://hub.docker.com/mcp/server/duckduckgo/overview)
 - [Dockerfile de DuckDuckGo: transporte stdio](https://github.com/nickclyde/duckduckgo-mcp-server/blob/8992977d65a086995c82826ceead42e890aa17c1/Dockerfile)
+
+## Observabilidad: Langfuse
+
+Langfuse recibe las trazas de `TracingMiddleware` (OpenTelemetry) y las muestra
+en su UI. Son seis contenedores (web, worker, Postgres, ClickHouse, Redis y
+MinIO), por eso van en el perfil `observability` y no arrancan con el `up`
+normal:
+
+```bash
+docker compose --profile observability up -d --wait
+```
+
+- UI: http://localhost:3000 — usuario `admin@maxai.local`, contraseña `maxai-local-ui`.
+- El primer arranque crea la organización `MaxAI`, el proyecto `max_ai` y sus
+  claves (`pk-lf-maxai-local` / `sk-lf-maxai-local`). Cambiarlas en `.env`
+  después no cambia las ya creadas.
+- Solo la UI (3000) y MinIO (9090, para archivos adjuntos) se publican, en
+  `127.0.0.1`. Postgres, ClickHouse y Redis quedan dentro de la red `observability`.
+
+Para enviar trazas desde el agente, en el `.env` de la raíz del repositorio:
+
+```text
+LANGFUSE_HOST=http://localhost:3000
+LANGFUSE_PUBLIC_KEY=pk-lf-maxai-local
+LANGFUSE_SECRET_KEY=sk-lf-maxai-local
+```
+
+Con esas variables, `examples/01_agent_with_openai.py` y `02_...` activan el
+tracing solos. En código: `provider = configure_langfuse()` y
+`Agent(..., middlewares=[TracingMiddleware()])`.
+
+Para detenerlo: `docker compose --profile observability down` (agrega `-v` para
+borrar también las trazas guardadas).

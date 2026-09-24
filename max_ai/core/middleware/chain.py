@@ -35,6 +35,14 @@ class MiddlewareChain:
         for middleware in reversed(self.middlewares):
             await middleware.on_run_end(mw, response)
 
+    async def run_error(self, mw: MiddlewareContext, error: BaseException) -> None:
+        """Every middleware hears about it; one failing doesn't hide the error."""
+        for middleware in reversed(self.middlewares):
+            try:
+                await middleware.on_run_error(mw, error)
+            except Exception:  # noqa: BLE001 - the run's own error must win
+                continue
+
     async def final_response(
         self,
         mw: MiddlewareContext,

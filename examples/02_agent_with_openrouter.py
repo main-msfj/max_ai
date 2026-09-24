@@ -36,6 +36,7 @@ from max_ai.capabilities.memory.local import LocalMemoryRegistry
 from max_ai.capabilities.session_store import LocalSessionStore
 from max_ai.capabilities.skills.local import LocalSkillRegistry
 from max_ai.capabilities.tools.function_as_tool import FunctionAsTool
+from max_ai.capabilities.middleware import TracingMiddleware, configure_langfuse
 from max_ai.cli import run_cli
 from max_ai.core.model.llm import ModelConfig
 from max_ai.types.tools import ToolApprovalMode
@@ -67,6 +68,7 @@ async def main() -> None:
             max_context_window=int(os.getenv("MAX_CONTEXT_WINDOW") or 0),
         ),
     )
+    tracing = configure_langfuse() if os.getenv("LANGFUSE_PUBLIC_KEY") else None
     # COMPACTION_THRESHOLD=0.05 compacts at ~5% of the window, to watch it happen.
     threshold = float(os.getenv("COMPACTION_THRESHOLD") or 0.8)
 
@@ -91,6 +93,8 @@ async def main() -> None:
         ],
         skills=LocalSkillRegistry(source=EXAMPLES_DIR / "LocalSkills", skills=["create-report", "create-ppt"]),
         compaction=SummaryCompaction(threshold=threshold, keep_ratio=threshold / 2),
+        # With LANGFUSE_PUBLIC_KEY/SECRET_KEY set, every turn is a trace in Langfuse.
+        middlewares=[TracingMiddleware()] if tracing else [],
     )
 
     try:
@@ -103,6 +107,8 @@ async def main() -> None:
             )
     finally:
         await client.client.close()
+        if tracing:
+            tracing.shutdown()  # sends the spans still buffered
 
 
 if __name__ == "__main__":

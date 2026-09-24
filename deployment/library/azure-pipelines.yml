@@ -1,0 +1,49 @@
+# Azure DevOps pipeline for building and publishing this Python library.
+# Publishing is triggered by version tags such as v0.1.1.
+trigger:
+  tags:
+    include:
+      - v*
+
+parameters:
+  - name: pythonVersion
+    displayName: Python version
+    type: string
+    default: '3.11'
+  - name: packagePath
+    displayName: Directory containing pyproject.toml
+    type: string
+    default: '.'
+  - name: artifactFeed
+    displayName: Azure Artifacts feed (PROJECT/FEED or organization-scoped FEED)
+    type: string
+    default: YOUR_PROJECT/YOUR_FEED
+  - name: twineRepository
+    displayName: Feed name used by twine -r
+    type: string
+    default: YOUR_FEED
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - task: UsePythonVersion@0
+    displayName: Use Python ${{ parameters.pythonVersion }}
+    inputs:
+      versionSpec: ${{ parameters.pythonVersion }}
+
+  - script: python -m pip install --upgrade build twine
+    displayName: Install Python packaging tools
+
+  - script: python -m build --outdir "$(Build.ArtifactStagingDirectory)/dist" "${{ parameters.packagePath }}"
+    displayName: Build source and wheel distributions
+
+  - task: TwineAuthenticate@1
+    displayName: Authenticate with Azure Artifacts
+    inputs:
+      artifactFeed: ${{ parameters.artifactFeed }}
+
+  - script: python -m twine upload -r "${{ parameters.twineRepository }}" --config-file "$(PYPIRC_PATH)" "$(Build.ArtifactStagingDirectory)/dist"/*
+    displayName: Publish package to Azure Artifacts

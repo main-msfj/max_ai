@@ -501,6 +501,10 @@ class Agent(ComponentBase[AgentSpec]):
             stopped = stop
             known = get_args(FinishReason)
             loop_state.finish_reason = stop.finish_reason if stop.finish_reason in known else "stopped"
+        except BaseException as error:
+            # Crash or cancel: middlewares still close what they opened.
+            await self._middleware.run_error(mw, error)
+            raise
         duration_ms = pending.get("duration_ms", 0) + int(
             (time.monotonic() - started) * 1000
         )
