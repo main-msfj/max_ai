@@ -41,6 +41,14 @@ class AgentError(Exception):
         )
 
     @classmethod
+    def unanswered_user_input(cls, agent_name: str, tool_call_ids: list[str]) -> t.Self:
+        return cls(
+            f"Agent {agent_name!r} cannot resume: {len(tool_call_ids)} question(s) "
+            f"still awaiting a user answer ({tool_call_ids}). Apply answers via "
+            "ctx.tool_state.apply_user_answer() before calling resume()."
+        )
+
+    @classmethod
     def nothing_to_resume(cls, agent_name: str) -> t.Self:
         return cls(
             f"Agent {agent_name!r} cannot resume: no actionable tool calls and no "

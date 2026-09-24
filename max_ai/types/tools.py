@@ -1,15 +1,16 @@
 import typing as t
 from enum import Enum
 from pathlib import Path
+
 from pydantic import BaseModel, Field
 
 
 # -------- TOOLS BASE MODEL -----------------------------------------------------------
 class RuntimeDirs(t.NamedTuple):
     root: Path
-    tools: Path
     skills: Path
-    artifacts: Path
+    scratch: Path
+    cwd: Path
 
 
 class ToolApprovalMode(str, Enum):
@@ -55,10 +56,3 @@ class DockerToolRef(BaseModel):
         default_factory=dict,
         description="JSON-serializable constructor configuration for class-based tools.",
     )
-
-class AgentAsToolConfig(BaseModel):
-    """Serializable configuration for an agent wrapped as a tool."""
-
-    agent: dict[str, t.Any]
-    input_name: str = "task"
-    strategy: str = "last"

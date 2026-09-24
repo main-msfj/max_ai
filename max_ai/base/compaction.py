@@ -1,235 +1,155 @@
-"""Core contract and helpers for context compaction strategies."""
+"""The compaction contract. Shared machinery lives in ``core.compaction``."""
 
 from __future__ import annotations
 
-import json
+import copy
 import logging
 import typing as t
 from abc import ABC, abstractmethod
 
-import tiktoken
-from pydantic import BaseModel, Field, PrivateAttr
+from pydantic import BaseModel, JsonValue
+from pydantic_core import from_json
 
-from ..config import setting
-from ..core.compaction import CompactionResult, MessageGroup
-from ..core.messages import AssistantMessage, CoreMessage, ToolMessage
+from ..core.compaction import (
+    CompactionConfig,
+    CompactionResult,
+    MemoryMaintenanceOutput,
+    MessageGroup,
+    TokenCounter,
+    client_max_output_tokens,
+    current_turn_start,
+    group_atomic_messages,
+    live_message_budget_tokens,
+    live_message_capacity_tokens,
+    live_message_threshold_tokens,
+)
+from ..core.messages import (
+    HARNESS_SOURCE,
+    AssistantMessage,
+    CoreMessage,
+    ToolMessage,
+    UserMessage,
+)
+from ..errors.compaction import CompactionError
+from ..types.run_context import RunContext
+from ..types.stacks import PromptCtx
+from .component import ComponentBase
 
 if t.TYPE_CHECKING:
     from .clients import CoreChatCompletionClient
-    from ..types.run_context import RunContext
-    from ..types.stacks import PromptCtx
-
+    from .memory import CoreMemoryRegistry
 
 logger = logging.getLogger(__name__)
+OutputT = t.TypeVar("OutputT", bound=BaseModel)
+
+MEMORY_TASK = (
+    "Some messages are leaving the conversation window. Extract the durable "
+    "facts worth remembering in later conversations: who the user is, their "
+    "preferences, projects, decisions and personal details. Skip one-off task "
+    "chatter. Existing memories are below as `category: content`. For each "
+    "category you create or change, return its COMPLETE new content (it "
+    "replaces the old one), merging what was there. Reuse existing categories "
+    "when they fit. Return an empty list when there is nothing new.\n\n"
+    "Existing memories:\n{existing}\n\n"
+    "Messages leaving the window:\n{transcript}"
+)
 
 
-class TokenCounter(BaseModel):
-    """Token counting helper used by compaction and telemetry."""
+class CoreCompaction(ComponentBase[CompactionConfig], ABC):
+    """Base for strategies that keep a run within its context window.
 
-    tokenizer_base: str = "o200k_base"
-    message_overhead_tokens: int = Field(default=5, ge=0)
+    ``compact`` is concrete and owned by the harness: it groups messages into
+    atomic blocks, runs the cheap prune pass, calls the strategy only when
+    still over budget, validates the output and updates memory. Strategies
+    implement ``_compact`` and never see ``RunContext``.
 
-    _encoder: t.Any = PrivateAttr(default=None)
+    Contract: ``compact`` never mutates ``ctx``. The caller (the reasoning
+    loop) applies ``result.messages`` and ``result.state``.
+    """
 
-    def model_post_init(self, __context: t.Any) -> None:
-        try:
-            self._encoder = tiktoken.get_encoding(self.tokenizer_base)
-        except Exception:
-            logger.warning(
-                "Tokenizer %r not found; falling back to o200k_base",
-                self.tokenizer_base,
-            )
-            self._encoder = tiktoken.get_encoding("o200k_base")
+    component_type = "compaction"
+    component_schema = CompactionConfig
 
-    def count_text(self, text: str) -> int:
-        if not text:
-            return 0
-        return len(self._encoder.encode(text))
+    def __init__(
+        self,
+        *,
+        threshold: float = 0.8,
+        keep_ratio: float = 0.4,
+        min_keep_groups: int = 2,
+        truncate_tool_outputs: bool = True,
+        tool_output_max_tokens: int = 500,
+        drop_harness_messages: bool = True,
+        update_memory: bool = True,
+        memory_max_tokens: int = 1000,
+        client: CoreChatCompletionClient | None = None,
+        token_counter: TokenCounter | None = None,
+    ) -> None:
+        # Validated through the config so bad values fail at construction.
+        """
+        Initialize the compaction strategy and its shared runtime options.
 
-    def count_message(self, message: CoreMessage) -> int:
-        if message.token_count > 0:
-            return message.token_count
-
-        if isinstance(message, ToolMessage):
-            return self.count_serialized(message)
-
-        if isinstance(message, AssistantMessage) and message.tool_calls:
-            return self.count_serialized(message)
-
-        if message.is_multimodal():
-            return self.count_text(self._message_budget_payload(message))
-
-        return self.count_text(message.text()) + self.message_overhead_tokens
-
-    def count_messages(self, messages: list[CoreMessage]) -> int:
-        return sum(self.count_message(message) for message in messages)
-
-    def count_serialized(self, value: t.Any) -> int:
-        if isinstance(value, BaseModel):
-            return self.count_text(value.model_dump_json(exclude_none=True))
-
-        try:
-            text = json.dumps(value, ensure_ascii=False, default=str)
-        except TypeError:
-            text = str(value)
-
-        return self.count_text(text)
-
-    def _message_budget_payload(self, message: CoreMessage) -> str:
-        data = message.model_dump(exclude_none=True)
-
-        content = data.get("content")
-        if isinstance(content, list):
-            for part in content:
-                if isinstance(part, dict) and part.get("data") is not None:
-                    part_type = part.get("type", "binary")
-                    part["data"] = f"<{part_type}_bytes>"
-
-        return json.dumps(data, ensure_ascii=False, default=str)
-
-
-def client_max_output_tokens(client: t.Any) -> int:
-    options = getattr(client, "generation_options", None)
-    if isinstance(options, dict) and options.get("max_tokens") is not None:
-        return int(options["max_tokens"])
-
-    config = getattr(client, "config", None)
-    max_output = getattr(config, "max_output_tokens", 0) or 0
-    if max_output:
-        return int(max_output)
-
-    return setting.compaction_min_output_tokens
-
-
-def live_message_capacity_tokens(
-    max_context_tokens: int,
-    *,
-    max_output_tokens: int,
-) -> int:
-    if max_context_tokens <= 0:
-        return 0
-
-    safety_margin = int(max_context_tokens * setting.compaction_safety_margin_ratio)
-    live_tokens = (
-        max_context_tokens
-        - setting.compaction_prompt_budget_tokens
-        - max_output_tokens
-        - safety_margin
-    )
-    return max(0, live_tokens)
-
-
-def live_message_threshold_tokens(
-    max_context_tokens: int,
-    *,
-    max_output_tokens: int,
-) -> int:
-    capacity = live_message_capacity_tokens(
-        max_context_tokens,
-        max_output_tokens=max_output_tokens,
-    )
-    if capacity <= 0:
-        return 0
-    return max(1, int(capacity * setting.compaction_live_message_threshold))
-
-
-def live_message_budget_tokens(capacity_tokens: int) -> int:
-    if capacity_tokens <= 0:
-        return 0
-    return max(1, int(capacity_tokens * setting.compaction_live_message_keep_ratio))
-
-
-def group_atomic_messages(
-    messages: list[CoreMessage],
-    counter: TokenCounter,
-) -> list[MessageGroup]:
-    """Group messages without splitting assistant tool calls from tool results."""
-
-    groups: list[MessageGroup] = []
-    i = 0
-
-    while i < len(messages):
-        message = messages[i]
-
-        if isinstance(message, AssistantMessage) and message.tool_calls:
-            expected_tool_ids = {tool_call.id for tool_call in message.tool_calls}
-            group_messages: list[CoreMessage] = [message]
-            i += 1
-
-            while i < len(messages):
-                next_message = messages[i]
-                if (
-                    isinstance(next_message, ToolMessage)
-                    and next_message.tool_call_id in expected_tool_ids
-                ):
-                    group_messages.append(next_message)
-                    i += 1
-                    continue
-
-                break
-
-            groups.append(
-                MessageGroup(
-                    messages=group_messages,
-                    token_count=counter.count_messages(group_messages),
-                )
-            )
-            continue
-
-        groups.append(
-            MessageGroup(
-                messages=[message],
-                token_count=counter.count_message(message),
-            )
+        Parameters
+        ----------
+        threshold : float, default=0.8
+            Fraction of the context budget that triggers compaction.
+        keep_ratio : float, default=0.4
+            Fraction of the budget retained after compaction.
+        min_keep_groups : int, default=2
+            Minimum number of recent message groups to retain.
+        truncate_tool_outputs : bool, default=True
+            Controls whether the corresponding compaction operation is enabled.
+        tool_output_max_tokens : int, default=500
+            Controls whether the corresponding compaction operation is enabled.
+        drop_harness_messages : bool, default=True
+            Controls whether the corresponding compaction operation is enabled.
+        update_memory : bool, default=True
+            Controls whether the corresponding compaction operation is enabled.
+        memory_max_tokens : int, default=1000
+            Controls whether the corresponding compaction operation is enabled.
+        client : CoreChatCompletionClient | None, default=None
+            Model client used by the operation.
+        token_counter : TokenCounter | None, default=None
+            Token counter used to measure messages.
+        """
+        self.config = CompactionConfig(
+            threshold=threshold,
+            keep_ratio=keep_ratio,
+            min_keep_groups=min_keep_groups,
+            truncate_tool_outputs=truncate_tool_outputs,
+            tool_output_max_tokens=tool_output_max_tokens,
+            drop_harness_messages=drop_harness_messages,
+            update_memory=update_memory,
+            memory_max_tokens=memory_max_tokens,
         )
-        i += 1
+        self.client = client
+        self.token_counter = token_counter or TokenCounter()
 
-    return groups
+    # -------- HARNESS (not overridden) ------------------------------------------------
+    def should_compact(
+        self,
+        ctx: RunContext,
+        prompts: PromptCtx,
+        max_context_tokens: int,
+        max_output_tokens: int,
+    ) -> bool:
+        """Cheap check the loop runs before every model call.
 
+        Delegates to ``_over_limit``, which strategies override (e.g. more
+        than N turns). Pending tool calls are not checked here but in
+        ``compact``, which is never overridden, so no strategy can skip it.
+        """
+        threshold = live_message_threshold_tokens(
+            max_context_tokens,
+            max_output_tokens=max_output_tokens,
+            prompt_tokens=prompts.prompt_tokens or None,
+            ratio=self.config.threshold,
+        )
+        blocks = group_atomic_messages(ctx.messages, self.token_counter)
+        # The history is sent to the model too, so it counts against the window.
+        live = self.token_counter.count_messages(ctx.message_history.iter_messages())
+        live += sum(block.token_count for block in blocks)
+        return self._over_limit(blocks, live_tokens=live, threshold=threshold)
 
-def split_recent_messages(
-    groups: list[MessageGroup],
-    *,
-    max_tokens: int,
-) -> tuple[list[CoreMessage], list[CoreMessage]]:
-    """Split atomic groups into old messages and newest messages within budget."""
-
-    if not groups:
-        return [], []
-
-    kept_groups: list[MessageGroup] = []
-    used_tokens = 0
-
-    for group in reversed(groups):
-        next_total = used_tokens + group.token_count
-
-        if next_total > max_tokens and kept_groups:
-            break
-
-        kept_groups.append(group)
-        used_tokens = next_total
-
-        if used_tokens >= max_tokens:
-            break
-
-    kept_groups.reverse()
-    kept_group_ids = {id(group) for group in kept_groups}
-
-    old_messages = [
-        message
-        for group in groups
-        if id(group) not in kept_group_ids
-        for message in group.messages
-    ]
-    recent_messages = [message for group in kept_groups for message in group.messages]
-
-    return old_messages, recent_messages
-
-
-class CoreCompaction(BaseModel, ABC):
-    """Abstract base for strategies that keep a run within context budget."""
-
-    @abstractmethod
     async def compact(
         self,
         *,
@@ -237,19 +157,314 @@ class CoreCompaction(BaseModel, ABC):
         prompts: PromptCtx,
         max_context_tokens: int,
         client: CoreChatCompletionClient,
+        memory: CoreMemoryRegistry | None = None,
     ) -> CompactionResult:
-        """Apply compaction to the provided runtime context."""
-        ...
+        """Run the full pipeline. Never mutates ``ctx``.
+
+        ``client`` is the agent's: it sizes the reserved output. Summaries and
+        memory use ``self.client`` when set. With tool calls still pending
+        (approval, ask_user) nothing is touched: their blocks aren't closed.
+        """
+        count = self.token_counter.count_messages
+        history = count(ctx.message_history.iter_messages())
+        before = history + count(ctx.messages)
+        unchanged = CompactionResult(
+            messages=list(ctx.messages),
+            state=copy.deepcopy(ctx.compaction.state),
+            tokens_before=before,
+            tokens_after=before,
+        )
+        if any(not record.is_consumed for record in ctx.tool_state.records.values()):
+            return unchanged
+
+        max_output = client_max_output_tokens(client)
+        prompt_tokens = prompts.prompt_tokens or None
+        capacity = live_message_capacity_tokens(
+            max_context_tokens, max_output_tokens=max_output, prompt_tokens=prompt_tokens,
+        )
+        threshold = live_message_threshold_tokens(
+            max_context_tokens, max_output_tokens=max_output,
+            prompt_tokens=prompt_tokens, ratio=self.config.threshold,
+        )
+        # The history also takes window space; strategies only see messages.
+        budget = max(0, live_message_budget_tokens(capacity, ratio=self.config.keep_ratio) - history)
+
+        blocks = group_atomic_messages(ctx.messages, self.token_counter)
+        blocks = self._prune(blocks, current_turn_start=current_turn_start(blocks))
+        pruned = [message for block in blocks for message in block.messages]
+        pruned_tokens = history + count(pruned)
+        if not self._over_limit(blocks, live_tokens=pruned_tokens, threshold=threshold):
+            return unchanged.model_copy(update={
+                "changed": pruned != ctx.messages,
+                "messages": pruned,
+                "tokens_after": pruned_tokens,
+                "pruned_only": True,
+            })
+
+        strategy_client = self.client or client
+        result = await self._compact(
+            blocks,
+            state=copy.deepcopy(ctx.compaction.state),
+            budget_tokens=budget,
+            client=strategy_client,
+        )
+        self._validate(result.messages)
+
+        if memory is not None and self.config.update_memory and result.old_messages:
+            try:
+                await self._update_memory(
+                    result.old_messages, memory=memory, client=strategy_client,
+                )
+            except Exception:
+                logger.exception("Memory update during compaction failed; continuing")
+
+        return result.model_copy(update={
+            "changed": result.changed or result.messages != ctx.messages,
+            "tokens_before": before,
+            "tokens_after": history + count(result.messages),
+        })
+
+    # -------- STRATEGY ---------------------------------------------------------------
+    @abstractmethod
+    async def _compact(
+        self,
+        blocks: list[MessageGroup],
+        *,
+        state: dict[str, JsonValue],
+        budget_tokens: int,
+        client: CoreChatCompletionClient,
+    ) -> CompactionResult:
+        """Strategy hook. Receives whole blocks only, so it cannot split a
+        tool call from its results. Returns the new window in ``messages``,
+        what left it in ``old_messages`` and its new ``state``."""
+
+    def _over_limit(
+        self, blocks: list[MessageGroup], *, live_tokens: int, threshold: int,
+    ) -> bool:
+        """Whether the window needs compacting. Asked before compacting and
+        again after the prune pass (if pruning was enough, ``_compact`` is
+        skipped). Default: live tokens (history included) over the
+        threshold; ``threshold`` is 0 when the model window is unknown.
+        """
+        return threshold > 0 and live_tokens > threshold
+
+    def render(self, state: dict[str, JsonValue]) -> str | None:
+        """What the model sees of the compacted past (a system prompt block).
+        Default: nothing. Summary strategies return their summary."""
+        return None
+
+    # -------- OVERRIDABLE STEPS ---------------------------------------------------------
+    def _prune(
+        self,
+        blocks: list[MessageGroup],
+        *,
+        current_turn_start: int,
+    ) -> list[MessageGroup]:
+        """Cheap, LLM-free cleanup of blocks older than the ``min_keep_groups``
+        newest. Returns NEW blocks; never edits the original messages.
+
+        - ``drop_harness_messages``: harness messages from previous turns.
+        - ``truncate_tool_outputs``: shrink old tool results and arguments,
+          keeping ids and structure, leaving a hint (size, status, first lines).
+
+        ``current_turn_start`` is a block index (see
+        ``core.compaction.current_turn_start``).
+        """
+        protected = len(blocks) - self.config.min_keep_groups
+        pruned: list[MessageGroup] = []
+        for index, block in enumerate(blocks):
+            if index >= protected:
+                pruned.append(block)
+                continue
+            messages = block.messages
+            if self.config.drop_harness_messages and index < current_turn_start:
+                messages = [m for m in messages if m.source != HARNESS_SOURCE]
+            if self.config.truncate_tool_outputs:
+                messages = [self._shrink(m) for m in messages]
+            if not messages:
+                continue
+            if messages == block.messages:
+                pruned.append(block)
+            else:
+                pruned.append(MessageGroup(
+                    messages=messages,
+                    token_count=self.token_counter.count_messages(messages),
+                ))
+        return pruned
+
+    def _shrink(self, message: CoreMessage) -> CoreMessage:
+        """Copy of ``message`` with oversized tool output/arguments cut down."""
+        cap = self.config.tool_output_max_tokens
+        if isinstance(message, ToolMessage):
+            text = message.text()
+            cut = self._truncate_text(text, cap)
+            if cut is None and not message.is_multimodal():
+                return message
+            status = "ok" if message.success else f"failed: {message.error or 'error'}"
+            return message.model_copy(update={
+                "content": (cut if cut is not None else text) + (
+                    f"\n[{message.tool_name} result {status}; truncated by "
+                    "compaction. Call the tool again if you need the rest.]"
+                ),
+                "token_count": 0,
+            })
+        if isinstance(message, AssistantMessage) and message.tool_calls:
+            calls, changed = [], False
+            for call in message.tool_calls:
+                params = {}
+                for key, value in call.parameters.items():
+                    cut = self._truncate_text(value, cap) if isinstance(value, str) else None
+                    params[key] = value if cut is None else cut + "\n[argument truncated by compaction]"
+                    changed |= cut is not None
+                calls.append(call.model_copy(update={"parameters": params}))
+            if changed:
+                return message.model_copy(update={"tool_calls": calls, "token_count": 0})
+        return message
+
+    def _truncate_text(self, text: str, cap: int) -> str | None:
+        """First ``cap`` tokens of ``text`` plus its original size, or ``None``
+        when it already fits."""
+        tokens = self.token_counter.encode(text)
+        if len(tokens) <= cap:
+            return None
+        head = self.token_counter.decode(tokens[:cap])
+        return f"{head}\n[… {len(tokens):,} tokens, kept the first {cap:,}]"
+
+    async def _update_memory(
+        self,
+        old_messages: list[CoreMessage],
+        *,
+        memory: CoreMemoryRegistry,
+        client: CoreChatCompletionClient,
+    ) -> None:
+        """Save durable facts from messages leaving the window.
+
+        The model sees the current memories and returns the complete new
+        content of each category it changes (``create_or_update`` replaces a
+        category). ``compact`` logs failures; they never reach the turn.
+        """
+        current = await memory.get_context()
+        existing = "\n".join(f"- {r.category}: {r.memory}" for r in current) or "None yet."
+        task = MEMORY_TASK.format(
+            existing=existing,
+            transcript=self._transcript(old_messages, self.config.memory_max_tokens),
+        )
+        output = await self._ask(client, task, MemoryMaintenanceOutput, self.config.memory_max_tokens)
+        if not isinstance(output, MemoryMaintenanceOutput):
+            return  # prose instead of structured output: nothing reliable to save
+        for update in output.updates:
+            if update.category.strip() and update.content.strip():
+                await memory.create_or_update(update.category, update.content)
+
+    # -------- SHARED LLM HELPERS ------------------------------------------------------
+    def _transcript(self, messages: list[CoreMessage], cap: int) -> str:
+        """``[role/source] text`` per message, each cut to ``cap`` tokens."""
+        rows = []
+        for message in messages:
+            text = message.text()
+            calls = getattr(message, "tool_calls", None)
+            if calls:
+                text += " " + "; ".join(f"{c.tool_name}({c.parameters})" for c in calls)
+            tokens = self.token_counter.encode(text)
+            if len(tokens) > cap:
+                text = self.token_counter.decode(tokens[:cap]) + " …[truncated]"
+            rows.append(f"[{message.role}/{message.source}] {text.strip()}")
+        return "\n".join(rows)
+
+    async def _ask(
+        self,
+        client: CoreChatCompletionClient,
+        task: str,
+        output_format: type[OutputT],
+        max_tokens: int,
+    ) -> OutputT | str:
+        """One structured request with no tools. Returns the parsed model;
+        JSON cut by ``max_tokens`` keeps its complete fields; anything else
+        comes back as the raw text."""
+        result = await client.run(
+            ctx=RunContext(messages=[UserMessage(source="compaction", content=task)]),
+            prompts=PromptCtx.model_construct(
+                stack=None, variables={}, rendered_layers={}, layer_usage={}, prompt_tokens=0,
+            ),
+            tools=None,
+            output_format=output_format,
+            stream=False,
+            max_tokens=max_tokens,
+        )
+        structured = result.message.structured_output
+        if isinstance(structured, output_format):
+            return structured
+        if structured is not None:
+            return output_format.model_validate(structured.model_dump())
+        text = result.message.text().strip()
+        if text.startswith("{"):
+            try:
+                return output_format.model_validate(from_json(text, allow_partial=True))
+            except ValueError:
+                pass
+        return text
+
+    def _validate(self, messages: list[CoreMessage]) -> None:
+        """Check the window a provider will accept, or raise ``CompactionError``.
+
+        Every ToolMessage answers a call of the assistant message that opens
+        its block, and every tool call of that message has its result.
+        """
+        open_index, waiting = -1, set[str]()
+        for index, message in enumerate(messages):
+            if isinstance(message, ToolMessage):
+                if message.tool_call_id not in waiting:
+                    raise CompactionError.orphan_tool_result(index, message.tool_call_id)
+                waiting.discard(message.tool_call_id)
+                continue
+            # Any other message closes the previous block.
+            if waiting:
+                raise CompactionError.unanswered_tool_calls(open_index, waiting)
+            if isinstance(message, AssistantMessage) and message.tool_calls:
+                open_index = index
+                waiting = {call.id for call in message.tool_calls}
+        if waiting:
+            raise CompactionError.unanswered_tool_calls(open_index, waiting)
+
+    # -------- SERIALIZATION ------------------------------------------------------------
+    def _to_config(self) -> CompactionConfig:
+        """
+        Return the serializable settings for this compaction strategy.
+
+        Returns
+        -------
+        CompactionConfig
+            The compaction configuration model.
+        """
+        client = self.client.serialize().model_dump() if self.client else None
+        return self.config.model_copy(update={"client": client})
+
+    @classmethod
+    def _from_config(cls, config: CompactionConfig) -> t.Self:
+        """
+        Build a compaction strategy from its validated configuration.
+
+        Parameters
+        ----------
+        config : CompactionConfig
+            Model or component configuration.
+
+        Returns
+        -------
+        t.Self
+            The reconstructed compaction strategy.
+        """
+        from .clients import CoreChatCompletionClient
+
+        client = (
+            CoreChatCompletionClient.deserialize(config.client)
+            if config.client else None
+        )
+        return cls(**config.model_dump(exclude={"client"}), client=client)
 
 
 __all__ = [
+    "CompactionConfig",
     "CompactionResult",
     "CoreCompaction",
-    "TokenCounter",
-    "client_max_output_tokens",
-    "live_message_budget_tokens",
-    "live_message_capacity_tokens",
-    "live_message_threshold_tokens",
-    "group_atomic_messages",
-    "split_recent_messages",
 ]

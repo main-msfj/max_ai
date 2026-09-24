@@ -26,7 +26,7 @@ Use this skill when the user asks for a report, brief, memo, article, analysis d
 ## Script
 
 ```bash
-python "skills/create-report/scripts/create_report.py" \
+python "$SKILLS/create-report/scripts/create_report.py" \
   --title "Q2 Launch Readiness" \
   --paragraph "This brief summarizes launch readiness across product, support, and go-to-market workstreams." \
   --section "Current State::Beta users respond well to onboarding, but support volume remains above the target threshold." \

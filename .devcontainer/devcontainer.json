@@ -6,29 +6,49 @@
     },
     "workspaceFolder": "/max_ai",
     "workspaceMount": "source=${localWorkspaceFolder},target=/max_ai,type=bind,consistency=cached",
+    "forwardPorts": [
+        8081,
+        3000,
+        "minio:9001",
+        "ollama:11434"
+    ],
+    "portsAttributes": {
+        "8081": { "label": "Mongo Express" },
+        "3000": { "label": "Langfuse" },
+        "minio:9001": { "label": "MinIO Console" },
+        "ollama:11434": { "label": "Ollama API" }
+    },
     "runArgs": [
-        "--name",
-        "max_ai_devcontainer",
-        "--network",
-        "llm-vnet",
-        "--gpus",
-        "all"
+        "--network=llm-vnet",
+        "--gpus=all",
+        "--cap-add=SYS_ADMIN",
+        "--cap-add=SYS_CHROOT",
+        "--cap-add=SETUID",
+        "--cap-add=SETGID",
+        "--cap-add=SYS_PTRACE",
+        "--security-opt=seccomp=unconfined",
+        "--security-opt=apparmor=unconfined"
+    
     ],
     "hostRequirements": {
         "gpu": "optional"
     },
     "mounts": [
-        "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
+        "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind",
+        "source=max_ai_volume,target=/root/.codex,type=volume,volume-subpath=max_ai_codex_config",
+        "source=max_ai_volume,target=/root/.claude,type=volume,volume-subpath=max_ai_claude_config",
+        "source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/root/.ssh-host,type=bind,consistency=cached,readonly"
     ],
     "features": {
-        "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+        "ghcr.io/devcontainers/features/docker-outside-of-docker:1.10.0": {
             "version": "latest",
             "moby": false
         }
     },
+    "overrideCommand": true,
     "initializeCommand": "docker network create llm-vnet 2>/dev/null || true",
-    "postCreateCommand": "uv sync && cd /max_ai/llm-models && docker compose --env-file .env up -d && docker exec ollama ollama pull gemma4:e2b-it-q4_K_M && docker exec ollama ollama pull llama3.1:8b && docker exec ollama ollama pull qwen3:4b-instruct-2507-q4_K_M && docker exec ollama ollama pull qwen3:4b-thinking-2507-q4_K_M && docker exec ollama ollama pull phi4-mini:3.8b",
-    "postStartCommand": "cd /max_ai/llm-models && docker compose --env-file .env up -d",
+    "postCreateCommand": "bash /max_ai/.devcontainer/post-create.sh",
+
     "remoteEnv": {
         "OLLAMA_BASE_URL": "http://ollama:11434"
     },
@@ -40,9 +60,7 @@
                 "ms-python.debugpy",
                 "charliermarsh.ruff",
                 "njpwerner.autodocstring",
-                "ms-toolsai.jupyter",
-                "github.copilot-chat",
-                "openai.chatgpt"
+                "ms-toolsai.jupyter"
             ],
             "settings": {
                 "python.defaultInterpreterPath": "/max_ai/.venv/bin/python",
@@ -64,5 +82,6 @@
                 ]
             }
         }
-    }
+    },
+    "postStartCommand": "bash /max_ai/.devcontainer/post-start.sh"
 }

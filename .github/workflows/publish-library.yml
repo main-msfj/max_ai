@@ -1,0 +1,82 @@
+name: Publish Python library to PyPI
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to package, for example v0.1.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: library-publish-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+  PYTHON_VERSION: ${{ vars.RELEASE_PYTHON_VERSION || '3.11' }}
+
+jobs:
+  build:
+    name: Test and build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install development dependencies
+        run: uv sync --group dev
+
+      - name: Lint
+        run: uv run ruff check max_ai tests examples deployment/library/verify_release.py
+
+      - name: Test
+        run: uv run pytest -q
+
+      - name: Build wheel and source distribution
+        run: uv build --out-dir dist --clear
+
+      - name: Verify tag, filenames, and package metadata
+        run: python deployment/library/verify_release.py --tag "$RELEASE_TAG" --dist dist
+
+      - name: Preserve verified distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: library-distributions
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/maxai
+    permissions:
+      id-token: write
+    steps:
+      - name: Download verified distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: library-distributions
+          path: dist
+
+      - name: Publish wheel and source distribution
+        uses: pypa/gh-action-pypi-publish@release/v1

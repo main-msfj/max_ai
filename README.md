@@ -45,11 +45,10 @@ The default behavior is a ReAct-style agent loop:
        v                v                 v                        v
 +-------------+  +-------------+  +----------------+  +--------------------------+
 | Tools       |  | user runtime|  | PromptCtx       |  | Chat Client              |
-| Memory      |  | tools/      |  | rendered layers |  | Ollama adapter included  |
-| Skills      |  | skills/     |  | layer usage     |  | provider contract        |
+| Memory      |  | tools/      |  | rendered layers |  | OpenAI, OpenRouter,      |
+| Skills      |  | skills/     |  | layer usage     |  | Ollama adapters included |
 | Knowledge   |  | artifacts/  |  | token counts    |  +------------+-------------+
-| Routines    |  +-------------+  +----------------+               |
-| Logbook     |                                                   |
+| Workspace   |  +-------------+  +----------------+               |
 +------+------+                                                   |
        |                                                          |
        | exposes tools / metadata                                 |
@@ -67,50 +66,50 @@ The default behavior is a ReAct-style agent loop:
               v
    +----------------------+       +----------------------+
    | LocalExecutor        |       | DockerExecutor       |
-   | in-process tools     |       | sandboxed runtime    |
-   +----------------------+       +----------+-----------+
+   | in-process tools     |       | ModalExecutor        |
+   +----------------------+       | sandboxed runtime    |
+                                  +----------+-----------+
                                              |
                                              v
-                                  +----------------------+
-                                  | /mnt/tools           |
-                                  | /mnt/skills          |
-                                  | /mnt/artifacts       |
-                                  +----------------------+
+                                  +------------------------+
+                                  | /workspaces/<user_id>/ |
+                                  |   workspace/           |
+                                  |   scratchpad/          |
+                                  |   skills/              |
+                                  +------------------------+
 ```
 
 ## How the Components Talk
 
 The `Agent` is the orchestration root. It receives a model client, optional tools, optional capability registries, optional custom prompt layers, an executor, and an optional reasoning loop. It normalizes everything during construction, prepares async resources before execution, then drives one run through `run_stream_events()`.
 
-The `AgentCapabilities` manager is the component catalog. It accepts standalone tools plus capability registries for memory, skills, logbook context, routines, knowledge, and workspace. It validates tool-name uniqueness, validates `priority_tools`, loads skill metadata during `prepare()`, and exposes the final tool list through `all_tools`.
+The agent manages capabilities (memory, skills, knowledge) and tool registration. It validates tool-name uniqueness, loads skill metadata during `prepare()`, and exposes the final tool list to the dispatcher.
 
-The `LayerContainer` stores the prompt stack. Default layers are:
+The `LayerContainer` stores the prompt stack. Default layers (always included or conditionally added based on configuration):
 
 ```text
 AgentPolicyLayer
 TaskAnalysisLayer
 RenderingLayer
-PriorityToolsLayer
-SkillsLayer
-RoutineLayer
-KnowledgeLayer
-ContextLayer
-MemoryLayer
+SkillsLayer         (if skills are configured)
+KnowledgeLayer      (if knowledge is configured)
+MemoryLayer         (if memory is configured)
+SessionStateLayer
 ```
 
-Each layer is a Jinja2-backed `CoreLayer`. Layers validate their template variables at construction time, so broken prompt contracts fail before the agent runs. During `Agent.prepare()`, `PromptVariablesBuilder` collects the variables needed by each layer from the agent's capabilities and renders them into a `PromptCtx`.
+Each layer is a Jinja2-backed `CoreLayer`. Layers validate their template variables at construction time, so broken prompt contracts fail before the agent runs. During `Agent.prepare()`, the layers are rendered with variables collected from the agent's capabilities into a `PromptCtx`.
 
 The `CoreChatCompletionClient` is the provider boundary. The agent and reasoning loop do not know provider wire formats. A concrete client decides how to combine rendered layers and chat history into provider messages, convert `CoreMessage` objects to API payloads, convert `CoreTool` objects to provider tool schemas, normalize token usage, and perform streaming or non-streaming completions.
 
-The included `OllamaChatCompletionClient` talks to Ollama through `ollama.AsyncClient`, supports OpenAI-style tool schemas, streaming, thinking configuration, and structured output schemas.
+Included clients: `OpenAIChatCompletionClient` (OpenAI API), `OpenRouterChatCompletionClient` (OpenRouter), and `OllamaChatCompletionClient` (local Ollama). Each supports tool calling, streaming, and structured output.
 
 The `ReActLoop` is the default reasoning engine. On each iteration it calls the client, appends the assistant message to `RunContext.messages`, registers any tool calls into `ctx.tool_state`, sends executable records to `ToolExecutor`, appends returned `ToolMessage` objects, and repeats. It stops when there are no tool calls, approval is needed, cancellation happens, no model result is returned, or the configured loop limit is reached.
 
 The `ToolExecutor` is the tool-call pipeline. It receives `ToolCallRecord` objects from the reasoning loop, resolves tool names, validates parameters against each tool's JSON schema, emits approval events when needed, runs middleware around the execution step, dispatches execution to an executor, and returns both observability events and `ToolMessage` results for the LLM.
 
-The executor controls where side effects happen. `LocalExecutor` runs trusted tools in the same Python process. `DockerExecutor` runs tools in a sandboxed Docker runtime and bind-mounts a per-user workspace as `/mnt`, with `tools`, `skills`, and `artifacts` directories.
+The executor controls where side effects happen. `LocalExecutor` runs trusted tools in the same Python process. `DockerExecutor` and `ModalExecutor` run commands in a sandbox and mount the user's directory at `/workspaces/<user_id>`.
 
-The workspace registry creates per-user runtime directories. When tools or skills require runtime files, the agent binds the executor to the workspace, materializes the user's runtime directory, copies selected skills into it, and passes paths such as `runtime_root`, `tools_dir`, `skills_dir`, and `artifacts_dir` to runtime-aware tools.
+The workspace creates per-user runtime directories: local disk (`LocalWorkspace`) or object storage (`AzureBlobWorkspace`, `MinIOWorkspace`). Each run materializes the user's directory, copies the selected skills into it, and gives the file tools and `bash` the same `$WORKSPACE`, `$SCRATCHPAD` and `$SKILLS` paths.
 
 ## Runtime Flow
 
@@ -155,7 +154,7 @@ Agent.run_stream_events(task)
                  +--> approval check
                  +--> parameter validation
                  +--> middleware chain
-                 +--> LocalExecutor or DockerExecutor
+                 +--> LocalExecutor, DockerExecutor or ModalExecutor
                  +--> ToolMessage returned to ReActLoop
 ```
 
@@ -163,7 +162,7 @@ Agent.run_stream_events(task)
 
 ### Agent
 
-`max_ai.base.agent.Agent` is the main public abstraction. It exposes three APIs:
+`max_ai.agents.Agent` is the main public abstraction. It exposes three APIs:
 
 - `run_stream_events()` yields every `CoreEvent` and then one final `AgentResponse`.
 - `run_stream()` yields assistant text chunks only.
@@ -179,7 +178,7 @@ Use `run_stream_events()` for UIs, tracing, approvals, and debugging. Use `run_s
 
 Prompt layers are small, typed prompt fragments. Each layer declares required and optional variables, validates its Jinja2 template, and renders once during `prepare()`. Provider clients decide how rendered layers are assembled into the final model request.
 
-Override default layers by passing `framework_layers` to `Agent`. An override of the same concrete type replaces the default. A new layer type is appended.
+Override default layers by passing `prompt_layers` to `Agent`. An override of the same concrete type replaces the default. A new layer type is appended.
 
 ### Capabilities
 
@@ -196,13 +195,43 @@ The agent collects these automatically from constructor arguments.
 
 ### Tools
 
-Tools implement `CoreTool` or are regular Python callables wrapped by `FunctionAsTool`. The `@tool` decorator is the easiest entry point.
+MCP servers are configured separately from `toolset`. Pass one or more
+serializable server configurations through `mcp`:
 
 ```python
-from max_ai.tools import tool
+from max_ai.agents import Agent
+from max_ai.capabilities.mcp import (
+    HTTPServerConfig, StdioMCPServerConfig,
+    serialize_mcp_servers, deserialize_mcp_servers,
+)
+
+servers = [
+    HTTPServerConfig(server_id="docs", url="https://example.com/mcp"),
+    StdioMCPServerConfig(
+        server_id="local", command="uvx", args=["mcp-server-fetch"],
+    ),
+]
+payload = serialize_mcp_servers(servers)
+restored = deserialize_mcp_servers(payload)
+
+agent = Agent(
+    name="assistant", description="Uses MCP", instructions="Help the user",
+    client=client, toolset=[local_tool], mcp=restored,
+)
+```
+
+The agent discovers MCP tools when a run starts, prefixes their names with the
+server ID, executes them in the host process, and closes the connections at the
+end of the run. The Max AI client uses MCP 2.x and negotiates with both current
+and earlier protocol versions.
+
+Tools implement `CoreTool` or are regular Python callables wrapped by `FunctionAsTool`. Pass the wrapped tool in `toolset`:
+
+```python
+from max_ai.capabilities.tools.function_as_tool import FunctionAsTool
+from max_ai.types.tools import ToolApprovalMode
 
 
-@tool(approval_mode="ask_for_approval")
 def get_weather(city: str, unit: str = "celsius") -> dict[str, str | int]:
     """Return a weather report for a city."""
     return {
@@ -211,9 +240,19 @@ def get_weather(city: str, unit: str = "celsius") -> dict[str, str | int]:
         "temperature": 24,
         "unit": unit,
     }
+
+agent = Agent(
+    name="assistant",
+    description="Uses tools",
+    instructions="Help the user",
+    client=client,
+    toolset=[
+        FunctionAsTool(get_weather, approval_mode=ToolApprovalMode.ASK_APPROVED),
+    ],
+)
 ```
 
-The decorator derives a tool name, description, and JSON schema from the Python function. Use approval modes for tools that can mutate state, access external systems, spend money, or expose sensitive data.
+`FunctionAsTool` derives a tool name, description, and JSON schema from the Python function signature. Use approval modes for tools that can mutate state, access external systems, spend money, or expose sensitive data.
 
 ### Skills
 
@@ -233,93 +272,166 @@ LocalSkills/
 
 `LocalSkillRegistry` selects named skills from a source directory, caches them under `var/skills`, reads frontmatter metadata from `SKILL.md`, adds skill descriptions to the prompt through `SkillsLayer`, and materializes the selected skills into the runtime workspace before execution.
 
+`GithubSkillRegistry` does the same from a Git repository. It shallow-clones the repo once, then copies each named top-level folder:
+
+```python
+from max_ai.capabilities.skills.github import GithubSkillRegistry
+
+skills = GithubSkillRegistry(
+    "org/agent-skills",          # or a full https / git@ / ssh:// URL
+    ["create-invoice"],
+    ref="v1.2.0",                # branch or tag
+    token_env="SKILLS_GH_TOKEN", # private repos only: the env var name, never the token
+)
+```
+
+The token is read from the environment when the repo is cloned. It is never serialized or placed on the command line. The host needs `git` installed.
+
 Skills require a sandbox executor. If skills are registered with the default local executor, the agent raises a safety error instead of running untrusted runtime code in-process.
 
 ### Execution
 
 `LocalExecutor` is fast and simple. It runs tool code in the current Python process and is suitable for trusted helpers.
 
-`DockerExecutor` isolates runtime execution. It stages the framework code for import inside the container, bind-mounts the per-user runtime directory, and executes normal tools as one-shot containers. Bash-like runtime tools can reuse a short-lived container session.
+`DockerExecutor` runs `bash` in one container per session. The container runs as a non-root user with a read-only root filesystem and all capabilities dropped. It has no network (`network="none"`, the default), CPU, memory and PID limits, and the user's directory bind-mounted at `/workspaces/<user_id>`. Build the image once:
 
-Host runtime layout:
-
-```text
-<workspace_root>/<user_id>/
-  tools/
-  skills/
-  artifacts/
+```bash
+docker build -f max_ai/capabilities/executor/docker/Dockerfile -t maxai-runtime:latest .
 ```
 
-Container runtime layout:
+`ModalExecutor` (`pip install 'maxai[runtime-modal]'`) runs the same commands in a Modal sandbox and syncs the workspace in and out. `examples/verify_modal_executor.py` checks a Modal account end to end.
+
+Import executors from `max_ai.capabilities.executor`:
+
+```python
+from max_ai.capabilities.executor import LocalExecutor, DockerExecutor
+
+agent = Agent(
+    name="assistant",
+    description="Uses Docker",
+    instructions="Help the user",
+    client=client,
+    executor=DockerExecutor(image="maxai-runtime:latest"),
+)
+```
+
+Per-user runtime layout on the host:
 
 ```text
-/mnt/tools
-/mnt/skills
-/mnt/artifacts
+<root>/<user_id>/
+  workspace/          (shared workspace; bash starts here with $WORKSPACE)
+  scratchpad/<session_id>/  (per-session temporary; $SCRATCHPAD)
+  skills/             (materializes skills; $SKILLS)
 ```
+
+### Workspace
+
+`LocalWorkspace` (the default) keeps each user's files on local disk. For serverless or multi-host deployments, a remote workspace keeps them in object storage. It downloads the user's files before a run and uploads only what changed at the end:
+
+```python
+from max_ai.capabilities.workspace import AzureBlobWorkspace, MinIOWorkspace
+
+AzureBlobWorkspace("https://acct.blob.core.windows.net/agents", api_key_env="AZURE_STORAGE_KEY")
+MinIOWorkspace("http://localhost:9000", bucket="agents",
+               access_key_env="MINIO_ACCESS_KEY", secret_key_env="MINIO_SECRET_KEY")
+```
+
+Install with `maxai[azure-blob]` or `maxai[minio]`. As everywhere else, configs store env var names, never credentials.
 
 ### Middleware
 
-Middleware wraps tool execution. The tool executor performs name resolution, approval checks, and parameter validation before the middleware chain, then runs the actual side-effecting `tool.execute()` call through `MiddlewareChain`.
+`CoreMiddleware` is a serializable component with optional async hooks: run lifecycle (`on_run_start`, `on_final_response`, `on_run_end`, `on_run_error`), model calls (`on_model_request`, `on_model_chunk`, `on_model_response`, `on_model_error`), and approved tool calls (`on_tool_request`, `on_tool_response`). Raise `StopRun(message)` from `on_run_start` or a model hook to end the turn cleanly (`response.stop_message`); a tool hook blocks a single call by returning a `ToolResult` instead. Pass middlewares via `Agent(..., middlewares=[...])`. Built-ins: `LoggingMiddleware`, `BudgetMiddleware(max_tokens=..., max_cost_usd=..., max_seconds=..., quota=QuotaLimits(...), quota_store=LocalQuotaStore(...))`, `TracingMiddleware()` with `configure_langfuse()` for OpenTelemetry → Langfuse.
+
+### Embeddings
+
+`CoreEmbedding` (`max_ai.base.embedding`) turns text into vectors, in batches and with a cache. `FastEmbedEmbedding` (`pip install 'maxai[embeddings]'`) runs a local multilingual model; `OpenAIEmbedding` needs no download (better for serverless). Memory and knowledge registries use `FastEmbedEmbedding` when `embedding` isn't passed, so `search_memory` and knowledge search match by meaning, in any language. Pass your own (`embedding=OpenAIEmbedding()`) to change it, or `embedding=None` for memory search by words only. MongoDB backends use `$vectorSearch` (Atlas, or the Atlas Local image in `docker-infra/`). `SQLiteMemoryRegistry` and `SQLiteKnowledgeRegistry` (`max_ai.capabilities.memory.sqlite`, `max_ai.capabilities.knowledge.sqlite`) store each vector next to its text, so stored memories and documents are never embedded again, even after a restart; knowledge is loaded with `upsert_block(block_id, KnowledgeBlock(...))`.
 
 ### Context Compaction
 
-Before the reasoning loop starts, the agent can compact old context if the client declares a `max_context_window`. The default strategy is `SlidingWindowCompaction`, which preserves recent messages while keeping prompt and history under budget.
+Compaction runs inside the loop before model calls when the window fills up. No default strategy (compaction=None means never compact). Strategies in max_ai.capabilities.compaction: `SummaryCompaction(threshold=0.8, keep_ratio=0.4)` (LLM summary of old turns; summary survives in prompt) and `SlidingWindowCompaction` (drops oldest turns without LLM).
 
 ### Events and Responses
 
-The event stream exposes model calls, streamed chunks, reasoning iterations, tool calls, tool responses, approval pauses, compaction, and errors. The final item is always an `AgentResponse` unless the caller cancels the run.
+The event stream exposes model calls, streamed chunks, reasoning iterations, tool calls, tool responses, approval pauses, compaction, and errors. The final item is always an `AgentResponse` unless the caller cancels.
 
-`AgentResponse` contains the final `RunContext`, the source agent name, usage metrics, and a normalized finish reason such as `stop`, `max_iterations`, `approval_needed`, `tool_direct_return`, `no_result`, `error`, or `cancelled`.
+`AgentResponse` contains the final `RunContext`, agent name, usage, and finish reason: `stop`, `max_iterations`, `output_limit`, `budget_exceeded`, `stopped`, `approval_needed`, `tool_denied`, `tool_direct_return`, `input_needed`, `no_result`, `error`, `incomplete`, `waiting`, or `cancelled`.
+
+### Completion Gates
+
+Gates accept or reject the model's proposed final response before the turn ends. The framework's `RuntimeCompletionGate` is always added; pass `RuntimeCompletionGate(RuntimeGateConfig(plan_must_close=False))` in `gates=[...]` to change its options. Custom gates subclass `CompletionBase` and implement `on_final_response(ctx) -> CompletionDecision`.
+
+### Sessions
+
+The host loads/saves runs: `ctx = await store.load(user_id, session_id)` (or new `RunContext(user_id=..., session_id=...)`), `response = await agent.run(text, run_context=ctx)`, `await store.save(response.context)`. `LocalSessionStore` (JSON files) and `MongoDBSessionStore` (shared by every process or serverless invocation; `uri_env="MONGODB_URI"`) in max_ai.capabilities.session_store. The Agent never touches the store.
+
+### Concurrency
+
+One Agent instance serves many users at once. Runs of different `(user_id, session_id)` execute in parallel; messages of the same session wait for each other. Memory is bound per run to `run_context.user_id` and `session_id`.
+
+### Parallel Tools
+
+Read-only tool calls of one model reply run at the same time (`FunctionAsTool(fn, read_only=True)`). Built-in read-only file tools and MCP tools with readOnlyHint already are. Other calls run alone, in order. Cap: env `MAX_PARALLEL_TOOLS` (default 8).
+
+### Structured Output
+
+`Agent(..., output_format=MyPydanticModel)` shapes only the final accepted answer. Read it from `response.final_message.structured_output`.
+
+### Serialization
+
+`row = agent.serialize().model_dump_json()`, `Agent.deserialize(row)`. Stored configs hold no secrets (clients store `api_key_env`, the env var name). Python-function tools can't be serialized—expose them through MCP. Third-party components need `from max_ai.base import allow_providers; allow_providers("my_pkg.")`.
 
 ## Installation
 
 This project targets Python 3.11 or newer.
 
 ```bash
-uv sync
+pip install maxai
 ```
 
-For UI dependencies:
+Or with optional features:
 
 ```bash
-uv sync --group ui
+pip install "maxai[cli,embeddings,tracing,mongodb,runtime-modal,azure-blob,minio]"
 ```
 
-The project includes Ollama support. To run the example agent, make sure an Ollama server is reachable and the configured model is available.
+For development:
+
+```bash
+uv sync --group dev
+```
 
 ## Minimal Agent
 
 ```python
 import asyncio
 
-from max_ai.base.agent import Agent
-from max_ai.clients.ollama import OllamaChatCompletionClient
-from max_ai.core.models import ModelConfig
-from max_ai.tools import tool
+from max_ai.agents import Agent
+from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
+from max_ai.capabilities.tools.function_as_tool import FunctionAsTool
+from max_ai.core.model.llm import ModelConfig
+from max_ai.types.tools import ToolApprovalMode
 
 
-@tool
 def add(a: int, b: int) -> int:
     """Add two integers."""
     return a + b
 
 
 async def main() -> None:
-    client = OllamaChatCompletionClient(
-        model="llama3.1:8b",
+    client = OpenAIChatCompletionClient(
+        model="gpt-4o-mini",
         config=ModelConfig(
             supports_function_calling=True,
-            max_context_window=8192,
+            max_context_window=128000,
         ),
     )
 
     agent = Agent(
         name="Sara",
-        description="A helpful local assistant.",
+        description="A helpful assistant.",
         instructions="Be concise and useful.",
         client=client,
-        toolset=[add],
+        toolset=[FunctionAsTool(add, approval_mode=ToolApprovalMode.AUTO_APPROVED)],
     )
 
     response = await agent.run("What is 21 + 21?")
@@ -330,55 +442,61 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-## Docker and Skills Example
+## Full-Featured Agent Example
 
-`examples/file.py` builds a Docker-backed agent with local skills:
+`examples/01_agent_with_openai.py` demonstrates a complete agent with memory, knowledge, skills, and the CLI:
 
 ```python
 from pathlib import Path
 
-from max_ai.base.agent import Agent
+from max_ai.agents import Agent
+from max_ai.base.knowledge import KnowledgeToolMode
+from max_ai.base.memory import MemoryToolMode
+from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
+from max_ai.capabilities.compaction import SummaryCompaction
+from max_ai.capabilities.knowledge.local import LocalKnowledgeRegistry
+from max_ai.capabilities.memory.local import LocalMemoryRegistry
 from max_ai.capabilities.skills.local import LocalSkillRegistry
-from max_ai.clients.ollama import OllamaChatCompletionClient
-from max_ai.core.models import ModelConfig
-from max_ai.executor import DockerExecutor
-from max_ai.ui import server
-from docker_tools import get_weather, check_link
+from max_ai.capabilities.tools.function_as_tool import FunctionAsTool
+from max_ai.capabilities.middleware import TracingMiddleware
+from max_ai.cli import run_cli
+from max_ai.core.model.llm import ModelConfig
+from max_ai.types.tools import ToolApprovalMode
 
 
-EXAMPLE_DIR = Path(__file__).parent
-TOOL_SOURCE = EXAMPLE_DIR / "docker_tools.py"
-SKILLS_SOURCE = EXAMPLE_DIR / "LocalSkills"
+def get_weather(city: str) -> dict:
+    """Return the current weather for a city."""
+    return {"city": city, "condition": "sunny", "temp_c": 24}
 
 
-agent = Agent(
-    name="Sara",
-    description="Example Max AI agent.",
-    instructions="You are a helpful assistant. Be concise and useful.",
-    client=OllamaChatCompletionClient(
-        model="gemma4:e2b-it-q4_K_M",
-        host="http://ollama:11434",
-        config=ModelConfig(
-            max_context_window=15000,
-            supports_function_calling=True,
-            supports_thinking=True,
-            supports_vision=True,
-        ),
-        think=False,
-        max_tokens=10000,
-    ),
-    skills=LocalSkillRegistry(
-        source=SKILLS_SOURCE,
-        skills=["create-report", "create-ppt"],
-    ),
-    toolset=[get_weather, check_link],
-    executor=DockerExecutor(
-        tool_files=TOOL_SOURCE,
-        image="maxai-sandbox:skills-demo-v3",
-    ),
-)
+async def main() -> None:
+    client = OpenAIChatCompletionClient(
+        model="gpt-4o-mini",
+        config=ModelConfig(supports_function_calling=True, max_context_window=128000),
+    )
 
-server(agent, host="0.0.0.0", port=8000)
+    agent = Agent(
+        name="Assistant",
+        description="A helpful agent with memory and skills.",
+        instructions="Help the user with their tasks.",
+        client=client,
+        toolset=[FunctionAsTool(get_weather, approval_mode=ToolApprovalMode.AUTO_APPROVED)],
+        memory=LocalMemoryRegistry(base_path=Path("./local")),
+        knowledge=[
+            LocalKnowledgeRegistry(
+                name="docs",
+                description="Project documentation",
+                base_path=Path("./local"),
+                tool_mode=KnowledgeToolMode.FULL,
+            )
+        ],
+        skills=LocalSkillRegistry(source=Path("./LocalSkills"), skills=["create-report"]),
+        compaction=SummaryCompaction(threshold=0.8),
+        middlewares=[TracingMiddleware()],
+    )
+
+    async with agent:
+        await run_cli(agent, user_id="user_001")
 ```
 
 ## Extending the Framework
@@ -426,22 +544,30 @@ uv run pytest tests/executor
 
 ```text
 max_ai/
-  base/              Core contracts: Agent, clients, tools, layers, reasoning
+  agents/            Agent orchestration and lifecycle
+  base/              Core contracts: clients, tools, layers, reasoning, capabilities
   capabilities/      Local capability implementations
-  clients/           Provider adapters, including Ollama
-  compaction/        Context compaction strategies
-  core/              Messages, events, models, primitives, tool state
-  executor/          Local and Docker execution backends
-  manager/           Capability and prompt stack builders
-  middleware/        Middleware chain implementation
-  reasoning/         ReAct loop implementation
-  stacks/            Built-in prompt layers and Jinja templates
-  tools/             Built-in tools and @tool decorator
+    clients/         Provider adapters (OpenAI, OpenRouter, Ollama)
+    compaction/      Context compaction strategies
+    completion_gate/ Completion decision gates
+    executor/        Execution backends (Local, Docker, Modal)
+    knowledge/       Knowledge registries and retrieval
+    memory/          Memory registries and persistence
+    middleware/      Logging, budget, tracing middleware
+    mcp/             MCP server client integration
+    reasoning/       ReAct loop implementation
+    session_store/   Session persistence
+    skills/          Skill registry and management
+    tools/           Built-in tools (filesystem, bash, approval)
+    workspace/       Workspace registry and runtime
+  cli/               Textual terminal UI
+  core/              Messages, events, tool state, primitives
   types/             Pydantic types used across runtime boundaries
-  ui/                FastAPI/static web UI
 examples/
-  file.py            Docker-backed agent + UI example
-  docker_tools.py    Example decorated tools
+  basic/             One feature per file: tools, approvals, memory, MCP, skills, tracing...
+  advance/           Custom backends, middleware, layers, embeddings, serialization
+  01_agent_with_openai.py    Full agent with OpenAI, memory, knowledge, skills
+  02_agent_with_openrouter.py Full agent with OpenRouter
   LocalSkills/       Example skill packages
 tests/               Unit, integration, executor, reasoning, and tool tests
 ```
@@ -455,3 +581,7 @@ tests/               Unit, integration, executor, reasoning, and tool tests
 - Approval is represented as state, not as an exception.
 - Sandboxed execution is required for skills.
 - Events are first-class so UIs and debuggers can observe a run without scraping text output.
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).

@@ -1,31 +1,20 @@
+"""Tools that can run in the Docker execution environment."""
 
-import random
+from pathlib import Path
+
 from max_ai.tools import tool
 
 
-@tool(approval_mode="ask_for_approval")
-def get_weather(city: str, unit: str = "celsius") -> dict[str, str | int]:
-    """Return a deterministic mock weather report for a city."""
-    city_name = city.strip() or "unknown"
-    unit_name = unit.strip().lower()
-    if unit_name not in {"celsius", "fahrenheit"}:
-        unit_name = "celsius"
-
-    seed = sum(ord(char) for char in city_name.lower())
-    condition = ["sunny", "cloudy", "rainy", "windy", "clear"][seed % 5]
-    celsius = 12 + seed % 18
-    temperature = celsius if unit_name == "celsius" else round(celsius * 9 / 5 + 32)
-
-    return {
-        "city": city_name,
-        "condition": condition,
-        "temperature": temperature,
-        "unit": unit_name,
-    }
+@tool(approval_mode="auto_approval")
+def calculate_compound_interest(principal: float, annual_rate: float, years: int) -> float:
+    """Calculate a balance with annual compound interest."""
+    return round(principal * (1 + annual_rate / 100) ** years, 2)
 
 
 @tool(approval_mode="ask_for_approval")
-def check_link(link:str):
-    """Return the link status"""
-    status = "Available" if bool(random.randint(0,1)) else "Offline"
-    return f"The provided link is {status}"
+def save_report(report: str) -> str:
+    """Save a report in the execution workspace after approval."""
+    path = Path("./reports/report.txt")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(report, encoding="utf-8")
+    return f"Report saved to {path}"

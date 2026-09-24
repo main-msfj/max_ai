@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import typing as t
+
 from pydantic import BaseModel, Field
+
 from ..base.layer import CoreLayer
-from ..manager.stacks import LayerContainer
+from ..core.stacks.container import LayerContainer
+
+if t.TYPE_CHECKING:
+    from ..core.compaction import TokenCounter
 
 
 class PromptLayerUsage(BaseModel):
@@ -53,3 +58,13 @@ class PromptCtx(BaseModel):
         default=0,
         description="Total token count for all rendered prompt layers.",
     )
+
+    def measure(self, counter: "TokenCounter") -> None:
+        """Recompute ``layer_usage`` and ``prompt_tokens`` from ``rendered_layers``."""
+        self.layer_usage = {
+            layer.__name__: PromptLayerUsage(
+                layer_name=layer.__name__, chars=len(text), tokens=counter.count_text(text),
+            )
+            for layer, text in self.rendered_layers.items()
+        }
+        self.prompt_tokens = sum(usage.tokens for usage in self.layer_usage.values())

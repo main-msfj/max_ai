@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 import pytest
 from pydantic import ValidationError
 
+from max_ai.core.primitives import FailureReason, ToolCallStatus
 from max_ai.types.tool_call import ToolCallRecord, ToolResult
-from max_ai.core.primitives import ToolCallStatus, FailureReason
 
 
 def make_record(**overrides) -> ToolCallRecord:

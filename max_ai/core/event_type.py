@@ -7,19 +7,18 @@ stop signals, and orchestration results.
 
 from __future__ import annotations
 
-import uuid
 import typing as t
-from typing import Annotated
 from datetime import datetime, timezone
-from pydantic import BaseModel, Discriminator, Field, ConfigDict
+from typing import Annotated
 
-from .messages import CoreMessage
+from pydantic import BaseModel, ConfigDict, Discriminator, Field
+
+from ..base.completion_gate import CompletionDecision
+from ..capabilities.tools.plan import AgentPlan
 from ..types.completions import Usage
 from ..types.tool_call import ToolResult
-
-from ..reasoning.plan import AgentPlan
-from ..reasoning.eval import EvalResult
-from ..base.scratchpad import Scratchpad
+from .ids import short_id
+from .messages import CoreMessage, Message
 
 
 # -------- -----------------------------------------------------------
@@ -35,7 +34,7 @@ class CoreEvent(BaseModel):
 
     source: str = Field()
     event_type: str = Field(default="")
-    event_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    event_id: str = Field(default_factory=short_id)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     def __init_subclass__(cls, **kwargs: t.Any) -> None:
@@ -158,10 +157,26 @@ class TaskStartEvent(TasksEvent):
 
 
 class TaskCompleteEvent(TasksEvent):
-    """Emitted when task processing completes."""
+    """Emitted once, only when the completion gate accepts the final
+    response. Never emitted by the model, and never on a pause, error,
+    or exhausted limit — only on a genuine, gate-approved completion."""
 
     EVENT_TYPE = "task_complete"
-    result: str = Field(..., description="The final task result")
+    decision: CompletionDecision = Field(
+        ..., description="The aggregate decision that closed this turn"
+    )
+
+
+class CompletionRejectedEvent(TasksEvent):
+    """Emitted every time the completion gate rejects a proposed final
+    response as incomplete and forces the model to try again. Distinct
+    from TaskCompleteEvent so a consumer can show retries live instead
+    of only finding out about them after the fact in ctx.messages."""
+
+    EVENT_TYPE = "completion_rejected"
+    decision: CompletionDecision = Field(
+        ..., description="The aggregate decision that rejected this response"
+    )
 
 
 # -------- -----------------------------------------------------------
@@ -174,6 +189,9 @@ class ModelCallEvent(ModelEvent):
     model: str = Field(..., description="Model being called")
     input_messages: t.Sequence[CoreMessage] = Field(
         ..., description="Message sent to model"
+    )
+    prompt_tokens: int = Field(
+        default=0, description="Size of the rendered system prompt for this call"
     )
 
 
@@ -214,32 +232,37 @@ class ReasoningCompleteEvent(ReasoningEvent):
     total_iterations: int = Field(..., description="How many iterations were executed")
 
 
+class LastMessageResponseEvent(ReasoningEvent):
+    """The model responded with no tool calls — this response is the
+    proposed end of the turn, about to be checked by the completion gate."""
+
+    EVENT_TYPE = "last_message_response"
+    response: str = Field(..., description="The model's proposed final text")
+
+
 class PlanningEvent(ReasoningEvent):
     """Event emitted when a plan is generated."""
 
     EVENT_TYPE = "planning"
-    phase: t.Literal["start", "complete", "failed", "skipped"]
+    phase: t.Literal["start", "complete", "failed", "skipped", "progress"]
     plan: AgentPlan | None = Field(default=None)
 
 
-class EvalEvent(ReasoningEvent):
-    """Emmited durin the self-evaluationn step"""
-
-    EVENT_TYPE = "eval"
-    phase: t.Literal["start", "complete", "failed", "skipped"]
-    score: float | None = Field(default=None)
-    passed: bool | None = Field(default=None)
-    result: EvalResult | None = Field(default=None)
-
-
 class UserInputRequestEvent(ReasoningEvent):
-    EVENT_TYPE = "user_input_request"
-    question: str = Field(description="Questsion ask to user")
-    options: list[str] | None
+    """The agent asked the user a question; the turn pauses until answered.
 
-class ScratchpadUpdateEvent(ReasoningEvent):
-    EVENT_TYPE = "scratchpad_update"
-    scratchpad: Scratchpad
+    Mirrors ``ToolApprovalEvent``: emitted by the executor *instead of*
+    executing the ask-the-user tool. The consumer answers via
+    ``ctx.tool_state.apply_user_answer(tool_call_id, answer)`` and resumes.
+    """
+
+    EVENT_TYPE = "user_input_request"
+    question: str = Field(description="Question asked to the user")
+    options: list[str] | None = Field(default=None)
+    tool_call_id: str | None = Field(
+        default=None,
+        description="Record id to answer via tool_state.apply_user_answer().",
+    )
 
 
 # -------- -----------------------------------------------------------
@@ -271,50 +294,134 @@ class AgentExecutionCompleteEvent(AgentEvent):
 
 
 class CompactionEvent(AgentEvent):
-    """Emitted when context compaction starts or finishes."""
+    """Emitted when context compaction starts and when it ends.
+
+    ``old_messages`` (end only) are the messages that left the window, for
+    hosts that archive the full conversation; the RunContext no longer has them.
+    """
 
     EVENT_TYPE = "compaction"
     phase: t.Literal["start", "end"] = Field(
         ..., description="Whether compaction is starting or finished"
     )
-    strategy: str = Field(..., description="Compaction strategy name")
-    changed: bool = Field(
-        default=False, description="Whether compaction changed the active transcript"
+    strategy: str = Field(..., description="Compaction strategy class name")
+    changed: bool = Field(default=False, description="Whether the window changed")
+    pruned_only: bool = Field(
+        default=False, description="The cheap prune pass was enough (no LLM)"
     )
-    old_message_count: int = Field(
-        default=0, description="Messages moved out of context"
+    tokens_before: int = Field(default=0, description="Live tokens before compacting")
+    tokens_after: int = Field(default=0, description="Live tokens after compacting")
+    kept_message_count: int = Field(
+        default=0, description="Messages left in the window"
     )
-    recent_message_count: int = Field(default=0, description="Messages kept in context")
-    old_token_count: int = Field(
-        default=0, description="Token count moved out of context"
-    )
-    recent_token_count: int = Field(
-        default=0, description="Token count kept in context"
-    )
-    total_token_count: int = Field(
-        default=0, description="Token count before compaction"
-    )
-    live_message_threshold_tokens: int = Field(
-        default=0, description="Live message token count that triggered compaction"
-    )
-    live_message_budget_tokens: int = Field(
-        default=0, description="Raw live message budget kept after compaction"
+    old_messages: list[Message] = Field(  # type: ignore[valid-type]
+        default_factory=list, description="Messages that left the window"
     )
     summary: str | None = Field(
-        default=None, description="Updated structured summary payload"
-    )
-    context_summary_persisted: bool = Field(
-        default=False,
-        description="Whether the summary was written to the context registry",
-    )
-    context_summary_session_id: str | None = Field(
-        default=None, description="Session id used when persisting the context summary"
+        default=None, description="What the model now sees of the past (render())"
     )
 
 
 # -------- -----------------------------------------------------------
 #  Tool Events
 # -------- -----------------------------------------------------------
+class BashStartedEvent(ToolEvent):
+    """Execution requested; declared_action describes model intent only."""
+
+    EVENT_TYPE = "bash_started"
+    tool_call_id: str
+    command: str
+    declared_action: str
+    description: str
+
+
+class BashFinishedEvent(ToolEvent):
+    EVENT_TYPE = "bash_finished"
+    tool_call_id: str
+    exit_code: int | None
+    duration_ms: int
+    timed_out: bool = False
+    truncated: bool = False
+
+
+class BashFailedEvent(ToolEvent):
+    EVENT_TYPE = "bash_failed"
+    tool_call_id: str
+    error: str
+
+
+class BashCancelledEvent(ToolEvent):
+    EVENT_TYPE = "bash_cancelled"
+    tool_call_id: str
+    reason: str
+
+
+class FileReadEvent(ToolEvent):
+    """A workspace file was read successfully."""
+
+    EVENT_TYPE = "file_read"
+    tool_call_id: str
+    path: str
+    root_dir: str
+    content_hash: str
+
+
+class DirectoryListedEvent(ToolEvent):
+    """A workspace directory was listed successfully."""
+
+    EVENT_TYPE = "directory_listed"
+    tool_call_id: str
+    path: str
+    root_dir: str
+    entry_count: int
+
+
+class FileWrittenEvent(ToolEvent):
+    """A workspace file was created or edited successfully."""
+
+    EVENT_TYPE = "file_written"
+    tool_call_id: str
+    operation: t.Literal["write_file", "edit_file"]
+    path: str
+    root_dir: str
+    content_hash: str
+
+
+class FilesSearchedEvent(ToolEvent):
+    """A workspace search completed successfully."""
+
+    EVENT_TYPE = "files_searched"
+    tool_call_id: str
+    operation: t.Literal["find_files", "search_text"]
+    path: str
+    root_dir: str
+    match_count: int
+    truncated: bool = False
+
+
+class DirectoryCreatedEvent(ToolEvent):
+    EVENT_TYPE = "directory_created"
+    tool_call_id: str
+    path: str
+    root_dir: str
+
+
+class FileDeletedEvent(ToolEvent):
+    EVENT_TYPE = "file_deleted"
+    tool_call_id: str
+    path: str
+    root_dir: str
+    content_hash: str
+
+
+class FileInfoEvent(ToolEvent):
+    EVENT_TYPE = "file_info"
+    tool_call_id: str
+    path: str
+    root_dir: str
+    file_type: t.Literal["file", "directory"]
+
+
 class ToolCallEvent(ToolEvent):
     """Emitted when a tool is about to be called."""
 
@@ -370,6 +477,14 @@ class ToolApprovalEvent(ToolEvent):
             f"Approval needed for tool '{self.tool_name}' "
             f"(ID: {self.tool_call_id}){reason_part}"
         )
+
+
+class ToolAutoApprovalEvent(ToolEvent):
+    """Emitted when policy approves a tool call without asking the user."""
+
+    EVENT_TYPE = "tool_auto_approval"
+    tool_call_id: str
+    tool_name: str
 
 
 class ToolValidationEvent(ToolEvent):
@@ -432,7 +547,7 @@ class MemoryRetrievalEvent(MemoryEvent):
 # -------- -----------------------------------------------------------
 # Union types Orchestration
 # -------- -----------------------------------------------------------
-OrchestrationEvent = Annotated[
+OrchestrationEvents = Annotated[
     t.Union[
         OrchestrationStartEvent,
         OrchestrationCompleteEvent,
@@ -451,19 +566,32 @@ AgentEvents = Annotated[
     t.Union[
         TaskStartEvent,
         TaskCompleteEvent,
+        CompletionRejectedEvent,
         ModelCallEvent,
         ModelResponseEvent,
         ModelStreamChunkEvent,
         ReasoningIterationEvent,
         ReasoningCompleteEvent,
+        LastMessageResponseEvent,
         PlanningEvent,
-        ScratchpadUpdateEvent,
-        EvalEvent,
+        UserInputRequestEvent,
         ToolCallEvent,
         ToolCallResponseEvent,
         ToolApprovalEvent,
+        ToolAutoApprovalEvent,
         ToolValidationEvent,
         ToolProgressEvent,
+        BashStartedEvent,
+        BashFinishedEvent,
+        BashFailedEvent,
+        BashCancelledEvent,
+        FileReadEvent,
+        DirectoryListedEvent,
+        FileWrittenEvent,
+        FilesSearchedEvent,
+        DirectoryCreatedEvent,
+        FileDeletedEvent,
+        FileInfoEvent,
         CompactionEvent,
         MemoryUpdateEvent,
         MemoryRetrievalEvent,

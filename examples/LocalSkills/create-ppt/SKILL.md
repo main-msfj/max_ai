@@ -25,7 +25,7 @@ Use this skill when the user asks for a slide deck, presentation, pitch, trainin
 ## Script
 
 ```bash
-python "skills/create-ppt/scripts/create_ppt.py" \
+python "$SKILLS/create-ppt/scripts/create_ppt.py" \
   --title "Customer Renewal Plan" \
   --subtitle "A practical operating plan for the sales team" \
   --slide "Current Renewal Risk::Three enterprise accounts need executive attention this quarter." \

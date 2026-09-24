@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from pydantic import ValidationError
 
-from max_ai.types.tool_call import ToolResult
 from max_ai.core.primitives import FailureReason
+from max_ai.types.tool_call import ToolResult
 
 
 # -------- BASIC SHAPE -----------------------------------------------------------

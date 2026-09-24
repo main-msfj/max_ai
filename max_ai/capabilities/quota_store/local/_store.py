@@ -1,0 +1,120 @@
+"""Usage as JSON files: ``<base>/<user_id>.json`` → ``{period_key: usage}``."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+from pathlib import Path
+
+from ....base.quota_store import CoreQuotaStore
+from ....core.model.quota import QuotaUsage
+from ._model import LocalQuotaStoreConfig
+
+
+class LocalQuotaStore(CoreQuotaStore):
+    """One small file per user. ``add`` is atomic within one process (a lock
+    per user, atomic file writes); several processes sharing the folder
+    need a database-backed store instead."""
+
+    component_schema = LocalQuotaStoreConfig
+    component_provider_override = "max_ai.capabilities.quota_store.local.LocalQuotaStore"
+
+    def __init__(self, base_path: str | Path, keep_periods: int = 60) -> None:
+        """Initialize ``LocalQuotaStore``.
+
+Parameters
+----------
+base_path : str | Path
+    Value supplied for ``base_path``.
+keep_periods : int
+    Value supplied for ``keep_periods``."""
+        super().__init__()
+        self.base_path = Path(base_path)
+        self.keep_periods = keep_periods
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def _to_config(self) -> LocalQuotaStoreConfig:
+        """Build the serializable configuration for ``LocalQuotaStore``."""
+        return LocalQuotaStoreConfig(base_path=str(self.base_path), keep_periods=self.keep_periods)
+
+    @classmethod
+    def _from_config(cls, config: LocalQuotaStoreConfig) -> LocalQuotaStore:
+        """Create an instance from its configuration for ``LocalQuotaStore``.
+
+Parameters
+----------
+config : LocalQuotaStoreConfig
+    Value supplied for ``config``."""
+        return cls(base_path=config.base_path, keep_periods=config.keep_periods)
+
+    def _path(self, user_id: str) -> Path:
+        """Perform the internal ``path`` operation for ``LocalQuotaStore``.
+
+Parameters
+----------
+user_id : str
+    Value supplied for ``user_id``."""
+        return self.base_path / f"{user_id}.json"
+
+    # -------- BACKEND HOOKS -----------------------------------------------------------
+    async def _usage(self, user_id: str, period_key: str) -> QuotaUsage:
+        """Perform the internal ``usage`` operation for ``LocalQuotaStore``.
+
+Parameters
+----------
+user_id : str
+    Value supplied for ``user_id``.
+period_key : str
+    Value supplied for ``period_key``."""
+        periods = await asyncio.to_thread(_read, self._path(user_id))
+        return QuotaUsage.model_validate(periods.get(period_key, {}))
+
+    async def _add(self, user_id: str, period_key: str, delta: QuotaUsage) -> QuotaUsage:
+        """Perform the internal ``add`` operation for ``LocalQuotaStore``.
+
+Parameters
+----------
+user_id : str
+    Value supplied for ``user_id``.
+period_key : str
+    Value supplied for ``period_key``.
+delta : QuotaUsage
+    Value supplied for ``delta``."""
+        async with self._locks.setdefault(user_id, asyncio.Lock()):
+            path = self._path(user_id)
+            periods = await asyncio.to_thread(_read, path)
+            total = QuotaUsage.model_validate(periods.get(period_key, {})) + delta
+            periods[period_key] = total.model_dump()
+            # Keys sort by date within a kind (day:/month:), newest last.
+            kept = dict(sorted(periods.items())[-self.keep_periods:])
+            await asyncio.to_thread(_write_atomic, path, json.dumps(kept))
+            return total
+
+
+def _read(path: Path) -> dict:
+    """Perform the internal ``read`` operation.
+
+Parameters
+----------
+path : Path
+    Value supplied for ``path``."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+
+
+def _write_atomic(path: Path, payload: str) -> None:
+    """Perform the internal ``write atomic`` operation.
+
+Parameters
+----------
+path : Path
+    Value supplied for ``path``.
+payload : str
+    Value supplied for ``payload``."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(payload, encoding="utf-8")
+    os.replace(tmp, path)

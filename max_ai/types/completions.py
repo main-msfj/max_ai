@@ -1,7 +1,9 @@
 import typing as t
+
 from pydantic import BaseModel, Field
 
 from ..core.messages import AssistantMessage
+
 
 # -------- MODEL USAGE -----------------------------------------------------------
 class Usage(BaseModel):
@@ -54,4 +56,7 @@ class ChatCompletionChunk(BaseModel):
     tool_call_chunk: dict[str, t.Any] | None = Field(default=None)
     usage: Usage | None = Field(default=None, description="Token usage statistics")
     structured_output: BaseModel | None = Field(default=None)
+    finish_reason: str | None = Field(
+        default=None, description="Why the model stopped, on the final chunk (e.g. 'length').",
+    )
 

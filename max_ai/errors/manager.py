@@ -1,4 +1,5 @@
-import typing as t 
+import typing as t
+
 
 class LayerContainerError(Exception):
     """Raised when LayerContainer construction fails validation."""

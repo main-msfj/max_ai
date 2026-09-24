@@ -1,0 +1,13 @@
+services:
+  duckduckgo:
+    image: ${DUCKDUCKGO_IMAGE:-mcp/duckduckgo:latest}
+    # The MCP client owns this stdio process: run --rm -T duckduckgo.
+    profiles: [mcp]
+    stdin_open: true
+    tty: false
+    restart: "no"
+    networks:
+      - mcp
+
+networks:
+  mcp:

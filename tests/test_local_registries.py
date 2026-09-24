@@ -21,18 +21,15 @@ from pathlib import Path
 
 import pytest
 
-from max_ai.base.memory import MemoryToolMode
 from max_ai.base.context import LogBookToolMode
 from max_ai.base.knowledge import KnowledgeToolMode
-from max_ai.base.routines import RoutineToolMode
-
-from max_ai.capabilities.memory import LocalMemoryRegistry
+from max_ai.base.memory import MemoryToolMode
 from max_ai.capabilities.context import LocalContextRegistry
 from max_ai.capabilities.knowledge import LocalKnowledgeRegistry
-from max_ai.capabilities.routines import LocalRoutineRegistry
+from max_ai.capabilities.memory import LocalMemoryRegistry
 from max_ai.capabilities.skills.local import LocalSkillRegistry
-from max_ai.types.workspace import WorkspaceDirectory
 from max_ai.errors.memory import MemoryError
+from max_ai.types.workspace import WorkspaceDirectory
 
 
 # =====================================================================
@@ -40,61 +37,37 @@ from max_ai.errors.memory import MemoryError
 # =====================================================================
 @pytest.mark.asyncio
 async def test_local_memory_registry_round_trip(tmp_path: Path):
-    """update_fact → get_context returns what we wrote, in correct shape."""
-    mem = LocalMemoryRegistry(
-        user_id="u1",
-        base_path=tmp_path,
-        tool_mode=MemoryToolMode.FULL,
-    )
+    """create_or_update → get_context returns what we wrote, per category."""
+    mem = LocalMemoryRegistry(base_path=tmp_path, tool_mode=MemoryToolMode.FULL).bind("u1", "s1")
 
     async with mem:
-        # First read on a new user is empty, not an error.
-        initial = await mem.get_context()
-        assert initial == []
+        assert await mem.get_context() == []  # a new user starts empty
 
-        # Write two facts.
-        await mem.update_fact("user_identity", "Software engineer in Buenos Aires")
-        await mem.update_fact("language", "Spanish, prefers technical English")
+        await mem.create_or_update("identity", "Software engineer in Buenos Aires")
+        await mem.create_or_update("language", "Spanish, prefers technical English")
+        by_category = {r.category: r for r in await mem.get_context()}
+        assert by_category["identity"].memory == "Software engineer in Buenos Aires"
+        assert isinstance(by_category["language"].updated, datetime)
 
-        # Read back.
-        all_facts = await mem.get_context()
-        assert len(all_facts) == 2
+        # Updating a category replaces it.
+        await mem.create_or_update("language", "English only")
+        by_category = {r.category: r for r in await mem.get_context()}
+        assert len(by_category) == 2 and by_category["language"].memory == "English only"
 
-        by_key = {f.key: f for f in all_facts}
-        assert by_key["user_identity"].category == "general"
-        assert by_key["user_identity"].content == "Software engineer in Buenos Aires"
-        assert by_key["language"].content == "Spanish, prefers technical English"
-        assert isinstance(by_key["language"].last_updated, datetime)
+        assert await mem.delete_memory("language") == "Memory deleted: language"
+        assert [r.category for r in await mem.get_context()] == ["identity"]
+        assert "not found" in await mem.delete_memory("never_existed")
 
-        # Update existing key overwrites.
-        await mem.update_fact("language", "English only")
-        updated = await mem.get_context()
-        assert len(updated) == 2  # still two
-        by_key = {f.key: f for f in updated}
-        assert by_key["language"].content == "English only"
-
-        # Delete removes it.
-        await mem.delete_fact("language")
-        after_delete = await mem.get_context()
-        assert len(after_delete) == 1
-        assert after_delete[0].key == "user_identity"
-
-        # Delete missing key is silent no-op.
-        await mem.delete_fact("never_existed")  # must not raise
-
-    # File should exist on disk after writes.
-    user_file = tmp_path / "memory" / "u1.json"
-    assert user_file.is_file()
+    assert (tmp_path / "memory" / "u1" / "s1.json").is_file()
 
 
 @pytest.mark.asyncio
-async def test_local_memory_rejects_invalid_keys(tmp_path: Path):
-    mem = LocalMemoryRegistry(user_id="u1", base_path=tmp_path)
+async def test_local_memory_rejects_empty_categories(tmp_path: Path):
+    mem = LocalMemoryRegistry(base_path=tmp_path).bind("u1", "s1")
     async with mem:
-        with pytest.raises(MemoryError):
-            await mem.update_fact("", "value")
-        with pytest.raises(MemoryError):
-            await mem.update_fact("   ", "value")
+        for category in ("", "   "):
+            with pytest.raises(MemoryError):
+                await mem.create_or_update(category, "value")
 
 
 # =====================================================================
@@ -134,17 +107,17 @@ async def test_local_context_registry_summary_and_search(tmp_path: Path):
         summary = await ctx.get_current_session_summary()
         assert summary == "Conversation about bicycle frame materials."
 
-        # Search finds session_001 by content.
+        # Semantic search ranks the rocket/spaceship session on top.
         results = await ctx.search("rocket spaceship")
-        assert len(results) == 1
+        assert results
         assert results[0].session_id == "session_001"
         assert "spaceship" in results[0].content
         assert results[0].score is not None
         assert results[0].score > 0
-
-        # Search with no match returns [].
-        empty = await ctx.search("zzznothingmatches")
-        assert empty == []
+        # The on-topic match must clearly outscore the off-topic one.
+        scores = {r.session_id: r.score for r in results}
+        if "session_002" in scores:
+            assert scores["session_001"] > scores["session_002"]
 
 
 @pytest.mark.asyncio
@@ -172,19 +145,16 @@ async def test_local_knowledge_registry_search(tmp_path: Path):
     source_file.write_text(json.dumps([
         {
             "content": "FastAPI is a modern Python web framework for APIs.",
-            "score": None,
             "tokens": 12,
             "metadata": {"source": "fastapi.md"},
         },
         {
             "content": "Pydantic provides data validation using type annotations.",
-            "score": None,
             "tokens": 10,
             "metadata": {"source": "pydantic.md"},
         },
         {
             "content": "Cooking pasta requires boiling salted water.",
-            "score": None,
             "tokens": 7,
             "metadata": {"source": "irrelevant.md"},
         },
@@ -201,16 +171,15 @@ async def test_local_knowledge_registry_search(tmp_path: Path):
         # Query that matches the python framework blocks.
         results = await kb.search("Python framework", limit=5)
         assert len(results) >= 1
-        # All returned blocks must have a fresh score, not None.
-        for block in results:
-            assert block.score is not None
-            assert block.score > 0
-        # Top result should be the FastAPI block (most token overlap).
+        # Top result should be the FastAPI block (closest semantically).
+        # Ranking happens internally (cosine similarity); the score itself
+        # is never attached to the returned blocks — see KnowledgeBlock.
         assert "FastAPI" in results[0].content
-
-        # Irrelevant query returns empty.
-        empty = await kb.search("zzznothingmatches")
-        assert empty == []
+        # The unrelated cooking block, if it clears the relevance bar at
+        # all, must rank below the on-topic blocks.
+        contents = [b.content for b in results]
+        if any("pasta" in c for c in contents):
+            assert contents.index(next(c for c in contents if "pasta" in c)) > 0
 
 
 @pytest.mark.asyncio
@@ -223,72 +192,6 @@ async def test_local_knowledge_registry_missing_file(tmp_path: Path):
     )
     async with kb:
         assert await kb.search("anything") == []
-
-
-# =====================================================================
-# ROUTINE
-# =====================================================================
-@pytest.mark.asyncio
-async def test_local_routine_registry_only_authorized(tmp_path: Path):
-    """Repo has 3 routines on disk; only 2 are authorized."""
-    routines_dir = tmp_path / "routines"
-    routines_dir.mkdir(parents=True)
-
-    def write_routine(name: str, description: str, instructions: str):
-        (routines_dir / f"{name}.json").write_text(json.dumps({
-            "name": name,
-            "description": description,
-            "instructions": instructions,
-        }))
-
-    write_routine("client_followup", "Follow up with a client.", "1. ... 2. ...")
-    write_routine("email_reply", "Draft an email reply.", "Steps...")
-    write_routine("internal_secret", "Internal procedure.", "Don't expose.")
-
-    reg = LocalRoutineRegistry(
-        source_path=tmp_path,
-        routines=["client_followup", "email_reply"],  # only 2 of 3
-        tool_mode=RoutineToolMode.FULL,
-    )
-
-    async with reg:
-        # Catalog returns the 2 authorized, ignores the 3rd on disk.
-        catalog = await reg.get_catalog()
-        assert {r.name for r in catalog} == {"client_followup", "email_reply"}
-
-        # Search only inside authorized routines.
-        results = await reg.search("email")
-        assert len(results) == 1
-        assert results[0].name == "email_reply"
-
-        # Fetch authorized routine succeeds.
-        block = await reg.fetch("client_followup")
-        assert block.name == "client_followup"
-        assert "1." in block.instructions
-
-        # Fetch unauthorized routine fails with informative message.
-        with pytest.raises(ValueError) as exc_info:
-            await reg.fetch("internal_secret")
-        msg = str(exc_info.value)
-        assert "internal_secret" in msg
-        assert "client_followup" in msg  # available list mentioned
-        assert "email_reply" in msg
-
-
-@pytest.mark.asyncio
-async def test_local_routine_registry_missing_authorized(tmp_path: Path):
-    """Authorized routine that doesn't exist on disk → fails loud at connect."""
-    (tmp_path / "routines").mkdir(parents=True)
-    # Don't create any files — just an empty routines dir.
-
-    reg = LocalRoutineRegistry(
-        source_path=tmp_path,
-        routines=["does_not_exist"],
-    )
-    with pytest.raises(FileNotFoundError) as exc_info:
-        async with reg:
-            pass
-    assert "does_not_exist" in str(exc_info.value)
 
 
 # =====================================================================
@@ -358,13 +261,54 @@ async def test_local_skill_registry_loads_skill(tmp_path: Path, monkeypatch: pyt
         assert (cached_skill / "references" / "notes.md").is_file()
         assert (cached_skill / "scripts" / "greetings.py").is_file()
 
+        user_root = server_root.resolve() / "tmp" / "u1"
         directory = WorkspaceDirectory(
-            root=server_root.resolve() / "tmp" / "u1",
-            tool_dir=server_root.resolve() / "tmp" / "u1" / "tools",
-            skill_dir=server_root.resolve() / "tmp" / "u1" / "skills",
-            artifacts_dir=server_root.resolve() / "tmp" / "u1" / "artifacts",
+            root=user_root,
+            workspace_dir=user_root / "workspace",
+            skill_dir=user_root / "skills",
+            artifacts_dir=user_root / "workspace",
         )
         session_skills = reg.materialize(directory)
         assert session_skills == directory.skill_dir
         assert (session_skills / "demo_skill" / "SKILL.md").is_file()
         assert (session_skills / "demo_skill" / "references" / "notes.md").is_file()
+
+
+async def test_materialize_refreshes_unedited_files_but_keeps_local_edits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A skill fixed upstream should reach users who never touched their copy,
+    without clobbering a file a user or agent actually edited."""
+    source_root = tmp_path / "source"
+    monkeypatch.setenv("SKILLS_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("SERVER_DIR", str(tmp_path / "server"))
+
+    skill_dir = source_root / "demo_skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("---\nname: demo_skill\ndescription: d\n---\nold path\n")
+    (skill_dir / "notes.md").write_text("shared")
+
+    reg = LocalSkillRegistry(source=source_root, skills=["demo_skill"])
+    user_root = (tmp_path / "server").resolve() / "tmp" / "u1"
+    directory = WorkspaceDirectory(
+        root=user_root, workspace_dir=user_root / "workspace",
+        skill_dir=user_root / "skills", artifacts_dir=user_root / "workspace",
+    )
+
+    async with reg:
+        await reg.get_skills()
+        reg.materialize(directory)
+        materialized = directory.skill_dir / "demo_skill"
+        # The user/agent edits notes.md; nothing touches SKILL.md.
+        (materialized / "notes.md").write_text("user's own notes")
+
+    # Upstream fixes SKILL.md (imagine the real bug: a wrong script path).
+    (skill_dir / "SKILL.md").write_text("---\nname: demo_skill\ndescription: d\n---\nfixed path\n")
+
+    reg2 = LocalSkillRegistry(source=source_root, skills=["demo_skill"])
+    async with reg2:
+        await reg2.get_skills()
+        reg2.materialize(directory)
+
+    assert (materialized / "SKILL.md").read_text().endswith("fixed path\n")
+    assert (materialized / "notes.md").read_text() == "user's own notes"

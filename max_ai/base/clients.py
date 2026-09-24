@@ -26,24 +26,25 @@ What stays the same — and is the framework's contract:
 
 from __future__ import annotations
 
+import os
 import typing as t
 from abc import ABC, abstractmethod
 
 from pydantic import BaseModel, SecretStr
 
-from .tools import CoreTool
-from .component import ComponentBase
-
-from ..types.stacks import PromptCtx
 from ..core.blocks import CoreMessage
-from ..core.models import ModelConfig
+from ..core.model.llm import ModelConfig
 from ..errors.client import ClientError
 from ..types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
+from ..types.stacks import PromptCtx
+from .component import ComponentBase
+from .tools import CoreTool
 
 if t.TYPE_CHECKING:
     from ..types.run_context import RunContext
 
 T = t.TypeVar("T")
+
 
 class CoreChatCompletionClient(ComponentBase[BaseModel], ABC):
     """Abstract base class for all MaxAI chat completion clients.
@@ -55,11 +56,17 @@ class CoreChatCompletionClient(ComponentBase[BaseModel], ABC):
     """
 
     # -------- CONSTRUCTION -----------------------------------------------------------
+    # Env var holding the key. Serialized configs store this name, never
+    # the key itself, so an agent's JSON can live in a database safely.
+    API_KEY_ENV: t.ClassVar[str | None] = None
+
     def __init__(
         self,
         model: str,
         api_key: str | SecretStr | None = None,
         config: ModelConfig | None = None,
+        *,
+        api_key_env: str | None = None,
         **kwargs: t.Any,
     ) -> None:
         """Initialize a client instance.
@@ -68,10 +75,10 @@ class CoreChatCompletionClient(ComponentBase[BaseModel], ABC):
             model: The provider-specific model identifier
                 (e.g. ``"qwen3:4b"``, ``"claude-opus-4"``,
                 ``"gpt-4o"``).
-            api_key: Authentication key. Optional — providers like
-                local Ollama need none. Concrete clients decide what
-                to do when ``None`` (read from env var, fall back to
-                no auth, etc.).
+            api_key: Authentication key for code-built clients. When
+                ``None`` it is read from ``api_key_env``.
+            api_key_env: Env var holding the key (default
+                ``API_KEY_ENV``). This name is what gets serialized.
             config: Model capabilities and defaults. If None, an
                 empty ``ModelConfig`` is used. The ``run()`` method
                 consults ``config.supports_function_calling`` to
@@ -80,6 +87,9 @@ class CoreChatCompletionClient(ComponentBase[BaseModel], ABC):
                 ``top_p``). Concrete clients pull what they need.
         """
         self.model: str = self._require_type(model, str, "model")
+        self.api_key_env: str | None = api_key_env or self.API_KEY_ENV
+        if api_key is None and self.api_key_env:
+            api_key = os.getenv(self.api_key_env) or None
         self.api_key: SecretStr | None = self._resolve_api_key(api_key)
         self.config: ModelConfig = self._require_type(
             config or ModelConfig(), ModelConfig, "config"
@@ -87,6 +97,23 @@ class CoreChatCompletionClient(ComponentBase[BaseModel], ABC):
 
     @staticmethod
     def _require_type(value: t.Any, expected: type[T], field: str) -> T:
+        """
+        Validate a value against an expected Python type.
+
+        Parameters
+        ----------
+        value : t.Any
+            Value to validate.
+        expected : type[T]
+            Expected Python type.
+        field : str
+            Field name used to describe a validation error.
+
+        Returns
+        -------
+        T
+            The input value after it passes type validation.
+        """
         if not isinstance(value, expected):
             raise TypeError(
                 f"{field} must be {expected.__name__}, got {type(value).__name__}"

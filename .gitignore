@@ -1,7 +1,17 @@
 .env
-user_001/
-user123/
+# Per-user runtime workspaces (e.g. user_001/, user123/)
+user*/
+Workspace/
+tmp/
+# Runtime/state dir (skills staging, pytest artifacts)
+var/
+# Local model weights
+llm-models/
 .vscode/
+.codex/
+.claude/
+.ruff_cache/
+.agents/
 .venv
 .pytest_cache/
 .docker-runtime
@@ -15,4 +25,12 @@ __pycache__/
 *.db
 *.bak
 *.backup
-*.swp   
+*.swp
+
+# Personal notes, research and the project website (kept out of the repo)
+website/
+deployment/website/
+agent_update.md
+architecture.md
+a-harness-max-ai/
+ai-harness-research/

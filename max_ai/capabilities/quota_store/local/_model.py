@@ -1,0 +1,11 @@
+"""Serializable configuration for LocalQuotaStore."""
+
+from __future__ import annotations
+
+from pydantic import BaseModel, Field
+
+
+class LocalQuotaStoreConfig(BaseModel):
+    """Configuration options for ``LocalQuotaStore``."""
+    base_path: str
+    keep_periods: int = Field(default=60, ge=1, description="Older periods are dropped.")

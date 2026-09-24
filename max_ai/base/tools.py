@@ -8,25 +8,25 @@ to execute external actions (e.g., APIs, file I/O, services).
 import typing as t
 from abc import ABC, abstractmethod
 
-from pydantic import BaseModel
 from jsonschema import Draft202012Validator
+from pydantic import BaseModel
 
+from ..core.termination import CancellationToken
 from ..errors.tools import DockerToolReferenceError
-from ..termination import CancellationToken
-from .component import ComponentBase
 from ..types.tool_call import ToolCallRecord, ToolResult
 from ..types.tools import (
-    ToolApprovalMode,
-    CoreToolParameters,
     CoreToolDefinition,
+    CoreToolParameters,
     DockerToolRef,
+    ToolApprovalMode,
 )
+from .component import ComponentBase
 
 
 class ToolContext:
     """Runtime context available to tools."""
 
-    __slots__ = ("user_id", "session_id", "run_id", "retry_count", "deps")
+    __slots__ = ("user_id", "session_id", "run_id", "retry_count", "deps", "emit_event")
 
     def __init__(
         self,
@@ -35,16 +35,38 @@ class ToolContext:
         user_id: str = "runtime",
         retry_count: int = 0,
         deps: dict[str, t.Any] | None = None,
+        emit_event: t.Callable[[t.Any], None] | None = None,
     ):
+        """
+        Initialize the run-scoped context supplied to a tool.
+
+        Parameters
+        ----------
+        run_id : str
+            Value used to configure the tool or its run-scoped context.
+        session_id : str, default=''
+            Identifier for the current session.
+        user_id : str, default='runtime'
+            Identifier for the user scope.
+        retry_count : int, default=0
+            Number of retries attempted for the current call.
+        deps : dict[str, t.Any] | None, default=None
+            Dependencies made available to the tool.
+        emit_event : t.Callable[[t.Any], None] | None, default=None
+            Optional callback for emitting runtime events.
+        """
         self.run_id = run_id
         self.user_id = user_id
         self.session_id = session_id
         self.retry_count = retry_count
         self.deps = deps or {}
+        self.emit_event = emit_event
 
 
 class CoreTool(ComponentBase[BaseModel], ABC):
     """Base class for all agent tools."""
+
+    component_type = "tool"
 
     _JSON_TYPE_MAP: t.ClassVar[dict[str, type | tuple[type, ...]]] = {
         "string": str,
@@ -64,13 +86,36 @@ class CoreTool(ComponentBase[BaseModel], ABC):
         approval_mode: ToolApprovalMode | str = ToolApprovalMode.ASK_APPROVED,
         timeout_seconds: float = 300,
         max_retries: int = 3,
+        read_only: bool = False,
     ):
+        """
+        Initialize the run-scoped context supplied to a tool.
+
+        Parameters
+        ----------
+        name : str
+            Name assigned to the component or resource.
+        description : str
+            Human-readable description of the resource.
+        version : str, default='1.0.0'
+            Version number of the saved configuration.
+        approval_mode : ToolApprovalMode | str, default=ToolApprovalMode.ASK_APPROVED
+            Value used to configure the tool or its run-scoped context.
+        timeout_seconds : float, default=300
+            Value used to configure the tool or its run-scoped context.
+        max_retries : int, default=3
+            Value used to configure the tool or its run-scoped context.
+        read_only : bool, default=False
+            Value used to configure the tool or its run-scoped context.
+        """
         self.name = name
         self.version = version
         self.description = description
         self.approval_mode = approval_mode
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
+        # No side effects: may run at the same time as other read-only calls.
+        self.read_only = read_only
 
         # Lazily-built schema validator
         self._schema_validator: Draft202012Validator | None = None
@@ -82,6 +127,14 @@ class CoreTool(ComponentBase[BaseModel], ABC):
         ...
 
     def docker_ref(self) -> DockerToolRef:
+        """
+        Return the container reference for a tool that supports isolation.
+
+        Returns
+        -------
+        DockerToolRef
+            The Docker reference for this tool.
+        """
         raise DockerToolReferenceError(
             self.name,
             "it does not provide a DockerToolRef",
@@ -168,9 +221,25 @@ class CoreTool(ComponentBase[BaseModel], ABC):
 
     # -------- DUNDERS -----------------------------------------------------------
     def __str__(self) -> str:
+        """
+        Return the tool name for display.
+
+        Returns
+        -------
+        str
+            The resulting text value.
+        """
         return f"{type(self).__name__}(name='{self.name}')"
 
     def __repr__(self) -> str:
+        """
+        Return a readable representation of this tool.
+
+        Returns
+        -------
+        str
+            The resulting text value.
+        """
         return (
             f"<{type(self).__name__} "
             f"name='{self.name}' "

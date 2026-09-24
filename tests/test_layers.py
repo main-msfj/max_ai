@@ -12,18 +12,17 @@ parse — the test fails immediately. That's all this suite is for.
 """
 
 
-from max_ai.core import MemoryBlock
+
+from max_ai.base.memory import MemoryRecord
+from max_ai.capabilities.stacks.agent_policy_layer import AgentPolicyLayer
+from max_ai.capabilities.stacks.context_layer import ContextLayer
+from max_ai.capabilities.stacks.knowledge_layer import KnowledgeLayer
+from max_ai.capabilities.stacks.memory_layer import MemoryLayer
+from max_ai.capabilities.stacks.rendering_layer import RenderingLayer
+from max_ai.capabilities.stacks.skills_layer import SkillsLayer
+from max_ai.capabilities.stacks.task_analysis_layer import TaskAnalysisLayer
 from max_ai.core.blocks import SkillBlock
 
-from max_ai.stacks.memory_layer import MemoryLayer
-from max_ai.stacks.skills_layer import SkillsLayer
-from max_ai.stacks.routine_layer import RoutineLayer
-from max_ai.stacks.context_layer import ContextLayer
-from max_ai.stacks.knowledge_layer import KnowledgeLayer
-from max_ai.stacks.rendering_layer import RenderingLayer
-from max_ai.stacks.agent_policy_layer import AgentPolicyLayer
-from max_ai.stacks.task_analysis_layer import TaskAnalysisLayer
-from max_ai.stacks.priority_tools_layer import PriorityToolsLayer
 
 def test_agent_policy_layer():
     layer = AgentPolicyLayer()
@@ -41,15 +40,15 @@ def test_memory_layer_with_facts_and_tools():
     layer = MemoryLayer()
     out = layer.render({
         "persistent_memories": [
-            MemoryBlock(category="location", content="Lives in Buenos Aires"),
-            MemoryBlock(category="role", content="Software engineer"),
+            MemoryRecord(category="location", memory="Lives in Buenos Aires"),
+            MemoryRecord(category="role", memory="Software engineer"),
         ],
-        "memory_tools": ["list_memories", "update_memory", "delete_memory"],
+        "memory_tools": ["create_or_update", "delete_memory"],
     })
     assert out
     assert "Lives in Buenos Aires" in out
     assert "[location]" in out
-    assert "update_memory" in out
+    assert "create_or_update(category, memory)" in out
     assert "<memory_management>" in out
 
 
@@ -58,7 +57,7 @@ def test_memory_layer_no_tools():
     layer = MemoryLayer()
     out = layer.render({
         "persistent_memories": [
-            MemoryBlock(category="role", content="Software engineer"),
+            MemoryRecord(category="role", memory="Software engineer"),
         ],
         # No memory_tools — read-only memory case.
     })
@@ -72,7 +71,7 @@ def test_memory_layer_empty():
     layer = MemoryLayer()
     out = layer.render({"persistent_memories": []})
     assert out
-    assert "No persistent memories" in out
+    assert "No memories are included" in out
 
 
 def test_knowledge_layer_with_tools():
@@ -92,34 +91,6 @@ def test_knowledge_layer_no_tools():
     assert out.strip() == ""
 
 
-def test_routine_layer_full():
-    layer = RoutineLayer()
-    out = layer.render({
-        "routine_search_tool": "search_routines",
-        "routine_fetch_tool": "get_routine",
-    })
-    assert out
-    assert "search_routines" in out
-    assert "get_routine" in out
-
-
-def test_routine_layer_search_only():
-    """Search without fetch — single-tool design."""
-    layer = RoutineLayer()
-    out = layer.render({
-        "routine_search_tool": "search_routines",
-    })
-    assert out
-    assert "search_routines" in out
-    assert "get_routine" not in out
-
-
-def test_routine_layer_no_tools():
-    layer = RoutineLayer()
-    out = layer.render({})
-    assert out.strip() == ""
-
-
 def test_skills_layer_with_skills():
     layer = SkillsLayer()
     skill = SkillBlock(
@@ -130,13 +101,11 @@ def test_skills_layer_with_skills():
     assert out
     assert "pr_review" in out
     assert "Review pull requests." in out
-    assert "Run `bash` with the command `read_skill <skill-name>`" in out
-    assert "`bash` is the ONLY way to engage a skill" in out
-    assert "Never treat a skill name as a" in out
     assert "`pr_review`" in out
-    assert "$SKILLS_DIR" not in out
-    assert "SKILL.md" not in out
-    assert "search_skills" not in out
+    assert "skills/pr_review/SKILL.md" in out  # read with read_file
+    assert "$SKILLS/<skill-name>/" in out  # where bash finds its scripts
+    assert "$WORKSPACE/skills" not in out  # skills are not inside the workspace
+    assert "Never treat a skill name as a callable tool." in out
 
 
 def test_skills_layer_empty():
@@ -160,22 +129,6 @@ def test_context_layer_with_summary():
 def test_context_layer_no_summary():
     layer = ContextLayer()
     out = layer.render({})
-    assert out.strip() == ""
-
-
-def test_priority_tools_layer_with_tools():
-    layer = PriorityToolsLayer()
-    out = layer.render({
-        "priority_tools": ["search_inventory", "check_order_status"],
-    })
-    assert out
-    assert "search_inventory" in out
-    assert "check_order_status" in out
-
-
-def test_priority_tools_layer_empty():
-    layer = PriorityToolsLayer()
-    out = layer.render({"priority_tools": []})
     assert out.strip() == ""
 
 

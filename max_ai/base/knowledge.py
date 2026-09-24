@@ -18,7 +18,7 @@ A ``CoreKnowledgeRegistry`` exposes two surfaces to the agent:
 
 Subclasses implement ``search`` (storage-level retrieval). The base
 class handles tool generation.
-"""
+    """
 
 from __future__ import annotations
 
@@ -30,12 +30,12 @@ from enum import Enum
 
 from pydantic import BaseModel
 
-from .capability import CoreAgentCapabilities
-from .tools import CoreTool
-from ..tools.function_as_tool import FunctionAsTool
-from ..types.tools import ToolApprovalMode
+from ..capabilities.tools.function_as_tool import FunctionAsTool
 from ..core import KnowledgeBlock
 from ..loggers import ScopedLogger
+from ..types.tools import ToolApprovalMode
+from .capability import CoreAgentCapabilities
+from .tools import CoreTool
 
 logger = logging.getLogger(__name__)
 log = ScopedLogger(logger, scope=["CoreKnowledgeRegistry"])
@@ -68,6 +68,18 @@ class CoreKnowledgeRegistry(CoreAgentCapabilities[BaseModel], ABC):
         description: str,
         tool_mode: KnowledgeToolMode = KnowledgeToolMode.FULL,
     ) -> None:
+        """
+        Initialize a named knowledge source and its agent-facing description.
+
+        Parameters
+        ----------
+        name : str
+            Name assigned to the component or resource.
+        description : str
+            Human-readable description of the resource.
+        tool_mode : KnowledgeToolMode, default=KnowledgeToolMode.FULL
+            Controls which agent-facing tools are exposed.
+        """
         super().__init__()
         self.name: str = self._validate_name(name)
         self.description: str = self.require_type(

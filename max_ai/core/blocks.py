@@ -1,27 +1,12 @@
 import typing as t
-from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 
-from .messages import CoreMessage
+from pydantic import BaseModel, Field
 
-if t.TYPE_CHECKING:
-    from ..types.routines import RoutineSummary
+from .messages import CoreMessage, Message
 
 
 # -------- UNIT BLOCKS -----------------------------------------------------------
-class RoutineBlocks(BaseModel):
-    """Single block of routine context information"""
-
-    name: str = Field(..., description="routine name")
-    description: str = Field(..., description="routine description")
-    instructions: str = Field(..., description="The full markdown instructions")
-
-    def to_summary(self) -> "RoutineSummary":
-        from ..types.routines import RoutineSummary
-
-        return RoutineSummary(name=self.name, description=self.description)
-
-
 class RunTimeBlock(BaseModel):
     """Single block of Run Time context information"""
 
@@ -31,9 +16,16 @@ class RunTimeBlock(BaseModel):
 
 
 class ChatHistoryBlock(BaseModel):
-    """Single block of chat history."""
+    """Single block of chat history.
 
-    message_history: list[CoreMessage] = Field(default_factory=list)  # type: ignore
+    Typed as the discriminated ``Message`` union (not the ``CoreMessage``
+    base) so deserialization restores the concrete subtypes — an
+    ``AssistantMessage`` keeps its ``tool_calls``, a ``ToolMessage`` its
+    ``tool_call_id``. With the base class, ``model_validate_json`` would
+    silently collapse every entry into a bare ``CoreMessage``.
+    """
+
+    message_history: list[Message] = Field(default_factory=list)  # type: ignore
 
     def iter_messages(self) -> t.Iterator[CoreMessage]:
         """Iterate over the messages in chronological order."""
@@ -59,7 +51,6 @@ class KnowledgeBlock(BaseModel):
     """Single block of external item"""
 
     content: str = Field(..., description="External Context")
-    score: float | None = Field(default=None)
     tokens: int = Field(default=0)
     metadata: dict[str, t.Any] = Field(default_factory=dict)
 

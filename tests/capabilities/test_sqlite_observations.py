@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import pytest
 from pathlib import Path
 
+import pytest
+
 from max_ai.base.context import LogBookToolMode
-from max_ai.base.observation import ObservationRecord
 from max_ai.capabilities.context import SQLiteContextRegistry
 
 

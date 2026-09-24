@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from max_ai.base import embeddings
+from max_ai.core.embeddings import lightweight as embeddings
 from max_ai.errors.embeddings import EmbeddingError
 
 

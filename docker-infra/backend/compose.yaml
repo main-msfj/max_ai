@@ -1,0 +1,40 @@
+services:
+  mongodb:
+    # Atlas local: MongoDB + Search (mongot), so $vectorSearch works locally.
+    image: ${MONGODB_IMAGE:-mongodb/mongodb-atlas-local:8.2}
+    restart: unless-stopped
+    environment:
+      MONGODB_INITDB_ROOT_USERNAME: ${MONGODB_USERNAME:-maxai}
+      MONGODB_INITDB_ROOT_PASSWORD: ${MONGODB_PASSWORD:-maxai-local-dev}
+    ports:
+      - "127.0.0.1:${MONGODB_PORT:-27017}:27017"
+    volumes:
+      - mongodb-atlas-data:/data/db
+      - mongodb-atlas-config:/data/configdb
+    networks:
+      - backend
+    # The image ships its own healthcheck.
+
+  mongo-express:
+    image: ${MONGO_EXPRESS_IMAGE:-mongo-express:1.0.2-20-alpine3.19}
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      ME_CONFIG_MONGODB_URL: "mongodb://${MONGODB_USERNAME:-maxai}:${MONGODB_PASSWORD:-maxai-local-dev}@mongodb:27017/?authSource=admin&directConnection=true"
+      ME_CONFIG_MONGODB_ENABLE_ADMIN: "true"
+      ME_CONFIG_BASICAUTH_ENABLED: "true"
+      ME_CONFIG_BASICAUTH_USERNAME: ${MONGO_EXPRESS_USERNAME:-maxai}
+      ME_CONFIG_BASICAUTH_PASSWORD: ${MONGO_EXPRESS_PASSWORD:-maxai-local-ui}
+    ports:
+      - "127.0.0.1:${MONGO_EXPRESS_PORT:-8081}:8081"
+    networks:
+      - backend
+
+volumes:
+  mongodb-atlas-data:
+  mongodb-atlas-config:
+
+networks:
+  backend:

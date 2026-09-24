@@ -17,7 +17,6 @@ Design principles:
 
 from __future__ import annotations
 
-import uuid
 import base64
 import typing as t
 from datetime import datetime, timezone
@@ -28,9 +27,19 @@ from pydantic import (
     ConfigDict,
     Discriminator,
     Field,
+    SerializeAsAny,
     TypeAdapter,
     model_validator,
 )
+
+from .ids import short_id
+
+if t.TYPE_CHECKING:
+    from .compaction.token_counter import TokenCounter
+
+# Source of messages the harness itself writes (gate rejections, limits),
+# as opposed to the user or the model.
+HARNESS_SOURCE = "harness"
 
 
 # -------- CONTENT PARTS -----------------------------------------------------------
@@ -122,7 +131,7 @@ MessageContent = Union[str, list[ContentPart]]
 class ToolCall(BaseModel):
     """A tool invocation requested by the assistant."""
 
-    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    id: str = Field(default_factory=short_id)
     tool_name: str = Field(..., description="Name of the tool to call")
     parameters: dict[str, t.Any] = Field(default_factory=dict)
 
@@ -179,16 +188,17 @@ class CoreMessage(BaseModel):
         """
         return _MESSAGE_ADAPTER.validate_python(data)
 
-    def with_token_count(self, func: t.Callable[[str], int] | None = None) -> t.Self:
-        """Return a copy with token_count set. Only counts textual content."""
+    def with_token_count(self, counter: TokenCounter | None = None) -> t.Self:
+        """Return a copy with ``token_count`` set by ``counter``.
+
+        Defaults to the shared counter for ``setting.default_tokenizer``.
+        """
         if self.token_count > 0:
             return self
-        text = self.text()
-        if func:
-            count = func(text) if text else 0
-        else:
-            buffer = 5  # Message structure overhead: <|start|>role<|message|>
-            count = buffer + max(1, int(len(text) / 4)) if text else 0
+        # Imported here: token_counter's package imports this module.
+        from .compaction.token_counter import default_counter
+
+        count = (counter or default_counter()).count_message(self)
         return self.model_copy(update={"token_count": count})
 
 
@@ -278,7 +288,47 @@ class AssistantMessage(CoreMessage):
 
     tool_calls: list[ToolCall] = Field(default_factory=list)
     thinking: str | None = Field(default=None, description="Reasoning")
-    structured_output: BaseModel | None = Field(default=None)
+    # A final answer that a loop guard vetoed (e.g. the model stopped
+    # mid-plan and was steered to continue). It stays in the transcript
+    # so the model keeps its own context, but UIs should hide or collapse
+    # it — the model's NEXT answer supersedes it.
+    interim: bool = Field(default=False)
+    # SerializeAsAny: dump the runtime class's fields, not the empty
+    # ``BaseModel`` schema the annotation would otherwise imply.
+    structured_output: SerializeAsAny[BaseModel] | None = Field(default=None)
+    # Dotted import path of the structured_output class. Maintained
+    # automatically so a persisted message can revalidate its structured
+    # output into the right model on rehydration (a bare ``BaseModel``
+    # annotation would otherwise deserialize into an empty model).
+    structured_output_type: str | None = Field(default=None)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _hydrate_structured_output(cls, data: t.Any) -> t.Any:
+        if not isinstance(data, dict):
+            return data
+        so = data.get("structured_output")
+        if isinstance(so, BaseModel):
+            from .type_ref import type_ref
+
+            data = {**data, "structured_output_type": type_ref(type(so))}
+            return data
+        if isinstance(so, dict):
+            from .type_ref import load_type_ref
+
+            ref = data.get("structured_output_type")
+            try:
+                model_cls = load_type_ref(ref)
+            except Exception:
+                model_cls = None
+            data = dict(data)
+            if model_cls is not None:
+                data["structured_output"] = model_cls.model_validate(so)
+            else:
+                # No usable type reference — drop rather than silently
+                # producing an empty BaseModel that lies about its content.
+                data["structured_output"] = None
+        return data
 
     def _format_tool_calls(self) -> str:
         if not self.tool_calls:

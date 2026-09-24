@@ -1,10 +1,11 @@
 """Chat History Context"""
 
 import typing as t
+
 from pydantic import field_validator
 
-from ..core.messages import CoreMessage
 from ..core.blocks import ChatHistoryBlock
+from ..core.messages import CoreMessage
 from ..errors.context import ChatHistoryError
 
 
@@ -12,22 +13,27 @@ from ..errors.context import ChatHistoryError
 class ChatHistory(ChatHistoryBlock):
     """Internal chat history for context management.
 
-    Enforces that message_history contains CoreMessage objects, not raw dicts.
-    To construct from serialized data (JSON, DB rows), use `load_from()`.
+    Accepts ``CoreMessage`` instances directly and parses raw dicts
+    (e.g. from ``model_validate_json`` when a persisted ``RunContext``
+    is rehydrated) through the discriminated ``Message`` union, so the
+    concrete subtypes survive a round trip. Anything else is rejected.
     """
 
     @field_validator("message_history", mode="before")
     @classmethod
-    def _require_core_messages(cls, v: list[t.Any]) -> list[t.Any]:
+    def _coerce_core_messages(cls, v: list[t.Any]) -> list[t.Any]:
         if not v:
             return v
+        coerced: list[CoreMessage] = []
         for i, item in enumerate(v):
+            if isinstance(item, CoreMessage):
+                coerced.append(item)
+                continue
             if isinstance(item, dict):
-                raise ChatHistoryError.wrong_input(i)
-
-            if not isinstance(item, CoreMessage):
-                raise ChatHistoryError.wrong_type(i, type(item))
-        return v
+                coerced.append(CoreMessage.parse_msg(item))
+                continue
+            raise ChatHistoryError.wrong_type(i, type(item))
+        return coerced
 
     @classmethod
     def load_from(

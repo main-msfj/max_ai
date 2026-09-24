@@ -6,13 +6,14 @@ from __future__ import annotations
 
 import typing as t
 from datetime import datetime, timezone
+
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..core.messages import CoreMessage, AssistantMessage
+from ..base.completion_gate import CompletionDecision
+from ..core.messages import AssistantMessage, CoreMessage
 from .completions import Usage
 from .run_context import RunContext
 from .tool_call import ToolCallRecord
-
 
 # Allowed values for ``finish_reason``. Using ``Literal`` so callers
 # get type-checking help; new reasons should be added here as the
@@ -20,12 +21,18 @@ from .tool_call import ToolCallRecord
 FinishReason = t.Literal[
     "stop",  # LLM emitted no tool calls; conversation done
     "max_iterations",  # ReActLoop hit max_loop_iterations
+    "output_limit",  # replies kept being cut at the client's max_tokens
+    "budget_exceeded",  # a BudgetMiddleware limit was reached
+    "stopped",  # a middleware ended the run (StopRun)
     "approval_needed",  # paused waiting for user approval on a tool
+    "tool_denied",  # paused because a tool call was denied (rejected or blocked by policy)
     "tool_direct_return",  # a tool with return_control_to_llm=False finished
     "no_result",  # client returned without a result (provider error)
     "error",  # uncaught exception in the run
     "cancelled",  # cancellation token was triggered
     "input_needed",  # run paused waiting for additional input from the user
+    "incomplete",  # completion gate did not accept the proposed final response
+    "waiting",  # completion gate is waiting on something outside the model's control
 ]
 
 
@@ -60,6 +67,14 @@ class AgentResponse(BaseModel):
         ...,
         description="Why the agent stopped this run.",
     )
+    completion: CompletionDecision | None = Field(
+        default=None,
+        description="Harness completion decision; independent of workspace publication.",
+    )
+    stop_message: str | None = Field(
+        default=None,
+        description="Why a middleware ended the run (StopRun), for the user.",
+    )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         description="When this response was assembled.",
@@ -84,11 +99,24 @@ class AgentResponse(BaseModel):
 
     @property
     def final_message(self) -> AssistantMessage | None:
-        """The last assistant message produced this run, if any."""
+        """The user-facing final assistant message of this run, if any.
+
+        Skips guard-vetoed drafts (``interim``) and prefers a message
+        with text over a text-less tool-call shell (e.g. the trailing
+        ``update_plan`` call that closes out a plan). Falls back to the
+        last non-interim assistant message when none has text.
+        """
+        if self.completion is not None and self.completion.status != "completed":
+            return None
+        fallback: AssistantMessage | None = None
         for msg in reversed(self.messages):
-            if isinstance(msg, AssistantMessage):
+            if not isinstance(msg, AssistantMessage) or msg.interim:
+                continue
+            if msg.text().strip():
                 return msg
-        return None
+            if fallback is None:
+                fallback = msg
+        return fallback
 
     @property
     def final_text(self) -> str:
@@ -110,6 +138,23 @@ class AgentResponse(BaseModel):
         if self.context is None:
             return []
         return self.context.tool_state.pending_approvals
+
+    # -------- ELICITATION FLOW -----------------------------------------------------------
+    @property
+    def needs_input(self) -> bool:
+        """``True`` if the run paused waiting for the user to answer a question."""
+        if self.context is None:
+            return False
+        return self.context.tool_state.waiting_for_input
+
+    @property
+    def pending_questions(self) -> list[ToolCallRecord]:
+        """Records in ``INPUT_NEEDED`` — each carries ``input_question`` /
+        ``input_options``; answer via
+        ``context.tool_state.apply_user_answer(record.id, answer)``."""
+        if self.context is None:
+            return []
+        return self.context.tool_state.pending_user_input
 
     # -------- DUNDERS -----------------------------------------------------------
     def __str__(self) -> str:

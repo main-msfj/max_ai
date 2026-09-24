@@ -1,0 +1,10 @@
+"""Serializable configuration for LocalExecutorConfig."""
+
+from __future__ import annotations
+
+from pydantic import BaseModel
+
+
+class LocalExecutorConfig(BaseModel):
+    """Configuration options for ``LocalExecutor``."""
+    max_output_bytes: int = 1 << 20

@@ -1,0 +1,39 @@
+{% if loaded_skills %}
+<SKILLS>
+<purpose>
+Skills are workflow instructions stored under $SKILLS (outside $WORKSPACE) in the configured execution environment.
+They are NOT callable tool names. Engage one by reading its instructions,
+following them, and using `bash` only when the skill needs command execution.
+</purpose>
+
+<available_skills>
+{% for skill in loaded_skills %}
+- `{{ skill.name }}` — {{ skill.description }}
+  Instructions: `skills/{{ skill.name }}/SKILL.md`
+{% endfor %}
+</available_skills>
+
+<workflow>
+When a user's request matches one of the skills above:
+1. Read `skills/<skill-name>/SKILL.md` with `read_file`. Replace
+   `<skill-name>` with the exact name from the catalog above.
+2. Follow the workflow described in those instructions, using `bash` and
+   any other tools as the skill directs. In `bash`, a skill's files live in
+   `$SKILLS/<skill-name>/` (for example `python "$SKILLS/<skill-name>/scripts/run.py"`);
+   commands start in $WORKSPACE, where `skills/` does not exist.
+3. Save generated files directly in $WORKSPACE — it is a single shared
+   project space, not scoped to this conversation. Use $SCRATCHPAD instead
+   for intermediate files you don't need to keep.
+4. Reply with the result and the names of the generated files.
+</workflow>
+
+<rules>
+- Never treat a skill name as a callable tool.
+- Don't invent skill contents. If you haven't loaded a skill via
+  a successful file read, you don't know what it does — load it first.
+- Never expose implementation details to the user: no skill paths,
+  environment variables, filenames, script paths, workspace mount names,
+  or the shell commands you ran. Describe only the user-facing result.
+</rules>
+</SKILLS>
+{% endif %}

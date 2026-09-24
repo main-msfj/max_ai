@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from max_ai.clients.ollama._schema import clean_json_schema
+from max_ai.capabilities.clients.ollama._schema import clean_json_schema
 
 
 # -------- BASIC SHAPE -----------------------------------------------------------

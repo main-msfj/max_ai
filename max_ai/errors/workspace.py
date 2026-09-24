@@ -1,5 +1,6 @@
 from pathlib import Path
 
+
 class WorkSpaceError(Exception):
     """Raised for workspace registry errors."""
 
