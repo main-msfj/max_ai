@@ -1,0 +1,50 @@
+# Object storage for remote workspaces (AzureBlobWorkspace, MinIOWorkspace).
+# MinIO also stores Langfuse's events and media (profile "observability").
+services:
+  azurite:
+    # Azure Blob Storage emulator. Account devstoreaccount1 with Azurite's
+    # well-known development key (see README); only for local use.
+    image: ${AZURITE_IMAGE:-mcr.microsoft.com/azure-storage/azurite:latest}
+    restart: unless-stopped
+    command: azurite-blob --blobHost 0.0.0.0 --location /data --skipApiVersionCheck
+    ports:
+      - "127.0.0.1:${AZURITE_PORT:-10000}:10000"
+    volumes:
+      - azurite-data:/data
+    networks:
+      - storage
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 10000 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    # S3-compatible storage (MinIO no longer publishes minio/minio on Docker Hub).
+    image: ${MINIO_IMAGE:-cgr.dev/chainguard/minio:latest}
+    restart: unless-stopped
+    entrypoint: sh
+    # The "langfuse" bucket is created before start (Langfuse's events and media).
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-maxai}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-maxai-local-dev}
+    ports:
+      - "127.0.0.1:${MINIO_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    networks:
+      - storage
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  azurite-data:
+  minio-data:
+
+networks:
+  storage:

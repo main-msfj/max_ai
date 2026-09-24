@@ -9,13 +9,13 @@
     "forwardPorts": [
         8081,
         3000,
-        "langfuse-minio:9001",
+        "minio:9001",
         "ollama:11434"
     ],
     "portsAttributes": {
         "8081": { "label": "Mongo Express" },
         "3000": { "label": "Langfuse" },
-        "langfuse-minio:9001": { "label": "MinIO Console" },
+        "minio:9001": { "label": "MinIO Console" },
         "ollama:11434": { "label": "Ollama API" }
     },
     "runArgs": [

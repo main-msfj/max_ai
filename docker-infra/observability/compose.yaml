@@ -12,18 +12,19 @@ x-langfuse-env: &langfuse-env
   CLICKHOUSE_USER: clickhouse
   CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:-maxai-local-dev}
   CLICKHOUSE_CLUSTER_ENABLED: "false"
+  # Events and media go to the shared MinIO (storage/compose.yaml).
   LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
   LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
-  LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
-  LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_PASSWORD:-maxai-local-dev}
-  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+  LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-maxai}
+  LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-maxai-local-dev}
+  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
   LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
   LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
   LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
   LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
-  LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: minio
-  LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_PASSWORD:-maxai-local-dev}
-  LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+  LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-maxai}
+  LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-maxai-local-dev}
+  LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://minio:9000
   LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
   LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
   REDIS_HOST: langfuse-redis
@@ -35,7 +36,7 @@ x-langfuse-depends: &langfuse-depends
     condition: service_healthy
   langfuse-clickhouse:
     condition: service_healthy
-  langfuse-minio:
+  minio:
     condition: service_healthy
   langfuse-redis:
     condition: service_healthy
@@ -51,9 +52,11 @@ services:
     environment:
       <<: *langfuse-env
       NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-maxai-local-secret}
+      # Listen on every network (observability and storage), not only the first.
+      HOSTNAME: 0.0.0.0
       # Media links are opened by the browser, so they use the published port.
-      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://localhost:${LANGFUSE_MINIO_PORT:-9090}
-      LANGFUSE_S3_MEDIA_UPLOAD_INTERNAL_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://localhost:${MINIO_PORT:-9000}
+      LANGFUSE_S3_MEDIA_UPLOAD_INTERNAL_ENDPOINT: http://minio:9000
       # First start: organization, project, API keys and a UI user.
       LANGFUSE_INIT_ORG_ID: maxai
       LANGFUSE_INIT_ORG_NAME: MaxAI
@@ -64,9 +67,9 @@ services:
       LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_UI_EMAIL:-admin@maxai.local}
       LANGFUSE_INIT_USER_NAME: MaxAI
       LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_UI_PASSWORD:-maxai-local-ui}
-    networks: [observability]
+    networks: [observability, storage]
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://$$(hostname):3000/api/public/health || exit 1"]
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3000/api/public/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 30
@@ -78,7 +81,7 @@ services:
     restart: unless-stopped
     depends_on: *langfuse-depends
     environment: *langfuse-env
-    networks: [observability]
+    networks: [observability, storage]
 
   langfuse-postgres:
     image: postgres:17
@@ -119,29 +122,6 @@ services:
       retries: 10
       start_period: 1s
 
-  langfuse-minio:
-    image: cgr.dev/chainguard/minio
-    profiles: [observability]
-    restart: unless-stopped
-    entrypoint: sh
-    # Creates the 'langfuse' bucket before starting.
-    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
-    environment:
-      MINIO_ROOT_USER: minio
-      MINIO_ROOT_PASSWORD: ${LANGFUSE_MINIO_PASSWORD:-maxai-local-dev}
-    ports:
-      - "127.0.0.1:${LANGFUSE_MINIO_PORT:-9090}:9000"
-      - "127.0.0.1:${LANGFUSE_MINIO_CONSOLE_PORT:-9091}:9001"
-    volumes:
-      - langfuse-minio-data:/data
-    networks: [observability]
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 1s
-      timeout: 5s
-      retries: 5
-      start_period: 1s
-
   langfuse-redis:
     image: redis:7
     profiles: [observability]
@@ -160,8 +140,8 @@ volumes:
   langfuse-postgres-data:
   langfuse-clickhouse-data:
   langfuse-clickhouse-logs:
-  langfuse-minio-data:
   langfuse-redis-data:
 
 networks:
   observability:
+  storage:

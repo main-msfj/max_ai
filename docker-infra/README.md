@@ -8,6 +8,7 @@ docker-infra/
 ├── .env.example           # Imágenes, puertos y credenciales locales
 ├── llm/compose.yaml       # Ollama
 ├── backend/compose.yaml   # MongoDB y Mongo Express
+├── storage/compose.yaml   # Azurite (Azure Blob) y MinIO (S3): workspaces remotos
 ├── observability/compose.yaml # Langfuse y sus dependencias
 └── mcp/compose.yaml       # DuckDuckGo MCP por stdio
 
@@ -25,7 +26,7 @@ docker compose --profile mcp pull
 docker compose up -d --wait
 ```
 
-`pull` descarga las imágenes del perfil MCP. `up` inicia MongoDB, Mongo Express y Ollama; DuckDuckGo se
+`pull` descarga las imágenes del perfil MCP. `up` inicia MongoDB, Mongo Express, Azurite, MinIO y Ollama; DuckDuckGo se
 inicia desde el cliente MCP con el comando de la sección siguiente. Cada grupo
 tiene su propia red. Los puertos publicados están enlazados a `127.0.0.1`.
 
@@ -52,11 +53,18 @@ docker compose exec ollama ollama list
 Con las credenciales predeterminadas, la URI desde el host es:
 
 ```text
-mongodb://maxai:maxai-local-dev@localhost:27017/max_ai?authSource=admin
+mongodb://maxai:maxai-local-dev@localhost:27017/max_ai?authSource=admin&directConnection=true
 ```
 
-MongoDB guarda los datos en el volumen `mongodb-data` y la configuración en
-`mongodb-config`. La base `max_ai` se crea cuando la aplicación escribe datos.
+La imagen es `mongodb/mongodb-atlas-local`: MongoDB con el motor de búsqueda
+(`mongot`), así que la búsqueda vectorial (`$vectorSearch`) de memoria y
+knowledge funciona en local. Es un replica set de un nodo: la URI necesita
+`directConnection=true`, o el driver intenta el nombre interno del contenedor.
+
+MongoDB guarda los datos en el volumen `mongodb-atlas-data` y la configuración en
+`mongodb-atlas-config`. Los volúmenes `mongodb-data`/`mongodb-config` de la
+imagen `mongo:8.0` anterior quedan sin uso; bórralos con `docker volume rm` si
+no necesitas esos datos. La base `max_ai` se crea cuando la aplicación escribe datos.
 El usuario se inicializa en `admin` durante el primer arranque con un volumen
 vacío; cambiar `.env` después no cambia las credenciales del usuario existente.
 
@@ -92,7 +100,7 @@ el devcontainer, conecta la red del backend desde su terminal:
 ```bash
 docker compose -f docker-infra/compose.yaml up -d --wait mongodb mongo-express
 docker network connect max-ai-infra_backend "$(hostname)"
-export MONGODB_URI='mongodb://maxai:maxai-local-dev@mongodb:27017/max_ai?authSource=admin'
+export MONGODB_URI='mongodb://maxai:maxai-local-dev@mongodb:27017/max_ai?authSource=admin&directConnection=true'
 ```
 
 La URI mostrada usa las credenciales locales predeterminadas; ajústala si
@@ -183,31 +191,29 @@ principal para mantener el mismo proyecto y los mismos volúmenes.
 ## Observabilidad: Langfuse
 
 Langfuse recibe las trazas de `TracingMiddleware` (OpenTelemetry) y las muestra
-en su UI. Son seis contenedores (web, worker, Postgres, ClickHouse, Redis y
-MinIO), por eso van en el perfil `observability` y no arrancan con el `up`
-normal:
+en su UI. Son cinco contenedores (web, worker, Postgres, ClickHouse y Redis) y
+guarda sus eventos en el MinIO del grupo `storage`; van en el perfil
+`observability` y no arrancan con el `up` normal. Postgres, ClickHouse y Redis
+son de Langfuse, no del framework (Langfuse no soporta MongoDB):
 
 ```bash
 docker compose --profile observability up -d --wait
 ```
 
 - UI: http://localhost:3000 — usuario `admin@maxai.local`, contraseña `maxai-local-ui`.
-- Consola MinIO: http://localhost:9091 — usuario `minio`, contraseña
-  `LANGFUSE_MINIO_PASSWORD` de `docker-infra/.env` (por defecto `maxai-local-dev`).
-- API MinIO: http://localhost:9090; Ollama API: http://localhost:11434/api/tags;
-  Mongo Express: http://localhost:8081.
+- Ollama API: http://localhost:11434/api/tags; Mongo Express: http://localhost:8081.
 - El primer arranque crea la organización `MaxAI`, el proyecto `max_ai` y sus
   claves (`pk-lf-maxai-local` / `sk-lf-maxai-local`). Cambiarlas en `.env`
   después no cambia las ya creadas.
-- La UI (3000), MinIO (9090 y consola 9091) se publican en
-  `127.0.0.1`. Postgres, ClickHouse y Redis quedan dentro de la red `observability`.
+- La UI (3000) se publica en `127.0.0.1`. Postgres, ClickHouse y Redis quedan
+  dentro de la red `observability`.
 
 Estas direcciones `localhost` corresponden al host de Docker. Dentro del
 devcontainer, Mongo Express y Langfuse también responden en
 `http://localhost:8081` y `http://localhost:3000`, respectivamente, gracias
 a los puentes locales. Las direcciones de servicio siguen disponibles en
 `http://mongo-express:8081`, `http://langfuse-web:3000`,
-`http://langfuse-minio:9001` y `http://ollama:11434/api/tags` si el contenedor
+`http://minio:9001` y `http://ollama:11434/api/tags` si el contenedor
 está conectado a las redes de Compose. VS Code reenvía los puertos 8081 y 3000
 del devcontainer al equipo local al abrir o recargar la ventana.
 
@@ -249,15 +255,38 @@ tracing solos. En código: `provider = configure_langfuse()` y
 Para detenerlo: `docker compose --profile observability down` (agrega `-v` para
 borrar también las trazas guardadas).
 
+## Almacenamiento: workspaces remotos
+
+`AzureBlobWorkspace` y `MinIOWorkspace` guardan los archivos del usuario fuera
+del proceso: el agente los descarga al empezar cada run y sube lo que cambió al
+terminar, así otra instancia (otro servidor, otra invocación serverless) los ve.
+
+| Servicio | URL | Credenciales |
+|---|---|---|
+| Azurite (Azure Blob) | `http://localhost:10000/devstoreaccount1/<contenedor>` | cuenta `devstoreaccount1`, clave de desarrollo de Azurite |
+| MinIO (S3) | API `http://localhost:9000`, consola http://localhost:9001 | `maxai` / `maxai-local-dev` |
+
+```python
+from max_ai.capabilities.workspace import AzureBlobWorkspace, MinIOWorkspace
+
+AzureBlobWorkspace("http://localhost:10000/devstoreaccount1/workspaces")  # lee $AZURE_STORAGE_KEY
+MinIOWorkspace("http://localhost:9000", bucket="workspaces")  # lee $MINIO_ACCESS_KEY / $MINIO_SECRET_KEY
+```
+
+La clave de Azurite es pública (la misma para todos):
+`Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==`.
+En Azure real, `blob_url` es `https://<cuenta>.blob.core.windows.net/<contenedor>`
+y `AZURE_STORAGE_KEY` la clave de la cuenta o un token SAS.
+
 ## Probar todo junto
 
-Con MongoDB y Langfuse arriba, `examples/03_agent_with_mongodb.py` abre la CLI
-con memoria, knowledge y cuotas en MongoDB y trazas en Langfuse:
+Con todo arriba, `examples/03_agent_with_mongodb.py` abre la CLI con memoria,
+knowledge (búsqueda vectorial) y cuotas en MongoDB, los archivos del usuario en
+Azurite o MinIO, y trazas en Langfuse:
 
 ```bash
-docker compose up -d --wait mongodb mongo-express
 docker compose --profile observability up -d --wait
-cd .. && .venv/bin/python -m examples.03_agent_with_mongodb
+cd .. && WORKSPACE=azure .venv/bin/python -m examples.03_agent_with_mongodb   # o minio / local
 ```
 
 Si ejecutas este ejemplo desde un devcontainer, usa primero la conexión a la

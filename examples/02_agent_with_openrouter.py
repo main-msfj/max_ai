@@ -84,7 +84,8 @@ async def main() -> None:
         ],
         # Backend only: each run binds it to its RunContext's user and session.
         memory=LocalMemoryRegistry(
-            base_path=LOCAL_DIR, tool_mode=MemoryToolMode.FULL,
+            base_path=LOCAL_DIR,
+            tool_mode=MemoryToolMode.FULL,
             embedding=FastEmbedEmbedding(),  # search_memory by meaning, in any language
         ),
         knowledge=[
@@ -95,7 +96,9 @@ async def main() -> None:
                 tool_mode=KnowledgeToolMode.FULL,
             ),
         ],
-        skills=LocalSkillRegistry(source=EXAMPLES_DIR / "LocalSkills", skills=["create-report", "create-ppt"]),
+        skills=LocalSkillRegistry(
+            source=EXAMPLES_DIR / "LocalSkills", skills=["create-report", "create-ppt"]
+        ),
         compaction=SummaryCompaction(threshold=threshold, keep_ratio=threshold / 2),
         # With LANGFUSE_PUBLIC_KEY/SECRET_KEY set, every turn is a trace in Langfuse.
         middlewares=[TracingMiddleware()] if tracing else [],

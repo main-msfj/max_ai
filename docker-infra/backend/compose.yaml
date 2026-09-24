@@ -1,28 +1,19 @@
 services:
   mongodb:
-    image: ${MONGODB_IMAGE:-mongo:8.0}
+    # Atlas local: MongoDB + Search (mongot), so $vectorSearch works locally.
+    image: ${MONGODB_IMAGE:-mongodb/mongodb-atlas-local:8.2}
     restart: unless-stopped
     environment:
-      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_USERNAME:-maxai}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_PASSWORD:-maxai-local-dev}
+      MONGODB_INITDB_ROOT_USERNAME: ${MONGODB_USERNAME:-maxai}
+      MONGODB_INITDB_ROOT_PASSWORD: ${MONGODB_PASSWORD:-maxai-local-dev}
     ports:
       - "127.0.0.1:${MONGODB_PORT:-27017}:27017"
     volumes:
-      - mongodb-data:/data/db
-      - mongodb-config:/data/configdb
+      - mongodb-atlas-data:/data/db
+      - mongodb-atlas-config:/data/configdb
     networks:
       - backend
-    healthcheck:
-      test:
-        - CMD
-        - mongosh
-        - --quiet
-        - --eval
-        - "quit(db.adminCommand({ping: 1}).ok ? 0 : 1)"
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
+    # The image ships its own healthcheck.
 
   mongo-express:
     image: ${MONGO_EXPRESS_IMAGE:-mongo-express:1.0.2-20-alpine3.19}
@@ -31,7 +22,7 @@ services:
       mongodb:
         condition: service_healthy
     environment:
-      ME_CONFIG_MONGODB_URL: "mongodb://${MONGODB_USERNAME:-maxai}:${MONGODB_PASSWORD:-maxai-local-dev}@mongodb:27017/?authSource=admin"
+      ME_CONFIG_MONGODB_URL: "mongodb://${MONGODB_USERNAME:-maxai}:${MONGODB_PASSWORD:-maxai-local-dev}@mongodb:27017/?authSource=admin&directConnection=true"
       ME_CONFIG_MONGODB_ENABLE_ADMIN: "true"
       ME_CONFIG_BASICAUTH_ENABLED: "true"
       ME_CONFIG_BASICAUTH_USERNAME: ${MONGO_EXPRESS_USERNAME:-maxai}
@@ -42,8 +33,8 @@ services:
       - backend
 
 volumes:
-  mongodb-data:
-  mongodb-config:
+  mongodb-atlas-data:
+  mongodb-atlas-config:
 
 networks:
   backend:
