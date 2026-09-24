@@ -11,6 +11,7 @@ never stored, serialized, or placed on a command line.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import shutil
 from pathlib import Path
@@ -27,6 +28,8 @@ class GithubSkillRegistry(CoreSkillBase):
     optionally ending in ``.git``) or the short ``org/repo`` form, expanded
     against github.com. Each name in ``skills`` must be a top-level directory
     in that repo containing a ``SKILL.md``, exactly like ``LocalSkillRegistry``.
+    When the skills live deeper, ``path`` names their folder inside the repo
+    (e.g. ``path="skills"`` for ``anthropics/skills``).
 
     ``ref`` must be a branch or tag (``git clone --branch`` doesn't accept an
     arbitrary commit); pin a tag for reproducibility.
@@ -46,7 +49,7 @@ class GithubSkillRegistry(CoreSkillBase):
 
     def __init__(
         self, source: str, skills: list[str], *, ref: str = "main",
-        token_env: str | None = None,
+        path: str = "", token_env: str | None = None,
     ) -> None:
         """Initialize ``GithubSkillRegistry``.
 
@@ -58,14 +61,20 @@ skills : list[str]
     Value supplied for ``skills``.
 ref : str
     Value supplied for ``ref``.
+path : str
+    Value supplied for ``path``.
 token_env : str | None
     Value supplied for ``token_env``."""
         super().__init__(source=source, skills=skills)
         self.ref = self.require_type(ref, str, "ref")
         if not self.ref.strip():
             raise ValueError("ref cannot be empty")
+        self.path = self._validate_path(path)
         self.token_env = token_env
-        self._clone_dir = self._cache_root / f"{self._registry_key()}-repo"
+        # The base keyed the cache on source alone; ref and path must not share it.
+        key = f"{self._registry_key()}-{self._variant()}"
+        self._registry_cache_dir = self._cache_root / key
+        self._clone_dir = self._cache_root / f"{key}-repo"
         self._clone_lock = asyncio.Lock()
         self._cloned = False
 
@@ -73,7 +82,7 @@ token_env : str | None
         """Build the serializable configuration for ``GithubSkillRegistry``."""
         return GithubSkillRegistryConfig(
             source=self.source, skills=list(self.skills),
-            ref=self.ref, token_env=self.token_env,
+            ref=self.ref, path=self.path, token_env=self.token_env,
         )
 
     @classmethod
@@ -86,8 +95,22 @@ config : GithubSkillRegistryConfig
     Value supplied for ``config``."""
         return cls(
             source=config.source, skills=config.skills,
-            ref=config.ref, token_env=config.token_env,
+            ref=config.ref, path=config.path, token_env=config.token_env,
         )
+
+    def _variant(self) -> str:
+        """Short, filesystem-safe fingerprint of ``ref`` and ``path``."""
+        return hashlib.sha256(f"{self.ref}\0{self.path}".encode()).hexdigest()[:10]
+
+    @staticmethod
+    def _validate_path(path: str) -> str:
+        """Normalize ``path`` to a relative POSIX path that stays inside the repo."""
+        if not isinstance(path, str):
+            raise TypeError("path must be a string")
+        parts = [p for p in path.replace("\\", "/").split("/") if p not in ("", ".")]
+        if path.startswith(("/", "\\")) or ".." in parts:
+            raise ValueError(f"path must be relative and stay inside the repo, got {path!r}")
+        return "/".join(parts)
 
     @staticmethod
     def _repo_url(source: str) -> str:
@@ -137,14 +160,16 @@ source : str
 
     async def _download_skill(self, skill_name: str, target_dir: Path) -> None:
         """Copy ``{skill_name}/`` out of the cloned repo into target_dir."""
-        repo = await self._clone()
-        skill_src = repo / skill_name
+        skills_root = (await self._clone()) / self.path
+        skill_src = skills_root / skill_name
+        where = f"{self.source}@{self.ref}" + (f" under {self.path!r}" if self.path else "")
 
+        if not skills_root.is_dir():
+            raise FileNotFoundError(f"Folder {self.path!r} not found in {self.source}@{self.ref}.")
         if not skill_src.exists():
-            available = sorted(p.name for p in repo.iterdir() if p.is_dir() and p.name != ".git")
+            available = sorted(p.name for p in skills_root.iterdir() if p.is_dir() and p.name != ".git")
             raise FileNotFoundError(
-                f"Skill {skill_name!r} not found in {self.source}@{self.ref}. "
-                f"Available directories: {available}"
+                f"Skill {skill_name!r} not found in {where}. Available directories: {available}"
             )
         if not skill_src.is_dir():
             raise NotADirectoryError(f"Skill {skill_name!r} at {skill_src} is not a directory.")

@@ -283,7 +283,13 @@ skills = GithubSkillRegistry(
     ref="v1.2.0",                # branch or tag
     token_env="SKILLS_GH_TOKEN", # private repos only: the env var name, never the token
 )
+
+# Skills nested in a folder of the repo:
+GithubSkillRegistry("trailofbits/skills-curated", ["openai-spreadsheet"],
+                    path="plugins/openai-spreadsheet/skills")
 ```
+
+Check each skill's license before using it. Some public skill repos mix open-source skills with proprietary ones.
 
 The token is read from the environment when the repo is cloned. It is never serialized or placed on the command line. The host needs `git` installed.
 

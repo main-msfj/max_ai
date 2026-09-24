@@ -70,12 +70,47 @@ async def test_private_repo_needs_the_token_env_set(tmp_path, monkeypatch):
             await registry.get_skills()
 
 
+async def test_skills_nested_in_a_folder_are_found_with_path(tmp_path):
+    repo = make_repo(tmp_path)
+    nested = repo / "plugins" / "sheets" / "skills"
+    nested.mkdir(parents=True)
+    (repo / "greet").rename(nested / "greet")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-m", "nest"], check=True, capture_output=True)
+
+    registry = GithubSkillRegistry(f"file://{repo}", ["greet"], path="plugins/sheets/skills/")
+    async with registry:
+        assert [b.name for b in await registry.get_skills()] == ["greet"]
+        assert (registry.materialize(directory(tmp_path, "u1")) / "greet" / "SKILL.md").is_file()
+
+    missing = GithubSkillRegistry(f"file://{repo}", ["greet"], path="nope")
+    async with missing:
+        with pytest.raises(FileNotFoundError, match="nope"):
+            await missing.get_skills()
+
+
+@pytest.mark.parametrize("bad", ["../outside", "a/../../b", "/etc"])
+def test_path_cannot_leave_the_repo(bad):
+    with pytest.raises(ValueError, match="inside the repo"):
+        GithubSkillRegistry("org/repo", ["x"], path=bad)
+
+
+def test_ref_and_path_get_their_own_cache():
+    a = GithubSkillRegistry("org/repo", ["x"])
+    b = GithubSkillRegistry("org/repo", ["x"], path="skills")
+    c = GithubSkillRegistry("org/repo", ["x"], ref="v2")
+    assert len({a._registry_cache_dir, b._registry_cache_dir, c._registry_cache_dir}) == 3
+    assert len({a._clone_dir, b._clone_dir, c._clone_dir}) == 3
+
+
 def test_config_stores_the_env_var_name_never_a_token():
-    registry = GithubSkillRegistry(source="org/repo", skills=["x"], token_env="MY_GH_TOKEN")
+    registry = GithubSkillRegistry(source="org/repo", skills=["x"], ref="v1", path="./skills",
+                                   token_env="MY_GH_TOKEN")
     stored = registry.serialize().model_dump_json()
     assert "MY_GH_TOKEN" in stored
     back = GithubSkillRegistry.deserialize(stored)
-    assert (back.source, back.skills, back.token_env) == ("org/repo", ["x"], "MY_GH_TOKEN")
+    assert (back.source, back.skills, back.ref, back.path, back.token_env) == (
+        "org/repo", ["x"], "v1", "skills", "MY_GH_TOKEN")
 
 
 @pytest.mark.parametrize("source, expected", [
