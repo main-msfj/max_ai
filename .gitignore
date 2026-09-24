@@ -29,6 +29,7 @@ __pycache__/
 
 # Personal notes, research and the project website (kept out of the repo)
 website/
+deployment/website/
 agent_update.md
 architecture.md
 a-harness-max-ai/
