@@ -28,12 +28,18 @@ class CompletionCheck(BaseModel):
 
 
 class CompletionDecision(BaseModel):
+    """
+    Represent the result of evaluating whether an agent turn may finish.
+    """
     model_config = ConfigDict(frozen=True)
     status: Literal["completed", "incomplete", "waiting", "cancelled"]
     reasons: tuple[str, ...] = ()
 
 
 class CompletionConfig(BaseModel):
+    """
+    Define the serializable settings shared by completion gates.
+    """
     model_config = ConfigDict(extra="forbid")
 
 

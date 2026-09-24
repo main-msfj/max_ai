@@ -6,4 +6,5 @@ from pydantic import BaseModel
 
 
 class LocalSessionStoreConfig(BaseModel):
+    """Configuration options for ``LocalSessionStore``."""
     base_path: str

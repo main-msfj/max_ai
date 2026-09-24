@@ -46,11 +46,12 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["max_ai"]
-# Backups and old code stay in the repo but are not shipped.
-exclude = ["max_ai/base copy", "max_ai/legacy"]
 
 [tool.hatch.build.targets.sdist]
-exclude = ["max_ai/base copy", "max_ai/legacy", "website", "docker-infra", "llm-models", "examples/local"]
+exclude = [
+    "website", "docker-infra", "llm-models", "examples/local",
+    "/*.png", ".devcontainer", "deployment",
+]
 
 [tool.ruff.lint]
 # Ruff's own defaults (E4, E7, E9, F) kept explicit, plus "I" (import
@@ -71,7 +72,7 @@ dev = [
     "pytest-asyncio>=1.3.0",
     "python-dotenv>=1.2.2",
     "ruff>=0.16.8",
-    "maxai[cli,embeddings,tracing,mongodb,azure-blob,minio]",
+    "maxai[cli,embeddings,tracing,mongodb,azure-blob,minio,runtime-modal]",
 ]
 
 [project.optional-dependencies]

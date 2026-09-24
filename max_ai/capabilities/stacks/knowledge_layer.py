@@ -73,7 +73,9 @@ class KnowledgeLayer(Component[StackConfig], CoreLayer):
         )
 
     def _default_template(self) -> str:
+        """Perform the internal ``default template`` operation for ``KnowledgeLayer``."""
         return self._load_file(self._DEFAULT_TEMPLATE_PATH / f"{self.name}.j2")
 
     def _optional_variables(self) -> set[str]:
+        """Perform the internal ``optional variables`` operation for ``KnowledgeLayer``."""
         return {"retrieval_tools"}

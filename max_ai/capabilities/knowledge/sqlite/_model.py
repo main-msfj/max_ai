@@ -10,6 +10,7 @@ from ....base.knowledge import KnowledgeToolMode
 
 
 class SQLiteKnowledgeRegistryConfig(BaseModel):
+    """Configuration options for ``SQLiteKnowledgeRegistry``."""
     name: str
     description: str
     base_path: str

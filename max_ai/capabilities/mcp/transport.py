@@ -25,6 +25,7 @@ def create_mcp_client(config: MCPServerConfig) -> Client:
 
         @asynccontextmanager
         async def transport() -> AsyncIterator[object]:
+            """Perform the ``transport`` operation."""
             async with httpx2.AsyncClient(headers=config.request_headers) as http_client:
                 async with streamable_http_client(
                     config.url, http_client=http_client

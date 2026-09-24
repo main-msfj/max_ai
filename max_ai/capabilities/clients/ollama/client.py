@@ -195,6 +195,12 @@ class OllamaChatCompletionClient(
         return [self._tool_to_ollama_schema(tool) for tool in tools]
 
     def _tool_to_ollama_schema(self, tool: CoreTool) -> dict[str, t.Any]:
+        """Perform the internal ``tool to ollama schema`` operation for ``OllamaChatCompletionClient``.
+
+Parameters
+----------
+tool : CoreTool
+    Value supplied for ``tool``."""
         return {
             "type": "function",
             "function": {
@@ -734,6 +740,16 @@ class OllamaChatCompletionClient(
         output_format: t.Type[BaseModel] | None,
         start_time: float,
     ) -> t.AsyncGenerator[ChatCompletionChunk, None]:
+        """Perform the internal ``iter chunks`` operation for ``OllamaChatCompletionClient``.
+
+Parameters
+----------
+raw_stream : t.AsyncIterator['ChatResponse']
+    Value supplied for ``raw_stream``.
+output_format : t.Type[BaseModel] | None
+    Value supplied for ``output_format``.
+start_time : float
+    Value supplied for ``start_time``."""
         accumulated_content: list[str] = []
         tool_call_count = 0
         final_response: "ChatResponse | None" = None

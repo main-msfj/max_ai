@@ -22,8 +22,8 @@ from examples.shared import (
     EXAMPLES_DIR,
     LOCAL_DIR,
     USER_ID,
-    get_weather,
-    send_email,
+    calculate_compound_interest,
+    save_report,
     session_arg,
 )
 from max_ai.agents import Agent
@@ -51,7 +51,7 @@ FALLBACK_MODELS = ["qwen/qwen3.8-27b:free", "google/gemma-4-31b-it:free"]
 async def main() -> None:
     load_dotenv(Path(__file__).resolve().parents[1] / ".env")
     if not os.getenv("OPENROUTER_API_KEY"):
-        raise SystemExit("Configura OPENROUTER_API_KEY en el entorno o en .env.")
+        raise SystemExit("Set OPENROUTER_API_KEY in the environment or in .env.")
 
     # The client stores the env var's name, never the key itself.
     client = OpenRouterChatCompletionClient(
@@ -75,12 +75,12 @@ async def main() -> None:
 
     agent = Agent(
         name="LocalDemo",
-        description="Agente conversacional con componentes locales y modelos de OpenRouter.",
-        instructions="Continua la conversacion con el usuario y ayudale con todo lo que necesite.",
+        description="A conversational agent with local components and OpenRouter models.",
+        instructions="Continue the conversation and help the user with their requests.",
         client=client,
         toolset=[
-            FunctionAsTool(get_weather, approval_mode=ToolApprovalMode.AUTO_APPROVED),
-            FunctionAsTool(send_email, approval_mode=ToolApprovalMode.ASK_APPROVED),
+            FunctionAsTool(calculate_compound_interest, approval_mode=ToolApprovalMode.AUTO_APPROVED),
+            FunctionAsTool(save_report, approval_mode=ToolApprovalMode.ASK_APPROVED),
         ],
         # Backend only: each run binds it to its RunContext's user and session.
         memory=LocalMemoryRegistry(

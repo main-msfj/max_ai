@@ -19,11 +19,12 @@ from enum import Enum
 
 from pydantic import AwareDatetime, BaseModel, Field
 
+from ..core.embeddings.fastembed import FastEmbedEmbedding
 from ..core.embeddings.similarity import rank
 from ..errors.memory import MemoryError
 from ..types.tools import ToolApprovalMode
 from .capability import CoreAgentCapabilities
-from .embedding import CoreEmbedding
+from .embedding import DEFAULT_EMBEDDING, CoreEmbedding
 from .tools import CoreTool, ToolContext
 
 
@@ -68,11 +69,29 @@ class CoreMemoryRegistry(CoreAgentCapabilities[BaseModel], ABC):
         tool_mode: MemoryToolMode = MemoryToolMode.FULL,
         *,
         context_days: int | None = 30,
-        embedding: CoreEmbedding | None = None,
+        embedding: CoreEmbedding | None = DEFAULT_EMBEDDING,
     ) -> None:
+        """
+        Initialize memory options before binding the registry to a run.
+
+        Parameters
+        ----------
+        user_id : str | None, default=None
+            Identifier for the user scope.
+        session_id : str | None, default=None
+            Identifier for the current session.
+        tool_mode : MemoryToolMode, default=MemoryToolMode.FULL
+            Controls which agent-facing tools are exposed.
+        context_days : int | None, default=30
+            Maximum age of memories included in context, or None for no age limit.
+        embedding : CoreEmbedding | None, default=DEFAULT_EMBEDDING
+            Maximum age of memories included in context, or None for no age limit.
+        """
         super().__init__()
         # With an embedding, search_memory matches by meaning, not words.
-        self.embedding = embedding
+        # DEFAULT_EMBEDDING (nothing passed): FastEmbedEmbedding. Explicit
+        # None: the caller wants plain word search, not "forgot to pass one".
+        self.embedding = FastEmbedEmbedding() if embedding is DEFAULT_EMBEDDING else embedding
         self.user_id: str | None = None
         self.session_id: str | None = None
         if user_id is not None or session_id is not None:
@@ -96,6 +115,16 @@ class CoreMemoryRegistry(CoreAgentCapabilities[BaseModel], ABC):
         return bound
 
     def _set_scope(self, user_id: str | None, session_id: str | None) -> None:
+        """
+        Bind memory operations to one user and session.
+
+        Parameters
+        ----------
+        user_id : str | None
+            Identifier for the user scope.
+        session_id : str | None
+            Identifier for the current session.
+        """
         self.user_id = self._validate_non_empty("user_id", user_id)
         self.session_id = self._validate_non_empty("session_id", session_id)
         self._validate_scope()
@@ -104,14 +133,25 @@ class CoreMemoryRegistry(CoreAgentCapabilities[BaseModel], ABC):
         """Backend hook: reject ids it can't store safely (e.g. as paths)."""
 
     def _require_scope(self) -> None:
+        """
+        Require user and session identifiers before accessing memory.
+        """
         if self.user_id is None or self.session_id is None:
             raise MemoryError.unbound()
 
     @abstractmethod
-    async def connect(self) -> None: ...
+    async def connect(self) -> None:
+        """
+        Open the registry storage connection.
+        """
+        ...
 
     @abstractmethod
-    async def disconnect(self) -> None: ...
+    async def disconnect(self) -> None:
+        """
+        Close the registry storage connection.
+        """
+        ...
 
     @abstractmethod
     async def _read_session(self) -> list[MemoryRecord]:
@@ -215,6 +255,14 @@ class CoreMemoryRegistry(CoreAgentCapabilities[BaseModel], ABC):
         ]
 
     def as_tools(self) -> list[CoreTool]:
+        """
+        Build the tools enabled by this registry configuration.
+
+        Returns
+        -------
+        list[CoreTool]
+            The resulting list.
+        """
         from ..capabilities.tools import FunctionAsTool
 
         if self.tool_mode == MemoryToolMode.NONE:
@@ -309,6 +357,14 @@ class CoreMemoryRegistry(CoreAgentCapabilities[BaseModel], ABC):
 
     @property
     def tools(self) -> list[CoreTool]:
+        """
+        Return the memory tools exposed to the agent.
+
+        Returns
+        -------
+        list[CoreTool]
+            The resulting list.
+        """
         return self.as_tools()
 
     def _for_run(self, context: ToolContext | None) -> t.Self:
@@ -320,6 +376,21 @@ class CoreMemoryRegistry(CoreAgentCapabilities[BaseModel], ABC):
 
     @staticmethod
     def _validate_non_empty(field: str, value: str) -> str:
+        """
+        Validate that a text field contains non-whitespace content.
+
+        Parameters
+        ----------
+        field : str
+            Field name used to describe a validation error.
+        value : str
+            Value to validate.
+
+        Returns
+        -------
+        str
+            The resulting text value.
+        """
         if not isinstance(value, str):
             raise MemoryError.invalid_type(field, "str", type(value).__name__)
         clean = value.strip()

@@ -8,6 +8,7 @@ from ....base.workspace import WorkspaceConfig
 
 
 class MinIOWorkspaceConfig(WorkspaceConfig):
+    """Configuration options for ``MinIOWorkspace``."""
     endpoint_url: str = Field(description="e.g. http://localhost:9000 or https://s3.amazonaws.com")
     bucket: str = Field(min_length=3)
     access_key_env: str = Field(default="MINIO_ACCESS_KEY", description="Env var name, never the key.")

@@ -16,6 +16,7 @@ from ._model import SQLiteContextRegistryConfig
 
 
 class SQLiteContextRegistry(CoreLogBookRegistry):
+    """SQLiteContextRegistry provides the SQLiteContextregistry implementation."""
     component_provider_override = "max_ai.capabilities.context.sqlite.SQLiteContextRegistry"
     component_schema = SQLiteContextRegistryConfig
     component_type = "context"
@@ -38,6 +39,20 @@ class SQLiteContextRegistry(CoreLogBookRegistry):
         *,
         db_name: str = "context.sqlite3",
     ) -> None:
+        """Initialize ``SQLiteContextRegistry``.
+
+Parameters
+----------
+user_id : str
+    Value supplied for ``user_id``.
+session_id : str
+    Value supplied for ``session_id``.
+base_path : str | Path
+    Value supplied for ``base_path``.
+tool_mode : LogBookToolMode
+    Value supplied for ``tool_mode``.
+db_name : str
+    Value supplied for ``db_name``."""
         super().__init__(
             user_id=user_id,
             session_id=session_id,
@@ -48,6 +63,7 @@ class SQLiteContextRegistry(CoreLogBookRegistry):
         self._conn: sqlite3.Connection | None = None
 
     def _to_config(self) -> SQLiteContextRegistryConfig:
+        """Build the serializable configuration for ``SQLiteContextRegistry``."""
         return SQLiteContextRegistryConfig(
             user_id=self.user_id,
             session_id=self.session_id,
@@ -58,6 +74,12 @@ class SQLiteContextRegistry(CoreLogBookRegistry):
 
     @classmethod
     def _from_config(cls, config: SQLiteContextRegistryConfig) -> "SQLiteContextRegistry":
+        """Create an instance from its configuration for ``SQLiteContextRegistry``.
+
+Parameters
+----------
+config : SQLiteContextRegistryConfig
+    Value supplied for ``config``."""
         return cls(
             user_id=config.user_id,
             session_id=config.session_id,
@@ -68,9 +90,11 @@ class SQLiteContextRegistry(CoreLogBookRegistry):
 
     @property
     def db_path(self) -> Path:
+        """Perform the ``db path`` operation for ``SQLiteContextRegistry``."""
         return self.base_path / "backend-local" / self.db_name
 
     async def connect(self) -> None:
+        """Open required resources for ``SQLiteContextRegistry``."""
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self.db_path)
         self._conn.row_factory = sqlite3.Row
@@ -111,11 +135,13 @@ class SQLiteContextRegistry(CoreLogBookRegistry):
         self._conn.commit()
 
     async def disconnect(self) -> None:
+        """Release resources held for ``SQLiteContextRegistry``."""
         if self._conn is not None:
             self._conn.close()
             self._conn = None
 
     async def get_current_session_summary(self) -> str | None:
+        """Get current session summary for ``SQLiteContextRegistry``."""
         conn = await self._ensure_db()
         row = conn.execute(
             """
@@ -134,6 +160,14 @@ class SQLiteContextRegistry(CoreLogBookRegistry):
         return summary
 
     async def search(self, query: str, limit: int = 5) -> list[ContextBlock]:
+        """Search SQLiteContextRegistry for matching records.
+
+Parameters
+----------
+query : str
+    Value supplied for ``query``.
+limit : int
+    Value supplied for ``limit``."""
         conn = await self._ensure_db()
         clean_query = self._validate_non_empty("query", query)
         query_vector = get_lightweight_embedding(clean_query)
@@ -204,6 +238,16 @@ class SQLiteContextRegistry(CoreLogBookRegistry):
         observation_type: str = "finding",
         tags: list[str] | None = None,
     ) -> str:
+        """Write observation for ``SQLiteContextRegistry``.
+
+Parameters
+----------
+content : str
+    Value supplied for ``content``.
+observation_type : str
+    Value supplied for ``observation_type``.
+tags : list[str] | None
+    Value supplied for ``tags``."""
         conn = await self._ensure_db()
         record = ObservationRecord(
             session_id=self.session_id,
@@ -235,6 +279,14 @@ class SQLiteContextRegistry(CoreLogBookRegistry):
         limit: int = 20,
         tags: list[str] | None = None,
     ) -> list[ObservationRecord]:
+        """Get observations for ``SQLiteContextRegistry``.
+
+Parameters
+----------
+limit : int
+    Value supplied for ``limit``.
+tags : list[str] | None
+    Value supplied for ``tags``."""
         conn = await self._ensure_db()
         rows = conn.execute(
             """
@@ -266,6 +318,7 @@ class SQLiteContextRegistry(CoreLogBookRegistry):
         return records
 
     async def _ensure_db(self) -> sqlite3.Connection:
+        """Perform the internal ``ensure db`` operation for ``SQLiteContextRegistry``."""
         await self._ensure_connected()
         if self._conn is None:
             raise RuntimeError("SQLite context is not connected.")
@@ -273,6 +326,14 @@ class SQLiteContextRegistry(CoreLogBookRegistry):
 
     @staticmethod
     def _validate_non_empty(field: str, value: str) -> str:
+        """Perform the internal ``validate non empty`` operation for ``SQLiteContextRegistry``.
+
+Parameters
+----------
+field : str
+    Value supplied for ``field``.
+value : str
+    Value supplied for ``value``."""
         if not isinstance(value, str):
             raise TypeError(f"{field} must be str, got {type(value).__name__}")
         clean = value.strip()
@@ -282,6 +343,14 @@ class SQLiteContextRegistry(CoreLogBookRegistry):
 
     @staticmethod
     def _row_to_block(row: sqlite3.Row, score: float) -> ContextBlock:
+        """Perform the internal ``row to block`` operation for ``SQLiteContextRegistry``.
+
+Parameters
+----------
+row : sqlite3.Row
+    Value supplied for ``row``.
+score : float
+    Value supplied for ``score``."""
         return ContextBlock(
             session_id=row["session_id"],
             timestamp=datetime.fromisoformat(row["timestamp"]),
@@ -292,6 +361,14 @@ class SQLiteContextRegistry(CoreLogBookRegistry):
 
     @staticmethod
     def _cosine_similarity(left: list[float], right: list[float]) -> float:
+        """Perform the internal ``cosine similarity`` operation for ``SQLiteContextRegistry``.
+
+Parameters
+----------
+left : list[float]
+    Value supplied for ``left``.
+right : list[float]
+    Value supplied for ``right``."""
         if not left or not right or len(left) != len(right):
             return 0.0
         dot = sum(a * b for a, b in zip(left, right))

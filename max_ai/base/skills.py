@@ -4,6 +4,8 @@ Contracts for skill registries.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import shutil
 import typing as t
@@ -19,6 +21,7 @@ from ..types.workspace import WorkspaceDirectory
 from .capability import CoreAgentCapabilities
 
 _VALID_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_SKILL_MANIFEST = ".maxai-skill-manifest.json"
 
 
 class CoreSkillBase(CoreAgentCapabilities[BaseModel], ABC):
@@ -100,10 +103,12 @@ class CoreSkillBase(CoreAgentCapabilities[BaseModel], ABC):
         return list(self._skill_blocks)
 
     def materialize(self, directory: WorkspaceDirectory) -> Path:
-        """Install missing selected skills into the runtime skill directory.
+        """Install selected skills into the runtime skill directory.
 
-        Copies all prepared skills from the cache into the specified workspace
-        directory, making them available for runtime execution.
+        Copies prepared skills from the cache into the workspace. A file a
+        skill's source changed since the last materialize is refreshed; a
+        file that no longer matches what was last materialized was edited
+        by the user or agent, and is left alone.
 
         Args:
             directory: Workspace directory containing the target skill_dir.
@@ -123,13 +128,106 @@ class CoreSkillBase(CoreAgentCapabilities[BaseModel], ABC):
             source_dir = self._registry_cache_dir / skill_name
             target_dir = directory.skill_dir / skill_name
 
-            if target_dir.exists():
-                # Workspace copies may have been edited by the user or agent.
+            if not target_dir.exists():
+                shutil.copytree(source_dir, target_dir)
+                self._write_skill_manifest(target_dir, self._scan_skill(source_dir))
                 continue
 
-            shutil.copytree(source_dir, target_dir)
+            self._sync_skill(source_dir, target_dir)
 
         return directory.skill_dir
+
+    @staticmethod
+    def _scan_skill(root: Path) -> dict[str, str]:
+        """
+        Read the metadata file from a skill directory.
+
+        Parameters
+        ----------
+        root : Path
+            Root directory used by the workspace or skill source.
+
+        Returns
+        -------
+        dict[str, str]
+            The resulting mapping.
+        """
+        return {
+            path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in root.rglob("*")
+            if path.is_file() and path.name != _SKILL_MANIFEST
+        }
+
+    @staticmethod
+    def _read_skill_manifest(target_dir: Path) -> dict[str, str]:
+        """
+        Load the registry manifest from its cache directory.
+
+        Parameters
+        ----------
+        target_dir : Path
+            Directory where cached skill data is stored.
+
+        Returns
+        -------
+        dict[str, str]
+            The resulting mapping.
+        """
+        try:
+            return json.loads((target_dir / _SKILL_MANIFEST).read_text())
+        except FileNotFoundError:
+            return {}
+
+    @staticmethod
+    def _write_skill_manifest(target_dir: Path, manifest: dict[str, str]) -> None:
+        """
+        Write the registry manifest to its cache directory.
+
+        Parameters
+        ----------
+        target_dir : Path
+            Directory where cached skill data is stored.
+        manifest : dict[str, str]
+            Skill metadata to persist.
+        """
+        (target_dir / _SKILL_MANIFEST).write_text(json.dumps(manifest, sort_keys=True))
+
+    def _sync_skill(self, source_dir: Path, target_dir: Path) -> None:
+        """Bring an already-materialized skill up to date with its source.
+
+        A file untouched since the last sync (its hash still matches the
+        manifest) is refreshed when the source changed. A file with no
+        manifest entry yet (a pre-existing install, from before this synced)
+        is adopted as-is rather than guessed at. A file that diverges from
+        its manifest entry was edited locally, and its manifest entry is
+        left frozen so it's never auto-overwritten again.
+        """
+        source = self._scan_skill(source_dir)
+        local = self._scan_skill(target_dir)
+        manifest = self._read_skill_manifest(target_dir)
+
+        for key, source_hash in source.items():
+            local_hash = local.get(key)
+            if local_hash is None:
+                if key in manifest:
+                    continue  # deleted locally since last sync: respect it
+                target = target_dir / key
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((source_dir / key).read_bytes())
+                manifest[key] = source_hash
+            elif key not in manifest:
+                manifest[key] = local_hash  # pre-existing file: adopt as baseline
+            elif local_hash == manifest[key] and source_hash != manifest[key]:
+                (target_dir / key).write_bytes((source_dir / key).read_bytes())
+                manifest[key] = source_hash
+            # else: unchanged, or diverged locally (manifest entry stays frozen)
+
+        for key in [k for k in manifest if k not in source]:
+            if local.get(key) == manifest[key]:
+                (target_dir / key).unlink(missing_ok=True)
+            manifest.pop(key)
+
+        self._write_skill_manifest(target_dir, manifest)
 
     @abstractmethod
     async def _download_skill(self, skill_name: str, target_dir: Path) -> None:

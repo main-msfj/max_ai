@@ -10,6 +10,7 @@ from ....base.knowledge import KnowledgeToolMode
 
 
 class MongoDBKnowledgeRegistryConfig(BaseModel):
+    """Configuration options for ``MongoDBKnowledgeRegistry``."""
     name: str
     description: str
     tool_mode: KnowledgeToolMode = KnowledgeToolMode.FULL

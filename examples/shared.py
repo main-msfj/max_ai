@@ -1,5 +1,4 @@
-"""What the numbered examples (01_, 02_, ...) share: fixture paths, two demo
-tools and the ``--session`` argument. Each example builds its own Agent."""
+"""Shared paths, example tools, and the ``--session`` argument."""
 
 from __future__ import annotations
 
@@ -11,15 +10,17 @@ LOCAL_DIR = EXAMPLES_DIR / "local"  # fixture memory, knowledge and sessions
 USER_ID = "user_001"
 
 
-def get_weather(city: str) -> dict[str, str | int]:
-    """Return the current weather for a city. Read-only, no side effects."""
-    return {"city": city, "condition": "soleado", "temp_c": 24}
+def calculate_compound_interest(principal: float, annual_rate: float, years: int) -> float:
+    """Calculate a balance with annual compound interest."""
+    return round(principal * (1 + annual_rate / 100) ** years, 2)
 
 
-def send_email(to: str, subject: str, body: str) -> dict[str, str | bool]:
-    """Send an email to someone. Has a real external side effect."""
-    print(f"[send_email] (simulado) para={to!r} asunto={subject!r} cuerpo={body!r}")
-    return {"sent": True, "to": to}
+def save_report(report: str) -> str:
+    """Save a report to a local file."""
+    path = LOCAL_DIR / "reports" / "report.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(report, encoding="utf-8")
+    return f"Report saved to {path}"
 
 
 def session_arg() -> str | None:

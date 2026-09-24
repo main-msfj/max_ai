@@ -35,12 +35,24 @@ _CHUNK = 1024 * 1024
 
 
 def _checked_limit(max_bytes: int) -> int:
+    """Perform the internal ``checked limit`` operation.
+
+Parameters
+----------
+max_bytes : int
+    Value supplied for ``max_bytes``."""
     if not isinstance(max_bytes, int) or isinstance(max_bytes, bool) or max_bytes < 0:
         raise ValueError("max_bytes must be a non-negative integer")
     return max_bytes
 
 
 def _open_root(root: Path) -> int:
+    """Perform the internal ``open root`` operation.
+
+Parameters
+----------
+root : Path
+    Value supplied for ``root``."""
     if not isinstance(root, Path):
         root = Path(root)
     parts = root.parts
@@ -61,6 +73,12 @@ def _open_root(root: Path) -> int:
 
 
 def _validate_rel(path: object) -> str:
+    """Perform the internal ``validate rel`` operation.
+
+Parameters
+----------
+path : object
+    Value supplied for ``path``."""
     if not isinstance(path, str) or not path or "\\" in path or "\x00" in path:
         raise ValueError("invalid relative path")
     if path.startswith("/") or path in (".", ".."):
@@ -74,6 +92,16 @@ def _validate_rel(path: object) -> str:
 
 
 def _read_file(dirfd: int, name: str, remaining: int) -> bytes:
+    """Perform the internal ``read file`` operation.
+
+Parameters
+----------
+dirfd : int
+    Value supplied for ``dirfd``.
+name : str
+    Value supplied for ``name``.
+remaining : int
+    Value supplied for ``remaining``."""
     try:
         fd = os.open(name, _OPEN_FILE, dir_fd=dirfd)
     except OSError as exc:
@@ -100,6 +128,16 @@ def _read_file(dirfd: int, name: str, remaining: int) -> bytes:
 
 
 def _walk(fd: int, prefix: str = "", budget: list[int] | None = None) -> Iterator[tuple[str, bytes]]:
+    """Perform the internal ``walk`` operation.
+
+Parameters
+----------
+fd : int
+    Value supplied for ``fd``.
+prefix : str
+    Value supplied for ``prefix``.
+budget : list[int] | None
+    Value supplied for ``budget``."""
     if budget is None:
         budget = [MAX_BYTES]
     for name in os.listdir(fd):
@@ -121,6 +159,14 @@ def _walk(fd: int, prefix: str = "", budget: list[int] | None = None) -> Iterato
 
 
 def _snapshot_fd(fd: int, max_bytes: int) -> dict[str, str]:
+    """Perform the internal ``snapshot fd`` operation.
+
+Parameters
+----------
+fd : int
+    Value supplied for ``fd``.
+max_bytes : int
+    Value supplied for ``max_bytes``."""
     result: dict[str, str] = {}
     for rel, data in _walk(fd, budget=[max_bytes]):
         if len(result) >= MAX_FILES:
@@ -140,6 +186,16 @@ def snapshot(root: Path, max_bytes: int = MAX_BYTES) -> dict[str, str]:
 
 
 def _decode_map(value: object, label: str, max_bytes: int) -> dict[str, bytes]:
+    """Perform the internal ``decode map`` operation.
+
+Parameters
+----------
+value : object
+    Value supplied for ``value``.
+label : str
+    Value supplied for ``label``.
+max_bytes : int
+    Value supplied for ``max_bytes``."""
     if not isinstance(value, dict) or len(value) > MAX_FILES:
         raise ValueError(f"{label} must be an object with at most {MAX_FILES} files")
     result: dict[str, bytes] = {}
@@ -162,6 +218,16 @@ def _decode_map(value: object, label: str, max_bytes: int) -> dict[str, bytes]:
 
 
 def _file_bytes(dirfd: int, name: str, limit: int = MAX_BYTES) -> bytes | None:
+    """Perform the internal ``file bytes`` operation.
+
+Parameters
+----------
+dirfd : int
+    Value supplied for ``dirfd``.
+name : str
+    Value supplied for ``name``.
+limit : int
+    Value supplied for ``limit``."""
     try:
         fd = os.open(name, _OPEN_FILE, dir_fd=dirfd)
     except FileNotFoundError:
@@ -187,6 +253,16 @@ def _file_bytes(dirfd: int, name: str, limit: int = MAX_BYTES) -> bytes | None:
 
 
 def _open_parent(rootfd: int, rel: str, create: bool) -> tuple[int, str]:
+    """Perform the internal ``open parent`` operation.
+
+Parameters
+----------
+rootfd : int
+    Value supplied for ``rootfd``.
+rel : str
+    Value supplied for ``rel``.
+create : bool
+    Value supplied for ``create``."""
     parts = rel.split("/")
     fd = os.dup(rootfd)
     try:
@@ -261,6 +337,7 @@ def apply_snapshot(root: Path, desired: dict[str, str], expected: dict[str, str]
 
 
 def _main() -> None:
+    """Perform the internal ``main`` operation."""
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=("snapshot", "apply"))
     parser.add_argument("root", type=Path)

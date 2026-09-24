@@ -6,7 +6,7 @@ import json
 import re
 from pathlib import Path
 
-from ....base.embedding import CoreEmbedding
+from ....base.embedding import DEFAULT_EMBEDDING, CoreEmbedding
 from ....base.memory import (
     CoreMemoryRegistry,
     MemoryRecord,
@@ -49,8 +49,24 @@ class LocalMemoryRegistry(CoreMemoryRegistry):
         tool_mode: MemoryToolMode = MemoryToolMode.FULL,
         *,
         context_days: int | None = 30,
-        embedding: CoreEmbedding | None = None,
+        embedding: CoreEmbedding | None = DEFAULT_EMBEDDING,
     ) -> None:
+        """Initialize ``LocalMemoryRegistry``.
+
+Parameters
+----------
+user_id : str | None
+    Value supplied for ``user_id``.
+session_id : str | None
+    Value supplied for ``session_id``.
+base_path : str | Path | None
+    Value supplied for ``base_path``.
+tool_mode : MemoryToolMode
+    Value supplied for ``tool_mode``.
+context_days : int | None
+    Value supplied for ``context_days``.
+embedding : CoreEmbedding | None
+    Value supplied for ``embedding``."""
         if base_path is None:
             raise ValueError("LocalMemoryRegistry needs a base_path")
         self.base_path: Path = Path(base_path).expanduser().resolve()
@@ -60,6 +76,7 @@ class LocalMemoryRegistry(CoreMemoryRegistry):
         )
 
     def _validate_scope(self) -> None:
+        """Perform the internal ``validate scope`` operation for ``LocalMemoryRegistry``."""
         if not _SAFE_ID_RE.match(self.user_id) or not _SAFE_ID_RE.match(self.session_id):
             raise ValueError(
                 "user_id/session_id must match "
@@ -67,6 +84,7 @@ class LocalMemoryRegistry(CoreMemoryRegistry):
             )
 
     def _to_config(self) -> LocalMemoryRegistryConfig:
+        """Build the serializable configuration for ``LocalMemoryRegistry``."""
         return LocalMemoryRegistryConfig(
             user_id=self.user_id,
             session_id=self.session_id,
@@ -78,6 +96,12 @@ class LocalMemoryRegistry(CoreMemoryRegistry):
 
     @classmethod
     def _from_config(cls, config: LocalMemoryRegistryConfig) -> "LocalMemoryRegistry":
+        """Create an instance from its configuration for ``LocalMemoryRegistry``.
+
+Parameters
+----------
+config : LocalMemoryRegistryConfig
+    Value supplied for ``config``."""
         return cls(
             user_id=config.user_id,
             session_id=config.session_id,
@@ -89,25 +113,41 @@ class LocalMemoryRegistry(CoreMemoryRegistry):
 
     @property
     def _memory_dir(self) -> Path:
+        """Perform the internal ``memory dir`` operation for ``LocalMemoryRegistry``."""
         return self.base_path / "memory"
 
     @property
     def _user_dir(self) -> Path:
+        """Perform the internal ``user dir`` operation for ``LocalMemoryRegistry``."""
         return self._memory_dir / self.user_id
 
     def _session_file(self, session_id: str) -> Path:
+        """Perform the internal ``session file`` operation for ``LocalMemoryRegistry``.
+
+Parameters
+----------
+session_id : str
+    Value supplied for ``session_id``."""
         return self._user_dir / f"{session_id}.json"
 
     async def connect(self) -> None:
         # Per-user folders are created on first write (see _write_store).
+        """Open required resources for ``LocalMemoryRegistry``."""
         self._memory_dir.mkdir(parents=True, exist_ok=True)
 
     async def disconnect(self) -> None:
+        """Release resources held for ``LocalMemoryRegistry``."""
         return None
 
     # -------- STORE I/O -----------------------------------------------------------
     @staticmethod
     def _load_store(path: Path) -> dict[str, MemoryRecord]:
+        """Perform the internal ``load store`` operation for ``LocalMemoryRegistry``.
+
+Parameters
+----------
+path : Path
+    Value supplied for ``path``."""
         if not path.is_file():
             return {}
         try:
@@ -133,6 +173,14 @@ class LocalMemoryRegistry(CoreMemoryRegistry):
 
     @staticmethod
     def _write_store(path: Path, store: dict[str, MemoryRecord]) -> None:
+        """Perform the internal ``write store`` operation for ``LocalMemoryRegistry``.
+
+Parameters
+----------
+path : Path
+    Value supplied for ``path``.
+store : dict[str, MemoryRecord]
+    Value supplied for ``store``."""
         path.parent.mkdir(parents=True, exist_ok=True)
         serializable = {
             category: json.loads(record.model_dump_json())
@@ -145,10 +193,17 @@ class LocalMemoryRegistry(CoreMemoryRegistry):
 
     # -------- CONTRACT -----------------------------------------------------------
     async def _read_session(self) -> list[MemoryRecord]:
+        """Perform the internal ``read session`` operation for ``LocalMemoryRegistry``."""
         await self._ensure_connected()
         return list(self._load_store(self._session_file(self.session_id)).values())
 
     async def _write_memory(self, record: MemoryRecord) -> bool:
+        """Perform the internal ``write memory`` operation for ``LocalMemoryRegistry``.
+
+Parameters
+----------
+record : MemoryRecord
+    Value supplied for ``record``."""
         await self._ensure_connected()
         path = self._session_file(self.session_id)
         store = self._load_store(path)
@@ -158,6 +213,12 @@ class LocalMemoryRegistry(CoreMemoryRegistry):
         return created
 
     async def _delete_memory(self, category: str) -> bool:
+        """Perform the internal ``delete memory`` operation for ``LocalMemoryRegistry``.
+
+Parameters
+----------
+category : str
+    Value supplied for ``category``."""
         await self._ensure_connected()
         path = self._session_file(self.session_id)
         store = self._load_store(path)

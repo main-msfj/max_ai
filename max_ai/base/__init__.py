@@ -1,3 +1,9 @@
+"""Public contracts and base classes for Max AI components.
+
+This package exposes the interfaces used to compose agents and implement
+clients, capabilities, tools, middleware, and runtime services.
+"""
+
 from .capability import CoreAgentCapabilities
 from .compaction import CompactionResult, CoreCompaction
 from .completion_gate import (

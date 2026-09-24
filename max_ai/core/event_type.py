@@ -15,9 +15,9 @@ from pydantic import BaseModel, ConfigDict, Discriminator, Field
 
 from ..base.completion_gate import CompletionDecision
 from ..capabilities.tools.plan import AgentPlan
-from ..ids import short_id
 from ..types.completions import Usage
 from ..types.tool_call import ToolResult
+from .ids import short_id
 from .messages import CoreMessage, Message
 
 

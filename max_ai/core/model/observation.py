@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from ...ids import short_id
+from ..ids import short_id
 
 
 class ObservationRecord(BaseModel):

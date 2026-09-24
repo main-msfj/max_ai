@@ -56,6 +56,20 @@ class CoreLayer(ComponentBase[BaseModel], ABC):
         load_from: str | Path | None = None,
         extra_variables: dict[str, t.Any] | None = None,
     ) -> None:
+        """
+        Initialize a named prompt layer and its template settings.
+
+        Parameters
+        ----------
+        name : str
+            Name assigned to the component or resource.
+        template : str | None, default=None
+            Value used to configure the prompt layer.
+        load_from : str | Path | None, default=None
+            Value used to configure the prompt layer.
+        extra_variables : dict[str, t.Any] | None, default=None
+            Value used to configure the prompt layer.
+        """
         if template is not None and load_from is not None:
             raise StackError.template_or_load_from()
 
@@ -112,6 +126,14 @@ class CoreLayer(ComponentBase[BaseModel], ABC):
 
     def _resolve_template(self) -> str:
         # Priority: inline user template > external file > subclass default
+        """
+        Choose and load the template used by this layer.
+
+        Returns
+        -------
+        str
+            The resulting text value.
+        """
         if self._inline_template is not None:
             return self._inline_template
         if self._load_from is not None:
@@ -120,6 +142,19 @@ class CoreLayer(ComponentBase[BaseModel], ABC):
 
     @staticmethod
     def _load_file(file_path: str | Path) -> str:
+        """
+        Read a prompt template from a filesystem path.
+
+        Parameters
+        ----------
+        file_path : str | Path
+            The text read from the template file.
+
+        Returns
+        -------
+        str
+            The resulting text value.
+        """
         path = Path(file_path)
         if not path.exists():
             raise StackError(f"Template file not found: {path}")
@@ -186,6 +221,14 @@ class CoreLayer(ComponentBase[BaseModel], ABC):
     # -------- RENDER -----------------------------------------------------------
     # -------- COMPONENT SERIALIZATION -----------------------------------------------------------
     def _to_config(self) -> StackConfig:
+        """
+        Return the serializable settings for this prompt layer.
+
+        Returns
+        -------
+        StackConfig
+            The prompt layer configuration model.
+        """
         description = self.__class__.__doc__.strip().split("\n\n")[0] if self.__class__.__doc__ else self.name
         return StackConfig(
             name=self.name,
@@ -200,6 +243,19 @@ class CoreLayer(ComponentBase[BaseModel], ABC):
 
     @classmethod
     def _from_config(cls, config: StackConfig) -> t.Self:
+        """
+        Build a prompt layer from its validated configuration.
+
+        Parameters
+        ----------
+        config : StackConfig
+            Model or component configuration.
+
+        Returns
+        -------
+        t.Self
+            The prompt layer reconstructed from its configuration.
+        """
         template = config.template if config.template is not None else config.instructions
         return cls(
             template=template,
@@ -233,4 +289,12 @@ class CoreLayer(ComponentBase[BaseModel], ABC):
         return self._compiled.render(**merged)
 
     def __repr__(self) -> str:
+        """
+        Return a readable representation of this prompt layer.
+
+        Returns
+        -------
+        str
+            The resulting text value.
+        """
         return f"{self.__class__.__name__}(name={self.name!r})"

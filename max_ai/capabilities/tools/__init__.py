@@ -40,6 +40,12 @@ if t.TYPE_CHECKING:  # static analyzers see the real symbols
 
 
 def __getattr__(name: str) -> t.Any:
+    """Resolve a lazily exported attribute.
+
+Parameters
+----------
+name : str
+    Value supplied for ``name``."""
     target = _LAZY_EXPORTS.get(name)
     if target is None:
         raise AttributeError(name)

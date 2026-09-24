@@ -21,11 +21,13 @@ from ....core.termination import CancellationToken
 
 
 async def main():
+    """Run the command-line entry point."""
     payload = json.load(sys.stdin)
     marker = Path("/tmp") / ("maxai-cancel-" + payload["id"])
     token = CancellationToken()
 
     async def watch():
+        """Perform the ``watch`` operation."""
         while not marker.exists():
             await asyncio.sleep(0.1)
         token.cancel()

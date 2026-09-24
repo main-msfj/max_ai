@@ -272,3 +272,43 @@ async def test_local_skill_registry_loads_skill(tmp_path: Path, monkeypatch: pyt
         assert session_skills == directory.skill_dir
         assert (session_skills / "demo_skill" / "SKILL.md").is_file()
         assert (session_skills / "demo_skill" / "references" / "notes.md").is_file()
+
+
+async def test_materialize_refreshes_unedited_files_but_keeps_local_edits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A skill fixed upstream should reach users who never touched their copy,
+    without clobbering a file a user or agent actually edited."""
+    source_root = tmp_path / "source"
+    monkeypatch.setenv("SKILLS_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("SERVER_DIR", str(tmp_path / "server"))
+
+    skill_dir = source_root / "demo_skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("---\nname: demo_skill\ndescription: d\n---\nold path\n")
+    (skill_dir / "notes.md").write_text("shared")
+
+    reg = LocalSkillRegistry(source=source_root, skills=["demo_skill"])
+    user_root = (tmp_path / "server").resolve() / "tmp" / "u1"
+    directory = WorkspaceDirectory(
+        root=user_root, workspace_dir=user_root / "workspace",
+        skill_dir=user_root / "skills", artifacts_dir=user_root / "workspace",
+    )
+
+    async with reg:
+        await reg.get_skills()
+        reg.materialize(directory)
+        materialized = directory.skill_dir / "demo_skill"
+        # The user/agent edits notes.md; nothing touches SKILL.md.
+        (materialized / "notes.md").write_text("user's own notes")
+
+    # Upstream fixes SKILL.md (imagine the real bug: a wrong script path).
+    (skill_dir / "SKILL.md").write_text("---\nname: demo_skill\ndescription: d\n---\nfixed path\n")
+
+    reg2 = LocalSkillRegistry(source=source_root, skills=["demo_skill"])
+    async with reg2:
+        await reg2.get_skills()
+        reg2.materialize(directory)
+
+    assert (materialized / "SKILL.md").read_text().endswith("fixed path\n")
+    assert (materialized / "notes.md").read_text() == "user's own notes"

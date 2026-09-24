@@ -43,6 +43,12 @@ class FileSystemTools:
     """Workspace-relative file tools, one shared workspace per user."""
 
     def __init__(self, workspace: str | Path | UserFileSystem | None = None):
+        """Initialize ``FileSystemTools``.
+
+Parameters
+----------
+workspace : str | Path | UserFileSystem | None
+    Value supplied for ``workspace``."""
         self._workspace = (
             workspace
             if isinstance(workspace, UserFileSystem)
@@ -60,6 +66,16 @@ class FileSystemTools:
         def list_directory(
             context: ToolContext, path: str = "", limit: int = 200
         ) -> dict[str, Any]:
+            """List directory for ``FileSystemTools``.
+
+Parameters
+----------
+context : ToolContext
+    Value supplied for ``context``.
+path : str
+    Value supplied for ``path``.
+limit : int
+    Value supplied for ``limit``."""
             filesystem = self._filesystem(context)
             resolved = self._workspace_path(context, path, allow_empty=True)
             result = filesystem.list_files(context.user_id, path=resolved, limit=limit)
@@ -86,6 +102,16 @@ class FileSystemTools:
             file_name: str,
             limit: int = 100,
         ) -> dict[str, Any]:
+            """Find files for ``FileSystemTools``.
+
+Parameters
+----------
+context : ToolContext
+    Value supplied for ``context``.
+file_name : str
+    Value supplied for ``file_name``.
+limit : int
+    Value supplied for ``limit``."""
             filesystem = self._filesystem(context)
             result = self._find_files(context, file_name, limit)
             self._emit(
@@ -113,6 +139,16 @@ class FileSystemTools:
             query: str,
             limit: int = 100,
         ) -> dict[str, Any]:
+            """Perform the ``search text`` operation for ``FileSystemTools``.
+
+Parameters
+----------
+context : ToolContext
+    Value supplied for ``context``.
+query : str
+    Value supplied for ``query``.
+limit : int
+    Value supplied for ``limit``."""
             filesystem = self._filesystem(context)
             result = self._search_text(context, query, limit)
             self._emit(
@@ -140,6 +176,16 @@ class FileSystemTools:
             file_name: str,
             max_bytes: int = 65536,
         ) -> dict[str, Any]:
+            """Read file for ``FileSystemTools``.
+
+Parameters
+----------
+context : ToolContext
+    Value supplied for ``context``.
+file_name : str
+    Value supplied for ``file_name``.
+max_bytes : int
+    Value supplied for ``max_bytes``."""
             filesystem = self._filesystem(context)
             resolved = self._workspace_path(context, file_name)
             result = filesystem.read_file_details(
@@ -165,6 +211,16 @@ class FileSystemTools:
         def write_file(
             context: ToolContext, file_name: str, content: str
         ) -> dict[str, Any]:
+            """Write file for ``FileSystemTools``.
+
+Parameters
+----------
+context : ToolContext
+    Value supplied for ``context``.
+file_name : str
+    Value supplied for ``file_name``.
+content : str
+    Value supplied for ``content``."""
             filesystem = self._filesystem(context)
             result = filesystem.create_text_file(
                 context.user_id,
@@ -199,6 +255,20 @@ class FileSystemTools:
             new_text: str,
             expected_sha256: str,
         ) -> dict[str, Any]:
+            """Perform the ``edit file`` operation for ``FileSystemTools``.
+
+Parameters
+----------
+context : ToolContext
+    Value supplied for ``context``.
+file_name : str
+    Value supplied for ``file_name``.
+old_text : str
+    Value supplied for ``old_text``.
+new_text : str
+    Value supplied for ``new_text``.
+expected_sha256 : str
+    Value supplied for ``expected_sha256``."""
             filesystem = self._filesystem(context)
             resolved = self._workspace_path(context, file_name)
             result = filesystem.edit_text_file(
@@ -227,6 +297,14 @@ class FileSystemTools:
             approval_mode=ToolApprovalMode.AUTO_APPROVED,
         )
         def create_directory(context: ToolContext, path: str) -> dict[str, Any]:
+            """Create directory for ``FileSystemTools``.
+
+Parameters
+----------
+context : ToolContext
+    Value supplied for ``context``.
+path : str
+    Value supplied for ``path``."""
             filesystem = self._filesystem(context)
             result = filesystem.create_directory(
                 context.user_id, self._write_target(context, path)
@@ -251,6 +329,14 @@ class FileSystemTools:
         def file_info(
             context: ToolContext, file_name: str
         ) -> dict[str, Any]:
+            """Perform the ``file info`` operation for ``FileSystemTools``.
+
+Parameters
+----------
+context : ToolContext
+    Value supplied for ``context``.
+file_name : str
+    Value supplied for ``file_name``."""
             filesystem = self._filesystem(context)
             resolved = self._workspace_path(context, file_name)
             result = filesystem.file_info(context.user_id, resolved)
@@ -279,6 +365,16 @@ class FileSystemTools:
             file_name: str,
             expected_sha256: str,
         ) -> dict[str, Any]:
+            """Delete file for ``FileSystemTools``.
+
+Parameters
+----------
+context : ToolContext
+    Value supplied for ``context``.
+file_name : str
+    Value supplied for ``file_name``.
+expected_sha256 : str
+    Value supplied for ``expected_sha256``."""
             filesystem = self._filesystem(context)
             resolved = self._workspace_path(context, file_name)
             result = filesystem.delete_file(context.user_id, resolved, expected_sha256)
@@ -352,10 +448,24 @@ class FileSystemTools:
 
     @staticmethod
     def _emit(context: ToolContext, event: Any) -> None:
+        """Perform the internal ``emit`` operation for ``FileSystemTools``.
+
+Parameters
+----------
+context : ToolContext
+    Value supplied for ``context``.
+event : Any
+    Value supplied for ``event``."""
         if context.emit_event is not None:
             context.emit_event(event)
 
     def _filesystem(self, context: ToolContext) -> UserFileSystem:
+        """Perform the internal ``filesystem`` operation for ``FileSystemTools``.
+
+Parameters
+----------
+context : ToolContext
+    Value supplied for ``context``."""
         if self._workspace is not None:
             filesystem = self._workspace
         else:
@@ -373,6 +483,16 @@ class FileSystemTools:
     def _find_files(
         self, context: ToolContext, pattern: str, limit: int
     ) -> dict[str, Any]:
+        """Perform the internal ``find files`` operation for ``FileSystemTools``.
+
+Parameters
+----------
+context : ToolContext
+    Value supplied for ``context``.
+pattern : str
+    Value supplied for ``pattern``.
+limit : int
+    Value supplied for ``limit``."""
         if (
             not isinstance(pattern, str)
             or not pattern
@@ -407,6 +527,16 @@ class FileSystemTools:
     def _search_text(
         self, context: ToolContext, query: str, limit: int
     ) -> dict[str, Any]:
+        """Perform the internal ``search text`` operation for ``FileSystemTools``.
+
+Parameters
+----------
+context : ToolContext
+    Value supplied for ``context``.
+query : str
+    Value supplied for ``query``.
+limit : int
+    Value supplied for ``limit``."""
         if not isinstance(query, str) or not query or len(query) > _MAX_QUERY_CHARS:
             raise ValueError(f"query must contain 1 to {_MAX_QUERY_CHARS} characters")
         effective_limit = UserFileSystem._bounded_limit(limit, _MAX_TOOL_RESULTS)

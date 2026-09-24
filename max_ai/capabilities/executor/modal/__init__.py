@@ -19,6 +19,12 @@ __all__ = ["ModalExecutor", "ModalExecutorConfig"]
 
 
 def __getattr__(name: str) -> t.Any:
+    """Resolve a lazily exported attribute.
+
+Parameters
+----------
+name : str
+    Value supplied for ``name``."""
     if name == "ModalExecutor":
         from ._executor import ModalExecutor
 

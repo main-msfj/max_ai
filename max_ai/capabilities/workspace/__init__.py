@@ -1,3 +1,4 @@
+"""Module providing capability implementations and supporting utilities."""
 from ._remote import RemoteWorkspace
 from .azure_blob import AzureBlobWorkspace, AzureBlobWorkspaceConfig
 from .local import (

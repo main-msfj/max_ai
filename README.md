@@ -66,15 +66,17 @@ The default behavior is a ReAct-style agent loop:
               v
    +----------------------+       +----------------------+
    | LocalExecutor        |       | DockerExecutor       |
-   | in-process tools     |       | sandboxed runtime    |
-   +----------------------+       +----------+-----------+
+   | in-process tools     |       | ModalExecutor        |
+   +----------------------+       | sandboxed runtime    |
+                                  +----------+-----------+
                                              |
                                              v
-                                  +----------------------+
-                                  | /mnt/tools           |
-                                  | /mnt/skills          |
-                                  | /mnt/artifacts       |
-                                  +----------------------+
+                                  +------------------------+
+                                  | /workspaces/<user_id>/ |
+                                  |   workspace/           |
+                                  |   scratchpad/          |
+                                  |   skills/              |
+                                  +------------------------+
 ```
 
 ## How the Components Talk
@@ -105,9 +107,9 @@ The `ReActLoop` is the default reasoning engine. On each iteration it calls the 
 
 The `ToolExecutor` is the tool-call pipeline. It receives `ToolCallRecord` objects from the reasoning loop, resolves tool names, validates parameters against each tool's JSON schema, emits approval events when needed, runs middleware around the execution step, dispatches execution to an executor, and returns both observability events and `ToolMessage` results for the LLM.
 
-The executor controls where side effects happen. `LocalExecutor` runs trusted tools in the same Python process. `DockerExecutor` runs tools in a sandboxed Docker runtime and bind-mounts a per-user workspace as `/mnt`, with `tools`, `skills`, and `artifacts` directories.
+The executor controls where side effects happen. `LocalExecutor` runs trusted tools in the same Python process. `DockerExecutor` and `ModalExecutor` run commands in a sandbox and mount the user's directory at `/workspaces/<user_id>`.
 
-The workspace registry creates per-user runtime directories. When tools or skills require runtime files, the agent binds the executor to the workspace, materializes the user's runtime directory, copies selected skills into it, and passes paths such as `runtime_root`, `tools_dir`, `skills_dir`, and `artifacts_dir` to runtime-aware tools.
+The workspace creates per-user runtime directories: local disk (`LocalWorkspace`) or object storage (`AzureBlobWorkspace`, `MinIOWorkspace`). Each run materializes the user's directory, copies the selected skills into it, and gives the file tools and `bash` the same `$WORKSPACE`, `$SCRATCHPAD` and `$SKILLS` paths.
 
 ## Runtime Flow
 
@@ -152,7 +154,7 @@ Agent.run_stream_events(task)
                  +--> approval check
                  +--> parameter validation
                  +--> middleware chain
-                 +--> LocalExecutor or DockerExecutor
+                 +--> LocalExecutor, DockerExecutor or ModalExecutor
                  +--> ToolMessage returned to ReActLoop
 ```
 
@@ -270,13 +272,34 @@ LocalSkills/
 
 `LocalSkillRegistry` selects named skills from a source directory, caches them under `var/skills`, reads frontmatter metadata from `SKILL.md`, adds skill descriptions to the prompt through `SkillsLayer`, and materializes the selected skills into the runtime workspace before execution.
 
+`GithubSkillRegistry` does the same from a Git repository. It shallow-clones the repo once, then copies each named top-level folder:
+
+```python
+from max_ai.capabilities.skills.github import GithubSkillRegistry
+
+skills = GithubSkillRegistry(
+    "org/agent-skills",          # or a full https / git@ / ssh:// URL
+    ["create-invoice"],
+    ref="v1.2.0",                # branch or tag
+    token_env="SKILLS_GH_TOKEN", # private repos only: the env var name, never the token
+)
+```
+
+The token is read from the environment when the repo is cloned. It is never serialized or placed on the command line. The host needs `git` installed.
+
 Skills require a sandbox executor. If skills are registered with the default local executor, the agent raises a safety error instead of running untrusted runtime code in-process.
 
 ### Execution
 
 `LocalExecutor` is fast and simple. It runs tool code in the current Python process and is suitable for trusted helpers.
 
-`DockerExecutor` isolates runtime execution. It stages the framework code for import inside the container, bind-mounts the per-user runtime directory, and executes tools as one-shot or persistent containers.
+`DockerExecutor` runs `bash` in one container per session. The container runs as a non-root user with a read-only root filesystem and all capabilities dropped. It has no network (`network="none"`, the default), CPU, memory and PID limits, and the user's directory bind-mounted at `/workspaces/<user_id>`. Build the image once:
+
+```bash
+docker build -f max_ai/capabilities/executor/docker/Dockerfile -t maxai-runtime:latest .
+```
+
+`ModalExecutor` (`pip install 'maxai[runtime-modal]'`) runs the same commands in a Modal sandbox and syncs the workspace in and out. `examples/verify_modal_executor.py` checks a Modal account end to end.
 
 Import executors from `max_ai.capabilities.executor`:
 
@@ -288,7 +311,7 @@ agent = Agent(
     description="Uses Docker",
     instructions="Help the user",
     client=client,
-    executor=DockerExecutor(image="maxai-sandbox:latest"),
+    executor=DockerExecutor(image="maxai-runtime:latest"),
 )
 ```
 
@@ -301,13 +324,27 @@ Per-user runtime layout on the host:
   skills/             (materializes skills; $SKILLS)
 ```
 
+### Workspace
+
+`LocalWorkspace` (the default) keeps each user's files on local disk. For serverless or multi-host deployments, a remote workspace keeps them in object storage. It downloads the user's files before a run and uploads only what changed at the end:
+
+```python
+from max_ai.capabilities.workspace import AzureBlobWorkspace, MinIOWorkspace
+
+AzureBlobWorkspace("https://acct.blob.core.windows.net/agents", api_key_env="AZURE_STORAGE_KEY")
+MinIOWorkspace("http://localhost:9000", bucket="agents",
+               access_key_env="MINIO_ACCESS_KEY", secret_key_env="MINIO_SECRET_KEY")
+```
+
+Install with `maxai[azure-blob]` or `maxai[minio]`. As everywhere else, configs store env var names, never credentials.
+
 ### Middleware
 
 `CoreMiddleware` is a serializable component with optional async hooks: run lifecycle (`on_run_start`, `on_final_response`, `on_run_end`, `on_run_error`), model calls (`on_model_request`, `on_model_chunk`, `on_model_response`, `on_model_error`), and approved tool calls (`on_tool_request`, `on_tool_response`). Raise `StopRun(message)` from `on_run_start` or a model hook to end the turn cleanly (`response.stop_message`); a tool hook blocks a single call by returning a `ToolResult` instead. Pass middlewares via `Agent(..., middlewares=[...])`. Built-ins: `LoggingMiddleware`, `BudgetMiddleware(max_tokens=..., max_cost_usd=..., max_seconds=..., quota=QuotaLimits(...), quota_store=LocalQuotaStore(...))`, `TracingMiddleware()` with `configure_langfuse()` for OpenTelemetry → Langfuse.
 
 ### Embeddings
 
-`CoreEmbedding` (`max_ai.base.embedding`) turns text into vectors, in batches and with a cache. `FastEmbedEmbedding` (`pip install 'maxai[embeddings]'`) runs a local multilingual model; `OpenAIEmbedding` needs no download (better for serverless). Knowledge search uses one (local by default); memory uses one when given: `LocalMemoryRegistry(base_path=..., embedding=FastEmbedEmbedding())` makes `search_memory` match by meaning, in any language. `SQLiteMemoryRegistry` and `SQLiteKnowledgeRegistry` (`max_ai.capabilities.memory.sqlite`, `max_ai.capabilities.knowledge.sqlite`) store each vector next to its text, so stored memories and documents are never embedded again, even after a restart; knowledge is loaded with `upsert_block(block_id, KnowledgeBlock(...))`.
+`CoreEmbedding` (`max_ai.base.embedding`) turns text into vectors, in batches and with a cache. `FastEmbedEmbedding` (`pip install 'maxai[embeddings]'`) runs a local multilingual model; `OpenAIEmbedding` needs no download (better for serverless). Memory and knowledge registries use `FastEmbedEmbedding` when `embedding` isn't passed, so `search_memory` and knowledge search match by meaning, in any language. Pass your own (`embedding=OpenAIEmbedding()`) to change it, or `embedding=None` for memory search by words only. MongoDB backends use `$vectorSearch` (Atlas, or the Atlas Local image in `docker-infra/`). `SQLiteMemoryRegistry` and `SQLiteKnowledgeRegistry` (`max_ai.capabilities.memory.sqlite`, `max_ai.capabilities.knowledge.sqlite`) store each vector next to its text, so stored memories and documents are never embedded again, even after a restart; knowledge is loaded with `upsert_block(block_id, KnowledgeBlock(...))`.
 
 ### Context Compaction
 
@@ -354,7 +391,7 @@ pip install maxai
 Or with optional features:
 
 ```bash
-pip install maxai[cli,embeddings,tracing,mongodb,runtime-modal]
+pip install "maxai[cli,embeddings,tracing,mongodb,runtime-modal,azure-blob,minio]"
 ```
 
 For development:
@@ -527,6 +564,8 @@ max_ai/
   core/              Messages, events, tool state, primitives
   types/             Pydantic types used across runtime boundaries
 examples/
+  basic/             One feature per file: tools, approvals, memory, MCP, skills, tracing...
+  advance/           Custom backends, middleware, layers, embeddings, serialization
   01_agent_with_openai.py    Full agent with OpenAI, memory, knowledge, skills
   02_agent_with_openrouter.py Full agent with OpenRouter
   LocalSkills/       Example skill packages

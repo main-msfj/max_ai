@@ -1,3 +1,4 @@
+"""Module providing capability implementations and supporting utilities."""
 from .local import LocalKnowledgeRegistry, LocalKnowledgeRegistryConfig
 from .mongodb import MongoDBKnowledgeRegistry, MongoDBKnowledgeRegistryConfig
 from .sqlite import SQLiteKnowledgeRegistry, SQLiteKnowledgeRegistryConfig

@@ -78,6 +78,7 @@ class FunctionAsTool(CoreTool):
 
     @property
     def parameters(self) -> dict[str, t.Any]:
+        """Perform the ``parameters`` operation for ``FunctionAsTool``."""
         return self._parameters_schema
 
     def docker_ref(self) -> DockerToolRef:
@@ -150,6 +151,16 @@ class FunctionAsTool(CoreTool):
         tool_context: ToolContext | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> ToolResult:
+        """Execute the requested operation for ``FunctionAsTool``.
+
+Parameters
+----------
+tool_request : ToolCallRecord
+    Value supplied for ``tool_request``.
+tool_context : ToolContext | None
+    Value supplied for ``tool_context``.
+cancellation_token : CancellationToken | None
+    Value supplied for ``cancellation_token``."""
         logs = log.child(
             action="Executing FunctionTool",
             tool_name=self.name,

@@ -6,10 +6,10 @@ import asyncio
 import os
 from typing import Any
 
-from ....base.embedding import CoreEmbedding
+from ....base.embedding import DEFAULT_EMBEDDING, CoreEmbedding
 from ....base.knowledge import CoreKnowledgeRegistry, KnowledgeToolMode
 from ....core import KnowledgeBlock
-from ....core.embeddings import rank
+from ....core.embeddings import FastEmbedEmbedding, rank
 from ...mongodb_vector import MongoVectorIndex
 from ._model import MongoDBKnowledgeRegistryConfig
 
@@ -31,9 +31,31 @@ class MongoDBKnowledgeRegistry(CoreKnowledgeRegistry):
         collection: str = "knowledge",
         uri_env: str = "MONGODB_URI",
         server_selection_timeout_ms: int = 5000,
-        embedding: CoreEmbedding | None = None,
+        embedding: CoreEmbedding | None = DEFAULT_EMBEDDING,
         min_score: float = 0.2,
     ) -> None:
+        """Initialize ``MongoDBKnowledgeRegistry``.
+
+Parameters
+----------
+name : str
+    Value supplied for ``name``.
+description : str
+    Value supplied for ``description``.
+tool_mode : KnowledgeToolMode
+    Value supplied for ``tool_mode``.
+database : str
+    Value supplied for ``database``.
+collection : str
+    Value supplied for ``collection``.
+uri_env : str
+    Value supplied for ``uri_env``.
+server_selection_timeout_ms : int
+    Value supplied for ``server_selection_timeout_ms``.
+embedding : CoreEmbedding | None
+    Value supplied for ``embedding``.
+min_score : float
+    Value supplied for ``min_score``."""
         super().__init__(name, description, tool_mode)
         self._mongo_config = MongoDBKnowledgeRegistryConfig(
             name=self.name, description=self.description, tool_mode=tool_mode,
@@ -42,23 +64,33 @@ class MongoDBKnowledgeRegistry(CoreKnowledgeRegistry):
         )
         # With an embedding: vectors stored with each block, search by meaning
         # ($vectorSearch when the server has it, else ranked in Python).
-        self.embedding = embedding
+        # DEFAULT_EMBEDDING (nothing passed): FastEmbedEmbedding. Explicit
+        # None: plain MongoDB $text search instead.
+        self.embedding = FastEmbedEmbedding() if embedding is DEFAULT_EMBEDDING else embedding
         self._vector_index = MongoVectorIndex(f"{collection}_vector", ["source", "model_id"])
         self._mongo_lock = asyncio.Lock()
         self._mongo_client: Any = None
         self._collection: Any = None
 
     def _to_config(self) -> MongoDBKnowledgeRegistryConfig:
+        """Build the serializable configuration for ``MongoDBKnowledgeRegistry``."""
         embedding = self.embedding.serialize().model_dump(exclude_none=True) if self.embedding else None
         return self._mongo_config.model_copy(update={"embedding": embedding}, deep=True)
 
     @classmethod
     def _from_config(cls, config: MongoDBKnowledgeRegistryConfig) -> "MongoDBKnowledgeRegistry":
+        """Create an instance from its configuration for ``MongoDBKnowledgeRegistry``.
+
+Parameters
+----------
+config : MongoDBKnowledgeRegistryConfig
+    Value supplied for ``config``."""
         embedding = CoreEmbedding.deserialize(config.embedding) if config.embedding else None
         return cls(**config.model_dump(exclude={"embedding"}), embedding=embedding)
 
     # -------- CONNECTION -----------------------------------------------------------
     async def connect(self) -> None:
+        """Open required resources for ``MongoDBKnowledgeRegistry``."""
         async with self._mongo_lock:
             if self._mongo_client is not None:
                 return
@@ -89,6 +121,7 @@ class MongoDBKnowledgeRegistry(CoreKnowledgeRegistry):
             self._connected = True
 
     async def disconnect(self) -> None:
+        """Release resources held for ``MongoDBKnowledgeRegistry``."""
         async with self._mongo_lock:
             client = self._mongo_client
             self._mongo_client = None
@@ -98,6 +131,12 @@ class MongoDBKnowledgeRegistry(CoreKnowledgeRegistry):
                 await client.close()
 
     async def _create_indexes(self, collection: Any) -> None:
+        """Perform the internal ``create indexes`` operation for ``MongoDBKnowledgeRegistry``.
+
+Parameters
+----------
+collection : Any
+    Value supplied for ``collection``."""
         await collection.create_index(
             [("source", 1), ("block_id", 1)], unique=True,
             name="knowledge_identity", collation={"locale": "simple"},
@@ -109,6 +148,14 @@ class MongoDBKnowledgeRegistry(CoreKnowledgeRegistry):
 
     # -------- SEARCH -----------------------------------------------------------
     async def search(self, query: str, limit: int = 5) -> list[KnowledgeBlock]:
+        """Search MongoDBKnowledgeRegistry for matching records.
+
+Parameters
+----------
+query : str
+    Value supplied for ``query``.
+limit : int
+    Value supplied for ``limit``."""
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise ValueError("limit must be an integer between 1 and 100")
         if not isinstance(query, str) or not query.strip():
@@ -128,6 +175,14 @@ class MongoDBKnowledgeRegistry(CoreKnowledgeRegistry):
     max_candidates: int = 5000
 
     async def _search_by_meaning(self, query: str, limit: int) -> list[KnowledgeBlock]:
+        """Perform the internal ``search by meaning`` operation for ``MongoDBKnowledgeRegistry``.
+
+Parameters
+----------
+query : str
+    Value supplied for ``query``.
+limit : int
+    Value supplied for ``limit``."""
         assert self.embedding is not None
         await self._embed_missing()
         model_id = self.embedding.model_id
@@ -167,6 +222,12 @@ class MongoDBKnowledgeRegistry(CoreKnowledgeRegistry):
     # -------- INGESTION (application API, not an agent tool) -----------------------------
     @staticmethod
     def _block_id(block_id: str) -> str:
+        """Perform the internal ``block id`` operation for ``MongoDBKnowledgeRegistry``.
+
+Parameters
+----------
+block_id : str
+    Value supplied for ``block_id``."""
         if not isinstance(block_id, str) or not block_id.strip():
             raise ValueError("block_id must be a non-empty string")
         return block_id.strip()
@@ -197,6 +258,12 @@ class MongoDBKnowledgeRegistry(CoreKnowledgeRegistry):
         return result.upserted_id is not None
 
     async def delete_block(self, block_id: str) -> bool:
+        """Delete block for ``MongoDBKnowledgeRegistry``.
+
+Parameters
+----------
+block_id : str
+    Value supplied for ``block_id``."""
         identity = {"source": self.name, "block_id": self._block_id(block_id)}
         await self._ensure_connected()
         result = await self._collection.delete_one(identity, collation={"locale": "simple"})

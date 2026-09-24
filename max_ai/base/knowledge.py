@@ -18,7 +18,7 @@ A ``CoreKnowledgeRegistry`` exposes two surfaces to the agent:
 
 Subclasses implement ``search`` (storage-level retrieval). The base
 class handles tool generation.
-"""
+    """
 
 from __future__ import annotations
 
@@ -68,6 +68,18 @@ class CoreKnowledgeRegistry(CoreAgentCapabilities[BaseModel], ABC):
         description: str,
         tool_mode: KnowledgeToolMode = KnowledgeToolMode.FULL,
     ) -> None:
+        """
+        Initialize a named knowledge source and its agent-facing description.
+
+        Parameters
+        ----------
+        name : str
+            Name assigned to the component or resource.
+        description : str
+            Human-readable description of the resource.
+        tool_mode : KnowledgeToolMode, default=KnowledgeToolMode.FULL
+            Controls which agent-facing tools are exposed.
+        """
         super().__init__()
         self.name: str = self._validate_name(name)
         self.description: str = self.require_type(

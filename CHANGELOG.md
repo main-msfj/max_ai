@@ -22,8 +22,19 @@ First public version.
 - Reasoning: `ReactLoop` with loop guards; completion gates (`gates=[...]`)
   decide when a turn may end; approvals and questions pause and resume a run.
 - Memory, knowledge and skills: local JSON, SQLite and MongoDB backends;
-  `CoreEmbedding` (`FastEmbedEmbedding` multilingual default, `OpenAIEmbedding`)
-  for search by meaning; SQLite backends store vectors next to their text.
+  `CoreEmbedding` (`FastEmbedEmbedding`, `OpenAIEmbedding`) for search by
+  meaning; SQLite backends store vectors next to their text; MongoDB uses
+  `$vectorSearch`. Registries use `FastEmbedEmbedding` when `embedding` isn't
+  passed; `embedding=None` keeps memory search by words only.
+- Skills from Git: `GithubSkillRegistry(source, skills, ref=..., token_env=...)`
+  shallow-clones a repo (public, or private with a token read from an env var)
+  and copies the named skills. Edits the agent makes to a materialized skill
+  are kept; changes at the source are picked up.
+- Workspaces: `LocalWorkspace`, plus `AzureBlobWorkspace` and `MinIOWorkspace`
+  that download a user's files before a run and upload only what changed.
+- Executors: `LocalExecutor`, `DockerExecutor` (non-root, read-only, no
+  network by default, resource limits; image in
+  `max_ai/capabilities/executor/docker/Dockerfile`) and `ModalExecutor`.
 - Context compaction: `SummaryCompaction` and `SlidingWindowCompaction`.
 - Sessions: `CoreSessionStore` / `LocalSessionStore`; the host loads, runs and
   saves.
@@ -35,4 +46,7 @@ First public version.
   in local or MongoDB stores) and `TracingMiddleware` (OpenTelemetry, Langfuse).
 - Terminal UI: `run_cli(agent, store=..., user_id=..., session_id=...)` with
   `/resume`, approvals, questions, plans and a context-window bar.
-- `docker-infra/`: local MongoDB, Ollama, an MCP server and Langfuse.
+- `docker-infra/`: MongoDB Atlas Local (vector search), MinIO, Azurite,
+  Ollama, an MCP server and Langfuse.
+- Examples: `examples/basic/` (one feature per file) and `examples/advance/`
+  (custom backends, middleware, layers, embeddings, serialization).

@@ -32,6 +32,7 @@ from ._model import LocalKnowledgeRegistryConfig
 
 
 class LocalKnowledgeRegistry(CoreKnowledgeRegistry):
+    """LocalKnowledgeRegistry provides the LocalKnowledgeregistry implementation."""
     component_provider_override = "max_ai.capabilities.knowledge.local.LocalKnowledgeRegistry"
     component_schema = LocalKnowledgeRegistryConfig
     component_type = "knowledge"
@@ -70,14 +71,31 @@ class LocalKnowledgeRegistry(CoreKnowledgeRegistry):
         tool_mode: KnowledgeToolMode = KnowledgeToolMode.FULL,
         embedding: CoreEmbedding | None = None,
     ) -> None:
+        """Initialize ``LocalKnowledgeRegistry``.
+
+Parameters
+----------
+name : str
+    Value supplied for ``name``.
+description : str
+    Value supplied for ``description``.
+base_path : str | Path
+    Value supplied for ``base_path``.
+tool_mode : KnowledgeToolMode
+    Value supplied for ``tool_mode``.
+embedding : CoreEmbedding | None
+    Value supplied for ``embedding``."""
         super().__init__(
             name=name, description=description, tool_mode=tool_mode
         )
         self.base_path: Path = Path(base_path).expanduser().resolve()
-        # Default: the local multilingual model (``maxai[embeddings]``).
+        # Knowledge search is meaning-only (no word-search fallback), so it
+        # always needs a real embedding; default to the local multilingual
+        # model (``maxai[embeddings]``) rather than requiring one every time.
         self.embedding = embedding if embedding is not None else FastEmbedEmbedding()
 
     def _to_config(self) -> LocalKnowledgeRegistryConfig:
+        """Build the serializable configuration for ``LocalKnowledgeRegistry``."""
         return LocalKnowledgeRegistryConfig(
             name=self.name,
             description=self.description,
@@ -88,6 +106,12 @@ class LocalKnowledgeRegistry(CoreKnowledgeRegistry):
 
     @classmethod
     def _from_config(cls, config: LocalKnowledgeRegistryConfig) -> "LocalKnowledgeRegistry":
+        """Create an instance from its configuration for ``LocalKnowledgeRegistry``.
+
+Parameters
+----------
+config : LocalKnowledgeRegistryConfig
+    Value supplied for ``config``."""
         return cls(
             name=config.name,
             description=config.description,
@@ -99,10 +123,12 @@ class LocalKnowledgeRegistry(CoreKnowledgeRegistry):
     # -------- PATH HELPERS -----------------------------------------------------------
     @property
     def _knowledge_dir(self) -> Path:
+        """Perform the internal ``knowledge dir`` operation for ``LocalKnowledgeRegistry``."""
         return self.base_path / "knowledge"
 
     @property
     def _source_file(self) -> Path:
+        """Perform the internal ``source file`` operation for ``LocalKnowledgeRegistry``."""
         return self._knowledge_dir / f"{self.name}.json"
 
     # -------- LIFECYCLE -----------------------------------------------------------
@@ -112,6 +138,7 @@ class LocalKnowledgeRegistry(CoreKnowledgeRegistry):
         self._knowledge_dir.mkdir(parents=True, exist_ok=True)
 
     async def disconnect(self) -> None:
+        """Release resources held for ``LocalKnowledgeRegistry``."""
         return None
 
     # -------- READ OPERATIONS -----------------------------------------------------------

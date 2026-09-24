@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 
 class ModalExecutorConfig(BaseModel):
+    """Configuration options for ``ModalExecutor``."""
     image: str
     app_name: str = "maxai-runtime"
     network: Literal["none", "unrestricted"] = "none"

@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 
 class DockerExecutorConfig(BaseModel):
+    """Configuration options for ``DockerExecutor``."""
     image: str = "maxai-runtime:latest"
     network: Literal["none", "unrestricted"] = "none"
     max_output_bytes: int = Field(default=1 << 20, gt=0)

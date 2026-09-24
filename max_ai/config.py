@@ -1,10 +1,9 @@
 """Runtime filesystem configuration for MaxAI.
 
-The framework uses one server workspace as the root for runtime files
-shared by local and container executors. Users can override the root
-with ``SERVER_WORKSPACE`` (env var or .env file); otherwise it defaults
-to the current working directory at startup. Subdirectories keep stable
-names so Docker and local runtimes speak the same filesystem contract.
+The framework uses one host directory as the root for runtime files
+(skills cache, local workspaces). Override it with ``HOST_WORKSPACE``
+(env var or .env file); otherwise it defaults to the current working
+directory at startup.
 """
 
 from __future__ import annotations
@@ -29,15 +28,6 @@ class Settings(BaseSettings):
         validation_alias="HOST_WORKSPACE",
         description="Root directory for the host server",
     )
-
-    # Default Folder
-    mtn_folder: str = Field(default="/mnt")
-    tool_dir: str = Field(default="tools")
-    skill_dir: str = Field(default="skills")
-    artifacts_dir: str = Field(default="artifacts")
-
-    # Allowed artifact extensions.
-    files: list[str] = Field(default=[".json", ".pdf", ".docx", ".xlsx", ".pptx"])
 
     # Fallback tiktoken encoding for token counting (DEFAULT_TOKENIZER in .env).
     # Models override it via ModelConfig.tokenizer_base.
@@ -79,7 +69,7 @@ class Settings(BaseSettings):
     def _resolve_root(cls, v: Path) -> Path:
         """Always store root_dir as an absolute, resolved path.
 
-        Relative paths in SERVER_WORKSPACE (e.g. './data') get resolved
+        Relative paths in HOST_WORKSPACE (e.g. './data') get resolved
         against the cwd at import time, so the rest of the framework
         can rely on root_dir being canonical.
         """

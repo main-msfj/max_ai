@@ -26,6 +26,7 @@ _MANIFEST = ".maxai-sync.json"
 
 
 class RemoteObject(t.NamedTuple):
+    """RemoteObject represents structured data used by the capability system."""
     key: str  # relative to the user's workspace prefix
     sha256: str | None
 
@@ -34,6 +35,12 @@ class RemoteWorkspace(WorkspaceBase):
     """A workspace mirrored to a remote store; subclasses move bytes."""
 
     def __init__(self, cache_dir: str | Path | None = None) -> None:
+        """Initialize ``RemoteWorkspace``.
+
+Parameters
+----------
+cache_dir : str | Path | None
+    Value supplied for ``cache_dir``."""
         self.cache_dir = str(cache_dir) if cache_dir is not None else None
         root = cache_dir or Path(tempfile.gettempdir()) / "maxai-workspaces" / self._cache_name()
         super().__init__(root)
@@ -49,39 +56,109 @@ class RemoteWorkspace(WorkspaceBase):
         """Where the files live (URL + container/bucket); names the cache."""
 
     @abstractmethod
-    async def _list(self, prefix: str) -> list[RemoteObject]: ...
+    async def _list(self, prefix: str) -> list[RemoteObject]:
+        """Perform the internal ``list`` operation for ``RemoteWorkspace``.
+
+Parameters
+----------
+prefix : str
+        Value supplied for ``prefix``."""
+        ...
 
     @abstractmethod
-    async def _get(self, key: str) -> bytes: ...
+    async def _get(self, key: str) -> bytes:
+        """Perform the internal ``get`` operation for ``RemoteWorkspace``.
+
+Parameters
+----------
+key : str
+        Value supplied for ``key``."""
+        ...
 
     @abstractmethod
-    async def _put(self, key: str, data: bytes, sha256: str) -> None: ...
+    async def _put(self, key: str, data: bytes, sha256: str) -> None:
+        """Perform the internal ``put`` operation for ``RemoteWorkspace``.
+
+Parameters
+----------
+key : str
+    Value supplied for ``key``.
+data : bytes
+    Value supplied for ``data``.
+sha256 : str
+        Value supplied for ``sha256``."""
+        ...
 
     @abstractmethod
-    async def _delete(self, key: str) -> None: ...
+    async def _delete(self, key: str) -> None:
+        """Perform the internal ``delete`` operation for ``RemoteWorkspace``.
+
+Parameters
+----------
+key : str
+        Value supplied for ``key``."""
+        ...
 
     # -------- SYNC -----------------------------------------------------------
     @staticmethod
     def _prefix(user_id: str) -> str:
+        """Perform the internal ``prefix`` operation for ``RemoteWorkspace``.
+
+Parameters
+----------
+user_id : str
+    Value supplied for ``user_id``."""
         return f"{user_id}/workspace/"
 
     def _local(self, user_id: str) -> Path:
+        """Perform the internal ``local`` operation for ``RemoteWorkspace``.
+
+Parameters
+----------
+user_id : str
+    Value supplied for ``user_id``."""
         return self.materialize(user_id).workspace_dir
 
     def _manifest(self, user_id: str) -> Path:
+        """Perform the internal ``manifest`` operation for ``RemoteWorkspace``.
+
+Parameters
+----------
+user_id : str
+    Value supplied for ``user_id``."""
         return Path(self.base_root) / user_id / _MANIFEST
 
     def _read_manifest(self, user_id: str) -> dict[str, str]:
+        """Perform the internal ``read manifest`` operation for ``RemoteWorkspace``.
+
+Parameters
+----------
+user_id : str
+    Value supplied for ``user_id``."""
         try:
             return json.loads(self._manifest(user_id).read_text())
         except FileNotFoundError:
             return {}
 
     def _write_manifest(self, user_id: str, manifest: dict[str, str]) -> None:
+        """Perform the internal ``write manifest`` operation for ``RemoteWorkspace``.
+
+Parameters
+----------
+user_id : str
+    Value supplied for ``user_id``.
+manifest : dict[str, str]
+    Value supplied for ``manifest``."""
         self._manifest(user_id).write_text(json.dumps(manifest, sort_keys=True))
 
     @staticmethod
     def _scan(root: Path) -> dict[str, str]:
+        """Perform the internal ``scan`` operation for ``RemoteWorkspace``.
+
+Parameters
+----------
+root : Path
+    Value supplied for ``root``."""
         files = {}
         for path in root.rglob("*"):
             if path.is_file() and not path.is_symlink() and not path.name.startswith(".maxai-"):

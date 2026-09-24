@@ -22,6 +22,12 @@ if t.TYPE_CHECKING:  # static analyzers see the real symbols
 
 
 def __getattr__(name: str) -> t.Any:
+    """Resolve a lazily exported attribute.
+
+Parameters
+----------
+name : str
+    Value supplied for ``name``."""
     if name == "AgentUpdatePlanTool":
         return importlib.import_module(f"{__name__}._agent_tool").AgentUpdatePlanTool
     raise AttributeError(name)

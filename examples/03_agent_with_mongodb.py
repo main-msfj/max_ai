@@ -20,7 +20,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from examples.shared import LOCAL_DIR, USER_ID, get_weather, session_arg
+from examples.shared import LOCAL_DIR, USER_ID, calculate_compound_interest, session_arg
 from max_ai.agents import Agent
 from max_ai.base.workspace import WorkspaceBase
 from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
@@ -85,7 +85,7 @@ async def main() -> None:
     for name, value in DEFAULTS.items():
         os.environ.setdefault(name, value)
     if not os.getenv("OPENAI_API_KEY"):
-        raise SystemExit("Configura OPENAI_API_KEY en el entorno o en .env.")
+        raise SystemExit("Set OPENAI_API_KEY in the environment or in .env.")
 
     client = OpenAIChatCompletionClient(
         model=MODEL, reasoning_effort="none", max_tokens=32_000
@@ -100,13 +100,13 @@ async def main() -> None:
 
     agent = Agent(
         name="MongoDemo",
-        description="Agente con memoria, knowledge y cuotas en MongoDB, y trazas en Langfuse.",
-        instructions="Ayuda al usuario. Guarda en memoria lo importante que te cuente.",
+        description="An agent with MongoDB memory, knowledge, quotas, and Langfuse traces.",
+        instructions="Help the user. Save important details they share to memory.",
         client=client,
         workspace=workspace(),
         toolset=[
             FunctionAsTool(
-                get_weather,
+                calculate_compound_interest,
                 approval_mode=ToolApprovalMode.AUTO_APPROVED,
                 read_only=True,
             )

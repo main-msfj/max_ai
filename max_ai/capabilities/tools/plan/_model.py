@@ -45,6 +45,7 @@ class AgentPlan(BaseModel):
 
     @model_validator(mode="after")
     def _validate_plan(self) -> "AgentPlan":
+        """Perform the internal ``validate plan`` operation for ``AgentPlan``."""
         ids = [s.id for s in self.steps]
         duplicate = {i for i in ids if ids.count(i) > 1}
         if duplicate:

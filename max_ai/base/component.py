@@ -61,6 +61,14 @@ class ComponentModel(BaseModel):
 
 
 def _type_to_provider_str(cls: type) -> str:
+    """
+    Return the importable provider path for a component class.
+
+    Returns
+    -------
+    str
+        The resulting text value.
+    """
     return f"{cls.__module__}.{cls.__qualname__}"
 
 
@@ -109,6 +117,14 @@ def allow_providers(*prefixes: str) -> None:
 
 
 def _check_allowed(provider: str) -> None:
+    """
+    Ensure a component provider is permitted by the trust configuration.
+
+    Parameters
+    ----------
+    provider : str
+        Import path or provider name to check.
+    """
     env = os.getenv("MAXAI_ALLOWED_PROVIDERS", "")
     allowed = _ALLOWED_PREFIXES | {p.strip() for p in env.split(",") if p.strip()}
     if "*" in allowed or any(provider.startswith(prefix) for prefix in allowed):
@@ -141,10 +157,31 @@ class ComponentBase(t.Generic[ConfigT]):
     """Optional UI label override."""
 
     def _to_config(self) -> ConfigT:
+        """
+        Return the component settings that should be serialized.
+
+        Returns
+        -------
+        ConfigT
+            The component configuration model.
+        """
         raise NotImplementedError("This component does not support dumping to config")
 
     @classmethod
     def _from_config(cls, config: ConfigT) -> t.Self:
+        """
+        Construct a component from its validated configuration.
+
+        Parameters
+        ----------
+        config : ConfigT
+            Model or component configuration.
+
+        Returns
+        -------
+        t.Self
+            The component reconstructed from its configuration.
+        """
         raise NotImplementedError("This component does not support loading from config")
 
     @classmethod
@@ -153,6 +190,21 @@ class ComponentBase(t.Generic[ConfigT]):
         config: dict[str, t.Any],
         version: int,
     ) -> t.Self:
+        """
+        Migrate an older configuration and construct the component.
+
+        Parameters
+        ----------
+        config : dict[str, t.Any]
+            Model or component configuration.
+        version : int
+            Version number of the saved configuration.
+
+        Returns
+        -------
+        t.Self
+            The component reconstructed from the migrated configuration.
+        """
         raise NotImplementedError(
             "This component does not support loading from past versions"
         )
@@ -259,6 +311,23 @@ class ComponentBase(t.Generic[ConfigT]):
 
     @staticmethod
     def require_type(value: t.Any, expected: type[ExpectedT], field: str) -> ExpectedT:
+        """
+        Validate a value against an expected Python type.
+
+        Parameters
+        ----------
+        value : t.Any
+            Value to validate.
+        expected : type[ExpectedT]
+            Expected Python type.
+        field : str
+            Field name used to describe a validation error.
+
+        Returns
+        -------
+        ExpectedT
+            The validated value.
+        """
         if not isinstance(value, expected):
             raise TypeError(
                 f"{field} must be {expected.__name__}, got {type(value).__name__}"
@@ -270,6 +339,9 @@ class CoreLifecycleComponent(ComponentBase[ConfigT]):
     """Serializable component with an async connection lifecycle."""
 
     def __init__(self) -> None:
+        """
+        Initialize the lifecycle component state.
+        """
         self._connected: bool = False
         self._connect_lock: asyncio.Lock = asyncio.Lock()
 
@@ -290,10 +362,26 @@ class CoreLifecycleComponent(ComponentBase[ConfigT]):
                     self._connected = True
 
     async def __aenter__(self) -> t.Self:
+        """
+        Connect the component and return it for an async context.
+
+        Returns
+        -------
+        t.Self
+            This lifecycle component, connected and ready for use.
+        """
         await self._ensure_connected()
         return self
 
     async def __aexit__(self, *exc: t.Any) -> None:
+        """
+        Disconnect the component when its async context ends.
+
+        Parameters
+        ----------
+        exc : t.Any
+            Exception information passed by the async context manager.
+        """
         if self._connected:
             await self.disconnect()
             self._connected = False
@@ -309,6 +397,14 @@ class Component(t.Generic[ConfigT]):
     """
 
     def __init_subclass__(cls, **kwargs: t.Any) -> None:
+        """
+        Register subclass metadata and validate its component declaration.
+
+        Parameters
+        ----------
+        kwargs : t.Any
+            Subclass-specific initialization options.
+        """
         super().__init_subclass__(**kwargs)
         if not is_component_class(cls):
             warnings.warn(
@@ -321,6 +417,19 @@ class Component(t.Generic[ConfigT]):
 
 
 def is_component_class(value: t.Any) -> t.TypeGuard[type[ComponentBase[t.Any]]]:
+    """
+    Check whether a value is a concrete ComponentBase subclass.
+
+    Parameters
+    ----------
+    value : t.Any
+        Value to validate.
+
+    Returns
+    -------
+    t.TypeGuard[type[ComponentBase[t.Any]]]
+        Whether the value is a ComponentBase subclass.
+    """
     if not isinstance(value, type):
         return False
 

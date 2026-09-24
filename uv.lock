@@ -1313,7 +1313,7 @@ tracing = [
 [package.dev-dependencies]
 dev = [
     { name = "hatchling" },
-    { name = "maxai", extra = ["azure-blob", "cli", "embeddings", "minio", "mongodb", "tracing"] },
+    { name = "maxai", extra = ["azure-blob", "cli", "embeddings", "minio", "mongodb", "runtime-modal", "tracing"] },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "python-dotenv" },
@@ -1348,7 +1348,7 @@ provides-extras = ["cli", "embeddings", "tracing", "mongodb", "runtime-modal", "
 [package.metadata.requires-dev]
 dev = [
     { name = "hatchling", specifier = ">=1.29.0" },
-    { name = "maxai", extras = ["cli", "embeddings", "tracing", "mongodb", "azure-blob", "minio"] },
+    { name = "maxai", extras = ["cli", "embeddings", "tracing", "mongodb", "azure-blob", "minio", "runtime-modal"] },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-asyncio", specifier = ">=1.3.0" },
     { name = "python-dotenv", specifier = ">=1.2.2" },

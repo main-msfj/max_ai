@@ -26,7 +26,7 @@ def connected(registry, documents=()):
 
 
 async def test_memory_queries_always_scope_user_and_session():
-    memory = MongoDBMemoryRegistry("alice", "current", search_limit=3)
+    memory = MongoDBMemoryRegistry("alice", "current", search_limit=3, embedding=None)
     doc = dict(category="project", memory="python", updated=datetime.now(UTC), session_id="old")
     collection, cursor = connected(memory, [doc])
     assert (await memory.get_context())[0].memory == "python"
@@ -40,7 +40,7 @@ async def test_memory_queries_always_scope_user_and_session():
 
 
 async def test_memory_upsert_and_delete_keep_exact_category_identity():
-    memory = MongoDBMemoryRegistry("alice", "current")
+    memory = MongoDBMemoryRegistry("alice", "current", embedding=None)
     collection, _ = connected(memory)
     collection.update_one = AsyncMock(return_value=SimpleNamespace(upserted_id="new"))
     assert await memory.create_or_update(" Project ", "first") == "New memory category created: Project"
@@ -59,7 +59,7 @@ async def test_memory_upsert_and_delete_keep_exact_category_identity():
 async def test_concurrent_insert_retries_only_the_same_identity():
     from pymongo.errors import DuplicateKeyError
 
-    memory = MongoDBMemoryRegistry("alice", "current")
+    memory = MongoDBMemoryRegistry("alice", "current", embedding=None)
     collection, _ = connected(memory)
     collection.update_one = AsyncMock(side_effect=[
         DuplicateKeyError("race"), SimpleNamespace(upserted_id=None, matched_count=1),
@@ -72,7 +72,7 @@ async def test_concurrent_insert_retries_only_the_same_identity():
 
 
 async def test_knowledge_search_and_ingestion_are_source_scoped():
-    knowledge = MongoDBKnowledgeRegistry("manual", "Search the manual")
+    knowledge = MongoDBKnowledgeRegistry("manual", "Search the manual", embedding=None)
     collection, cursor = connected(knowledge, [dict(content="Python guide", tokens=2, metadata={"page": 1})])
     result = await knowledge.search(" Python ", limit=2)
     assert result == [KnowledgeBlock(content="Python guide", tokens=2, metadata={"page": 1})]

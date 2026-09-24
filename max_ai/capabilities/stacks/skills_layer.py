@@ -64,7 +64,9 @@ class SkillsLayer(Component[StackConfig], CoreLayer):
         )
 
     def _default_template(self) -> str:
+        """Perform the internal ``default template`` operation for ``SkillsLayer``."""
         return self._load_file(self._DEFAULT_TEMPLATE_PATH / f"{self.name}.j2")
 
     def _required_variables(self) -> set[str]:
+        """Perform the internal ``required variables`` operation for ``SkillsLayer``."""
         return {"loaded_skills"}

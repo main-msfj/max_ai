@@ -1,3 +1,4 @@
+"""Module providing capability implementations and supporting utilities."""
 from .local import LocalContextRegistry, LocalContextRegistryConfig
 from .sqlite import SQLiteContextRegistry, SQLiteContextRegistryConfig
 

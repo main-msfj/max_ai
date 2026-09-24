@@ -63,7 +63,9 @@ class ContextLayer(Component[StackConfig], CoreLayer):
         )
 
     def _default_template(self) -> str:
+        """Perform the internal ``default template`` operation for ``ContextLayer``."""
         return self._load_file(self._DEFAULT_TEMPLATE_PATH / f"{self.name}.j2")
 
     def _optional_variables(self) -> set[str]:
+        """Perform the internal ``optional variables`` operation for ``ContextLayer``."""
         return {"current_session_summary", "past_observations"}

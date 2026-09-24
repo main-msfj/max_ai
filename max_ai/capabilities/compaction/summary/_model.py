@@ -8,6 +8,7 @@ from ....core.compaction import CompactionConfig
 
 
 class SummaryCompactionConfig(CompactionConfig):
+    """Configuration options for ``SummaryCompaction``."""
     summary_max_tokens: int = Field(
         default=2000, gt=0,
         description="Output cap of each summary call; also reserved in the window.",

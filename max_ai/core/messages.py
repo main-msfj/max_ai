@@ -32,7 +32,7 @@ from pydantic import (
     model_validator,
 )
 
-from ..ids import short_id
+from .ids import short_id
 
 if t.TYPE_CHECKING:
     from .compaction.token_counter import TokenCounter

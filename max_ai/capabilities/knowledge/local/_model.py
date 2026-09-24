@@ -10,6 +10,7 @@ from ....base.knowledge import KnowledgeToolMode
 
 
 class LocalKnowledgeRegistryConfig(BaseModel):
+    """Configuration options for ``LocalKnowledgeRegistry``."""
     name: str
     description: str
     base_path: str

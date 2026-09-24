@@ -85,6 +85,32 @@ class CoreCompaction(ComponentBase[CompactionConfig], ABC):
         token_counter: TokenCounter | None = None,
     ) -> None:
         # Validated through the config so bad values fail at construction.
+        """
+        Initialize the compaction strategy and its shared runtime options.
+
+        Parameters
+        ----------
+        threshold : float, default=0.8
+            Fraction of the context budget that triggers compaction.
+        keep_ratio : float, default=0.4
+            Fraction of the budget retained after compaction.
+        min_keep_groups : int, default=2
+            Minimum number of recent message groups to retain.
+        truncate_tool_outputs : bool, default=True
+            Controls whether the corresponding compaction operation is enabled.
+        tool_output_max_tokens : int, default=500
+            Controls whether the corresponding compaction operation is enabled.
+        drop_harness_messages : bool, default=True
+            Controls whether the corresponding compaction operation is enabled.
+        update_memory : bool, default=True
+            Controls whether the corresponding compaction operation is enabled.
+        memory_max_tokens : int, default=1000
+            Controls whether the corresponding compaction operation is enabled.
+        client : CoreChatCompletionClient | None, default=None
+            Model client used by the operation.
+        token_counter : TokenCounter | None, default=None
+            Token counter used to measure messages.
+        """
         self.config = CompactionConfig(
             threshold=threshold,
             keep_ratio=keep_ratio,
@@ -402,11 +428,32 @@ class CoreCompaction(ComponentBase[CompactionConfig], ABC):
 
     # -------- SERIALIZATION ------------------------------------------------------------
     def _to_config(self) -> CompactionConfig:
+        """
+        Return the serializable settings for this compaction strategy.
+
+        Returns
+        -------
+        CompactionConfig
+            The compaction configuration model.
+        """
         client = self.client.serialize().model_dump() if self.client else None
         return self.config.model_copy(update={"client": client})
 
     @classmethod
     def _from_config(cls, config: CompactionConfig) -> t.Self:
+        """
+        Build a compaction strategy from its validated configuration.
+
+        Parameters
+        ----------
+        config : CompactionConfig
+            Model or component configuration.
+
+        Returns
+        -------
+        t.Self
+            The reconstructed compaction strategy.
+        """
         from .clients import CoreChatCompletionClient
 
         client = (

@@ -97,6 +97,7 @@ class ReActLoopState(BaseLoopState):
 
 # -------- LOOP -----------------------------------------------------------
 class ReactLoopConfig(ReasoningConfig):
+    """Configuration options for ``ReactLoop``."""
     max_loop_iterations: int | None = Field(
         default=None, ge=1, description="None = setting.max_loop_iterations.",
     )
@@ -155,15 +156,23 @@ class ReactLoop(BaseReasoning):
 
     @property
     def max_loop_iterations(self) -> int:
+        """Perform the ``max loop iterations`` operation for ``ReactLoop``."""
         return self._max_loop_iterations or setting.max_loop_iterations
 
     @max_loop_iterations.setter
     def max_loop_iterations(self, value: int | None) -> None:
+        """Perform the ``max loop iterations`` operation for ``ReactLoop``.
+
+Parameters
+----------
+value : int | None
+    Value supplied for ``value``."""
         if value is not None and value < 1:
             raise ValueError("max_loop_iterations must be positive")
         self._max_loop_iterations = value
 
     def _to_config(self) -> ReactLoopConfig:
+        """Build the serializable configuration for ``ReactLoop``."""
         return ReactLoopConfig(
             max_loop_iterations=self._max_loop_iterations,
             max_connection_retries=self.max_connection_retries,
@@ -175,6 +184,12 @@ class ReactLoop(BaseReasoning):
 
     @classmethod
     def _from_config(cls, config: ReactLoopConfig) -> "ReactLoop":
+        """Create an instance from its configuration for ``ReactLoop``.
+
+Parameters
+----------
+config : ReactLoopConfig
+    Value supplied for ``config``."""
         guards = None
         if config.guards is not None:
             guards = [LoopGuard.deserialize(guard) for guard in config.guards]
@@ -556,6 +571,16 @@ class ReactLoop(BaseReasoning):
         loop_state: ReActLoopState,
         cancellation_token: CancellationToken | None,
     ) -> CompletionDecision:
+        """Perform the internal ``check completion`` operation for ``ReactLoop``.
+
+Parameters
+----------
+ctx : RunContext
+    Value supplied for ``ctx``.
+loop_state : ReActLoopState
+    Value supplied for ``loop_state``.
+cancellation_token : CancellationToken | None
+    Value supplied for ``cancellation_token``."""
         blocked = runtime_status(
             ctx,
             cancelled=bool(cancellation_token and cancellation_token.is_cancelled()),
@@ -604,6 +629,12 @@ class ReactLoop(BaseReasoning):
 
     @staticmethod
     def _denied_records(records: list[ToolCallRecord]) -> list[ToolCallRecord]:
+        """Perform the internal ``denied records`` operation for ``ReactLoop``.
+
+Parameters
+----------
+records : list[ToolCallRecord]
+    Value supplied for ``records``."""
         return [
             r
             for r in records

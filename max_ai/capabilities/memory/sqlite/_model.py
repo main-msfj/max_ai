@@ -10,6 +10,7 @@ from ....base.memory import MemoryToolMode
 
 
 class SQLiteMemoryRegistryConfig(BaseModel):
+    """Configuration options for ``SQLiteMemoryRegistry``."""
     base_path: str
     db_name: str = Field(default="memory.sqlite3", min_length=1)
     user_id: str | None = None

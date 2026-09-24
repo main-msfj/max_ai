@@ -84,6 +84,28 @@ class OpenAIChatCompletionClient(
         api_key_env: str | None = None,
         **kwargs: t.Any,
     ) -> None:
+        """Initialize ``OpenAIChatCompletionClient``.
+
+Parameters
+----------
+model : str
+    Value supplied for ``model``.
+api_key : str | SecretStr | None
+    Value supplied for ``api_key``.
+base_url : str | None
+    Value supplied for ``base_url``.
+organization : str | None
+    Value supplied for ``organization``.
+project : str | None
+    Value supplied for ``project``.
+config : ModelConfig | None
+    Value supplied for ``config``.
+max_tokens : int | None
+    Value supplied for ``max_tokens``.
+api_key_env : str | None
+    Value supplied for ``api_key_env``.
+kwargs : t.Any
+    Value supplied for ``kwargs``."""
         super().__init__(
             model=model, api_key=api_key, config=config, api_key_env=api_key_env, **kwargs,
         )
@@ -112,6 +134,7 @@ class OpenAIChatCompletionClient(
         self.client = AsyncOpenAI(**client_kwargs)
 
     def _to_config(self) -> OpenAIChatCompletionClientConfig:
+        """Build the serializable configuration for ``OpenAIChatCompletionClient``."""
         return OpenAIChatCompletionClientConfig(
             model=self.model,
             api_key_env=self.api_key_env,
@@ -127,6 +150,12 @@ class OpenAIChatCompletionClient(
         cls,
         config: OpenAIChatCompletionClientConfig,
     ) -> "OpenAIChatCompletionClient":
+        """Create an instance from its configuration for ``OpenAIChatCompletionClient``.
+
+Parameters
+----------
+config : OpenAIChatCompletionClientConfig
+    Value supplied for ``config``."""
         model_config = ModelConfig(**config.config) if config.config else None
         return cls(
             model=config.model,
@@ -144,11 +173,23 @@ class OpenAIChatCompletionClient(
         return None
 
     def build_tool_schema(self, tools: list["CoreTool"]) -> list[dict[str, t.Any]]:
+        """Build tool schema for ``OpenAIChatCompletionClient``.
+
+Parameters
+----------
+tools : list['CoreTool']
+    Value supplied for ``tools``."""
         if not tools:
             return []
         return [self._tool_to_openai_schema(tool) for tool in tools]
 
     def _tool_to_openai_schema(self, tool: "CoreTool") -> dict[str, t.Any]:
+        """Perform the internal ``tool to openai schema`` operation for ``OpenAIChatCompletionClient``.
+
+Parameters
+----------
+tool : 'CoreTool'
+    Value supplied for ``tool``."""
         return {
             "type": "function",
             "function": {
@@ -159,6 +200,12 @@ class OpenAIChatCompletionClient(
         }
 
     def normalize_usage_stats(self, usage: t.Any) -> Usage:
+        """Normalize usage stats for ``OpenAIChatCompletionClient``.
+
+Parameters
+----------
+usage : t.Any
+    Value supplied for ``usage``."""
         if usage is None:
             return Usage()
         prompt_tokens = int(self._get(usage, "prompt_tokens", 0) or 0)
@@ -174,6 +221,14 @@ class OpenAIChatCompletionClient(
         )
 
     def format_messages(self, ctx: RunContext, prompts: PromptCtx) -> list[CoreMessage]:
+        """Format messages for ``OpenAIChatCompletionClient``.
+
+Parameters
+----------
+ctx : RunContext
+    Value supplied for ``ctx``.
+prompts : PromptCtx
+    Value supplied for ``prompts``."""
         messages: list[CoreMessage] = []
         system_content = self._build_system_content(prompts)
         if system_content:
@@ -183,6 +238,12 @@ class OpenAIChatCompletionClient(
         return messages
 
     def _build_system_content(self, prompts: PromptCtx) -> str:
+        """Perform the internal ``build system content`` operation for ``OpenAIChatCompletionClient``.
+
+Parameters
+----------
+prompts : PromptCtx
+    Value supplied for ``prompts``."""
         chunks: list[str] = []
         for rendered in prompts.rendered_layers.values():
             if rendered and rendered.strip():
@@ -190,9 +251,21 @@ class OpenAIChatCompletionClient(
         return self.SYSTEM_LAYER_SEPARATOR.join(chunks)
 
     def build_api_messages(self, messages: list[CoreMessage]) -> list[dict[str, t.Any]]:
+        """Build api messages for ``OpenAIChatCompletionClient``.
+
+Parameters
+----------
+messages : list[CoreMessage]
+    Value supplied for ``messages``."""
         return [self._message_to_dict(message) for message in messages]
 
     def _message_to_dict(self, msg: CoreMessage) -> dict[str, t.Any]:
+        """Perform the internal ``message to dict`` operation for ``OpenAIChatCompletionClient``.
+
+Parameters
+----------
+msg : CoreMessage
+    Value supplied for ``msg``."""
         if isinstance(msg, SystemMessage):
             return {"role": "system", "content": msg.text()}
         if isinstance(msg, UserMessage):
@@ -207,6 +280,12 @@ class OpenAIChatCompletionClient(
         )
 
     def _user_to_dict(self, msg: UserMessage) -> dict[str, t.Any]:
+        """Perform the internal ``user to dict`` operation for ``OpenAIChatCompletionClient``.
+
+Parameters
+----------
+msg : UserMessage
+    Value supplied for ``msg``."""
         if isinstance(msg.content, str):
             return {"role": "user", "content": msg.content}
 
@@ -228,6 +307,12 @@ class OpenAIChatCompletionClient(
         return {"role": "user", "content": content}
 
     def _assistant_to_dict(self, msg: AssistantMessage) -> dict[str, t.Any]:
+        """Perform the internal ``assistant to dict`` operation for ``OpenAIChatCompletionClient``.
+
+Parameters
+----------
+msg : AssistantMessage
+    Value supplied for ``msg``."""
         out: dict[str, t.Any] = {"role": "assistant", "content": msg.text()}
         if msg.tool_calls:
             out["tool_calls"] = [
@@ -245,6 +330,12 @@ class OpenAIChatCompletionClient(
 
     @staticmethod
     def _tool_to_dict(msg: ToolMessage) -> dict[str, t.Any]:
+        """Perform the internal ``tool to dict`` operation for ``OpenAIChatCompletionClient``.
+
+Parameters
+----------
+msg : ToolMessage
+    Value supplied for ``msg``."""
         return {
             "role": "tool",
             "tool_call_id": msg.tool_call_id,
@@ -253,6 +344,12 @@ class OpenAIChatCompletionClient(
 
     @staticmethod
     def _image_url(part: ImagePart) -> str:
+        """Perform the internal ``image url`` operation for ``OpenAIChatCompletionClient``.
+
+Parameters
+----------
+part : ImagePart
+    Value supplied for ``part``."""
         if part.url is not None:
             return part.url
         assert part.data is not None
@@ -266,6 +363,18 @@ class OpenAIChatCompletionClient(
         output_format: t.Type[BaseModel] | None,
         **kwargs: t.Any,
     ) -> ChatCompletionResult:
+        """Send a completion request for ``OpenAIChatCompletionClient``.
+
+Parameters
+----------
+messages : list[dict[str, t.Any]]
+    Value supplied for ``messages``.
+tools : list[dict[str, t.Any]] | None
+    Value supplied for ``tools``.
+output_format : t.Type[BaseModel] | None
+    Value supplied for ``output_format``.
+kwargs : t.Any
+    Value supplied for ``kwargs``."""
         try:
             start = time.monotonic()
             request = self._build_request(
@@ -288,6 +397,18 @@ class OpenAIChatCompletionClient(
         output_format: t.Type[BaseModel] | None,
         **kwargs: t.Any,
     ) -> t.AsyncGenerator[ChatCompletionChunk, None]:
+        """Stream completion output for ``OpenAIChatCompletionClient``.
+
+Parameters
+----------
+messages : list[dict[str, t.Any]]
+    Value supplied for ``messages``.
+tools : list[dict[str, t.Any]] | None
+    Value supplied for ``tools``.
+output_format : t.Type[BaseModel] | None
+    Value supplied for ``output_format``.
+kwargs : t.Any
+    Value supplied for ``kwargs``."""
         try:
             start = time.monotonic()
             request = self._build_request(
@@ -312,6 +433,20 @@ class OpenAIChatCompletionClient(
         stream: bool,
         **kwargs: t.Any,
     ) -> dict[str, t.Any]:
+        """Perform the internal ``build request`` operation for ``OpenAIChatCompletionClient``.
+
+Parameters
+----------
+messages : list[dict[str, t.Any]]
+    Value supplied for ``messages``.
+tools : list[dict[str, t.Any]] | None
+    Value supplied for ``tools``.
+output_format : t.Type[BaseModel] | None
+    Value supplied for ``output_format``.
+stream : bool
+    Value supplied for ``stream``.
+kwargs : t.Any
+    Value supplied for ``kwargs``."""
         request: dict[str, t.Any] = {
             "model": self.model,
             "messages": messages,
@@ -334,6 +469,12 @@ class OpenAIChatCompletionClient(
         return request
 
     def _response_format(self, output_format: t.Type[BaseModel]) -> dict[str, t.Any]:
+        """Perform the internal ``response format`` operation for ``OpenAIChatCompletionClient``.
+
+Parameters
+----------
+output_format : t.Type[BaseModel]
+    Value supplied for ``output_format``."""
         return {
             "type": "json_schema",
             "json_schema": {
@@ -344,7 +485,19 @@ class OpenAIChatCompletionClient(
         }
 
     def _strict_json_schema(self, schema: dict[str, t.Any]) -> dict[str, t.Any]:
+        """Perform the internal ``strict json schema`` operation for ``OpenAIChatCompletionClient``.
+
+Parameters
+----------
+schema : dict[str, t.Any]
+    Value supplied for ``schema``."""
         def visit(node: t.Any) -> t.Any:
+            """Perform the ``visit`` operation for ``OpenAIChatCompletionClient``.
+
+Parameters
+----------
+node : t.Any
+    Value supplied for ``node``."""
             if isinstance(node, list):
                 return [visit(item) for item in node]
             if not isinstance(node, dict):
@@ -362,6 +515,12 @@ class OpenAIChatCompletionClient(
 
     @staticmethod
     def _schema_name(output_format: t.Type[BaseModel]) -> str:
+        """Perform the internal ``schema name`` operation for ``OpenAIChatCompletionClient``.
+
+Parameters
+----------
+output_format : t.Type[BaseModel]
+    Value supplied for ``output_format``."""
         name = re.sub(r"[^a-zA-Z0-9_-]", "_", output_format.__name__)
         return name[:64] or "structured_output"
 
@@ -371,6 +530,16 @@ class OpenAIChatCompletionClient(
         output_format: t.Type[BaseModel] | None,
         duration_ms: int,
     ) -> ChatCompletionResult:
+        """Perform the internal ``parse response`` operation for ``OpenAIChatCompletionClient``.
+
+Parameters
+----------
+response : t.Any
+    Value supplied for ``response``.
+output_format : t.Type[BaseModel] | None
+    Value supplied for ``output_format``.
+duration_ms : int
+    Value supplied for ``duration_ms``."""
         choice = self._first_choice(response)
         message = self._get(choice, "message")
         content = self._get(message, "content", "") or ""
@@ -399,6 +568,16 @@ class OpenAIChatCompletionClient(
         output_format: t.Type[BaseModel] | None,
         start_time: float,
     ) -> t.AsyncGenerator[ChatCompletionChunk, None]:
+        """Perform the internal ``iter chunks`` operation for ``OpenAIChatCompletionClient``.
+
+Parameters
+----------
+raw_stream : t.AsyncIterator[t.Any]
+    Value supplied for ``raw_stream``.
+output_format : t.Type[BaseModel] | None
+    Value supplied for ``output_format``.
+start_time : float
+    Value supplied for ``start_time``."""
         content_parts: list[str] = []
         tool_parts: dict[int, dict[str, t.Any]] = {}
         final_usage = Usage()
@@ -482,6 +661,12 @@ class OpenAIChatCompletionClient(
         )
 
     def _parse_tool_calls(self, raw_tool_calls: t.Any) -> list[ToolCall]:
+        """Perform the internal ``parse tool calls`` operation for ``OpenAIChatCompletionClient``.
+
+Parameters
+----------
+raw_tool_calls : t.Any
+    Value supplied for ``raw_tool_calls``."""
         parsed: list[ToolCall] = []
         for raw in raw_tool_calls or []:
             tool_id = self._get(raw, "id", None)
@@ -510,6 +695,14 @@ class OpenAIChatCompletionClient(
         content: str,
         output_format: t.Type[BaseModel] | None,
     ) -> BaseModel | None:
+        """Perform the internal ``parse structured output`` operation for ``OpenAIChatCompletionClient``.
+
+Parameters
+----------
+content : str
+    Value supplied for ``content``.
+output_format : t.Type[BaseModel] | None
+    Value supplied for ``output_format``."""
         if output_format is None or not content:
             return None
         try:
@@ -523,6 +716,12 @@ class OpenAIChatCompletionClient(
 
     @staticmethod
     def _first_choice(response: t.Any) -> t.Any:
+        """Perform the internal ``first choice`` operation for ``OpenAIChatCompletionClient``.
+
+Parameters
+----------
+response : t.Any
+    Value supplied for ``response``."""
         choices = OpenAIChatCompletionClient._get(response, "choices", None) or []
         if not choices:
             raise ClientError.invalid_response("Response contained no choices.")
@@ -530,12 +729,28 @@ class OpenAIChatCompletionClient(
 
     @staticmethod
     def _get(obj: t.Any, key: str, default: t.Any = None) -> t.Any:
+        """Perform the internal ``get`` operation for ``OpenAIChatCompletionClient``.
+
+Parameters
+----------
+obj : t.Any
+    Value supplied for ``obj``.
+key : str
+    Value supplied for ``key``.
+default : t.Any
+    Value supplied for ``default``."""
         if isinstance(obj, dict):
             return obj.get(key, default)
         return getattr(obj, key, default)
 
     @classmethod
     def _map_openai_error(cls, exc: Exception) -> ClientError:
+        """Perform the internal ``map openai error`` operation for ``OpenAIChatCompletionClient``.
+
+Parameters
+----------
+exc : Exception
+    Value supplied for ``exc``."""
         if isinstance(exc, ClientError):
             return exc
         if isinstance(exc, AuthenticationError):

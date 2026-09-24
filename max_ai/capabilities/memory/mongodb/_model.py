@@ -10,6 +10,7 @@ from ....base.memory import MemoryToolMode
 
 
 class MongoDBMemoryRegistryConfig(BaseModel):
+    """Configuration options for ``MongoDBMemoryRegistry``."""
     user_id: str | None = None
     session_id: str | None = None
     tool_mode: MemoryToolMode = MemoryToolMode.FULL

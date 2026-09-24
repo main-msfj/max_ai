@@ -38,6 +38,7 @@ _STARTED = "log_started"
 
 
 class LoggingMiddlewareConfig(MiddlewareConfig):
+    """Configuration options for ``LoggingMiddleware``."""
     level: t.Literal["info", "debug"] = Field(
         default="info",
         description="debug adds tool parameters and results.",
@@ -54,6 +55,14 @@ class LoggingMiddleware(CoreMiddleware):
     def __init__(
         self, level: t.Literal["info", "debug"] = "info", preview_chars: int = 200
     ) -> None:
+        """Initialize ``LoggingMiddleware``.
+
+Parameters
+----------
+level : t.Literal['info', 'debug']
+    Value supplied for ``level``.
+preview_chars : int
+    Value supplied for ``preview_chars``."""
         self.level = level
         self.preview_chars = preview_chars
         self._log = ScopedLogger(
@@ -62,6 +71,16 @@ class LoggingMiddleware(CoreMiddleware):
 
     def _write(self, text: str, mw: MiddlewareContext, **details: t.Any) -> None:
         # Readable with any formatter; also structured (``extra``) for JSON logs.
+        """Perform the internal ``write`` operation for ``LoggingMiddleware``.
+
+Parameters
+----------
+text : str
+    Value supplied for ``text``.
+mw : MiddlewareContext
+    Value supplied for ``mw``.
+details : t.Any
+    Value supplied for ``details``."""
         shown = " | ".join(
             f"{key}={value}" for key, value in details.items() if value is not None
         )
@@ -69,6 +88,12 @@ class LoggingMiddleware(CoreMiddleware):
         self._log.info(line, run_id=mw.ctx.run_id, agent=mw.agent, **details)
 
     def _preview(self, value: t.Any) -> str:
+        """Perform the internal ``preview`` operation for ``LoggingMiddleware``.
+
+Parameters
+----------
+value : t.Any
+    Value supplied for ``value``."""
         text = (
             value
             if isinstance(value, str)
@@ -84,12 +109,28 @@ class LoggingMiddleware(CoreMiddleware):
     async def on_run_start(
         self, mw: MiddlewareContext, task: list[CoreMessage] | None
     ) -> None:
+        """On run start for ``LoggingMiddleware``.
+
+Parameters
+----------
+mw : MiddlewareContext
+    Value supplied for ``mw``.
+task : list[CoreMessage] | None
+    Value supplied for ``task``."""
         mw.state(self)[_STARTED] = time.monotonic()
         self._write(
             "→ run started", mw, task=f"{len(task)} message(s)" if task else "resume"
         )
 
     async def on_run_end(self, mw: MiddlewareContext, response: AgentResponse) -> None:
+        """On run end for ``LoggingMiddleware``.
+
+Parameters
+----------
+mw : MiddlewareContext
+    Value supplied for ``mw``.
+response : AgentResponse
+    Value supplied for ``response``."""
         started = mw.state(self).pop(_STARTED, None)
         seconds = round(time.monotonic() - started, 1) if started else None
         self._write(
@@ -99,6 +140,14 @@ class LoggingMiddleware(CoreMiddleware):
     async def on_model_request(
         self, mw: MiddlewareContext, request: ModelRequest
     ) -> ModelRequest:
+        """On model request for ``LoggingMiddleware``.
+
+Parameters
+----------
+mw : MiddlewareContext
+    Value supplied for ``mw``.
+request : ModelRequest
+    Value supplied for ``request``."""
         request.metadata[_STARTED] = time.monotonic()
         self._write(
             "→ model call",
@@ -115,6 +164,16 @@ class LoggingMiddleware(CoreMiddleware):
         request: ModelRequest,
         result: ChatCompletionResult,
     ) -> ChatCompletionResult:
+        """On model response for ``LoggingMiddleware``.
+
+Parameters
+----------
+mw : MiddlewareContext
+    Value supplied for ``mw``.
+request : ModelRequest
+    Value supplied for ``request``.
+result : ChatCompletionResult
+    Value supplied for ``result``."""
         self._write(
             "← model call",
             mw,
@@ -132,6 +191,16 @@ class LoggingMiddleware(CoreMiddleware):
         request: ModelRequest,
         error: Exception,
     ) -> None:
+        """On model error for ``LoggingMiddleware``.
+
+Parameters
+----------
+mw : MiddlewareContext
+    Value supplied for ``mw``.
+request : ModelRequest
+    Value supplied for ``request``.
+error : Exception
+    Value supplied for ``error``."""
         self._log.error(
             "✗ model call",
             run_id=mw.ctx.run_id,
@@ -144,6 +213,14 @@ class LoggingMiddleware(CoreMiddleware):
     async def on_tool_request(
         self, mw: MiddlewareContext, request: ToolRequest
     ) -> None:
+        """On tool request for ``LoggingMiddleware``.
+
+Parameters
+----------
+mw : MiddlewareContext
+    Value supplied for ``mw``.
+request : ToolRequest
+    Value supplied for ``request``."""
         request.metadata[_STARTED] = time.monotonic()
         details = (
             {"params": self._preview(request.parameters)}
@@ -159,6 +236,16 @@ class LoggingMiddleware(CoreMiddleware):
         request: ToolRequest,
         result: ToolResult,
     ) -> ToolResult:
+        """On tool response for ``LoggingMiddleware``.
+
+Parameters
+----------
+mw : MiddlewareContext
+    Value supplied for ``mw``.
+request : ToolRequest
+    Value supplied for ``request``.
+result : ToolResult
+    Value supplied for ``result``."""
         details: dict[str, t.Any] = {
             "ms": _elapsed_ms(request.metadata),
             "ok": result.success,
@@ -172,6 +259,12 @@ class LoggingMiddleware(CoreMiddleware):
 
 
 def _elapsed_ms(metadata: dict[str, t.Any]) -> int | None:
+    """Perform the internal ``elapsed ms`` operation.
+
+Parameters
+----------
+metadata : dict[str, t.Any]
+    Value supplied for ``metadata``."""
     started = metadata.get(_STARTED)
     return int((time.monotonic() - started) * 1000) if started else None
 

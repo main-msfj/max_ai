@@ -42,6 +42,12 @@ _LOCKS_GUARD = threading.Lock()
 
 
 def _path_lock(key: tuple[str, str, str]) -> threading.RLock:
+    """Perform the internal ``path lock`` operation.
+
+Parameters
+----------
+key : tuple[str, str, str]
+    Value supplied for ``key``."""
     with _LOCKS_GUARD:
         lock = _LOCKS.get(key)
         if lock is None:
@@ -54,6 +60,12 @@ class UserFileSystem:
     """Access ``root/user/workspace`` with user-wide read scope."""
 
     def __init__(self, root: str | os.PathLike[str]):
+        """Initialize ``UserFileSystem``.
+
+Parameters
+----------
+root : str | os.PathLike[str]
+    Value supplied for ``root``."""
         if (
             os.name != "posix"
             or not hasattr(os, "O_NOFOLLOW")
@@ -236,6 +248,18 @@ class UserFileSystem:
         def walk(
             directory_fd: int, base: tuple[str, ...], depth: int, user_root: bool
         ) -> None:
+            """Perform the ``walk`` operation for ``UserFileSystem``.
+
+Parameters
+----------
+directory_fd : int
+    Value supplied for ``directory_fd``.
+base : tuple[str, ...]
+    Value supplied for ``base``.
+depth : int
+    Value supplied for ``depth``.
+user_root : bool
+    Value supplied for ``user_root``."""
             nonlocal entries_seen, truncated
             if depth > _MAX_SCAN_DEPTH:
                 truncated = True
@@ -628,12 +652,26 @@ class UserFileSystem:
 
     @staticmethod
     def _safe_id(value: str, label: str) -> str:
+        """Perform the internal ``safe id`` operation for ``UserFileSystem``.
+
+Parameters
+----------
+value : str
+    Value supplied for ``value``.
+label : str
+    Value supplied for ``label``."""
         if not isinstance(value, str) or not _ID_RE.fullmatch(value):
             raise ValueError(f"{label} must be a safe single path segment")
         return value
 
     @classmethod
     def _safe_session_id(cls, value: str) -> str:
+        """Perform the internal ``safe session id`` operation for ``UserFileSystem``.
+
+Parameters
+----------
+value : str
+    Value supplied for ``value``."""
         session = cls._safe_id(value, "session_id")
         if session in _RESERVED_ROOT_DIRS:
             raise ValueError("session_id must not be a reserved directory name")
@@ -641,12 +679,28 @@ class UserFileSystem:
 
     @staticmethod
     def _bounded_limit(limit: int, maximum: int) -> int:
+        """Perform the internal ``bounded limit`` operation for ``UserFileSystem``.
+
+Parameters
+----------
+limit : int
+    Value supplied for ``limit``.
+maximum : int
+    Value supplied for ``maximum``."""
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
             raise ValueError("limit must be a positive integer")
         return min(limit, maximum)
 
     @staticmethod
     def _parts(path: str, *, allow_empty: bool = False) -> tuple[str, ...]:
+        """Perform the internal ``parts`` operation for ``UserFileSystem``.
+
+Parameters
+----------
+path : str
+    Value supplied for ``path``.
+allow_empty : bool
+    Value supplied for ``allow_empty``."""
         if not isinstance(path, str):
             raise ValueError("path must be a relative string")
         if len(path.encode("utf-8", errors="strict")) > _MAX_PATH_BYTES:
@@ -666,6 +720,14 @@ class UserFileSystem:
 
     @classmethod
     def _visible_parts(cls, path: str, *, allow_empty: bool = False) -> tuple[str, ...]:
+        """Perform the internal ``visible parts`` operation for ``UserFileSystem``.
+
+Parameters
+----------
+path : str
+    Value supplied for ``path``.
+allow_empty : bool
+    Value supplied for ``allow_empty``."""
         parts = cls._parts(path, allow_empty=allow_empty)
         if parts and parts[0] in _BLOCKED_PATH_ROOTS:
             raise ValueError("tools and artifacts are outside the user file scope")
@@ -677,6 +739,12 @@ class UserFileSystem:
 
     @classmethod
     def _write_parts(cls, path: str) -> tuple[str, ...]:
+        """Perform the internal ``write parts`` operation for ``UserFileSystem``.
+
+Parameters
+----------
+path : str
+    Value supplied for ``path``."""
         parts = cls._visible_parts(path)
         if any(part.startswith(".") for part in parts):
             raise ValueError("dot paths are not writable")
@@ -684,6 +752,12 @@ class UserFileSystem:
 
     @classmethod
     def _workspace_file_parts(cls, path: str) -> tuple[str, ...]:
+        """Perform the internal ``workspace file parts`` operation for ``UserFileSystem``.
+
+Parameters
+----------
+path : str
+    Value supplied for ``path``."""
         parts = cls._write_parts(path)
         if len(parts) < 2 or parts[0] != "workspace":
             raise ValueError("path must be a workspace/<file> path")
@@ -691,6 +765,12 @@ class UserFileSystem:
 
     @staticmethod
     def _text_bytes(content: str) -> bytes:
+        """Perform the internal ``text bytes`` operation for ``UserFileSystem``.
+
+Parameters
+----------
+content : str
+    Value supplied for ``content``."""
         if not isinstance(content, str):
             raise ValueError("content must be text")
         if "\0" in content:
@@ -701,6 +781,12 @@ class UserFileSystem:
         return data
 
     def _open_root_fd(self, *, create: bool = False) -> int:
+        """Perform the internal ``open root fd`` operation for ``UserFileSystem``.
+
+Parameters
+----------
+create : bool
+    Value supplied for ``create``."""
         if create:
             self.root.mkdir(parents=True, exist_ok=True)
         flags = (
@@ -714,6 +800,16 @@ class UserFileSystem:
 
     @staticmethod
     def _open_dir_at(parent_fd: int, name: str, *, create: bool = False) -> int:
+        """Perform the internal ``open dir at`` operation for ``UserFileSystem``.
+
+Parameters
+----------
+parent_fd : int
+    Value supplied for ``parent_fd``.
+name : str
+    Value supplied for ``name``.
+create : bool
+    Value supplied for ``create``."""
         flags = (
             os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
         )
@@ -736,6 +832,14 @@ class UserFileSystem:
             raise
 
     def _open_user_fd(self, user_id: str, *, create: bool = False) -> int:
+        """Perform the internal ``open user fd`` operation for ``UserFileSystem``.
+
+Parameters
+----------
+user_id : str
+    Value supplied for ``user_id``.
+create : bool
+    Value supplied for ``create``."""
         user = self._safe_id(user_id, "user_id")
         root_fd = self._open_root_fd(create=create)
         try:
@@ -746,6 +850,16 @@ class UserFileSystem:
     def _open_parent_fd(
         self, user_id: str, parts: tuple[str, ...], *, create: bool = False
     ) -> int:
+        """Perform the internal ``open parent fd`` operation for ``UserFileSystem``.
+
+Parameters
+----------
+user_id : str
+    Value supplied for ``user_id``.
+parts : tuple[str, ...]
+    Value supplied for ``parts``.
+create : bool
+    Value supplied for ``create``."""
         if not parts:
             raise ValueError("path must name a file")
         fd = self._open_user_fd(user_id, create=create)
@@ -764,6 +878,14 @@ class UserFileSystem:
     def _open_regular_file(
         self, user_id: str, parts: tuple[str, ...]
     ) -> tuple[int, int, os.stat_result]:
+        """Perform the internal ``open regular file`` operation for ``UserFileSystem``.
+
+Parameters
+----------
+user_id : str
+    Value supplied for ``user_id``.
+parts : tuple[str, ...]
+    Value supplied for ``parts``."""
         parent_fd = self._open_parent_fd(user_id, parts)
         try:
             leaf = parts[-1]
@@ -794,6 +916,14 @@ class UserFileSystem:
     def _read_all(
         self, user_id: str, parts: tuple[str, ...]
     ) -> tuple[bytes, os.stat_result]:
+        """Perform the internal ``read all`` operation for ``UserFileSystem``.
+
+Parameters
+----------
+user_id : str
+    Value supplied for ``user_id``.
+parts : tuple[str, ...]
+    Value supplied for ``parts``."""
         parent_fd, file_fd, info = self._open_regular_file(user_id, parts)
         try:
             data = bytearray()
@@ -811,11 +941,23 @@ class UserFileSystem:
 
     @staticmethod
     def _require_single_link(info: os.stat_result) -> None:
+        """Perform the internal ``require single link`` operation for ``UserFileSystem``.
+
+Parameters
+----------
+info : os.stat_result
+    Value supplied for ``info``."""
         if info.st_nlink != 1:
             raise ValueError("hard-linked files are not accessible")
 
     @classmethod
     def _require_regular_single_link(cls, info: os.stat_result) -> None:
+        """Perform the internal ``require regular single link`` operation for ``UserFileSystem``.
+
+Parameters
+----------
+info : os.stat_result
+    Value supplied for ``info``."""
         if stat.S_ISLNK(info.st_mode):
             raise ValueError("symlinks are not accessible")
         if not stat.S_ISREG(info.st_mode):
@@ -824,6 +966,12 @@ class UserFileSystem:
 
     @staticmethod
     def _raise_safe_path_error(exc: OSError) -> None:
+        """Perform the internal ``raise safe path error`` operation for ``UserFileSystem``.
+
+Parameters
+----------
+exc : OSError
+    Value supplied for ``exc``."""
         if exc.errno in {errno.ELOOP, errno.ENOTDIR, errno.EISDIR}:
             raise ValueError(
                 "symlinks and non-directory path components are not accessible"
@@ -831,6 +979,14 @@ class UserFileSystem:
 
     @staticmethod
     def _write_all(file_fd: int, data: bytes) -> None:
+        """Perform the internal ``write all`` operation for ``UserFileSystem``.
+
+Parameters
+----------
+file_fd : int
+    Value supplied for ``file_fd``.
+data : bytes
+    Value supplied for ``data``."""
         view = memoryview(data)
         while view:
             written = os.write(file_fd, view)
@@ -839,6 +995,14 @@ class UserFileSystem:
             view = view[written:]
 
     def _write_temp(self, parent_fd: int, data: bytes) -> str:
+        """Perform the internal ``write temp`` operation for ``UserFileSystem``.
+
+Parameters
+----------
+parent_fd : int
+    Value supplied for ``parent_fd``.
+data : bytes
+    Value supplied for ``data``."""
         name = f".maxai-{secrets.token_hex(12)}.tmp"
         flags = (
             os.O_WRONLY
@@ -860,6 +1024,14 @@ class UserFileSystem:
 
     @staticmethod
     def _unlink_if_present(parent_fd: int, name: str) -> None:
+        """Perform the internal ``unlink if present`` operation for ``UserFileSystem``.
+
+Parameters
+----------
+parent_fd : int
+    Value supplied for ``parent_fd``.
+name : str
+    Value supplied for ``name``."""
         try:
             os.unlink(name, dir_fd=parent_fd)
         except FileNotFoundError:

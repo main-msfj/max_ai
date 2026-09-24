@@ -18,6 +18,9 @@ from .session_store import validate_id
 
 
 class CoreQuotaStore(CoreLifecycleComponent[BaseModel], ABC):
+    """
+    Define the persistent interface for per-user quota usage.
+    """
     component_type = "quota_store"
 
     async def usage(self, user_id: str, period_key: str) -> QuotaUsage:
@@ -34,10 +37,44 @@ class CoreQuotaStore(CoreLifecycleComponent[BaseModel], ABC):
 
     # -------- BACKEND HOOKS -----------------------------------------------------------
     @abstractmethod
-    async def _usage(self, user_id: str, period_key: str) -> QuotaUsage: ...
+    async def _usage(self, user_id: str, period_key: str) -> QuotaUsage:
+        """
+        Read the current usage for one user and period.
+
+        Parameters
+        ----------
+        user_id : str
+            Identifier for the user scope.
+        period_key : str
+            Key that identifies the quota period.
+
+        Returns
+        -------
+        QuotaUsage
+            The usage total after the operation.
+        """
+        ...
 
     @abstractmethod
-    async def _add(self, user_id: str, period_key: str, delta: QuotaUsage) -> QuotaUsage: ...
+    async def _add(self, user_id: str, period_key: str, delta: QuotaUsage) -> QuotaUsage:
+        """
+        Atomically add usage to one user and period.
+
+        Parameters
+        ----------
+        user_id : str
+            Identifier for the user scope.
+        period_key : str
+            Key that identifies the quota period.
+        delta : QuotaUsage
+            Usage to add to the stored total.
+
+        Returns
+        -------
+        QuotaUsage
+            The usage total after the operation.
+        """
+        ...
 
 
 __all__ = ["CoreQuotaStore"]

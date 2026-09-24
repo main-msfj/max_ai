@@ -47,6 +47,7 @@ EXCEEDED = "budget_exceeded"
 
 
 def _now() -> datetime:
+    """Perform the internal ``now`` operation."""
     return datetime.now(timezone.utc)
 
 
@@ -65,6 +66,7 @@ class BudgetConfig(MiddlewareConfig):
 
     @model_validator(mode="after")
     def _consistent(self) -> BudgetConfig:
+        """Perform the internal ``consistent`` operation for ``BudgetConfig``."""
         if (self.quota is None) != (self.quota_store is None):
             raise ValueError("quota and quota_store go together")
         limits = self.model_dump(exclude={"quota", "quota_store"}).values()
@@ -91,6 +93,24 @@ class BudgetMiddleware(CoreMiddleware):
         quota_store: CoreQuotaStore | None = None,
     ) -> None:
         # Validates the limits once, at construction.
+        """Initialize ``BudgetMiddleware``.
+
+Parameters
+----------
+max_tokens : int | None
+    Value supplied for ``max_tokens``.
+max_cost_usd : float | None
+    Value supplied for ``max_cost_usd``.
+max_seconds : float | None
+    Value supplied for ``max_seconds``.
+max_model_calls : int | None
+    Value supplied for ``max_model_calls``.
+max_tool_calls : int | None
+    Value supplied for ``max_tool_calls``.
+quota : QuotaLimits | None
+    Value supplied for ``quota``.
+quota_store : CoreQuotaStore | None
+    Value supplied for ``quota_store``."""
         BudgetConfig(
             max_tokens=max_tokens, max_cost_usd=max_cost_usd, max_seconds=max_seconds,
             max_model_calls=max_model_calls, max_tool_calls=max_tool_calls,
@@ -105,6 +125,7 @@ class BudgetMiddleware(CoreMiddleware):
         self.quota_store = quota_store
 
     def _to_config(self) -> BudgetConfig:
+        """Build the serializable configuration for ``BudgetMiddleware``."""
         store = self.quota_store.serialize().model_dump(exclude_none=True) if self.quota_store else None
         return BudgetConfig(
             max_tokens=self.max_tokens, max_cost_usd=self.max_cost_usd,
@@ -114,6 +135,12 @@ class BudgetMiddleware(CoreMiddleware):
 
     @classmethod
     def _from_config(cls, config: BudgetConfig) -> BudgetMiddleware:
+        """Create an instance from its configuration for ``BudgetMiddleware``.
+
+Parameters
+----------
+config : BudgetConfig
+    Value supplied for ``config``."""
         store = CoreQuotaStore.deserialize(config.quota_store) if config.quota_store else None
         return cls(
             **config.model_dump(exclude={"quota", "quota_store"}),
@@ -135,6 +162,12 @@ class BudgetMiddleware(CoreMiddleware):
         return await self.quota_store.usage(user_id, self.quota.period_key(_now()))
 
     def _spent_seconds(self, state: dict[str, t.Any]) -> float:
+        """Perform the internal ``spent seconds`` operation for ``BudgetMiddleware``.
+
+Parameters
+----------
+state : dict[str, t.Any]
+    Value supplied for ``state``."""
         running = time.monotonic() - state["segment_start"] if state.get("segment_start") else 0
         return state.get("seconds", 0.0) + running
 
@@ -165,6 +198,14 @@ class BudgetMiddleware(CoreMiddleware):
 
     # -------- HOOKS -----------------------------------------------------------
     async def on_run_start(self, mw: MiddlewareContext, task: list[CoreMessage] | None) -> None:
+        """On run start for ``BudgetMiddleware``.
+
+Parameters
+----------
+mw : MiddlewareContext
+    Value supplied for ``mw``.
+task : list[CoreMessage] | None
+    Value supplied for ``task``."""
         state = mw.state(self)
         if task is not None:  # a new task starts from zero; a resume keeps counting
             state.clear()
@@ -180,11 +221,27 @@ class BudgetMiddleware(CoreMiddleware):
             await self._charge(mw, QuotaUsage(tasks=1))
 
     async def on_run_end(self, mw: MiddlewareContext, response: AgentResponse) -> None:
+        """On run end for ``BudgetMiddleware``.
+
+Parameters
+----------
+mw : MiddlewareContext
+    Value supplied for ``mw``.
+response : AgentResponse
+    Value supplied for ``response``."""
         state = mw.state(self)
         state["seconds"] = self._spent_seconds(state)
         state.pop("segment_start", None)
 
     async def on_model_request(self, mw: MiddlewareContext, request: ModelRequest) -> ModelRequest:
+        """On model request for ``BudgetMiddleware``.
+
+Parameters
+----------
+mw : MiddlewareContext
+    Value supplied for ``mw``.
+request : ModelRequest
+    Value supplied for ``request``."""
         needs_prices = self.max_cost_usd is not None or (self.quota and self.quota.max_cost_usd)
         if needs_prices and _prices(request) is None:
             raise ValueError(
@@ -200,6 +257,16 @@ class BudgetMiddleware(CoreMiddleware):
     async def on_model_response(
         self, mw: MiddlewareContext, request: ModelRequest, result: ChatCompletionResult,
     ) -> ChatCompletionResult:
+        """On model response for ``BudgetMiddleware``.
+
+Parameters
+----------
+mw : MiddlewareContext
+    Value supplied for ``mw``.
+request : ModelRequest
+    Value supplied for ``request``.
+result : ChatCompletionResult
+    Value supplied for ``result``."""
         state = mw.state(self)
         tokens = (result.usage.tokens_input or 0) + (result.usage.tokens_output or 0)
         cost = 0.0
@@ -212,6 +279,14 @@ class BudgetMiddleware(CoreMiddleware):
         return result
 
     async def on_tool_request(self, mw: MiddlewareContext, request: ToolRequest) -> ToolResult | None:
+        """On tool request for ``BudgetMiddleware``.
+
+Parameters
+----------
+mw : MiddlewareContext
+    Value supplied for ``mw``.
+request : ToolRequest
+    Value supplied for ``request``."""
         state = mw.state(self)
         reason = self._exhausted(state)
         calls = state.get("tool_calls", 0)
@@ -225,12 +300,24 @@ class BudgetMiddleware(CoreMiddleware):
 
 
 def _user(mw: MiddlewareContext) -> str:
+    """Perform the internal ``user`` operation.
+
+Parameters
+----------
+mw : MiddlewareContext
+    Value supplied for ``mw``."""
     if not mw.ctx.user_id:
         raise ValueError("A user quota needs RunContext.user_id")
     return mw.ctx.user_id
 
 
 def _prices(request: ModelRequest) -> tuple[float, float] | None:
+    """Perform the internal ``prices`` operation.
+
+Parameters
+----------
+request : ModelRequest
+    Value supplied for ``request``."""
     config = request.model_config
     if config is None or config.input_cost_per_mtok is None or config.output_cost_per_mtok is None:
         return None

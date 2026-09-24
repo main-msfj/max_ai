@@ -72,6 +72,18 @@ class CoreLogBookRegistry(CoreAgentCapabilities[BaseModel], ABC):
         session_id: str,
         tool_mode: LogBookToolMode = LogBookToolMode.READ_ONLY,
     ) -> None:
+        """
+        Initialize the log book registry for one user and session.
+
+        Parameters
+        ----------
+        user_id : str
+            Identifier for the user scope.
+        session_id : str
+            Identifier for the current session.
+        tool_mode : LogBookToolMode, default=LogBookToolMode.READ_ONLY
+            Controls which agent-facing tools are exposed.
+        """
         super().__init__()
         self.user_id: str = self.require_type(user_id, str, "user_id")
         self.session_id: str = self.require_type(session_id, str, "session_id")

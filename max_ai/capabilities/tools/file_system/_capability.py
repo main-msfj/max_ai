@@ -20,6 +20,7 @@ class FileSystem:
     read_only: bool = False
 
     def get_toolset(self) -> FileSystemTools:
+        """Get toolset for ``FileSystem``."""
         toolset = FileSystemTools(self.workspace)
         if self.read_only:
             toolset.tools = [

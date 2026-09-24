@@ -97,6 +97,23 @@ class CoreChatCompletionClient(ComponentBase[BaseModel], ABC):
 
     @staticmethod
     def _require_type(value: t.Any, expected: type[T], field: str) -> T:
+        """
+        Validate a value against an expected Python type.
+
+        Parameters
+        ----------
+        value : t.Any
+            Value to validate.
+        expected : type[T]
+            Expected Python type.
+        field : str
+            Field name used to describe a validation error.
+
+        Returns
+        -------
+        T
+            The input value after it passes type validation.
+        """
         if not isinstance(value, expected):
             raise TypeError(
                 f"{field} must be {expected.__name__}, got {type(value).__name__}"

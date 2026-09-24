@@ -114,6 +114,14 @@ class BaseLoopState(BaseModel):
 
     @property
     def retries(self) -> int:
+        """
+        Return the number of retries used by the current loop.
+
+        Returns
+        -------
+        int
+            The resulting integer value.
+        """
         return max(0, self.attempts_to_call_api - self.llm_calls)
 
     def record_usage(self, usage: Usage) -> None:
@@ -229,6 +237,14 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
         self._current_loop_state: BaseLoopState | None = None
 
     def _set_loop_state(self, state: BaseLoopState) -> None:
+        """
+        Set the loop state shared with runtime callbacks.
+
+        Parameters
+        ----------
+        state : BaseLoopState
+            Loop state to make available to runtime callbacks.
+        """
         self._current_loop_state = state
 
     # -------- BIND -----------------------------------------------------------
@@ -368,29 +384,74 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
 
     @property
     def name(self) -> str:
+        """
+        Return the name of the agent bound to this reasoning loop.
+
+        Returns
+        -------
+        str
+            The resulting text value.
+        """
         if self._name is None:
             raise RuntimeError(f"{type(self).__name__} not bound — call .bind() first.")
         return self._name
 
     @property
     def client(self) -> CoreChatCompletionClient:
+        """
+        Return the chat completion client bound to this loop.
+
+        Returns
+        -------
+        CoreChatCompletionClient
+            The chat completion client bound to this loop.
+        """
         if self._client is None:
             raise RuntimeError(f"{type(self).__name__} not bound — call .bind() first.")
         return self._client
 
     @property
     def dispatcher(self) -> ToolDispatcher:
+        """
+        Return the tool dispatcher bound to this loop.
+
+        Returns
+        -------
+        ToolDispatcher
+            The tool dispatcher bound to this loop.
+        """
         if self._dispatcher is None:
             raise RuntimeError(f"{type(self).__name__} not bound — call .bind() first.")
         return self._dispatcher
 
     @property
     def middleware_chain(self) -> MiddlewareChain:
+        """
+        Return the middleware chain bound to this loop.
+
+        Returns
+        -------
+        MiddlewareChain
+            The middleware chain bound to this loop.
+        """
         if self._middleware_chain is None:
             raise RuntimeError(f"{type(self).__name__} not bound — call .bind() first.")
         return self._middleware_chain
 
     def _middleware_context(self, ctx: RunContext) -> MiddlewareContext:
+        """
+        Build middleware context for the current run.
+
+        Parameters
+        ----------
+        ctx : RunContext
+            Current run context.
+
+        Returns
+        -------
+        MiddlewareContext
+            The middleware context for this run.
+        """
         emit = self._tool_context.emit_event if self._tool_context else None
         return MiddlewareContext(
             ctx=ctx, agent=self.name, emit=emit or (lambda event: None)
@@ -398,6 +459,14 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
 
     @property
     def completion_bus(self) -> EventBus:
+        """
+        Return the event bus used for completion events.
+
+        Returns
+        -------
+        EventBus
+            The event bus used for completion events.
+        """
         if self._completion_bus is None:
             raise RuntimeError(f"{type(self).__name__} not bound — call .bind() first.")
         return self._completion_bus
@@ -414,6 +483,14 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
 
     @property
     def tool_catalog(self) -> dict[str, CoreTool]:
+        """
+        Return the tools indexed by their model-visible names.
+
+        Returns
+        -------
+        dict[str, CoreTool]
+            The resulting mapping.
+        """
         return {tool.name: tool for tool in self.dispatcher.registry.all_tools()}
 
     async def _execute_tools(
@@ -422,6 +499,18 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
         records: t.Any,
         cancellation_token: CancellationToken | None = None,
     ):
+        """
+        Execute tool calls and update the current run context.
+
+        Parameters
+        ----------
+        ctx : RunContext
+            Current run context.
+        records : t.Any
+            Tool-call records to execute.
+        cancellation_token : CancellationToken | None, default=None
+            Token used to request cancellation.
+        """
         from contextlib import aclosing
 
         async with aclosing(
@@ -479,6 +568,19 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
         )
 
     def _model_input_messages(self, ctx: RunContext) -> list[CoreMessage]:
+        """
+        Build the conversation messages sent to the model.
+
+        Parameters
+        ----------
+        ctx : RunContext
+            Current run context.
+
+        Returns
+        -------
+        list[CoreMessage]
+            The resulting list.
+        """
         return self._without_assistant_thinking(self._conversation_messages(ctx))
 
     def _input_messages_with_token_counts(
@@ -558,6 +660,14 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
         loop_state.last_result = None
 
         async def _single_call() -> ChatCompletionResult:
+            """
+            Perform one non-streaming model call with middleware hooks.
+
+            Returns
+            -------
+            ChatCompletionResult
+                The normalized model response.
+            """
             task = asyncio.create_task(
                 self.client.run(
                     ctx=self._model_context(ctx, transient_messages),
@@ -689,6 +799,14 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
         loop_state.last_result = None
 
         async def _streaming_call() -> t.AsyncGenerator[ChatCompletionChunk, None]:
+            """
+            Stream one model call and apply middleware hooks to its chunks.
+
+            Yields
+            -------
+            t.AsyncGenerator[ChatCompletionChunk, None]
+                An asynchronous stream of model chunks or runtime events.
+            """
             stream = await self.client.run(
                 ctx=self._model_context(ctx, transient_messages),
                 prompts=prompts,

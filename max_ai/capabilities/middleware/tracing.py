@@ -46,6 +46,7 @@ _SPAN = "trace_span"
 
 
 class TracingConfig(MiddlewareConfig):
+    """Configuration options for ``Tracing``."""
     capture_content: bool = Field(
         default=True, description="Record prompts, answers and tool data (may hold personal data).",
     )
@@ -65,6 +66,16 @@ class TracingMiddleware(CoreMiddleware):
         *,
         tracer_provider: TracerProvider | None = None,
     ) -> None:
+        """Initialize ``TracingMiddleware``.
+
+Parameters
+----------
+capture_content : bool
+    Value supplied for ``capture_content``.
+max_content_chars : int
+    Value supplied for ``max_content_chars``.
+tracer_provider : TracerProvider | None
+    Value supplied for ``tracer_provider``."""
         self.capture_content = capture_content
         self.max_content_chars = max_content_chars
         # Runtime only (not serialized): default is the global provider.
@@ -75,15 +86,32 @@ class TracingMiddleware(CoreMiddleware):
 
     @property
     def _tracer(self) -> trace.Tracer:
+        """Perform the internal ``tracer`` operation for ``TracingMiddleware``."""
         return trace.get_tracer("max_ai", tracer_provider=self._provider)
 
     def _content(self, value: t.Any) -> str | None:
+        """Perform the internal ``content`` operation for ``TracingMiddleware``.
+
+Parameters
+----------
+value : t.Any
+    Value supplied for ``value``."""
         if not self.capture_content or value is None:
             return None
         text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
         return text if len(text) <= self.max_content_chars else text[: self.max_content_chars] + "…"
 
     def _child(self, mw: MiddlewareContext, name: str, attributes: dict[str, t.Any]) -> Span:
+        """Perform the internal ``child`` operation for ``TracingMiddleware``.
+
+Parameters
+----------
+mw : MiddlewareContext
+    Value supplied for ``mw``.
+name : str
+    Value supplied for ``name``.
+attributes : dict[str, t.Any]
+    Value supplied for ``attributes``."""
         parent = self._runs.get(mw.ctx.run_id)
         context = trace.set_span_in_context(parent) if parent is not None else None
         # On every span, so per-observation filters (user, session) find them.
@@ -94,6 +122,14 @@ class TracingMiddleware(CoreMiddleware):
 
     # -------- RUN -----------------------------------------------------------
     async def on_run_start(self, mw: MiddlewareContext, task: list[CoreMessage] | None) -> None:
+        """On run start for ``TracingMiddleware``.
+
+Parameters
+----------
+mw : MiddlewareContext
+    Value supplied for ``mw``.
+task : list[CoreMessage] | None
+    Value supplied for ``task``."""
         ctx = mw.ctx
         task_text = "\n".join(m.text() for m in task) if task else None
         self._runs[ctx.run_id] = self._tracer.start_span(
@@ -114,6 +150,14 @@ class TracingMiddleware(CoreMiddleware):
         )
 
     async def on_final_response(self, mw: MiddlewareContext, message: AssistantMessage) -> AssistantMessage:
+        """On final response for ``TracingMiddleware``.
+
+Parameters
+----------
+mw : MiddlewareContext
+    Value supplied for ``mw``.
+message : AssistantMessage
+    Value supplied for ``message``."""
         span = self._runs.get(mw.ctx.run_id)
         if span is not None:
             answer = message.structured_output.model_dump() if message.structured_output else message.text()
@@ -124,6 +168,14 @@ class TracingMiddleware(CoreMiddleware):
         return message
 
     async def on_run_end(self, mw: MiddlewareContext, response: AgentResponse) -> None:
+        """On run end for ``TracingMiddleware``.
+
+Parameters
+----------
+mw : MiddlewareContext
+    Value supplied for ``mw``.
+response : AgentResponse
+    Value supplied for ``response``."""
         span = self._runs.pop(mw.ctx.run_id, None)
         if span is None:
             return
@@ -141,6 +193,14 @@ class TracingMiddleware(CoreMiddleware):
         span.end()
 
     async def on_run_error(self, mw: MiddlewareContext, error: BaseException) -> None:
+        """On run error for ``TracingMiddleware``.
+
+Parameters
+----------
+mw : MiddlewareContext
+    Value supplied for ``mw``.
+error : BaseException
+    Value supplied for ``error``."""
         span = self._runs.pop(mw.ctx.run_id, None)
         if span is not None:
             span.record_exception(error)
@@ -149,6 +209,14 @@ class TracingMiddleware(CoreMiddleware):
 
     # -------- MODEL -----------------------------------------------------------
     async def on_model_request(self, mw: MiddlewareContext, request: ModelRequest) -> ModelRequest:
+        """On model request for ``TracingMiddleware``.
+
+Parameters
+----------
+mw : MiddlewareContext
+    Value supplied for ``mw``.
+request : ModelRequest
+    Value supplied for ``request``."""
         messages = [{"role": m.role, "content": m.text()} for m in request.messages]
         options = {k: v for k, v in request.options.items() if isinstance(v, (str, int, float, bool))}
         request.metadata[_SPAN] = self._child(mw, f"chat {request.model}", {
@@ -164,6 +232,16 @@ class TracingMiddleware(CoreMiddleware):
     async def on_model_response(
         self, mw: MiddlewareContext, request: ModelRequest, result: ChatCompletionResult,
     ) -> ChatCompletionResult:
+        """On model response for ``TracingMiddleware``.
+
+Parameters
+----------
+mw : MiddlewareContext
+    Value supplied for ``mw``.
+request : ModelRequest
+    Value supplied for ``request``.
+result : ChatCompletionResult
+    Value supplied for ``result``."""
         span: Span | None = request.metadata.pop(_SPAN, None)
         if span is None:
             return result
@@ -184,6 +262,16 @@ class TracingMiddleware(CoreMiddleware):
         return result
 
     async def on_model_error(self, mw: MiddlewareContext, request: ModelRequest, error: Exception) -> None:
+        """On model error for ``TracingMiddleware``.
+
+Parameters
+----------
+mw : MiddlewareContext
+    Value supplied for ``mw``.
+request : ModelRequest
+    Value supplied for ``request``.
+error : Exception
+    Value supplied for ``error``."""
         span: Span | None = request.metadata.pop(_SPAN, None)
         if span is not None:
             span.record_exception(error)
@@ -193,6 +281,14 @@ class TracingMiddleware(CoreMiddleware):
 
     # -------- TOOLS -----------------------------------------------------------
     async def on_tool_request(self, mw: MiddlewareContext, request: ToolRequest) -> None:
+        """On tool request for ``TracingMiddleware``.
+
+Parameters
+----------
+mw : MiddlewareContext
+    Value supplied for ``mw``.
+request : ToolRequest
+    Value supplied for ``request``."""
         request.metadata[_SPAN] = self._child(mw, f"execute_tool {request.tool_name}", {
             "gen_ai.operation.name": "execute_tool",
             "gen_ai.tool.name": request.tool_name,
@@ -205,6 +301,16 @@ class TracingMiddleware(CoreMiddleware):
     async def on_tool_response(
         self, mw: MiddlewareContext, request: ToolRequest, result: ToolResult,
     ) -> ToolResult:
+        """On tool response for ``TracingMiddleware``.
+
+Parameters
+----------
+mw : MiddlewareContext
+    Value supplied for ``mw``.
+request : ToolRequest
+    Value supplied for ``request``.
+result : ToolResult
+    Value supplied for ``result``."""
         span: Span | None = request.metadata.pop(_SPAN, None)
         if span is None:
             return result
@@ -223,6 +329,16 @@ def _clean(attributes: dict[str, t.Any]) -> dict[str, t.Any]:
 
 
 def _cost(request: ModelRequest, tokens_in: int | None, tokens_out: int | None) -> str | None:
+    """Perform the internal ``cost`` operation.
+
+Parameters
+----------
+request : ModelRequest
+    Value supplied for ``request``.
+tokens_in : int | None
+    Value supplied for ``tokens_in``.
+tokens_out : int | None
+    Value supplied for ``tokens_out``."""
     config = request.model_config
     if config is None or config.input_cost_per_mtok is None or config.output_cost_per_mtok is None:
         return None

@@ -68,6 +68,26 @@ class BashTool(CoreRuntimeTool):
         ask_patterns: list[str] | None = None,
         deny_patterns: list[str] | None = None,
     ) -> None:
+        """Initialize ``BashTool``.
+
+Parameters
+----------
+name : str
+    Value supplied for ``name``.
+description : str | None
+    Value supplied for ``description``.
+timeout_seconds : float
+    Value supplied for ``timeout_seconds``.
+max_output_chars : int
+    Value supplied for ``max_output_chars``.
+approval_mode : ToolApprovalMode | str
+    Value supplied for ``approval_mode``.
+allowed_patterns : list[str] | None
+    Value supplied for ``allowed_patterns``.
+ask_patterns : list[str] | None
+    Value supplied for ``ask_patterns``.
+deny_patterns : list[str] | None
+    Value supplied for ``deny_patterns``."""
         super().__init__(
             name=name,
             description=description or self._DESCRIPTION,
@@ -93,6 +113,7 @@ class BashTool(CoreRuntimeTool):
 
     @property
     def parameters(self) -> dict[str, t.Any]:
+        """Perform the ``parameters`` operation for ``BashTool``."""
         return {
             "type": "object",
             "properties": {
@@ -135,6 +156,12 @@ class BashTool(CoreRuntimeTool):
         }
 
     def validate_parameters(self, tool_request: ToolCallRecord) -> CoreToolParameters:
+        """Validate parameters for ``BashTool``.
+
+Parameters
+----------
+tool_request : ToolCallRecord
+    Value supplied for ``tool_request``."""
         validation = super().validate_parameters(tool_request)
         if not validation.is_tool_valid:
             return validation
@@ -166,6 +193,7 @@ class BashTool(CoreRuntimeTool):
         return validation
 
     def docker_ref(self) -> DockerToolRef:
+        """Perform the ``docker ref`` operation for ``BashTool``."""
         return DockerToolRef(
             kind="class",
             module="max_ai.tools.bash",
@@ -186,6 +214,16 @@ class BashTool(CoreRuntimeTool):
         tool_context: ToolContext | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> ToolResult:
+        """Execute the requested operation for ``BashTool``.
+
+Parameters
+----------
+tool_request : ToolCallRecord
+    Value supplied for ``tool_request``.
+tool_context : ToolContext | None
+    Value supplied for ``tool_context``.
+cancellation_token : CancellationToken | None
+    Value supplied for ``cancellation_token``."""
         validation = self.validate_parameters(tool_request)
         if not validation.is_tool_valid:
             msg_error = validation.msg_error or "Invalid bash parameters."
@@ -380,6 +418,12 @@ class BashTool(CoreRuntimeTool):
 
     @classmethod
     def _runtime_dirs(cls, tool_context: ToolContext) -> RuntimeDirs:
+        """Perform the internal ``runtime dirs`` operation for ``BashTool``.
+
+Parameters
+----------
+tool_context : ToolContext
+    Value supplied for ``tool_context``."""
         deps = tool_context.deps or {}
         root = cls._path_from_deps_or_env(deps, "runtime_root", "RUNTIME_DIR")
         skills = cls._path_from_deps_or_env(deps, "skills_dir", "SKILLS_DIR")
@@ -414,6 +458,16 @@ class BashTool(CoreRuntimeTool):
         dep_key: str,
         env_key: str,
     ) -> Path | None:
+        """Perform the internal ``path from deps or env`` operation for ``BashTool``.
+
+Parameters
+----------
+deps : dict[str, t.Any]
+    Value supplied for ``deps``.
+dep_key : str
+    Value supplied for ``dep_key``.
+env_key : str
+    Value supplied for ``env_key``."""
         value = deps.get(dep_key) or os.environ.get(env_key)
         if value is None:
             return None
@@ -423,6 +477,12 @@ class BashTool(CoreRuntimeTool):
 
     @staticmethod
     def _safe_user_id(user_id: str) -> str:
+        """Perform the internal ``safe user id`` operation for ``BashTool``.
+
+Parameters
+----------
+user_id : str
+    Value supplied for ``user_id``."""
         if not isinstance(user_id, str) or not _VALID_NAME_RE.match(user_id):
             raise ValueError("Invalid user_id  Allowed characters")
         return user_id

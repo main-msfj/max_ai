@@ -23,6 +23,21 @@ _SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
 def validate_id(kind: str, value: str) -> str:
+    """
+    Validate an identifier before using it as a storage key.
+
+    Parameters
+    ----------
+    kind : str
+        Identifier category included in validation errors.
+    value : str
+        Value to validate.
+
+    Returns
+    -------
+    str
+        The resulting text value.
+    """
     if not isinstance(value, str) or not _SAFE_ID.match(value):
         raise ValueError(f"Invalid {kind} {value!r}: use 1-128 of [A-Za-z0-9_-]")
     return value
@@ -90,13 +105,70 @@ class CoreSessionStore(CoreLifecycleComponent[BaseModel], ABC):
 
     # -------- BACKEND HOOKS -----------------------------------------------------------
     @abstractmethod
-    async def _load(self, user_id: str, session_id: str) -> RunContext | None: ...
+    async def _load(self, user_id: str, session_id: str) -> RunContext | None:
+        """
+        Load one saved run context from the backend.
+
+        Parameters
+        ----------
+        user_id : str
+            Identifier for the user scope.
+        session_id : str
+            Identifier for the current session.
+
+        Returns
+        -------
+        RunContext | None
+            The saved run context, or None when the session is absent.
+        """
+        ...
 
     @abstractmethod
-    async def _save(self, ctx: RunContext, info: SessionInfo) -> None: ...
+    async def _save(self, ctx: RunContext, info: SessionInfo) -> None:
+        """
+        Persist a run context and its listing metadata.
+
+        Parameters
+        ----------
+        ctx : RunContext
+            Current run context.
+        info : SessionInfo
+            Metadata describing the saved session.
+        """
+        ...
 
     @abstractmethod
-    async def _list(self, user_id: str) -> t.Iterable[SessionInfo]: ...
+    async def _list(self, user_id: str) -> t.Iterable[SessionInfo]:
+        """
+        Return the saved session metadata for one user.
+
+        Parameters
+        ----------
+        user_id : str
+            Identifier for the user scope.
+
+        Returns
+        -------
+        t.Iterable[SessionInfo]
+            The iterable of saved session metadata.
+        """
+        ...
 
     @abstractmethod
-    async def _delete(self, user_id: str, session_id: str) -> bool: ...
+    async def _delete(self, user_id: str, session_id: str) -> bool:
+        """
+        Delete one saved session from the backend.
+
+        Parameters
+        ----------
+        user_id : str
+            Identifier for the user scope.
+        session_id : str
+            Identifier for the current session.
+
+        Returns
+        -------
+        bool
+            Whether the operation succeeded.
+        """
+        ...

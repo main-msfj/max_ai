@@ -14,6 +14,9 @@ from .capability import CoreAgentCapabilities
 
 
 class WorkspaceConfig(BaseModel):
+    """
+    Store the serializable settings for a workspace.
+    """
     model_config = ConfigDict(extra="forbid")
     root: str | None = None
 
@@ -29,6 +32,14 @@ class WorkspaceBase(CoreAgentCapabilities[WorkspaceConfig], ABC):
     component_type = "workspace"
 
     def __init__(self, root: str | Path | None = None) -> None:
+        """
+        Initialize the workspace root and filesystem state.
+
+        Parameters
+        ----------
+        root : str | Path | None, default=None
+            Root directory used by the workspace or skill source.
+        """
         super().__init__()
         self.base_root = (
             Path(root if root is not None else setting.root_dir / ".agents")
@@ -39,13 +50,37 @@ class WorkspaceBase(CoreAgentCapabilities[WorkspaceConfig], ABC):
         self._filesystem = None
 
     def _to_config(self) -> WorkspaceConfig:
+        """
+        Return the workspace settings for serialization.
+
+        Returns
+        -------
+        WorkspaceConfig
+            The workspace configuration model.
+        """
         return WorkspaceConfig(root=str(self.base_root))
 
     @classmethod
     def _from_config(cls, config: WorkspaceConfig) -> WorkspaceBase:
+        """
+        Build a workspace from its validated configuration.
+
+        Parameters
+        ----------
+        config : WorkspaceConfig
+            Model or component configuration.
+
+        Returns
+        -------
+        WorkspaceBase
+            The constructed workspace.
+        """
         return cls(root=config.root)
 
     def get_filesystem(self):
+        """
+        Return the lazily initialized per-user filesystem.
+        """
         from ..capabilities.workspace.local._filesystem import UserFileSystem
 
         if self._filesystem is None:

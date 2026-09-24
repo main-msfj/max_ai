@@ -54,6 +54,24 @@ class SQLiteKnowledgeRegistry(CoreKnowledgeRegistry):
         min_score: float = 0.2,
         embedding: CoreEmbedding | None = None,
     ) -> None:
+        """Initialize ``SQLiteKnowledgeRegistry``.
+
+Parameters
+----------
+name : str
+    Value supplied for ``name``.
+description : str
+    Value supplied for ``description``.
+base_path : str | Path
+    Value supplied for ``base_path``.
+tool_mode : KnowledgeToolMode
+    Value supplied for ``tool_mode``.
+db_name : str
+    Value supplied for ``db_name``.
+min_score : float
+    Value supplied for ``min_score``.
+embedding : CoreEmbedding | None
+    Value supplied for ``embedding``."""
         super().__init__(name, description, tool_mode)
         self.base_path = Path(base_path).expanduser().resolve()
         self.db_name = db_name
@@ -65,9 +83,11 @@ class SQLiteKnowledgeRegistry(CoreKnowledgeRegistry):
 
     @property
     def path(self) -> Path:
+        """Perform the ``path`` operation for ``SQLiteKnowledgeRegistry``."""
         return self.base_path / self.db_name
 
     def _to_config(self) -> SQLiteKnowledgeRegistryConfig:
+        """Build the serializable configuration for ``SQLiteKnowledgeRegistry``."""
         return SQLiteKnowledgeRegistryConfig(
             name=self.name, description=self.description, base_path=str(self.base_path),
             db_name=self.db_name, tool_mode=self.tool_mode, min_score=self.min_score,
@@ -76,12 +96,20 @@ class SQLiteKnowledgeRegistry(CoreKnowledgeRegistry):
 
     @classmethod
     def _from_config(cls, config: SQLiteKnowledgeRegistryConfig) -> SQLiteKnowledgeRegistry:
+        """Create an instance from its configuration for ``SQLiteKnowledgeRegistry``.
+
+Parameters
+----------
+config : SQLiteKnowledgeRegistryConfig
+    Value supplied for ``config``."""
         embedding = CoreEmbedding.deserialize(config.embedding) if config.embedding else None
         return cls(**config.model_dump(exclude={"embedding"}), embedding=embedding)
 
     # -------- CONNECTION -----------------------------------------------------------
     async def connect(self) -> None:
+        """Open required resources for ``SQLiteKnowledgeRegistry``."""
         def open_db() -> sqlite3.Connection:
+            """Open db for ``SQLiteKnowledgeRegistry``."""
             self.base_path.mkdir(parents=True, exist_ok=True)
             db = sqlite3.connect(self.path, check_same_thread=False)
             db.execute("PRAGMA journal_mode=WAL")
@@ -92,6 +120,7 @@ class SQLiteKnowledgeRegistry(CoreKnowledgeRegistry):
             self._db = await asyncio.to_thread(open_db)
 
     async def disconnect(self) -> None:
+        """Release resources held for ``SQLiteKnowledgeRegistry``."""
         db, self._db = self._db, None
         if db is not None:
             await asyncio.to_thread(db.close)
@@ -103,6 +132,7 @@ class SQLiteKnowledgeRegistry(CoreKnowledgeRegistry):
         assert db is not None
 
         def locked() -> t.Any:
+            """Perform the ``locked`` operation for ``SQLiteKnowledgeRegistry``."""
             with self._lock, db:
                 return work(db)
 
@@ -110,6 +140,14 @@ class SQLiteKnowledgeRegistry(CoreKnowledgeRegistry):
 
     # -------- SEARCH -----------------------------------------------------------
     async def search(self, query: str, limit: int = 5) -> list[KnowledgeBlock]:
+        """Search SQLiteKnowledgeRegistry for matching records.
+
+Parameters
+----------
+query : str
+    Value supplied for ``query``.
+limit : int
+    Value supplied for ``limit``."""
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise ValueError("limit must be an integer between 1 and 100")
         if not isinstance(query, str) or not query.strip():
@@ -145,6 +183,12 @@ class SQLiteKnowledgeRegistry(CoreKnowledgeRegistry):
     # -------- INGESTION (application API, not an agent tool) -------------------------
     @staticmethod
     def _block_id(block_id: str) -> str:
+        """Perform the internal ``block id`` operation for ``SQLiteKnowledgeRegistry``.
+
+Parameters
+----------
+block_id : str
+    Value supplied for ``block_id``."""
         if not isinstance(block_id, str) or not block_id.strip():
             raise ValueError("block_id must be a non-empty string")
         return block_id.strip()
@@ -157,6 +201,12 @@ class SQLiteKnowledgeRegistry(CoreKnowledgeRegistry):
         vector = pack_vector(await self.embedding.embed_one(block.content))
 
         def write(db: sqlite3.Connection) -> bool:
+            """Perform the ``write`` operation for ``SQLiteKnowledgeRegistry``.
+
+Parameters
+----------
+db : sqlite3.Connection
+    Value supplied for ``db``."""
             existed = db.execute(
                 "SELECT 1 FROM knowledge WHERE source=? AND block_id=?", (self.name, block_id),
             ).fetchone()
@@ -173,6 +223,12 @@ class SQLiteKnowledgeRegistry(CoreKnowledgeRegistry):
         return await self._run(write)
 
     async def delete_block(self, block_id: str) -> bool:
+        """Delete block for ``SQLiteKnowledgeRegistry``.
+
+Parameters
+----------
+block_id : str
+    Value supplied for ``block_id``."""
         block_id = self._block_id(block_id)
         deleted = await self._run(lambda db: db.execute(
             "DELETE FROM knowledge WHERE source=? AND block_id=?", (self.name, block_id),

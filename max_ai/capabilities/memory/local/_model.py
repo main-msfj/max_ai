@@ -10,6 +10,7 @@ from ....base.memory import MemoryToolMode
 
 
 class LocalMemoryRegistryConfig(BaseModel):
+    """Configuration options for ``LocalMemoryRegistry``."""
     base_path: str
     user_id: str | None = None
     session_id: str | None = None

@@ -19,12 +19,26 @@ class MongoVectorIndex:
     """One ``vectorSearch`` index on the ``vector`` field of a collection."""
 
     def __init__(self, name: str, filters: t.Sequence[str]) -> None:
+        """Initialize ``MongoVectorIndex``.
+
+Parameters
+----------
+name : str
+    Value supplied for ``name``.
+filters : t.Sequence[str]
+    Value supplied for ``filters``."""
         self.name = name
         self.filters = list(filters)
         self._supported: bool | None = None  # None: not checked yet
         self._dimensions: int | None = None
 
     def _definition(self, dimensions: int) -> dict[str, t.Any]:
+        """Perform the internal ``definition`` operation for ``MongoVectorIndex``.
+
+Parameters
+----------
+dimensions : int
+    Value supplied for ``dimensions``."""
         return {"fields": [
             {"type": "vector", "path": "vector", "numDimensions": dimensions, "similarity": "cosine"},
             *({"type": "filter", "path": path} for path in self.filters),
@@ -57,6 +71,12 @@ class MongoVectorIndex:
 
     @staticmethod
     def _index_dimensions(index: dict[str, t.Any]) -> int | None:
+        """Perform the internal ``index dimensions`` operation for ``MongoVectorIndex``.
+
+Parameters
+----------
+index : dict[str, t.Any]
+    Value supplied for ``index``."""
         definition = index.get("latestDefinition") or index.get("definition") or {}
         for field in definition.get("fields", []):
             if field.get("type") == "vector":

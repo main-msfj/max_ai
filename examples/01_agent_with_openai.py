@@ -20,8 +20,8 @@ from examples.shared import (
     EXAMPLES_DIR,
     LOCAL_DIR,
     USER_ID,
-    get_weather,
-    send_email,
+    calculate_compound_interest,
+    save_report,
     session_arg,
 )
 from max_ai.agents import Agent
@@ -46,7 +46,7 @@ MODEL = "gpt-5.6-luna"
 async def main() -> None:
     load_dotenv(Path(__file__).resolve().parents[1] / ".env")
     if not os.getenv("OPENAI_API_KEY"):
-        raise SystemExit("Configura OPENAI_API_KEY en el entorno o en .env.")
+        raise SystemExit("Set OPENAI_API_KEY in the environment or in .env.")
 
     # The client stores the env var's name, never the key itself.
     client = OpenAIChatCompletionClient(
@@ -67,12 +67,12 @@ async def main() -> None:
 
     agent = Agent(
         name="LocalDemo",
-        description="Agente conversacional con componentes locales y modelo OpenAI.",
-        instructions="Continua la conversacion con el usuario y ayudale con todo lo que necesite.",
+        description="A conversational agent with local components and an OpenAI model.",
+        instructions="Continue the conversation and help the user with their requests.",
         client=client,
         toolset=[
-            FunctionAsTool(get_weather, approval_mode=ToolApprovalMode.AUTO_APPROVED),
-            FunctionAsTool(send_email, approval_mode=ToolApprovalMode.ASK_APPROVED),
+            FunctionAsTool(calculate_compound_interest, approval_mode=ToolApprovalMode.AUTO_APPROVED),
+            FunctionAsTool(save_report, approval_mode=ToolApprovalMode.ASK_APPROVED),
         ],
         # Backend only: each run binds it to its RunContext's user and session.
         memory=LocalMemoryRegistry(

@@ -102,6 +102,7 @@ class AskUserTool(CoreTool):
     )
 
     def __init__(self) -> None:
+        """Initialize ``AskUserTool``."""
         super().__init__(
             name=self.TOOL_NAME,
             description=(
@@ -120,6 +121,7 @@ class AskUserTool(CoreTool):
 
     @property
     def parameters(self) -> dict[str, t.Any]:
+        """Perform the ``parameters`` operation for ``AskUserTool``."""
         return {
             "type": "object",
             "properties": {
@@ -155,6 +157,12 @@ class AskUserTool(CoreTool):
     def validate_parameters(self, tool_request: ToolCallRecord) -> CoreToolParameters:
         # Records persisted with the legacy single-question shape are
         # rewritten to the current one so they still validate on resume.
+        """Validate parameters for ``AskUserTool``.
+
+Parameters
+----------
+tool_request : ToolCallRecord
+    Value supplied for ``tool_request``."""
         params = tool_request.parameters
         if "questions" not in params and "question" in params:
             legacy: dict[str, t.Any] = {"question": params["question"], "header": "Question"}

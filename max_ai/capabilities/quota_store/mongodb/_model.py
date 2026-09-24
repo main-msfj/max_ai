@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 
 class MongoDBQuotaStoreConfig(BaseModel):
+    """Configuration options for ``MongoDBQuotaStore``."""
     database: str = "max_ai"
     collection: str = "quota"
     uri_env: str = Field(default="MONGODB_URI", description="Env var holding the URI (never the URI).")

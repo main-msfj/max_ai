@@ -29,6 +29,14 @@ class SlidingWindowCompaction(CoreCompaction):
     component_provider_override = "maxai.compaction.SlidingWindowCompaction"
 
     def __init__(self, *, max_turns: int = 10, **kwargs) -> None:
+        """Initialize ``SlidingWindowCompaction``.
+
+Parameters
+----------
+max_turns : int
+    Value supplied for ``max_turns``.
+kwargs
+    Value supplied for ``kwargs``."""
         super().__init__(**kwargs)
         self.config = SlidingWindowCompactionConfig(
             **self.config.model_dump(), max_turns=max_turns,
@@ -37,6 +45,16 @@ class SlidingWindowCompaction(CoreCompaction):
     def _over_limit(
         self, blocks: list[MessageGroup], *, live_tokens: int, threshold: int,
     ) -> bool:
+        """Perform the internal ``over limit`` operation for ``SlidingWindowCompaction``.
+
+Parameters
+----------
+blocks : list[MessageGroup]
+    Value supplied for ``blocks``.
+live_tokens : int
+    Value supplied for ``live_tokens``.
+threshold : int
+    Value supplied for ``threshold``."""
         too_many_turns = len(turn_starts(blocks)) > self.config.max_turns
         return too_many_turns or super()._over_limit(
             blocks, live_tokens=live_tokens, threshold=threshold,
@@ -50,6 +68,18 @@ class SlidingWindowCompaction(CoreCompaction):
         budget_tokens: int,
         client: CoreChatCompletionClient,
     ) -> CompactionResult:
+        """Perform the internal ``compact`` operation for ``SlidingWindowCompaction``.
+
+Parameters
+----------
+blocks : list[MessageGroup]
+    Value supplied for ``blocks``.
+state : dict[str, JsonValue]
+    Value supplied for ``state``.
+budget_tokens : int
+    Value supplied for ``budget_tokens``.
+client : CoreChatCompletionClient
+    Value supplied for ``client``."""
         starts = turn_starts(blocks)
         cut = starts[-self.config.max_turns] if len(starts) > self.config.max_turns else 0
         old, kept = blocks[:cut], blocks[cut:]

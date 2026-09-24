@@ -11,6 +11,12 @@ __all__ = [
 
 
 def __getattr__(name):
+    """Resolve a lazily exported attribute.
+
+Parameters
+----------
+name
+    Value supplied for ``name``."""
     if name == "LocalExecutor":
         from .local import LocalExecutor
         return LocalExecutor

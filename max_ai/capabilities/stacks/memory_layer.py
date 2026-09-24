@@ -48,6 +48,16 @@ class MemoryLayer(Component[StackConfig], CoreLayer):
         load_from: str | Path | None = None,
         extra_variables: dict[str, t.Any] | None = None,
     ) -> None:
+        """Initialize ``MemoryLayer``.
+
+Parameters
+----------
+template : str | None
+    Value supplied for ``template``.
+load_from : str | Path | None
+    Value supplied for ``load_from``.
+extra_variables : dict[str, t.Any] | None
+    Value supplied for ``extra_variables``."""
         super().__init__(
             name="MemoryLayer",
             template=template,
@@ -56,10 +66,13 @@ class MemoryLayer(Component[StackConfig], CoreLayer):
         )
 
     def _default_template(self) -> str:
+        """Perform the internal ``default template`` operation for ``MemoryLayer``."""
         return self._load_file(self._DEFAULT_TEMPLATE_PATH / f"{self.name}.j2")
 
     def _required_variables(self) -> set[str]:
+        """Perform the internal ``required variables`` operation for ``MemoryLayer``."""
         return {"persistent_memories"}
 
     def _optional_variables(self) -> set[str]:
+        """Perform the internal ``optional variables`` operation for ``MemoryLayer``."""
         return {"memory_tools"}

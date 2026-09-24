@@ -19,7 +19,30 @@ from ..errors.embeddings import EmbeddingError
 from .component import ComponentBase
 
 
+class _DefaultEmbedding:
+    """Sentinel: caller didn't pass ``embedding``, so use the framework's
+    default (``FastEmbedEmbedding``). Distinct from ``None``, which means
+    the caller explicitly wants no semantic search."""
+
+    def __repr__(self) -> str:
+        """
+        Return a readable representation of this embedding provider.
+
+        Returns
+        -------
+        str
+            The resulting text value.
+        """
+        return "DEFAULT_EMBEDDING"
+
+
+DEFAULT_EMBEDDING = _DefaultEmbedding()
+
+
 class CoreEmbedding(ComponentBase[BaseModel], ABC):
+    """
+    Define the interface for converting text into vectors.
+    """
     component_type = "embedding"
 
     batch_size: t.ClassVar[int] = 64
@@ -49,6 +72,19 @@ class CoreEmbedding(ComponentBase[BaseModel], ABC):
         return vectors
 
     async def embed_one(self, text: str) -> list[float]:
+        """
+        Convert one text string into an embedding vector.
+
+        Parameters
+        ----------
+        text : str
+            Text to validate or embed.
+
+        Returns
+        -------
+        list[float]
+            The resulting list.
+        """
         if not isinstance(text, str):
             raise EmbeddingError.invalid_text()
         return (await self.embed([text]))[0]
@@ -59,11 +95,32 @@ class CoreEmbedding(ComponentBase[BaseModel], ABC):
 
     # -------- CACHE -----------------------------------------------------------
     def _vectors(self) -> OrderedDict[str, list[float]]:
+        """
+        Return the process-local cache of computed embedding vectors.
+
+        Returns
+        -------
+        OrderedDict[str, list[float]]
+            The ordered cache of text embeddings.
+        """
         if not hasattr(self, "_cache"):
             self._cache: OrderedDict[str, list[float]] = OrderedDict()
         return self._cache
 
     def _key(self, text: str) -> str:
+        """
+        Build the cache key for a text string.
+
+        Parameters
+        ----------
+        text : str
+            Text to validate or embed.
+
+        Returns
+        -------
+        str
+            The resulting text value.
+        """
         return hashlib.sha256(f"{self.model_id}\0{text}".encode()).hexdigest()
 
 

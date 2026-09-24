@@ -8,6 +8,7 @@ from ....base.context import LogBookToolMode
 
 
 class LocalContextRegistryConfig(BaseModel):
+    """Configuration options for ``LocalContextRegistry``."""
     user_id: str
     session_id: str
     base_path: str

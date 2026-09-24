@@ -40,6 +40,12 @@ _LAZY_GUARDS = {
 
 
 def __getattr__(name: str) -> t.Any:
+    """Resolve a lazily exported attribute.
+
+Parameters
+----------
+name : str
+    Value supplied for ``name``."""
     if name in _LAZY_LOOP:
         from . import react
 

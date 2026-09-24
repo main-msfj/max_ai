@@ -67,7 +67,7 @@ async def test_memory_categories_per_user_and_session(tmp_path):
 
 
 async def test_memory_search_by_words_without_an_embedding(tmp_path):
-    registry = memory(tmp_path)
+    registry = memory(tmp_path, embedding=None)
     await registry.bind("ana", "s1").create_or_update("diet", "She is vegetarian")
     await registry.bind("ana", "s2").create_or_update("pets", "Has a vegetarian dog")
     found = await registry.bind("ana", "s2").search_memory("vegetarian")

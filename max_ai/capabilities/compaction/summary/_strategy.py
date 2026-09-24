@@ -59,6 +59,16 @@ class SummaryCompaction(CoreCompaction):
     def __init__(
         self, *, summary_max_tokens: int = 2000, message_cap_tokens: int = 2000, **kwargs,
     ) -> None:
+        """Initialize ``SummaryCompaction``.
+
+Parameters
+----------
+summary_max_tokens : int
+    Value supplied for ``summary_max_tokens``.
+message_cap_tokens : int
+    Value supplied for ``message_cap_tokens``.
+kwargs
+    Value supplied for ``kwargs``."""
         super().__init__(**kwargs)
         self.config = SummaryCompactionConfig(
             **self.config.model_dump(),
@@ -74,6 +84,18 @@ class SummaryCompaction(CoreCompaction):
         budget_tokens: int,
         client: CoreChatCompletionClient,
     ) -> CompactionResult:
+        """Perform the internal ``compact`` operation for ``SummaryCompaction``.
+
+Parameters
+----------
+blocks : list[MessageGroup]
+    Value supplied for ``blocks``.
+state : dict[str, JsonValue]
+    Value supplied for ``state``.
+budget_tokens : int
+    Value supplied for ``budget_tokens``.
+client : CoreChatCompletionClient
+    Value supplied for ``client``."""
         cut = self._split_index(blocks, max(1, budget_tokens - self.config.summary_max_tokens))
         old = [m for block in blocks[:cut] for m in block.messages]
         recent = [m for block in blocks[cut:] for m in block.messages]
@@ -101,6 +123,12 @@ class SummaryCompaction(CoreCompaction):
         return cut
 
     def render(self, state: dict[str, JsonValue]) -> str | None:
+        """Render the configured template for ``SummaryCompaction``.
+
+Parameters
+----------
+state : dict[str, JsonValue]
+    Value supplied for ``state``."""
         summary = self._summary(state)
         if summary is None:
             return None
@@ -119,6 +147,12 @@ class SummaryCompaction(CoreCompaction):
     # -------- SUMMARIZATION -----------------------------------------------------------
     @staticmethod
     def _summary(state: dict[str, JsonValue]) -> CompactionOutput | None:
+        """Perform the internal ``summary`` operation for ``SummaryCompaction``.
+
+Parameters
+----------
+state : dict[str, JsonValue]
+    Value supplied for ``state``."""
         raw = state.get("summary")
         return CompactionOutput.model_validate(raw) if isinstance(raw, dict) else None
 
@@ -161,6 +195,16 @@ class SummaryCompaction(CoreCompaction):
         previous: CompactionOutput | None,
         client: CoreChatCompletionClient,
     ) -> CompactionOutput:
+        """Perform the internal ``summarize chunk`` operation for ``SummaryCompaction``.
+
+Parameters
+----------
+transcript : str
+    Value supplied for ``transcript``.
+previous : CompactionOutput | None
+    Value supplied for ``previous``.
+client : CoreChatCompletionClient
+    Value supplied for ``client``."""
         task = SUMMARY_TASK.format(
             budget=self.config.summary_max_tokens,
             previous=previous.model_dump_json(exclude_defaults=True) if previous else "None yet.",

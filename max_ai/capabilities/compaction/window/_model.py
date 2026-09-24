@@ -8,6 +8,7 @@ from ....core.compaction import CompactionConfig
 
 
 class SlidingWindowCompactionConfig(CompactionConfig):
+    """Configuration options for ``SlidingWindowCompaction``."""
     max_turns: int = Field(
         default=10, ge=1, description="Turns kept; older ones leave the window.",
     )

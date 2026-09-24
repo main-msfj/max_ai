@@ -8,6 +8,7 @@ from ....base.context import LogBookToolMode
 
 
 class SQLiteContextRegistryConfig(BaseModel):
+    """Configuration options for ``SQLiteContextRegistry``."""
     user_id: str
     session_id: str
     base_path: str

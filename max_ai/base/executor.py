@@ -24,6 +24,9 @@ SyncDirection = Literal["to_environment", "to_workspace"]
 
 @dataclass(frozen=True)
 class ExecutionResult:
+    """
+    Describe the result of running a command in an execution session.
+    """
     stdout: str
     stderr: str
     exit_code: int | None

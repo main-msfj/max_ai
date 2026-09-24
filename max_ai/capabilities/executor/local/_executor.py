@@ -9,15 +9,22 @@ import os
 from ....base.executor import ExecutionSession, ExecutorBase
 from ....base.tools import ToolContext
 from ....core.executor.process import run_process
-from ....ids import short_id
+from ....core.ids import short_id
 from ._model import LocalExecutorConfig
 
 
 class LocalExecutor(ExecutorBase):
+    """LocalExecutor provides the Localexecution implementation."""
     component_provider_override = "max_ai.capabilities.executor.local.LocalExecutor"
     component_schema = LocalExecutorConfig
 
     def __init__(self, *, max_output_bytes: int = 1 << 20) -> None:
+        """Initialize ``LocalExecutor``.
+
+Parameters
+----------
+max_output_bytes : int
+    Value supplied for ``max_output_bytes``."""
         super().__init__()
         if max_output_bytes <= 0:
             raise ValueError("max_output_bytes must be positive")
@@ -27,17 +34,40 @@ class LocalExecutor(ExecutorBase):
         self._locks: dict[str, asyncio.Lock] = {}
 
     def _to_config(self) -> LocalExecutorConfig:
+        """Build the serializable configuration for ``LocalExecutor``."""
         return LocalExecutorConfig(max_output_bytes=self.max_output_bytes)
 
     @classmethod
     def _from_config(cls, config: LocalExecutorConfig) -> "LocalExecutor":
+        """Create an instance from its configuration for ``LocalExecutor``.
+
+Parameters
+----------
+config : LocalExecutorConfig
+    Value supplied for ``config``."""
         return cls(max_output_bytes=config.max_output_bytes)
 
     def _check(self, session: ExecutionSession) -> None:
+        """Perform the internal ``check`` operation for ``LocalExecutor``.
+
+Parameters
+----------
+session : ExecutionSession
+    Value supplied for ``session``."""
         if self._sessions.get(session.id) is not session:
             raise ValueError("session does not belong to this executor")
 
     async def connect(self, workspace, user_id, conversation_id) -> ExecutionSession:
+        """Open required resources for ``LocalExecutor``.
+
+Parameters
+----------
+workspace
+    Value supplied for ``workspace``.
+user_id
+    Value supplied for ``user_id``.
+conversation_id
+    Value supplied for ``conversation_id``."""
         directory = workspace.materialize(user_id, conversation_id)
         session = ExecutionSession(
             short_id(), user_id, conversation_id, workspace,
@@ -48,9 +78,21 @@ class LocalExecutor(ExecutorBase):
         return session
 
     async def disconnect(self, session: ExecutionSession) -> None:
+        """Release resources held for ``LocalExecutor``.
+
+Parameters
+----------
+session : ExecutionSession
+    Value supplied for ``session``."""
         self._check(session)
 
     async def clean(self, session: ExecutionSession) -> None:
+        """Remove temporary resources owned for ``LocalExecutor``.
+
+Parameters
+----------
+session : ExecutionSession
+    Value supplied for ``session``."""
         if self._sessions.get(session.id) is not session:
             if self._closed.get(session.id) is session:
                 return
@@ -60,6 +102,12 @@ class LocalExecutor(ExecutorBase):
         self._closed[session.id] = session
 
     async def rebuild(self, session: ExecutionSession) -> ExecutionSession:
+        """Recreate the runtime environment for ``LocalExecutor``.
+
+Parameters
+----------
+session : ExecutionSession
+    Value supplied for ``session``."""
         self._check(session)
         workspace, user_id, conversation_id = (
             session.workspace, session.user_id, session.conversation_id,
@@ -70,6 +118,20 @@ class LocalExecutor(ExecutorBase):
     async def execute_argv(
         self, session, argv, *, stdin=None, timeout=60, cancellation_token=None
     ):
+        """Run an argument vector for ``LocalExecutor``.
+
+Parameters
+----------
+session
+    Value supplied for ``session``.
+argv
+    Value supplied for ``argv``.
+stdin
+    Value supplied for ``stdin``.
+timeout
+    Value supplied for ``timeout``.
+cancellation_token
+    Value supplied for ``cancellation_token``."""
         self._check(session)
         lock = self._locks.setdefault(session.id, asyncio.Lock())
         async with lock:
@@ -86,6 +148,18 @@ class LocalExecutor(ExecutorBase):
             )
 
     async def execute(self, session, command, *, timeout=60, cancellation_token=None):
+        """Execute the requested operation for ``LocalExecutor``.
+
+Parameters
+----------
+session
+    Value supplied for ``session``.
+command
+    Value supplied for ``command``.
+timeout
+    Value supplied for ``timeout``.
+cancellation_token
+    Value supplied for ``cancellation_token``."""
         if not isinstance(command, str) or not command.strip():
             raise ValueError("command cannot be empty")
         # Clear shell startup variables (notably BASH_ENV) inherited from the host.
@@ -107,6 +181,20 @@ class LocalExecutor(ExecutorBase):
         )
 
     async def run_tool(self, session, tool, record, context, cancellation_token=None):
+        """Run a tool through this component for ``LocalExecutor``.
+
+Parameters
+----------
+session
+    Value supplied for ``session``.
+tool
+    Value supplied for ``tool``.
+record
+    Value supplied for ``record``.
+context
+    Value supplied for ``context``.
+cancellation_token
+    Value supplied for ``cancellation_token``."""
         deps = dict(context.deps)
         directory = session.handle
         deps.update(

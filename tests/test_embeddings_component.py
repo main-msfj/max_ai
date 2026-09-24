@@ -112,7 +112,7 @@ async def test_memory_search_by_meaning_across_the_users_sessions(tmp_path):
     found = await memory.bind("ana", "s3").search_memory("does she eat meat?")
     assert [(r.session_id, r.category) for r in found] == [("s1", "diet")]  # never its own session
 
-    words_only = LocalMemoryRegistry(base_path=tmp_path)  # no embedding: plain words
+    words_only = LocalMemoryRegistry(base_path=tmp_path, embedding=None)  # explicitly disabled: plain words
     assert await words_only.bind("ana", "s3").search_memory("eat meat") == []
     assert [r.category for r in await words_only.bind("ana", "s3").search_memory("vegetarian")] == ["diet"]
 

@@ -15,13 +15,14 @@ from dataclasses import dataclass, field
 
 from ....base.executor import ExecutionResult, ExecutionSession
 from ....core.executor.remote import RemoteExecutor
-from ....ids import short_id
+from ....core.ids import short_id
 from ._model import ModalExecutorConfig
 from .sync import apply_snapshot, snapshot
 
 
 @dataclass
 class _Sandbox:
+    """_Sandbox represents structured data used by the capability system."""
     sandbox: object
     baseline: dict[str, str] = field(default_factory=dict)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -29,12 +30,27 @@ class _Sandbox:
 
 
 class ModalExecutor(RemoteExecutor):
+    """ModalExecutor provides the Modalexecution implementation."""
     component_schema = ModalExecutorConfig
     component_provider_override = "max_ai.capabilities.executor.modal.ModalExecutor"
 
     def __init__(self, *, image, app_name: str = "maxai-runtime",
                  network: str = "none", lifetime: int = 3600,
                  max_output_bytes: int = 1 << 20):
+        """Initialize ``ModalExecutor``.
+
+Parameters
+----------
+image
+    Value supplied for ``image``.
+app_name : str
+    Value supplied for ``app_name``.
+network : str
+    Value supplied for ``network``.
+lifetime : int
+    Value supplied for ``lifetime``.
+max_output_bytes : int
+    Value supplied for ``max_output_bytes``."""
         if network not in {"none", "unrestricted"}:
             raise ValueError("network must be 'none' or 'unrestricted'")
         if not 1 <= lifetime <= 86400 or max_output_bytes <= 0:
@@ -44,6 +60,7 @@ class ModalExecutor(RemoteExecutor):
         self._sessions: dict[str, ExecutionSession] = {}
 
     def _to_config(self) -> ModalExecutorConfig:
+        """Build the serializable configuration for ``ModalExecutor``."""
         if not isinstance(self.image, str):
             raise TypeError("Modal image must be a registry string to serialize")
         return ModalExecutorConfig(
@@ -53,13 +70,35 @@ class ModalExecutor(RemoteExecutor):
 
     @classmethod
     def _from_config(cls, config: ModalExecutorConfig) -> "ModalExecutor":
+        """Create an instance from its configuration for ``ModalExecutor``.
+
+Parameters
+----------
+config : ModalExecutorConfig
+    Value supplied for ``config``."""
         return cls(**config.model_dump())
 
     def _check(self, session):
+        """Perform the internal ``check`` operation for ``ModalExecutor``.
+
+Parameters
+----------
+session
+    Value supplied for ``session``."""
         if self._sessions.get(session.id) is not session:
             raise ValueError("Session does not belong to this executor")
 
     async def connect(self, workspace, user_id, conversation_id):
+        """Open required resources for ``ModalExecutor``.
+
+Parameters
+----------
+workspace
+    Value supplied for ``workspace``.
+user_id
+    Value supplied for ``user_id``.
+conversation_id
+    Value supplied for ``conversation_id``."""
         try:
             import modal
         except ImportError as error:
@@ -94,6 +133,20 @@ class ModalExecutor(RemoteExecutor):
             raise
 
     async def _command(self, session, argv, *, stdin=None, timeout=60, limit=None):
+        """Perform the internal ``command`` operation for ``ModalExecutor``.
+
+Parameters
+----------
+session
+    Value supplied for ``session``.
+argv
+    Value supplied for ``argv``.
+stdin
+    Value supplied for ``stdin``.
+timeout
+    Value supplied for ``timeout``.
+limit
+    Value supplied for ``limit``."""
         self._check(session)
         handle = session.handle
         if handle.closed:
@@ -109,6 +162,7 @@ class ModalExecutor(RemoteExecutor):
                    "max_output_bytes": limit or self.max_output_bytes}
 
         async def communicate():
+            """Perform the ``communicate`` operation for ``ModalExecutor``."""
             process.stdin.write(json.dumps(payload).encode())
             process.stdin.write_eof()
             await process.stdin.drain.aio()
@@ -124,6 +178,7 @@ class ModalExecutor(RemoteExecutor):
             return await asyncio.shield(task)
         except asyncio.CancelledError:
             async def cancel_remote():
+                """Perform the ``cancel remote`` operation for ``ModalExecutor``."""
                 await handle.sandbox.filesystem.write_text.aio(
                     "cancel", f"/tmp/maxai-cancel-{invocation}",
                 )
@@ -142,6 +197,20 @@ class ModalExecutor(RemoteExecutor):
                 await asyncio.gather(task, return_exceptions=True)
 
     async def execute_argv(self, session, argv, *, stdin=None, timeout=60, cancellation_token=None):
+        """Run an argument vector for ``ModalExecutor``.
+
+Parameters
+----------
+session
+    Value supplied for ``session``.
+argv
+    Value supplied for ``argv``.
+stdin
+    Value supplied for ``stdin``.
+timeout
+    Value supplied for ``timeout``.
+cancellation_token
+    Value supplied for ``cancellation_token``."""
         self._check(session)
         if cancellation_token is not None and cancellation_token.is_cancelled():
             raise asyncio.CancelledError
@@ -152,12 +221,32 @@ class ModalExecutor(RemoteExecutor):
             return await task
 
     async def execute(self, session, command, *, timeout=60, cancellation_token=None):
+        """Execute the requested operation for ``ModalExecutor``.
+
+Parameters
+----------
+session
+    Value supplied for ``session``.
+command
+    Value supplied for ``command``.
+timeout
+    Value supplied for ``timeout``.
+cancellation_token
+    Value supplied for ``cancellation_token``."""
         if not isinstance(command, str) or not command.strip():
             raise ValueError("Command cannot be empty")
         return await self.execute_argv(session, ["bash", "--noprofile", "--norc", "-c", command],
                                        timeout=timeout, cancellation_token=cancellation_token)
 
     async def sync(self, session, direction):
+        """Perform the ``sync`` operation for ``ModalExecutor``.
+
+Parameters
+----------
+session
+    Value supplied for ``session``.
+direction
+    Value supplied for ``direction``."""
         self._check(session)
         if direction not in {"to_environment", "to_workspace"}:
             raise ValueError("Unknown synchronization direction")
@@ -207,10 +296,22 @@ class ModalExecutor(RemoteExecutor):
                         baseline.pop(name, None)
 
     async def disconnect(self, session):
+        """Release resources held for ``ModalExecutor``.
+
+Parameters
+----------
+session
+    Value supplied for ``session``."""
         self._check(session)
         # No detach before clean: Modal invalidates the detached handle.
 
     async def clean(self, session):
+        """Remove temporary resources owned for ``ModalExecutor``.
+
+Parameters
+----------
+session
+    Value supplied for ``session``."""
         self._check(session)
         handle = session.handle
         if not handle.closed:
@@ -219,6 +320,12 @@ class ModalExecutor(RemoteExecutor):
             handle.closed = True
 
     async def rebuild(self, session):
+        """Recreate the runtime environment for ``ModalExecutor``.
+
+Parameters
+----------
+session
+    Value supplied for ``session``."""
         self._check(session)
         await self.sync(session, "to_workspace")
         await self.clean(session)

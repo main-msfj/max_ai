@@ -6,5 +6,6 @@ from pydantic import BaseModel
 
 
 class LocalSkillRegistryConfig(BaseModel):
+    """Configuration options for ``LocalSkillRegistry``."""
     source: str
     skills: list[str]

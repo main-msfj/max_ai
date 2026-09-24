@@ -25,6 +25,7 @@ from ._model import LocalSkillRegistryConfig
 
 
 class LocalSkillRegistry(CoreSkillRegistry):
+    """LocalSkillRegistry provides the LocalSkillregistry implementation."""
     component_provider_override = "max_ai.capabilities.skills.local.LocalSkillRegistry"
     component_schema = LocalSkillRegistryConfig
     component_type = "skills"
@@ -47,14 +48,29 @@ class LocalSkillRegistry(CoreSkillRegistry):
     """
 
     def __init__(self, source: str | Path, skills: list[str]) -> None:
+        """Initialize ``LocalSkillRegistry``.
+
+Parameters
+----------
+source : str | Path
+    Value supplied for ``source``.
+skills : list[str]
+    Value supplied for ``skills``."""
         super().__init__(source=source, skills=skills)
         self._source_path: Path = self._resolve_source_path(self.source)
 
     def _to_config(self) -> LocalSkillRegistryConfig:
+        """Build the serializable configuration for ``LocalSkillRegistry``."""
         return LocalSkillRegistryConfig(source=self.source, skills=list(self.skills))
 
     @classmethod
     def _from_config(cls, config: LocalSkillRegistryConfig) -> "LocalSkillRegistry":
+        """Create an instance from its configuration for ``LocalSkillRegistry``.
+
+Parameters
+----------
+config : LocalSkillRegistryConfig
+    Value supplied for ``config``."""
         return cls(source=config.source, skills=config.skills)
 
     async def connect(self) -> None:
@@ -67,6 +83,12 @@ class LocalSkillRegistry(CoreSkillRegistry):
 
     @staticmethod
     def _resolve_source_path(source: str) -> Path:
+        """Perform the internal ``resolve source path`` operation for ``LocalSkillRegistry``.
+
+Parameters
+----------
+source : str
+    Value supplied for ``source``."""
         path = Path(source).expanduser().resolve()
         if not path.exists():
             raise FileNotFoundError(

@@ -1,3 +1,4 @@
+"""Module providing capability implementations and supporting utilities."""
 from ...base.layer import CoreLayer
 from .agent_policy_layer import AgentPolicyLayer
 from .knowledge_layer import KnowledgeLayer

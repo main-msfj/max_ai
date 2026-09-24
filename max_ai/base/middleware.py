@@ -50,6 +50,16 @@ class StopRun(Exception):
     so the transcript never keeps a tool call without its result."""
 
     def __init__(self, message: str, finish_reason: str = "stopped") -> None:
+        """
+        Initialize a run-stop signal with its user-facing reason.
+
+        Parameters
+        ----------
+        message : str
+            Value used to initialize the run-stop signal.
+        finish_reason : str, default='stopped'
+            Value used to initialize the run-stop signal.
+        """
         super().__init__(message)
         self.message = message
         self.finish_reason = finish_reason
@@ -94,10 +104,26 @@ class ToolRequest:
 
     @property
     def tool_name(self) -> str:
+        """
+        Return the name of the tool represented by this request.
+
+        Returns
+        -------
+        str
+            The resulting text value.
+        """
         return self.record.tool_name
 
     @property
     def parameters(self) -> dict[str, t.Any]:
+        """
+        Return the arguments supplied to this tool call.
+
+        Returns
+        -------
+        dict[str, t.Any]
+            The arguments supplied to the tool call.
+        """
         return self.record.parameters
 
 
@@ -138,6 +164,21 @@ class CoreMiddleware(ComponentBase[MiddlewareConfig]):
 
     # -------- MODEL -----------------------------------------------------------
     async def on_model_request(self, mw: MiddlewareContext, request: ModelRequest) -> ModelRequest:
+        """
+        Inspect or modify a model request before it is sent.
+
+        Parameters
+        ----------
+        mw : MiddlewareContext
+            Middleware context for the active run.
+        request : ModelRequest
+            Request being passed through the middleware hook.
+
+        Returns
+        -------
+        ModelRequest
+            The request to send to the model.
+        """
         return request
 
     async def on_model_chunk(
@@ -149,6 +190,23 @@ class CoreMiddleware(ComponentBase[MiddlewareConfig]):
     async def on_model_response(
         self, mw: MiddlewareContext, request: ModelRequest, result: ChatCompletionResult,
     ) -> ChatCompletionResult:
+        """
+        Inspect or modify a completed model response.
+
+        Parameters
+        ----------
+        mw : MiddlewareContext
+            Middleware context for the active run.
+        request : ModelRequest
+            Request being passed through the middleware hook.
+        result : ChatCompletionResult
+            Result produced by the preceding operation.
+
+        Returns
+        -------
+        ChatCompletionResult
+            The normalized model response.
+        """
         return result
 
     async def on_model_error(
@@ -169,15 +227,53 @@ class CoreMiddleware(ComponentBase[MiddlewareConfig]):
     async def on_tool_response(
         self, mw: MiddlewareContext, request: ToolRequest, result: ToolResult,
     ) -> ToolResult:
+        """
+        Inspect or modify the result returned by a tool.
+
+        Parameters
+        ----------
+        mw : MiddlewareContext
+            Middleware context for the active run.
+        request : ToolRequest
+            Request being passed through the middleware hook.
+        result : ToolResult
+            Result produced by the preceding operation.
+
+        Returns
+        -------
+        ToolResult
+            The result to return from the tool call.
+        """
         return result
 
     # -------- SERIALIZATION -----------------------------------------------------------
     def _to_config(self) -> BaseModel:
+        """
+        Return the middleware settings for serialization.
+
+        Returns
+        -------
+        BaseModel
+            The middleware configuration model.
+        """
         schema = self.component_schema
         return schema(**{name: getattr(self, name) for name in schema.model_fields})
 
     @classmethod
     def _from_config(cls, config: BaseModel) -> t.Self:
+        """
+        Create middleware from its validated configuration.
+
+        Parameters
+        ----------
+        config : BaseModel
+            Model or component configuration.
+
+        Returns
+        -------
+        t.Self
+            The middleware instance reconstructed from its configuration.
+        """
         return cls(**config.model_dump())
 
 

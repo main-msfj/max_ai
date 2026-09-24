@@ -26,6 +26,18 @@ class MongoDBQuotaStore(CoreQuotaStore):
         uri_env: str = "MONGODB_URI",
         server_selection_timeout_ms: int = 5000,
     ) -> None:
+        """Initialize ``MongoDBQuotaStore``.
+
+Parameters
+----------
+database : str
+    Value supplied for ``database``.
+collection : str
+    Value supplied for ``collection``.
+uri_env : str
+    Value supplied for ``uri_env``.
+server_selection_timeout_ms : int
+    Value supplied for ``server_selection_timeout_ms``."""
         super().__init__()
         self.config = MongoDBQuotaStoreConfig(
             database=database, collection=collection, uri_env=uri_env,
@@ -36,14 +48,22 @@ class MongoDBQuotaStore(CoreQuotaStore):
         self._collection: t.Any = None
 
     def _to_config(self) -> MongoDBQuotaStoreConfig:
+        """Build the serializable configuration for ``MongoDBQuotaStore``."""
         return self.config.model_copy()
 
     @classmethod
     def _from_config(cls, config: MongoDBQuotaStoreConfig) -> MongoDBQuotaStore:
+        """Create an instance from its configuration for ``MongoDBQuotaStore``.
+
+Parameters
+----------
+config : MongoDBQuotaStoreConfig
+    Value supplied for ``config``."""
         return cls(**config.model_dump())
 
     # -------- CONNECTION -----------------------------------------------------------
     async def connect(self) -> None:
+        """Open required resources for ``MongoDBQuotaStore``."""
         async with self._mongo_lock:
             if self._mongo_client is not None:
                 return
@@ -69,6 +89,7 @@ class MongoDBQuotaStore(CoreQuotaStore):
             self._mongo_client, self._collection = client, collection
 
     async def disconnect(self) -> None:
+        """Release resources held for ``MongoDBQuotaStore``."""
         async with self._mongo_lock:
             client, self._mongo_client, self._collection = self._mongo_client, None, None
             if client is not None:
@@ -76,10 +97,28 @@ class MongoDBQuotaStore(CoreQuotaStore):
 
     # -------- BACKEND HOOKS -----------------------------------------------------------
     async def _usage(self, user_id: str, period_key: str) -> QuotaUsage:
+        """Perform the internal ``usage`` operation for ``MongoDBQuotaStore``.
+
+Parameters
+----------
+user_id : str
+    Value supplied for ``user_id``.
+period_key : str
+    Value supplied for ``period_key``."""
         doc = await self._collection.find_one({"user_id": user_id, "period": period_key})
         return _usage(doc)
 
     async def _add(self, user_id: str, period_key: str, delta: QuotaUsage) -> QuotaUsage:
+        """Perform the internal ``add`` operation for ``MongoDBQuotaStore``.
+
+Parameters
+----------
+user_id : str
+    Value supplied for ``user_id``.
+period_key : str
+    Value supplied for ``period_key``.
+delta : QuotaUsage
+    Value supplied for ``delta``."""
         from pymongo import ReturnDocument
 
         doc = await self._collection.find_one_and_update(
@@ -91,6 +130,12 @@ class MongoDBQuotaStore(CoreQuotaStore):
 
 
 def _usage(doc: dict[str, t.Any] | None) -> QuotaUsage:
+    """Perform the internal ``usage`` operation.
+
+Parameters
+----------
+doc : dict[str, t.Any] | None
+    Value supplied for ``doc``."""
     if not doc:
         return QuotaUsage()
     return QuotaUsage(tokens=doc.get("tokens", 0), cost_usd=doc.get("cost_usd", 0.0), tasks=doc.get("tasks", 0))
