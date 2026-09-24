@@ -8,6 +8,7 @@ import threading
 PORTS = {
     8081: ("mongo-express", 8081),
     3000: ("langfuse-web", 3000),
+    9001: ("minio", 9001),  # MinIO Console (the agents' files)
 }
 
 
