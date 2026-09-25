@@ -37,6 +37,14 @@ class PostgresMemory(CoreMemoryRegistry):
         )
         return [MemoryRecord(category=row[0], memory=row[1], updated=row[2]) for row in await cursor.fetchall()]
 
+    async def _read_user(self) -> list[MemorySearchResult]:
+        cursor = await self.connection.execute(
+            "SELECT session_id, category, memory, updated_at FROM example_memory WHERE user_id = %s",
+            (self.user_id,),
+        )
+        return [MemorySearchResult(session_id=row[0], category=row[1], memory=row[2], updated=row[3])
+                for row in await cursor.fetchall()]
+
     async def _write_memory(self, record: MemoryRecord) -> bool:
         cursor = await self.connection.execute(
             "SELECT 1 FROM example_memory WHERE user_id = %s AND session_id = %s AND category = %s",

@@ -4,7 +4,9 @@ A registry is bound to one user and one session. Backends store one entry per
 category in that session (for example in a session JSON/YAML file). Updating a
 category replaces its whole memory; there is no semantic merge or deduplication.
 
-Cross-session retrieval is delegated to the backend. Embeddings, indexing and
+The prompt context covers every session of the user: a category written in the
+current session wins, otherwise the newest one. Search across sessions is
+delegated to the backend. Embeddings, indexing and
 compaction triggers do not belong to this contract. Saving a memory never waits
 for compaction or requires indexing.
 """
@@ -158,6 +160,14 @@ class CoreMemoryRegistry(CoreAgentCapabilities[BaseModel], ABC):
         """Read all categories for this user/session, without a date filter."""
         ...
 
+    async def _read_user(self) -> list[MemorySearchResult]:
+        """Read every category of this user, in all sessions, without a date filter.
+
+        Backends should override it; the default only sees the current session.
+        """
+        return [MemorySearchResult(**record.model_dump(), session_id=self.session_id)
+                for record in await self._read_session()]
+
     @abstractmethod
     async def _write_memory(self, record: MemoryRecord) -> bool:
         """Atomically create or replace a category in this user/session.
@@ -186,13 +196,21 @@ class CoreMemoryRegistry(CoreAgentCapabilities[BaseModel], ABC):
         ...
 
     async def get_context(self) -> list[MemoryRecord]:
-        """Current-session memories, newest first, within ``context_days``.
+        """The user's memories from all sessions, newest first, within ``context_days``.
 
+        One entry per category: the current session's, otherwise the newest.
         None disables the date filter. Filtering never deletes stored memories.
         """
         self._require_scope()
         await self._ensure_connected()
-        records = await self._read_session()
+        chosen: dict[str, MemorySearchResult] = {}
+        for record in await self._read_user():
+            kept = chosen.get(record.category)
+            if kept is None or (kept.session_id != self.session_id and (
+                    record.session_id == self.session_id or record.updated > kept.updated)):
+                chosen[record.category] = record
+        records = [MemoryRecord(category=r.category, memory=r.memory, updated=r.updated)
+                   for r in chosen.values()]
         if self.context_days is not None:
             cutoff = datetime.now(UTC) - timedelta(days=self.context_days)
             records = [record for record in records if record.updated >= cutoff]

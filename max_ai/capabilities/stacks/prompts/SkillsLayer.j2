@@ -20,11 +20,11 @@ When a user's request matches one of the skills above:
 2. Prepare the environment BEFORE running anything from the skill:
    - List the packages and command-line tools the skill needs (imports
      in its scripts, packages it names, commands it calls).
-   - Check which are already available in one command, for example
-     `python3 -c "import openpyxl, pandas"` or `command -v node`.
-   - Install only what is missing, in one step, as the execution
-     environment allows (for example `pip install --user openpyxl`).
-     Never reinstall or upgrade what is already there.
+   - Check and install in ONE command, so a missing package is not a
+     failed step, for example
+     `python3 -c "import openpyxl, pandas" 2>/dev/null || pip install --user openpyxl pandas`.
+     Install only what is missing, as the execution environment allows;
+     never reinstall or upgrade what is already there.
    - If something cannot be installed, stop and tell the user what is
      missing instead of improvising a replacement.
 3. Follow the skill's workflow, using `bash` and other tools as it

@@ -71,6 +71,7 @@ COMMANDS = {
     "/help": "show commands and shortcuts",
     "/skills": "list the agent's skills",
     "/tools": "list the tools the agent can call",
+    "/mcp": "list the MCP servers with their tools and resources",
     "/resume": "pick a saved conversation and continue it",
     "/new": "start a new conversation (the current one stays saved)",
     "/session": "show this conversation's id and how to resume it",
@@ -219,6 +220,16 @@ class MaxAIApp(App[None]):
                 self._skills = list(await skills.get_skills())
             except Exception as error:  # noqa: BLE001 — a bad skill dir must not kill the UI
                 await self._write_system(f"Could not load skills: {error}", style="#f87171")
+        servers = self._mcp_servers()
+        if servers:
+            line = Text("MCP ", style="bold")
+            line.append(" · ".join(
+                f"{sid} ({len(info['tools'])} tools"
+                + (f", {len(info['resources'])} resources" if info["resources"] else "") + ")"
+                for sid, info in servers.items()
+            ), style="#a1a1aa")
+            line.append("  /mcp for details", style="#71717a")
+            await self._mount(NoteLine(line))
         if self.store is not None:
             await self._open_session_on_start()
         client = getattr(self.agent, "client", None)
@@ -232,6 +243,23 @@ class MaxAIApp(App[None]):
         self._refresh_usage()
         self._refresh_status()
         self.set_interval(0.12, self._tick)
+
+    def _mcp_servers(self) -> dict[str, dict[str, list]]:
+        """server_id → its tools and resources, from the agent's connected MCP tools."""
+        servers: dict[str, dict[str, list]] = {}
+        for tool in getattr(self.agent, "tools", []):
+            sid = getattr(tool, "server_id", None)
+            if sid is None:
+                continue
+            info = servers.setdefault(sid, {"tools": [], "resources": []})
+            if hasattr(tool, "available_resources"):
+                info["resources"] += [
+                    str(getattr(r, "uri", None) or getattr(r, "uri_template", ""))
+                    for r in [*tool.available_resources, *tool.resource_templates]
+                ]
+            else:
+                info["tools"].append(tool)
+        return servers
 
     @property
     def project_root(self) -> Path:
@@ -555,6 +583,21 @@ class MaxAIApp(App[None]):
                     body.append("asks approval · ", style="#fbbf24")
                 body.append(f"{first}\n", style="#a1a1aa")
             await self._mount(NoteLine(body))
+        elif command == "/mcp":
+            servers = self._mcp_servers()
+            if not servers:
+                await self._write_system("This agent has no MCP servers.")
+                return
+            body = Text("MCP servers\n", style="bold")
+            for sid, info in servers.items():
+                body.append(f"  {sid}\n", style=f"bold {ACCENT}")
+                for tool in info["tools"]:
+                    ask = "ask" in str(getattr(getattr(tool, "approval_mode", None), "value", "")).lower()
+                    body.append(f"    {tool.name.removeprefix(sid + '_'):<26}", style="bold")
+                    body.append("asks approval\n" if ask else "auto\n", style="#fbbf24" if ask else "#71717a")
+                for uri in info["resources"]:
+                    body.append(f"    {uri}\n", style="#a1a1aa")
+            await self._mount(NoteLine(body))
         elif command in ("/new", "/clear"):
             await self._switch_to(self._new_context())
             await self._write_system(f"New conversation · session {self.context.session_id}.")
@@ -803,9 +846,13 @@ class MaxAIApp(App[None]):
             color = "#f87171" if response.finish_reason in ("error", "cancelled") else "#fbbf24"
             line = Text(f"■ Stopped after {elapsed}s", style=f"bold {color}")
         line.append(f" · {response.finish_reason}", style="#a1a1aa")
+        if closed and decision is not None and not warn:
+            fixes = len(self._gate_retries)
+            line.append(" · gate ✓", style="#4ade80")
+            if fixes:
+                line.append(f" after {fixes} fix{'es' if fixes > 1 else ''}", style="#a1a1aa")
         if self._gate_retries and self.verbose:
-            count = len(self._gate_retries)
-            line.append(f" · gate retried {count}×: ", style="#fbbf24")
+            line.append(" · gate asked: ", style="#fbbf24")
             line.append(" | ".join(self._gate_retries)[:200], style="#a1a1aa")
         if response.stop_message:
             line.append(f" · {response.stop_message}", style="#a1a1aa")

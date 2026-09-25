@@ -25,12 +25,12 @@ def connected(registry, documents=()):
     return collection, cursor
 
 
-async def test_memory_queries_always_scope_user_and_session():
+async def test_memory_queries_always_scope_the_user():
     memory = MongoDBMemoryRegistry("alice", "current", search_limit=3, embedding=None)
     doc = dict(category="project", memory="python", updated=datetime.now(UTC), session_id="old")
     collection, cursor = connected(memory, [doc])
     assert (await memory.get_context())[0].memory == "python"
-    assert collection.find.call_args.args[0] == {"user_id": "alice", "session_id": "current"}
+    assert collection.find.call_args.args[0] == {"user_id": "alice"}
     result = await memory.search_memory("python")
     assert result[0].session_id == "old"
     assert collection.find.call_args.args[0] == {

@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
 
 from ....base.executor import ExecutionSession
 from ....core.executor.process import run_process
-from ....core.executor.remote import DEFAULT_FRAMEWORK, RemoteExecutor
+from ....core.executor.remote import DEFAULT_FRAMEWORK, FRAMEWORK_PYTHON, RemoteExecutor
+from ..modal.sync import apply_snapshot, snapshot
 from ._model import DockerExecutorConfig
 
 _RUNTIME_DOCKERFILE = Path(__file__).with_name("Dockerfile")
@@ -32,6 +34,7 @@ class _Container:
     name: str
     started: bool = False
     may_exist: bool = False
+    baseline: dict[str, str] = field(default_factory=dict)  # last synced state
 
 
 class DockerExecutor(RemoteExecutor):
@@ -41,7 +44,9 @@ class DockerExecutor(RemoteExecutor):
     by domain, so ``"packages"`` and ``allow_list`` are not supported here;
     use ModalExecutor for that.
 
-    The image is built on first use and cached by Docker: max_ai's runtime
+    The workspace is copied into the container and back (no bind mount), so
+    it also works when Docker runs elsewhere (Docker-outside-of-Docker, a
+    remote daemon). The image is built once and cached by Docker: max_ai's runtime
     Dockerfile by default, or your ``image``/``dockerfile`` with max_ai, the
     agent user and /workspaces added on top, so you never install max_ai.
     """
@@ -91,6 +96,9 @@ max_output_bytes : int
         if ours:
             text += " Python 3.11, uv, Node.js/npm, git and ripgrep are available."
         return text
+
+    async def prepare(self) -> None:
+        await self._ensure_image()
 
     async def _ensure_image(self) -> str:
         """Build the runtime image once (Docker caches it by tag) and return its tag."""
@@ -192,15 +200,14 @@ session
 root
     Value supplied for ``root``."""
         h = session.handle
-        if "," in str(root):
-            raise ValueError("Docker workspace paths cannot contain commas")
         args = ["run", "--detach", "--pull=never", "--name", h.name, "--user", f"{_UID}:{_UID}",
                 "--network=none" if self.network == "none" else "--network=bridge",
                 "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
                 "--init", "--pids-limit=128", "--memory=512m", "--cpus=1",
-                "--tmpfs", "/tmp:rw,nosuid,nodev,size=64m", "--mount",
-                f"type=bind,src={root},dst={session.workspace_path}",
-                "--workdir", session.workspace_path, "--env", f"WORKSPACE={session.workspace_path}",
+                "--tmpfs", "/tmp:rw,nosuid,nodev,size=64m",
+                # An anonymous volume: no host path, removed with the container.
+                "--mount", "type=volume,dst=/workspaces",
+                "--workdir", "/workspaces", "--env", f"WORKSPACE={session.workspace_path}",
                 await self._ensure_image(), "sleep", "infinity"]
         h.may_exist = True
         try:
@@ -208,7 +215,9 @@ root
             if result.exit_code != 0:
                 raise RuntimeError(result.stderr or "Docker startup failed")
             h.started = True
-            verify = await self._docker_exec(session, ["sh", "-c", "test \"$(id -u)\" -ne 0 && test -w \"$WORKSPACE\""])
+            h.baseline = {}
+            verify = await self._docker_exec(session, ["sh", "-c", 'test "$(id -u)" -ne 0 && mkdir -p "$WORKSPACE" && test -w "$WORKSPACE"'],
+                                             workdir="/workspaces")
             if verify.exit_code != 0:
                 raise RuntimeError("Docker image user must be non-root and workspace-writable")
         except BaseException:
@@ -228,8 +237,10 @@ kwargs
     Value supplied for ``kwargs``."""
         stdin = kwargs.get("stdin")
         interactive = ["-i"] if stdin is not None else []
-        return await run_process(["docker", "exec", *interactive, "--workdir", session.workspace_path,
-                                  session.handle.name, *argv], max_output_bytes=self.max_output_bytes, **kwargs)
+        workdir = kwargs.pop("workdir", session.workspace_path)
+        kwargs.setdefault("max_output_bytes", self.max_output_bytes)
+        return await run_process(["docker", "exec", *interactive, "--workdir", workdir,
+                                  session.handle.name, *argv], **kwargs)
 
     async def execute_argv(self, session, argv, *, stdin=None, timeout=60, cancellation_token=None):
         """Run an argument vector for ``DockerExecutor``.
@@ -250,7 +261,7 @@ cancellation_token
         async with self._locks[session.id]:
             try:
                 if not session.handle.started:
-                    await self._start(session, session.workspace.materialize(session.user_id, session.conversation_id).root)
+                    await self._start(session, None)
                 result = await self._docker_exec(session, list(argv), stdin=stdin, timeout=timeout,
                                                  cancellation_token=cancellation_token)
                 if result.timed_out:
@@ -282,15 +293,47 @@ cancellation_token
                                        timeout=timeout, cancellation_token=cancellation_token)
 
     async def sync(self, session, direction):
-        """Perform the ``sync`` operation for ``DockerExecutor``.
-
-Parameters
-----------
-session
-    Value supplied for ``session``.
-direction
-    Value supplied for ``direction``."""
+        """Copy the workspace into the container ("to_environment") or back
+        ("to_workspace"), only what changed since the last sync."""
         self._check(session)
+        if direction not in {"to_environment", "to_workspace"}:
+            raise ValueError("Unknown synchronization direction")
+        async with self._locks[session.id]:
+            h = session.handle
+            if not h.started:
+                if direction == "to_workspace":
+                    return  # nothing ran: the container holds no changes
+                await self._start(session, None)
+            root = session.workspace.materialize(session.user_id, session.conversation_id).root
+            command = [FRAMEWORK_PYTHON, "-m", "max_ai.capabilities.executor.modal.sync"]
+            result = await self._docker_exec(session, [*command, "snapshot", session.workspace_path],
+                                             timeout=120, max_output_bytes=24 << 20)
+            if result.exit_code != 0 or result.timed_out:
+                raise RuntimeError(result.stderr or "Workspace snapshot failed")
+            local, remote = snapshot(root), json.loads(result.stdout)
+            source, destination = (local, remote) if direction == "to_environment" else (remote, local)
+            desired = dict(destination)
+            for name in set(source) | set(h.baseline):
+                before, incoming, current = h.baseline.get(name), source.get(name), destination.get(name)
+                if incoming == before:
+                    continue
+                if current != before and current != incoming:
+                    raise RuntimeError(f"Workspace sync conflict: {name}")
+                if incoming is None:
+                    desired.pop(name, None)
+                else:
+                    desired[name] = incoming
+            if desired != destination:
+                if direction == "to_environment":
+                    applied = await self._docker_exec(
+                        session, [*command, "apply", session.workspace_path],
+                        stdin=json.dumps({"desired": desired, "expected": destination}), timeout=120,
+                    )
+                    if applied.exit_code != 0 or applied.timed_out:
+                        raise RuntimeError(applied.stderr or "Workspace upload failed")
+                else:
+                    apply_snapshot(root, desired, destination)
+            h.baseline = {name: data for name, data in desired.items()}
 
     async def disconnect(self, session):
         """Release resources held for ``DockerExecutor``.
@@ -310,7 +353,7 @@ handle
     Value supplied for ``handle``."""
         if not handle.may_exist:
             return
-        result = await run_process(["docker", "rm", "--force", handle.name], timeout=15,
+        result = await run_process(["docker", "rm", "--force", "--volumes", handle.name], timeout=15,
                                    max_output_bytes=self.max_output_bytes)
         if result.exit_code != 0 and "No such container" not in result.stderr:
             raise RuntimeError(result.stderr or "Docker cleanup failed")

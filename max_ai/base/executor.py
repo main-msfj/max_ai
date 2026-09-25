@@ -59,6 +59,10 @@ class ExecutorBase(ComponentBase[BaseModel], ABC):
 
     component_type = "executor"
 
+    async def prepare(self) -> None:
+        """Slow one-time setup (building an image), run by the Agent before
+        any tool so it never counts against a tool's timeout."""
+
     def describe_environment(self) -> str | None:
         """What the model should know about where its commands run (network,
         preinstalled packages), or ``None``. The Agent reads it once, when it

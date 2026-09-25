@@ -79,6 +79,9 @@ async def test_the_prompt_says_where_commands_run(tmp_path):
     assert "isolated Docker container as a non-root user" in await policy_prompt(docker)
     assert "It has internet access." in await policy_prompt(docker)
 
+    from datetime import UTC, datetime
+    assert f"Today is {datetime.now(UTC).date().isoformat()} (UTC)." in text
+
     # The local executor runs on the host: nothing to add.
     assert "Execution environment" not in await policy_prompt(make_agent(tmp_path, RecordingClient()))
 
@@ -95,8 +98,10 @@ async def test_memory_tools_execute_and_snapshot_refreshes(tmp_path):
         await agent.run("recall", run_context=ctx)
         assert "First line\nSecond line" in client.prompts[-1].rendered_layers[MemoryLayer]
         assert agent._registry.runs_on_host("create_or_update")
-        # Another session gets its own, empty memory: never "s"'s memories.
+        # The user's other sessions see it too; other users never do.
         await agent.run("other session", run_context=RunContext(user_id="u", session_id="other"))
+        assert "First line" in client.prompts[-1].rendered_layers[MemoryLayer]
+        await agent.run("other user", run_context=RunContext(user_id="someone", session_id="s"))
         assert "First line" not in client.prompts[-1].rendered_layers[MemoryLayer]
 
 

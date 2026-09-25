@@ -35,4 +35,4 @@ ai-harness-research/
 
 # Local state produced by deployment examples
 example-for-deployment/local/
-example-for-deployment/data/
+example-for-deployment/data/outbox/

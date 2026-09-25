@@ -1,0 +1,173 @@
+[
+  {
+    "content": "Acme AI Vacation Policy — Entitlement. Full-time employees receive paid vacation days each calendar year based on their completed years of service on January 1: less than 1 year: 10 days (prorated by months worked in the first year); 1 to less than 3 years: 12 days; 3 to less than 5 years: 15 days; 5 to less than 10 years: 18 days; 10 or more years: 20 days. Part-time employees receive days in proportion to their contracted hours.",
+    "tokens": 113,
+    "metadata": {
+      "company": "Acme AI",
+      "policy": "vacation",
+      "section": "entitlement"
+    }
+  },
+  {
+    "content": "Acme AI Vacation Policy — Counting days. Vacation is counted in working days, Monday to Friday. Weekends and the official public holidays of the employee's office country do not count as vacation days. The public holiday calendar is published in the HR system. Employees may take half days (0.5) as well as full days.",
+    "tokens": 67,
+    "metadata": {
+      "company": "Acme AI",
+      "policy": "vacation",
+      "section": "working_days"
+    }
+  },
+  {
+    "content": "Acme AI Vacation Policy — How to request. Submit every vacation request in the HR system with the start date, the end date and an optional note. Requests of 1 to 3 working days need at least 5 working days of notice; requests of 4 or more working days need at least 15 working days of notice. The request goes to the employee's direct manager, who approves or rejects it within 3 working days. Vacation is only confirmed once it is approved.",
+    "tokens": 98,
+    "metadata": {
+      "company": "Acme AI",
+      "policy": "vacation",
+      "section": "how_to_request"
+    }
+  },
+  {
+    "content": "Acme AI Vacation Policy — Team coverage. At most 30% of a team may be on vacation on the same day. Before submitting, employees should check the team timeline in the HR system; a manager may reject a request that exceeds this limit. Overlapping requests are reviewed in the order they were submitted.",
+    "tokens": 63,
+    "metadata": {
+      "company": "Acme AI",
+      "policy": "vacation",
+      "section": "team_coverage"
+    }
+  },
+  {
+    "content": "Acme AI Vacation Policy — Blackout periods. Engineering teams cannot take vacation during the last 5 working days of each quarter (release freeze), unless the VP of Engineering approves an exception in writing. December 24 to January 1 is not a blackout period.",
+    "tokens": 53,
+    "metadata": {
+      "company": "Acme AI",
+      "policy": "vacation",
+      "section": "blackout"
+    }
+  },
+  {
+    "content": "Acme AI Vacation Policy — Carry-over. Up to 5 unused vacation days can be carried over to the next year and must be used before March 31 of that year; carried-over days not used by then expire. Unused days above 5 expire on December 31 and are not paid out, except at the end of employment.",
+    "tokens": 69,
+    "metadata": {
+      "company": "Acme AI",
+      "policy": "vacation",
+      "section": "carry_over"
+    }
+  },
+  {
+    "content": "Acme AI Vacation Policy — Changes and cancellations. An approved request can be cancelled or shortened in the HR system at any time before it starts, and the days return to the balance. Changes after the vacation has started require the manager's approval. Extending a vacation is a new request and follows the normal notice rules.",
+    "tokens": 64,
+    "metadata": {
+      "company": "Acme AI",
+      "policy": "vacation",
+      "section": "cancel_change"
+    }
+  },
+  {
+    "content": "Acme AI Vacation Policy — Balance. The HR system shows each employee's balance: days granted this year, days carried over, days already taken, days pending approval, and days available. Available days = granted + carried over − taken − pending. Employees cannot request more days than they have available; unpaid leave is a separate request.",
+    "tokens": 67,
+    "metadata": {
+      "company": "Acme AI",
+      "policy": "vacation",
+      "section": "balance"
+    }
+  },
+  {
+    "content": "Acme AI Parking Policy — Overview. The Taipei office garage (basement levels B1 and B2) has 40 employee parking spaces, 6 of them with EV chargers (B1-01 to B1-06), 4 accessible spaces next to the elevator (B1-07 to B1-10), and 4 visitor spaces. Parking is free for employees but must be reserved.",
+    "tokens": 82,
+    "metadata": {
+      "company": "Acme AI",
+      "policy": "parking",
+      "section": "overview"
+    }
+  },
+  {
+    "content": "Acme AI Parking Policy — Reservations. Employees reserve a space for a specific day in the HR system, up to 14 days in advance and for at most 3 days per week. One reservation per employee per day. A reservation is confirmed immediately if the space is free. Reservations can be cancelled until 9:00 on the same day.",
+    "tokens": 70,
+    "metadata": {
+      "company": "Acme AI",
+      "policy": "parking",
+      "section": "reservation"
+    }
+  },
+  {
+    "content": "Acme AI Parking Policy — EV charging spaces. Spaces B1-01 to B1-06 are reserved for electric vehicles that are actively charging. Charging sessions are limited to 4 hours; after that the car must be moved to a regular space if one is available. Charging is free for employees.",
+    "tokens": 61,
+    "metadata": {
+      "company": "Acme AI",
+      "policy": "parking",
+      "section": "ev_charging"
+    }
+  },
+  {
+    "content": "Acme AI Parking Policy — Accessible spaces. Spaces B1-07 to B1-10 are kept for employees and visitors with an accessibility permit registered with HR. Unused accessible spaces are released to all employees at 10:00 each day.",
+    "tokens": 50,
+    "metadata": {
+      "company": "Acme AI",
+      "policy": "parking",
+      "section": "accessible"
+    }
+  },
+  {
+    "content": "Acme AI Parking Policy — No-shows and visitors. A reservation not checked in by 10:30 is released automatically. Three no-shows in a calendar month suspend reservations for the rest of that month. Visitor spaces are booked by the host employee in the HR system, at least 1 working day before the visit.",
+    "tokens": 66,
+    "metadata": {
+      "company": "Acme AI",
+      "policy": "parking",
+      "section": "no_show_visitors"
+    }
+  },
+  {
+    "content": "Acme AI Sick Leave Policy. Employees have up to 30 days of paid sick leave per year. Notify your manager before your usual start time on the first day of absence and record the days in the HR system. A doctor's note is required for absences longer than 3 consecutive working days. Sick leave does not reduce the vacation balance.",
+    "tokens": 69,
+    "metadata": {
+      "company": "Acme AI",
+      "policy": "sick_leave",
+      "section": "general"
+    }
+  },
+  {
+    "content": "Acme AI Remote Work Policy. Employees work from the office at least 2 days per week, agreed with their manager, and can work remotely the other days from their country of employment. Working from another country for more than 10 working days per year needs HR approval in advance, for tax and legal reasons.",
+    "tokens": 63,
+    "metadata": {
+      "company": "Acme AI",
+      "policy": "remote_work",
+      "section": "general"
+    }
+  },
+  {
+    "content": "Acme AI Parental Leave Policy. Birth parents receive 16 weeks of fully paid parental leave and other parents 8 weeks, to be taken within 12 months of the birth or adoption. Request it in the HR system at least 30 days before it starts when possible. Parental leave does not reduce the vacation balance.",
+    "tokens": 66,
+    "metadata": {
+      "company": "Acme AI",
+      "policy": "parental_leave",
+      "section": "general"
+    }
+  },
+  {
+    "content": "Acme AI Expense Policy. Work-related expenses are reimbursed when submitted in the HR system with a receipt within 30 days. Meals during business travel are covered up to USD 60 per day. Flights of more than 6 hours may be booked in premium economy. Expenses above USD 500 need the manager's approval before purchase.",
+    "tokens": 67,
+    "metadata": {
+      "company": "Acme AI",
+      "policy": "expenses",
+      "section": "general"
+    }
+  },
+  {
+    "content": "Acme AI Public Holidays. Each office follows the official public holidays of its country, published every year in the HR system. When a public holiday falls on a weekend, the replacement day announced by the government applies. Employees working remotely follow the holidays of the office they belong to.",
+    "tokens": 56,
+    "metadata": {
+      "company": "Acme AI",
+      "policy": "public_holidays",
+      "section": "general"
+    }
+  },
+  {
+    "content": "Acme AI HR Contact. For questions not covered by these policies, write to hr@acme-ai.example or open a ticket in the HR system. HR answers within 2 working days.",
+    "tokens": 39,
+    "metadata": {
+      "company": "Acme AI",
+      "policy": "contact",
+      "section": "general"
+    }
+  }
+]

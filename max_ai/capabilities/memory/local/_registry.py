@@ -197,6 +197,15 @@ store : dict[str, MemoryRecord]
         await self._ensure_connected()
         return list(self._load_store(self._session_file(self.session_id)).values())
 
+    async def _read_user(self) -> list[MemorySearchResult]:
+        """Every session file of this user."""
+        await self._ensure_connected()
+        return [
+            MemorySearchResult(**record.model_dump(), session_id=path.stem)
+            for path in sorted(self._user_dir.glob("*.json"))
+            for record in self._load_store(path).values()
+        ]
+
     async def _write_memory(self, record: MemoryRecord) -> bool:
         """Perform the internal ``write memory`` operation for ``LocalMemoryRegistry``.
 

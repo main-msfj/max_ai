@@ -104,6 +104,15 @@ ready : asyncio.Future
                         result = await getattr(client, method)(*args)
                         if not future.done():
                             future.set_result(result)
+                    except asyncio.CancelledError as exc:
+                        if asyncio.current_task().cancelling():
+                            if not future.done():
+                                future.set_exception(exc)
+                            raise
+                        # Cancelled inside the client (the transport failed), not by us.
+                        if not future.done():
+                            future.set_exception(RuntimeError(
+                                "The MCP server connection interrupted the request; try again."))
                     except BaseException as exc:
                         if not future.done():
                             future.set_exception(exc)

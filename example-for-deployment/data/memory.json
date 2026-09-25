@@ -1,0 +1,27 @@
+{
+  "identity": {
+    "category": "identity",
+    "memory": "The user is Marvin Garcia, employee ID 0123456789, a Software Engineer on the Agents team (Engineering) at Acme AI. Work email: marvin.garcia@acme-ai.example.",
+    "updated": "2026-09-25T00:00:00Z"
+  },
+  "employment": {
+    "category": "employment",
+    "memory": "Marvin joined Acme AI on 2023-03-01, works full time, and reports to Lin Mei-Hua, Engineering Manager of the Agents team.",
+    "updated": "2026-09-25T00:00:00Z"
+  },
+  "location": {
+    "category": "location",
+    "memory": "Marvin lives in Taipei, Taiwan (time zone Asia/Taipei) and works from the Taipei office on Tuesdays and Thursdays, remotely the other days.",
+    "updated": "2026-09-25T00:00:00Z"
+  },
+  "commute": {
+    "category": "commute",
+    "memory": "Marvin drives an electric car to the office and prefers an EV charging spot, or otherwise a spot close to the elevator.",
+    "updated": "2026-09-25T00:00:00Z"
+  },
+  "preferences": {
+    "category": "preferences",
+    "memory": "Marvin prefers short, direct answers, dates written as YYYY-MM-DD, and confirmation emails in English.",
+    "updated": "2026-09-25T00:00:00Z"
+  }
+}
