@@ -1,30 +1,50 @@
-# Publicación de la librería en PyPI desde GitHub
+# Publicación de la librería desde Azure Pipelines
 
-El workflow activo está en [`.github/workflows/publish-library.yml`](../../.github/workflows/publish-library.yml). GitHub Actions construye y publica el paquete en **PyPI**; Azure Artifacts ya no interviene. PyPI es el índice que usan `pip` y `uv` por defecto, de modo que, tras la primera publicación, los usuarios podrán ejecutar:
-
-```sh
-pip install maxai
-uv add maxai
-```
+El pipeline [`azure-pipelines.yml`](azure-pipelines.yml) prueba y construye `maxai`
+y publica wheel y sdist en **PyPI**. Los usuarios instalan el paquete con
+`pip install maxai` o `uv add maxai`.
 
 ## Configuración inicial
 
-1. En GitHub, crea el environment `pypi` para `main-msfj/max_ai`. Puedes limitarlo a tags de release protegidos.
-2. En PyPI, registra un [Trusted Publisher](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/) para el proyecto `maxai`. Si aún no existe, crea un *pending publisher*. Usa estos valores exactos: owner `main-msfj`, repository `max_ai`, workflow `publish-library.yml`, environment `pypi`.
-3. Asegúrate de que `pyproject.toml`, `LICENSE` y `NOTICE` estén incluidos en el commit que se etiquetará.
+1. Sube el repositorio completo a Azure Repos, incluidos `deployment/`,
+   `pyproject.toml`, `LICENSE`, `NOTICE`, el código y los tests.
+2. En Azure DevOps, abre **Pipelines → New pipeline → Azure Repos Git**,
+   selecciona el repositorio y **Existing Azure Pipelines YAML file**.
+3. Selecciona `/deployment/library/azure-pipelines.yml` en `main` y guarda el
+   pipeline con un nombre como `maxai-library`.
+4. En PyPI, crea un API token para un proyecto que controles. Para la primera
+   publicación de un proyecto nuevo, usa un token de cuenta; después sustitúyelo
+   por uno limitado al proyecto `maxai`. El nombre debe estar disponible o debes
+   tener permisos sobre el proyecto existente.
+5. En las variables del pipeline, crea `PYPI_API_TOKEN`, pega el token y marca
+   **Keep this value secret**. No guardes el token en Git.
 
-La publicación usa OIDC de GitHub y [la acción oficial de PyPA](https://docs.pypi.org/trusted-publishers/using-a-publisher/). No requiere guardar un token de PyPI en GitHub.
+## Publicar una versión
 
-## Cuándo publica
+Actualiza `[project].version` en `pyproject.toml`, confirma los cambios y sube
+el commit. Después crea y sube el tag correspondiente al remoto de Azure Repos:
 
-Un push de un tag `v*` dispara el workflow. También se puede ejecutar manualmente desde **Actions → Publish Python library to PyPI**, indicando un tag existente en `tag`. El tag debe coincidir exactamente con `v` + `[project].version` de `pyproject.toml`; por ejemplo, la versión `0.1.0` usa `v0.1.0`. PyPI no permite volver a subir la misma versión: aumenta `[project].version` para cada release.
+```sh
+# Ejemplo para version = "0.1.0"; azure es el nombre de tu remoto de Azure Repos.
+git tag v0.1.0
+git push azure v0.1.0
+```
 
-El job de build instala dependencias, ejecuta lint y tests, genera wheel y sdist, y verifica nombres y metadatos. Solo después, un job separado con permiso OIDC (`id-token: write`) publica los dos archivos en PyPI.
+Solo los tags `v*` disparan la publicación automática. El tag debe coincidir
+exactamente con `v` + la versión del paquete. PyPI no permite reutilizar una
+versión publicada. El YAML debe existir en el commit etiquetado.
 
-## Parámetros
+El primer stage instala dependencias con uv, ejecuta Ruff y pytest, construye
+wheel y sdist, verifica sus metadatos y ejecuta `twine check --strict`. Guarda
+las distribuciones como artefacto; el segundo stage descarga esos mismos
+archivos y los publica con Twine. El token solo se pasa al paso de publicación.
 
-- `workflow_dispatch.inputs.tag`: tag existente para una ejecución manual.
-- Variable de repositorio `RELEASE_PYTHON_VERSION`: versión de Python del build; predeterminada `3.11`.
-- `[project].version` en `pyproject.toml`: versión publicada, que debe coincidir con el tag.
+Una ejecución manual sobre una rama valida y construye, pero no publica.
+Para publicar manualmente, selecciona un tag `v*` en **Run pipeline**.
+El parámetro `pythonVersion` permite cambiar Python (predeterminado: `3.11`).
 
-La primera publicación requiere que PyPI acepte el nombre `maxai` y que el Trusted Publisher coincida exactamente con el workflow y environment. Hasta entonces, `pip install maxai` y `uv add maxai` no instalarán este proyecto desde PyPI.
+El workflow de GitHub `.github/workflows/publish-library.yml` queda disponible
+solo para ejecuciones manuales y conserva su autenticación OIDC; Azure es quien
+publica automáticamente los tags. No ejecutes ambos para la misma versión.
+
+Referencia: [Publicar paquetes Python con Azure Pipelines](https://learn.microsoft.com/en-us/azure/devops/pipelines/artifacts/pypi?view=azure-devops).

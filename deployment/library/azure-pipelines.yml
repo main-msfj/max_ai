@@ -1,0 +1,76 @@
+# Create PYPI_API_TOKEN as a secret variable in this pipeline.
+trigger:
+  branches:
+    exclude:
+      - '*'
+  tags:
+    include:
+      - 'v*'
+pr: none
+
+parameters:
+  - name: pythonVersion
+    type: string
+    default: '3.11'
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+  - stage: Build
+    displayName: Test and build library
+    jobs:
+      - job: Distributions
+        steps:
+          - checkout: self
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: ${{ parameters.pythonVersion }}
+          - bash: |
+              set -euo pipefail
+              python -m pip install uv
+              uv sync --group dev
+            displayName: Install dependencies
+          - bash: uv run ruff check max_ai tests examples deployment/library/verify_release.py
+            displayName: Lint
+          - bash: uv run pytest -q
+            displayName: Test
+          - bash: |
+              set -euo pipefail
+              uv build --out-dir dist --clear
+              if [[ "$SOURCE_REF" == refs/tags/* ]]; then
+                release_tag="${SOURCE_REF#refs/tags/}"
+              else
+                release_tag="$(python -c 'import tomllib; print("v" + tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+              fi
+              python deployment/library/verify_release.py --tag "$release_tag" --dist dist
+              uvx --from twine twine check --strict dist/*
+            displayName: Build and verify distributions
+            env:
+              SOURCE_REF: $(Build.SourceBranch)
+          - publish: $(Build.SourcesDirectory)/dist
+            artifact: library-distributions
+            displayName: Save verified distributions
+
+  - stage: Publish
+    displayName: Publish to PyPI
+    dependsOn: Build
+    condition: and(succeeded(), startsWith(variables['Build.SourceBranch'], 'refs/tags/v'), ne(variables['Build.Reason'], 'PullRequest'))
+    jobs:
+      - job: Upload
+        steps:
+          - checkout: none
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: ${{ parameters.pythonVersion }}
+          - download: current
+            artifact: library-distributions
+          - bash: |
+              set -euo pipefail
+              python -m pip install twine
+              python -m twine upload --non-interactive --repository-url https://upload.pypi.org/legacy/ "${DIST_DIR}"/*
+            displayName: Upload wheel and source distribution
+            env:
+              DIST_DIR: $(Pipeline.Workspace)/library-distributions
+              TWINE_USERNAME: __token__
+              TWINE_PASSWORD: $(PYPI_API_TOKEN)

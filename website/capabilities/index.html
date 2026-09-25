@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/><script>try { const saved = localStorage.getItem('max-ai-theme'); document.documentElement.dataset.theme = saved || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); } catch (_) {}</script>
+<meta content="Capabilities · Max AI framework documentation." name="description"/>
+<title>Capabilities · Max AI Docs</title>
+<link href="/assets/styles.css" rel="stylesheet"/>
+<script defer="" src="/assets/app.js"></script>
+<link href="/assets/favicon.svg" rel="icon" type="image/svg+xml"/></head>
+<body data-page="capabilities/index.html">
+
+<a class="skip-link" href="#main-content">Skip to content</a>
+<header class="topbar">
+<a aria-label="Max AI home" class="brand" href="/overview/index.html"><svg aria-hidden="true" class="brand-logo" fill="none" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"><rect fill="currentColor" height="38" rx="10" width="38" x="1" y="1"></rect><path d="M10 28V12l10 12 10-12v16" stroke="var(--bg)" stroke-linejoin="round" stroke-width="3"></path><circle cx="30" cy="12" fill="#b9a5f4" r="3"></circle></svg><span>max<span class="brand-accent">ai</span></span><span class="brand-divider"></span><span class="header-label">Documentation</span></a>
+<div class="topbar-actions">
+<button aria-controls="search-dialog" aria-haspopup="dialog" class="search-trigger" type="button"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><span>Search documentation</span><kbd>⌘ K</kbd></button>
+
+<button aria-label="Switch color theme" class="icon-button" id="theme-toggle" type="button"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"></path></svg></button>
+<button aria-controls="sidebar" aria-expanded="false" aria-label="Open navigation" class="menu-button" id="menu-toggle" type="button"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M4 6h16M4 12h16M4 18h16"></path></svg></button>
+</div>
+</header>
+<nav aria-label="Primary" class="tabs-bar">
+<a class="selected" href="/overview/index.html">Documentation</a><a href="/overview/index.html#installation">Installation</a><a href="/agents/index.html#agent">API guide</a>
+<span class="release-label"><span class="status-dot"></span>v0.1.0 <span class="release-status">· in development</span></span>
+</nav>
+<aside class="sidebar" id="sidebar">
+<div class="sidebar-title">Max AI documentation</div>
+<nav aria-label="Documentation">
+<div class="nav-group nav-group-start">
+<details class="nav-disclosure nav-section">
+<summary class="nav-label nav-label-section">Start</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/overview/index.html">Overview</a>
+</div></details>
+</div>
+<div class="nav-group">
+<details class="nav-disclosure nav-section">
+<summary class="nav-label nav-label-section">Agents</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/agents/index.html#agent-top">Agent</a>
+</div></details>
+</div>
+<div class="nav-group">
+<details class="nav-disclosure nav-basecomponents">
+<summary class="nav-label nav-label-basecomponents">BaseComponents</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/basecomponents/clients.html#clients-top">Clients</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/compaction.html#compaction-top">Compaction</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/executor.html#executor-top">Executor</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/knowledge.html#knowledge-top">Knowledge</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/layers.html#layers-top">Layers</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/memory.html#memory-top">Memory</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/middleware.html#middleware-top">Middleware</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/reasoning.html#reasoning-top">Reasoning</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/skills.html#skills-top">Skills</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/tools.html#tools-top">Tools</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/workspace.html#workspace-top">Workspace</a>
+<a class="nav-link nav-sub-link" href="https://github.com/main-msfj/max_ai/tree/main/max_ai/base" target="_blank" rel="noopener">More in GitHub</a>
+</div></details>
+</div>
+<div class="nav-group">
+<details class="nav-disclosure nav-capability-root" open>
+<summary aria-current="location" class="nav-label nav-label-capabilities">Capabilities</summary>
+<div class="nav-children">
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Client</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/clients/ollama.html#capability-clients-ollama-top">Ollama</a>
+<a class="nav-link nav-sub-link" href="/capabilities/clients/openai.html#capability-clients-openai-top">OpenAI</a>
+<a class="nav-link nav-sub-link" href="/capabilities/clients/openrouter.html#capability-clients-openrouter-top">OpenRouter</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Tool</summary>
+<div class="nav-children">
+<details class="nav-disclosure nav-category"><summary class="nav-link nav-sub-link">Native</summary><div class="nav-children">
+<a class="nav-link nav-example-link" href="/capabilities/tools/native/bash.html#capability-tool-bash-top">Bash</a>
+<a class="nav-link nav-example-link" href="/capabilities/tools/native/ask-user.html#capability-tool-ask-user-top">Ask User</a>
+<a class="nav-link nav-example-link" href="/capabilities/tools/native/filesystem.html#capability-tool-filesystem-top">File system</a>
+<a class="nav-link nav-example-link" href="/capabilities/tools/native/plan.html#capability-tool-plan-top">Plan</a>
+</div></details>
+<details class="nav-disclosure nav-category"><summary class="nav-link nav-sub-link">Decorator</summary><div class="nav-children">
+<a class="nav-link nav-example-link" href="/capabilities/tools/decorator/decorator.html#capability-tool-decorator-top">Decorator</a>
+<a class="nav-link nav-example-link" href="/capabilities/tools/decorator/function.html#capability-tool-function-top">Function wrapper</a>
+</div></details>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">MCP</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/mcp/stdio.html#capability-mcp-stdio-top">Stdio</a>
+<a class="nav-link nav-sub-link" href="/capabilities/mcp/http.html#capability-mcp-http-top">HTTP</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Memory</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/memory/local.html#capability-memory-local-top">Local</a>
+<a class="nav-link nav-sub-link" href="/capabilities/memory/sqlite.html#capability-memory-sqlite-top">SQLite</a>
+<a class="nav-link nav-sub-link" href="/capabilities/memory/mongodb.html#capability-memory-mongodb-top">MongoDB</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Knowledge</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/knowledge/local.html#capability-knowledge-local-top">Local</a>
+<a class="nav-link nav-sub-link" href="/capabilities/knowledge/sqlite.html#capability-knowledge-sqlite-top">SQLite</a>
+<a class="nav-link nav-sub-link" href="/capabilities/knowledge/mongodb.html#capability-knowledge-mongodb-top">MongoDB</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Skills</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/skills/local.html#capability-skills-local-top">Local</a>
+<a class="nav-link nav-sub-link" href="/capabilities/skills/github.html#capability-skills-github-top">GitHub</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Reasoning</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/reasoning/react.html#capability-reasoning-react-top">ReAct</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Compaction</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/compaction/summary.html#capability-compaction-summary-top">Summary</a>
+<a class="nav-link nav-sub-link" href="/capabilities/compaction/sliding-window.html#capability-compaction-sliding-window-top">Sliding window</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Middleware</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/middleware/budget.html#capability-middleware-budget-top">Budget</a>
+<a class="nav-link nav-sub-link" href="/capabilities/middleware/logging.html#capability-middleware-logging-top">Logging</a>
+<a class="nav-link nav-sub-link" href="/capabilities/middleware/tracing.html#capability-middleware-tracing-top">Tracing</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Gates</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/completion-gates/runtime.html#capability-completion-gate-runtime-top">Runtime completion gate</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Output format</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/output-formats/structured.html#capability-output-format-top">Structured output</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Prompt layers</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/agent-policy.html#capability-stack-agent-policy-top">Agent policy</a>
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/context.html#capability-stack-context-top">Context</a>
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/knowledge.html#capability-stack-knowledge-top">Knowledge</a>
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/memory.html#capability-stack-memory-top">Memory</a>
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/rendering.html#capability-stack-rendering-top">Rendering</a>
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/session-state.html#capability-stack-session-state-top">Session state</a>
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/skills.html#capability-stack-skills-top">Skills</a>
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/task-analysis.html#capability-stack-task-analysis-top">Task analysis</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Workspace</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/workspaces/local.html#capability-workspace-local-top">Local</a>
+<a class="nav-link nav-sub-link" href="/capabilities/workspaces/azure-blob.html#capability-workspace-azure-blob-top">Azure Blob</a>
+<a class="nav-link nav-sub-link" href="/capabilities/workspaces/minio.html#capability-workspace-minio-top">MinIO</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Executor</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/executors/local.html#capability-executor-local-top">Local</a>
+<a class="nav-link nav-sub-link" href="/capabilities/executors/docker.html#capability-executor-docker-top">Docker</a>
+<a class="nav-link nav-sub-link" href="/capabilities/executors/modal.html#capability-executor-modal-top">Modal</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Context</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/context/local.html#capability-context-local-top">Local</a>
+<a class="nav-link nav-sub-link" href="/capabilities/context/sqlite.html#capability-context-sqlite-top">SQLite</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Session store</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/session-stores/local.html#capability-session-store-local-top">Local</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Quota store</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/quota-stores/local.html#capability-quota-store-local-top">Local</a>
+<a class="nav-link nav-sub-link" href="/capabilities/quota-stores/mongodb.html#capability-quota-store-mongodb-top">MongoDB</a>
+</div></details>
+</div></details>
+</div>
+<div class="nav-group">
+<details class="nav-disclosure nav-examples">
+<summary class="nav-label nav-label-capabilities">Examples</summary>
+<div class="nav-children">
+<details class="nav-disclosure nav-category">
+<summary class="nav-link nav-sub-link">Basic</summary>
+<div class="nav-children">
+<a class="nav-link nav-example-link" href="/examples/basic/basic-agent.html#basic-agent">Basic agent</a>
+<a class="nav-link nav-example-link" href="/examples/basic/ollama-agent.html#ollama-agent">Ollama agent</a>
+<a class="nav-link nav-example-link" href="/examples/basic/function-tools.html#function-tools">Function tools</a>
+<a class="nav-link nav-example-link" href="/examples/basic/tool-approval.html#tool-approval">Tool approval</a>
+<a class="nav-link nav-example-link" href="/examples/basic/sessions.html#sessions">Sessions</a>
+<a class="nav-link nav-example-link" href="/examples/basic/memory.html#memory">Memory</a>
+<a class="nav-link nav-example-link" href="/examples/basic/knowledge-search.html#knowledge-search">Knowledge search</a>
+<a class="nav-link nav-example-link" href="/examples/basic/structured-output.html#structured-output">Structured output</a>
+<a class="nav-link nav-example-link" href="/examples/basic/mcp-tools.html#mcp-tools">MCP tools</a>
+<a class="nav-link nav-example-link" href="/examples/basic/skills.html#skills">Skills</a>
+<a class="nav-link nav-example-link" href="/examples/basic/streaming-events.html#streaming-events">Streaming events</a>
+<a class="nav-link nav-example-link" href="/examples/basic/middleware-tracing.html#middleware-tracing">Middleware and tracing</a>
+<a class="nav-link nav-example-link" href="/examples/basic/workspace-files.html#workspace-files">Workspace files</a>
+<a class="nav-link nav-example-link" href="/examples/basic/concurrent-runs.html#concurrent-runs">Concurrent runs</a>
+<a class="nav-link nav-example-link" href="/examples/basic/full-agent.html#full-agent">Full agent</a>
+</div></details>
+<details class="nav-disclosure nav-category">
+<summary class="nav-link nav-sub-link">Advanced</summary>
+<div class="nav-children">
+<a class="nav-link nav-example-link" href="/examples/advanced/native-tool.html#native-tool">Native tool</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/postgres-memory.html#postgres-memory">PostgreSQL memory</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/postgres-knowledge.html#postgres-knowledge">PostgreSQL knowledge</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/custom-middleware.html#custom-middleware">Custom middleware</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/in-memory-session-store.html#in-memory-session-store">In-memory session store</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/custom-prompt-layer.html#custom-prompt-layer">Custom prompt layer</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/custom-embedding.html#custom-embedding">Custom embedding</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/custom-workspace.html#custom-workspace">Custom workspace</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/serialize-agent.html#serialize-agent">Serialize an agent</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/deserialize-agent.html#deserialize-agent">Deserialize an agent</a>
+</div></details>
+</div></details>
+</div>
+<div class="nav-group">
+<details class="nav-disclosure nav-types">
+<summary class="nav-label nav-label-capabilities">Types</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/types/agent-response.html#agent-response-top">AgentResponse</a>
+<a class="nav-link nav-sub-link" href="/types/completion.html#completion-top">Completion</a>
+<a class="nav-link nav-sub-link" href="/types/tool.html#tool-top">Tool</a>
+<a class="nav-link nav-sub-link" href="/types/tool-call.html#tool-call-top">Tool call</a>
+<a class="nav-link nav-sub-link" href="/types/run-context.html#run-context-top">RunContext</a>
+</div></details>
+</div>
+<div class="nav-group">
+<details class="nav-disclosure nav-events">
+<summary class="nav-label nav-label-capabilities">Events</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/events/index.html#events-top">Event types</a>
+</div></details>
+</div>
+<div class="nav-group">
+<details class="nav-disclosure nav-cli">
+<summary class="nav-label nav-label-capabilities">CLI</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/cli/index.html#cli-top">Command line</a>
+</div></details>
+</div>
+</nav>
+
+</aside><button aria-label="Close navigation" class="nav-backdrop" tabindex="-1" type="button"></button>
+<main class="main-content" id="main-content" tabindex="-1">
+<nav aria-label="Breadcrumb" class="breadcrumb"><a href="/overview/index.html">Docs</a><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m9 5 7 7-7 7"></path></svg><span>Core concepts</span><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m9 5 7 7-7 7"></path></svg><span>Capabilities</span>
+</nav>
+<details class="mobile-toc"><summary>On this page</summary>
+<nav aria-label="Page sections"><a class="toc-link" href="#capabilities-top">Overview</a><a class="toc-link" href="#workspace">Workspace and execution</a><a class="toc-link" href="#remote-workspaces">Remote workspaces</a><a class="toc-link" href="#memory">Memory</a><a class="toc-link" href="#skills">Skills</a><a class="toc-link" href="#knowledge">Knowledge</a><a class="toc-link" href="#providers">Model providers</a><a class="toc-link" href="#reasoning">Reasoning</a><a class="toc-link" href="#compaction">Compaction</a><a class="toc-link" href="#gates">Gates</a><a class="toc-link" href="#middleware">Middleware</a><a class="toc-link" href="#quotas">Quotas & budget</a><a class="toc-link" href="#tracing">Tracing</a>
+</nav></details>
+<section class="hero content-section page-hero" id="capabilities-top">
+<h1>Capabilities</h1>
+<p class="hero-copy">The public Agent composes model, reasoning, tool, execution, and optional context providers. Each provider implements a contract under <code>max_ai.base</code> and ships concrete implementations under <code>max_ai.capabilities</code>.</p>
+</section>
+<section class="section-block content-section" id="workspace">
+<h2>Workspace and execution<a aria-label="Link to Workspace and execution" class="heading-anchor" href="#workspace">#</a></h2>
+<p><code>WorkspaceBase</code> owns persistent user files and skill materialization. <code>ExecutorBase</code> runs executor-routed tools, and <code>EnvironmentManager</code> manages sessions linking the two. The Agent defaults to <code>LocalWorkspace</code> and <code>LocalExecutor</code>; Docker and Modal are alternatives for execution. Local execution runs on the host and is not a sandbox. Workspace and executor are separate providers.</p>
+<div class="inline-code"><span>WorkspaceBase</span><span>EnvironmentManager</span><span>ExecutorBase</span>
+</div>
+<h3 id="remote-workspaces">Remote workspaces</h3>
+<p><code>AzureBlobWorkspace</code> and <code>MinIOWorkspace</code> (<code>max_ai.capabilities.workspace</code>) keep a user's files in object storage instead of local disk, so a serverless instance or another server sees the same workspace. The Agent downloads a user's files when a run starts and uploads changes when it ends; only a manifest of file hashes is compared, so unchanged files never move. Scratchpads and materialized skills stay local, since they are throwaway per run.</p>
+<div class="code-card"><div class="code-head"><span>Object-storage workspace</span></div><pre tabindex="0"><code>from max_ai.capabilities.workspace import AzureBlobWorkspace, MinIOWorkspace
+
+workspace = AzureBlobWorkspace(
+    "https://myaccount.blob.core.windows.net/workspaces",
+    api_key_env="AZURE_STORAGE_KEY",
+)
+# Or: MinIOWorkspace("http://localhost:9000", bucket="workspaces",
+#                     access_key_env="MINIO_ACCESS_KEY", secret_key_env="MINIO_SECRET_KEY")
+agent = Agent(..., workspace=workspace)</code></pre></div>
+<p class="installation-note">Needs <code>pip install "maxai[azure-blob]"</code> or <code>"maxai[minio]"</code>. MinIO's endpoint also accepts any S3-compatible store, including AWS S3.</p>
+</section>
+<section class="section-block content-section" id="memory">
+<h2>Memory<a aria-label="Link to Memory" class="heading-anchor" href="#memory">#</a></h2>
+<p>These are three different ways to add context. Memory is user/session data that can change during a run. A skill is a reusable procedure with instructions and files. Knowledge is a curated collection searched on demand. Enable each by passing its registry to <code>Agent</code>; a configured capability contributes its tools and prompt layer.</p>
+<div class="diagram-card capability-diagram"><div class="capability-row"><span class="cap-node memory-node"><b>Memory</b><small>personal · session scoped</small></span><span class="cap-arrow">↔</span><span class="cap-node"><b>Agent run</b><small>RunContext user_id + session_id</small></span><span class="cap-arrow">↔</span><span class="cap-node skill-node"><b>Skills</b><small>instructions · workspace files</small></span></div><div class="capability-row"><span class="cap-node knowledge-node"><b>Knowledge</b><small>curated source · retrieval tool</small></span><span class="cap-arrow">→</span><span class="cap-node"><b>Model context</b><small>layer text + tool results</small></span><span class="cap-arrow">←</span><span class="cap-node skill-node"><b>SKILL.md</b><small>read when the task calls for it</small></span></div></div>
+<p>Choose a backend based on where the agent runs: Local for a simple file store, SQLite for a shared local database, or MongoDB for state shared across application servers. Each registry accepts the same user and session scope from the Agent.</p>
+<div class="backend-panels"><details class="backend-panel" id="memory-local"><summary>Local memory</summary><div class="backend-copy"><p><strong>Receives:</strong> <code>base_path</code> is required. You can also set <code>tool_mode</code>, <code>context_days</code>, and an <code>embedding</code>. The Agent binds each run's <code>user_id</code> and <code>session_id</code>.</p><p><strong>Stores:</strong> A JSON file for each user and session under <code>base_path/memory/</code>. Best for a single process and simple local persistence.</p><p><strong>Search:</strong> Cross-session memory search defaults to local semantic embeddings. Set <code>embedding=None</code> to use word matching.</p><div class="code-card"><div class="code-head"><span>Local registry</span></div><pre tabindex="0"><code>LocalMemoryRegistry(
+    base_path="./agent-data",
+    tool_mode=MemoryToolMode.FULL,
+    context_days=30,
+)</code></pre></div></div></details><details class="backend-panel" id="memory-sqlite"><summary>SQLite memory</summary><div class="backend-copy"><p><strong>Receives:</strong> Required <code>base_path</code>; optional <code>db_name</code> (default <code>memory.sqlite3</code>), <code>tool_mode</code>, <code>context_days</code>, <code>search_limit</code>, and <code>embedding</code>.</p><p><strong>Stores:</strong> Memory records and their embeddings in one SQLite file, scoped by user, session, and category. Suitable for one process or a small deployment on one machine.</p><p><strong>Search:</strong> Semantic search is the default. Passing <code>embedding=None</code> uses text matching instead.</p><div class="code-card"><div class="code-head"><span>SQLite registry</span></div><pre tabindex="0"><code>SQLiteMemoryRegistry(
+    base_path="./agent-data",
+    db_name="memory.sqlite3",
+    search_limit=20,
+)</code></pre></div></div></details><details class="backend-panel" id="memory-mongodb"><summary>MongoDB memory</summary><div class="backend-copy"><p><strong>Receives:</strong> Optional <code>database</code>, <code>collection</code>, <code>uri_env</code>, <code>server_selection_timeout_ms</code>, <code>context_days</code>, <code>search_limit</code>, and <code>embedding</code>. The MongoDB URI is read from the named environment variable.</p><p><strong>Stores:</strong> User and session records in a shared MongoDB collection, so multiple application servers can use the same store. Install the <code>mongodb</code> extra.</p><p><strong>Search:</strong> Semantic search is the default. MongoDB Atlas can use vector search; other servers rank candidates in Python. Pass <code>embedding=None</code> for text matching.</p><div class="code-card"><div class="code-head"><span>MongoDB registry</span></div><pre tabindex="0"><code>MongoDBMemoryRegistry(
+    uri_env="MONGODB_URI",
+    database="max_ai",
+    collection="memory",
+)</code></pre></div></div></details></div></section>
+<section class="section-block content-section" id="skills"><h2>Skills: local procedures<a class="heading-anchor" href="#skills" aria-label="Link to Skills">#</a></h2>
+<p>A local skill source contains one directory per selected skill, each with a <code>SKILL.md</code>. Its YAML frontmatter declares <code>name</code> and <code>description</code>. During preparation the registry validates selected skills and reads their short catalog entries. <code>SkillsLayer</code> gives the model that catalog; when a task matches, the model uses the built-in <code>read_file</code> tool to open the full <code>SKILL.md</code>, then follows its procedure and uses any accompanying scripts or references. Skills are not callable tools: they teach the agent when and how to use tools.</p>
+<div class="code-card"><div class="code-head"><span>Example skill package and Agent wiring</span></div><pre tabindex="0"><code>skills/
+└── invoice-review/
+    ├── SKILL.md       # YAML name/description + procedure
+    ├── references/    # optional detailed guidance
+    └── scripts/       # optional helper programs
+
+from max_ai.capabilities.skills.local import LocalSkillRegistry
+skills = LocalSkillRegistry(source="./skills", skills=["invoice-review"])
+# Pass skills=skills and workspace=LocalWorkspace(...) to Agent.</code></pre></div>
+<p>Preparation stages selected skills in the registry cache. Before a run, the workspace materializes them under its per-user <code>skills/</code> directory; existing workspace edits are preserved.</p>
+</section>
+<section class="section-block content-section" id="knowledge"><h2>Knowledge: retrieval on demand<a class="heading-anchor" href="#knowledge" aria-label="Link to Knowledge">#</a></h2><p>A knowledge registry turns a curated document collection into a named search tool. Choose Local, SQLite, or MongoDB for storage; each backend below explains its constructor inputs, ingestion, and search behavior.</p>
+<div class="inline-code"><span>capabilities/memory</span><span>capabilities/skills</span><span>capabilities/knowledge</span><span>context registry exists separately; not an Agent constructor input</span>
+</div>
+<div class="backend-panels"><details class="backend-panel" id="knowledge-local"><summary>Local knowledge</summary><div class="backend-copy"><p><strong>Receives:</strong> Required <code>name</code>, <code>description</code>, and <code>base_path</code>; optional <code>tool_mode</code> and <code>embedding</code>. The name determines the search tool, such as <code>search_product_docs</code>.</p><p><strong>Stores:</strong> Reads blocks from <code>base_path/knowledge/{name}.json</code>. Document ingestion is external to the Agent; prepare the JSON file before searching.</p><p><strong>Search:</strong> The model supplies a query and optional result limit. The default local embedding ranks matching <code>KnowledgeBlock</code> records by meaning.</p><div class="code-card"><div class="code-head"><span>Local knowledge source</span></div><pre tabindex="0"><code>LocalKnowledgeRegistry(
+    name="product_docs",
+    description="Search product manuals.",
+    base_path="./agent-data",
+)</code></pre></div></div></details><details class="backend-panel" id="knowledge-sqlite"><summary>SQLite knowledge</summary><div class="backend-copy"><p><strong>Receives:</strong> Required <code>name</code>, <code>description</code>, and <code>base_path</code>; optional <code>db_name</code>, <code>tool_mode</code>, <code>min_score</code>, and <code>embedding</code>.</p><p><strong>Stores:</strong> Each block's text, metadata, and embedding in SQLite. Use <code>upsert_block(block_id, block)</code> and <code>delete_block(block_id)</code> from application code to manage documents.</p><p><strong>Search:</strong> The Agent exposes a named search tool. New or changed block text is embedded on write; the query is embedded when searched.</p><div class="code-card"><div class="code-head"><span>SQLite knowledge source</span></div><pre tabindex="0"><code>SQLiteKnowledgeRegistry(
+    name="product_docs",
+    description="Search product manuals.",
+    base_path="./agent-data",
+    min_score=0.2,
+)</code></pre></div></div></details><details class="backend-panel" id="knowledge-mongodb"><summary>MongoDB knowledge</summary><div class="backend-copy"><p><strong>Receives:</strong> Required <code>name</code> and <code>description</code>; optional <code>database</code>, <code>collection</code>, <code>uri_env</code>, <code>server_selection_timeout_ms</code>, <code>tool_mode</code>, <code>min_score</code>, and <code>embedding</code>. The connection URI is read from the named environment variable.</p><p><strong>Stores:</strong> Knowledge blocks in a shared MongoDB collection. Use the registry's upsert/delete methods from application code to manage the source. Install the <code>mongodb</code> extra.</p><p><strong>Search:</strong> By default, embeddings enable semantic retrieval and Atlas vector search where supported. Set <code>embedding=None</code> to use MongoDB text search.</p><div class="code-card"><div class="code-head"><span>MongoDB knowledge source</span></div><pre tabindex="0"><code>MongoDBKnowledgeRegistry(
+    name="product_docs",
+    description="Search product manuals.",
+    uri_env="MONGODB_URI",
+    database="max_ai",
+    collection="knowledge",
+)</code></pre></div></div></details></div></section>
+<section class="section-block content-section" id="providers">
+<h2>Model providers<a aria-label="Link to Model providers" class="heading-anchor" href="#providers">#</a></h2>
+<p><code>CoreChatCompletionClient</code> is the framework contract. A provider adapter maps typed messages, tool schemas, structured output, streaming chunks, and usage data to that provider's API and maps responses back. The reasoning loop depends on this contract, so it does not need provider-specific branches.</p>
+<div class="capability-list provider-list"><div><span class="list-number">Local</span><strong>Ollama</strong><small>Local model server; configure model and host, with optional thinking and generation options. Useful for local development and deployments where the Ollama service is managed by you.</small></div><div><span class="list-number">API</span><strong>OpenAI</strong><small>OpenAI chat-completions client. Configure model and API-key environment variable; optional base URL, organization, project, and request options.</small></div><div><span class="list-number">Gateway</span><strong>OpenRouter</strong><small>OpenAI-compatible routing through OpenRouter, with routing/fallback options and provider-specific settings.</small></div></div>
+<p>The client carries a <code>ModelConfig</code> describing context window, output limit, tool calling, vision/audio, thinking, and tokenizer support. These are capability declarations consumed by runtime features such as compaction and multimodal message handling; choose values that match the actual model. Output is capped at 32K tokens across every client — room for a whole file in one tool call — and a reply cut at the limit is explained back to the model instead of silently dropped. Keep API keys in environment variables—serialized client config stores the variable name, not the secret.</p>
+<div class="code-card"><div class="code-head"><span>OpenAI provider setup</span></div><pre tabindex="0"><code>from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
+from max_ai.core.model.llm import ModelConfig
+
+# Export OPENAI_API_KEY in the process environment before construction.
+client = OpenAIChatCompletionClient(
+    model="YOUR_PROVIDER_MODEL",
+    api_key_env="OPENAI_API_KEY",
+    config=ModelConfig(supports_function_calling=True),
+)
+# Pass client=client to Agent.</code></pre></div>
+<div class="inline-code"><span>capabilities/clients/ollama</span><span>capabilities/clients/openai</span><span>capabilities/clients/openrouter</span>
+</div>
+<details class="backend-panel capability-input" id="provider-inputs"><summary>Provider configuration: what the client receives</summary><div class="backend-copy"><p>Every provider client needs a provider-specific <code>model</code>. OpenAI accepts an API key or an <code>api_key_env</code> name plus optional <code>base_url</code>, <code>organization</code>, <code>project</code>, <code>ModelConfig</code>, and generation options. OpenRouter adds fallback models and routing preferences. Ollama accepts a host, optional API key, thinking settings, and keep-alive value.</p><p><code>ModelConfig</code> declares runtime capabilities such as context window, output limit, tool calling, vision, audio, thinking, and token counting. Choose values that match the model; compaction and message handling rely on them. API credentials can be passed directly, but an environment variable name is safer and is what serialized configuration stores.</p><div class="code-card"><div class="code-head"><span>OpenAI client</span></div><pre tabindex="0"><code>OpenAIChatCompletionClient(
+    model="YOUR_PROVIDER_MODEL",
+    api_key_env="OPENAI_API_KEY",
+    config=ModelConfig(supports_function_calling=True),
+)</code></pre></div></div></details></section>
+<section class="section-block content-section" id="reasoning"><h2>Reasoning · ReAct<a class="heading-anchor" href="#reasoning" aria-label="Link to Reasoning">#</a></h2><p><code>BaseReasoning</code> is the loop contract and <code>ReactLoop</code> is the default. Each run binds its own strategy to the model client, tool dispatcher, middleware, and completion bus. Model requests, tool observations, guards, and final responses repeat until the turn closes or pauses. <a href="/core/concepts.html#base-loop">Explore the loop →</a></p><details class="backend-panel capability-input" id="reasoning-inputs"><summary>Reasoning configuration: loop settings and per-run inputs</summary><div class="backend-copy"><p><code>ReactLoop</code> constructor settings are <code>max_loop_iterations</code> (or <code>None</code> to follow the framework setting), <code>max_connection_retries</code>, and <code>guards</code>. The default guards retry schema errors, steer repeated calls, and check the run budget; pass an empty list to disable them.</p><p>When a run begins, the Agent binds a copy of the reasoning loop to that run's model client, tool dispatcher, middleware chain, compaction strategy, memory, and context limit. The loop method then receives messages and state through <code>RunContext</code>, the prepared prompt, streaming/cancellation settings, and any output schema.</p><div class="code-card"><div class="code-head"><span>Select a loop</span></div><pre tabindex="0"><code>reasoning = ReactLoop(
+    max_loop_iterations=12,
+    max_connection_retries=3,
+)
+agent = Agent(..., reasoning=reasoning)</code></pre></div></div></details></section>
+<section class="section-block content-section" id="compaction"><h2>Compaction<a class="heading-anchor" href="#compaction" aria-label="Link to Compaction">#</a></h2><p>There is no default: pass <code>compaction=None</code> (or omit it) and the window is never compacted, which is fine for short sessions. Use <code>SlidingWindowCompaction</code> to drop the oldest turns without an LLM call, or <code>SummaryCompaction(threshold=0.8, keep_ratio=0.4)</code> to summarize older turns with the model once the window is 80% full, keeping the summary in the prompt. Pass a strategy as <code>compaction=...</code>; it runs inside the loop before model calls. Its summary and counters live with the conversation <code>RunContext</code>; compaction reduces model context, not the need to persist the conversation.</p><div class="inline-code"><span>SlidingWindowCompaction</span><span>SummaryCompaction</span><span>RunContext.compaction_state</span></div><details class="backend-panel capability-input" id="compaction-inputs"><summary>Compaction configuration: token budget and strategy</summary><div class="backend-copy"><p>Compaction is opt-in. The shared strategy settings include <code>threshold</code> (the fraction of the model window that triggers compaction), <code>keep_ratio</code>, <code>min_keep_groups</code>, tool-output truncation controls, and whether extracted older facts update memory.</p><p><code>SlidingWindowCompaction</code> also receives <code>max_turns</code> and removes old turns without an LLM summary. <code>SummaryCompaction</code> receives <code>summary_max_tokens</code> and <code>message_cap_tokens</code>; it uses the model client to summarize older turns. Both return updated messages and state to the reasoning loop.</p><div class="code-card"><div class="code-head"><span>Choose a strategy</span></div><pre tabindex="0"><code>compaction = SummaryCompaction(
+    threshold=0.8,
+    keep_ratio=0.4,
+    summary_max_tokens=2000,
+)
+agent = Agent(..., compaction=compaction)</code></pre></div></div></details></section>
+<section class="section-block content-section" id="gates"><h2>Completion gates<a class="heading-anchor" href="#gates" aria-label="Link to Completion gates">#</a></h2><p><code>RuntimeCompletionGate</code> is included in every Agent. It checks whether an answer is ready to close: open plans, declared Bash outputs, and unresolved failures can keep work in the loop. Pass additional <code>CompletionBase</code> implementations through <code>gates=[...]</code>. A gate's <code>on_final_response(ctx)</code> decision can accept, reject, or wait; observation hooks may record evidence but do not veto closure.</p><p>Configure built-in checks with <code>RuntimeCompletionGate(RuntimeGateConfig(...))</code> in <code>gates</code>. <a href="/core/concepts.html#gates">See gate outcomes →</a></p></section>
+<section class="section-block content-section" id="middleware"><h2>Middleware<a class="heading-anchor" href="#middleware" aria-label="Link to Middleware">#</a></h2><p><code>CoreMiddleware</code> hooks surround the run (<code>on_run_start</code>, <code>on_final_response</code>, <code>on_run_end</code>, <code>on_run_error</code>), every model call (<code>on_model_request</code>, <code>on_model_chunk</code>, <code>on_model_response</code>, <code>on_model_error</code>), and every approved tool call (<code>on_tool_request</code>, <code>on_tool_response</code>). Raising <code>StopRun(message)</code> from a run or model hook ends the turn cleanly; a tool hook blocks a single call by returning a <code>ToolResult</code> instead. Pass middleware through <code>middlewares=[...]</code>; middleware observes and controls runtime behavior, while gates decide completion.</p><div class="inline-code"><span>LoggingMiddleware</span><span>BudgetMiddleware</span><span>TracingMiddleware</span></div>
+<h3 id="quotas">Budget and quotas</h3>
+<p><code>BudgetMiddleware</code> enforces two kinds of limits at once: per-task caps (<code>max_tokens</code>, <code>max_cost_usd</code>, <code>max_seconds</code>) that stop a single run, and per-user quotas (<code>quota=QuotaLimits(...)</code>) that track daily and monthly spend across runs in a <code>quota_store</code>. <code>LocalQuotaStore</code> keeps counters on disk for a single process; <code>MongoDBQuotaStore</code> shares them across servers.</p>
+<div class="code-card"><div class="code-head"><span>Per-task limits and a daily quota</span></div><pre tabindex="0"><code>from max_ai.capabilities.middleware import BudgetMiddleware
+from max_ai.capabilities.quota_store import LocalQuotaStore
+from max_ai.core.model.quota import QuotaLimits
+
+budget = BudgetMiddleware(
+    max_tokens=200_000, max_cost_usd=2.0, max_seconds=120,
+    quota=QuotaLimits(daily_cost_usd=20.0, monthly_cost_usd=300.0),
+    quota_store=LocalQuotaStore(base_path="./agent-data"),
+)
+agent = Agent(..., middlewares=[budget])</code></pre></div>
+<h3 id="tracing">Tracing</h3>
+<p><code>TracingMiddleware()</code> emits OpenTelemetry spans for runs, model calls, and tool calls. Call <code>configure_langfuse()</code> once at startup to send those spans to a Langfuse instance — <code>docker-infra/</code> ships a local one for development.</p>
+<details class="backend-panel capability-input" id="middleware-inputs"><summary>Middleware configuration: hooks and their inputs</summary><div class="backend-copy"><p>Each hook receives a <code>MiddlewareContext</code> (the current run, agent name, event emitter, and per-run state) plus the object for that lifecycle point: a task, a <code>ModelRequest</code>, a model result/chunk, or a <code>ToolRequest</code>/<code>ToolResult</code>.</p><p>Run and model hooks can observe or change requests and responses. Returning a <code>ToolResult</code> from <code>on_tool_request</code> supplies the tool result without executing the tool. Use <code>middlewares=[...]</code> on Agent. <code>BudgetMiddleware</code> receives per-run token/cost/time/call limits and optional quota/store settings; <code>TracingMiddleware</code> receives content-capture settings and an optional tracer provider.</p><div class="code-card"><div class="code-head"><span>Attach a middleware</span></div><pre tabindex="0"><code>budget = BudgetMiddleware(
+    max_tokens=100_000,
+    max_seconds=90,
+)
+agent = Agent(..., middlewares=[budget])</code></pre></div></div></details></section>
+<nav aria-label="Previous and next page" class="page-pagination"><a href="/basecomponents/tools.html"><small>← Previous</small><strong>Tools &amp; dispatch</strong></a><a class="next" href="/core/integrations.html"><small>Next →</small><strong>Integrations</strong></a>
+</nav>
+<footer class="footer"><span>Max AI · Python agent framework</span>
+</footer>
+</main>
+<aside aria-label="On this page" class="page-toc">
+<p><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"></path></svg>On this page</p>
+<nav><a class="toc-link" href="#capabilities-top">Overview</a><a class="toc-link" href="#workspace">Workspace and execution</a><a class="toc-link" href="#remote-workspaces">Remote workspaces</a><a class="toc-link" href="#memory">Memory</a><a class="toc-link" href="#skills">Skills</a><a class="toc-link" href="#knowledge">Knowledge</a><a class="toc-link" href="#providers">Model providers</a><a class="toc-link" href="#reasoning">Reasoning</a><a class="toc-link" href="#compaction">Compaction</a><a class="toc-link" href="#gates">Gates</a><a class="toc-link" href="#middleware">Middleware</a><a class="toc-link" href="#quotas">Quotas & budget</a><a class="toc-link" href="#tracing">Tracing</a>
+</nav>
+<div class="toc-extra"><a href="#capabilities-top"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5 12h14m-5-5 5 5-5 5"></path></svg>Back to top</a>
+</div>
+</aside>
+<dialog aria-labelledby="search-title" class="search-dialog" id="search-dialog">
+<h2 class="sr-only" id="search-title">Search documentation</h2>
+<div class="search-input-row"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><label class="sr-only" for="docs-search">Search documentation</label><input autocomplete="off" id="docs-search" placeholder="Search documentation…" spellcheck="false" type="search"/><button aria-label="Close search" id="search-close" type="button">Esc</button>
+</div>
+<div class="search-results" id="search-results">
+</div>
+<p class="sr-only" id="search-status" role="status">
+</p>
+<div class="search-footer"><span><kbd>↑</kbd> <kbd>↓</kbd> navigate   <kbd>↵</kbd> open</span><span>Search Max AI docs</span>
+</div>
+</dialog>
+</body>
+</html>

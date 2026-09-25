@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Follow a message through Max AI: agent orchestration, prompt building, model calls, tools, completion gates, and the final response.">
+  <title>Message flow · Max AI Docs</title>
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/assets/styles.css">
+  <style>
+    body { background: #08111f; color: #eff7ff; }
+    .flow-page { width: min(1680px, calc(100% - 40px)); margin: 28px auto; }
+    .flow-nav { display: flex; flex-wrap: wrap; gap: 24px; margin-bottom: 32px; }
+    .flow-page a { color: #6fe6ff; }
+    .flow-page h1 { font-size: clamp(28px, 4vw, 48px); line-height: 1.15; margin-bottom: 16px; }
+    .flow-intro, .flow-caption { color: #b7c9e6; }
+    .flow-actions { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin: 24px 0; }
+    .flow-actions .button { background: #6fe6ff; color: #08111f; border-color: #6fe6ff; }
+    .flow-figure { margin: 32px 0; }
+    .flow-figure img { display: block; width: 100%; height: auto; border: 1px solid #284569; border-radius: 16px; }
+    .flow-figure > a { display: block; cursor: zoom-in; }
+    .flow-caption { margin-top: 12px; font-size: 14px; }
+    .flow-page :focus-visible { outline: 2px solid #6fe6ff; outline-offset: 5px; }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to content</a>
+  <div class="flow-page">
+    <nav class="flow-nav" aria-label="Documentation">
+      <a href="/overview/index.html#architecture">← Documentation</a>
+      <a href="/core/concepts.html#base-loop">Loop &amp; conversations</a>
+    </nav>
+    <main id="main-content" tabindex="-1">
+      <section id="message-flow">
+        <h1>How a message flows through Max AI</h1>
+        <p class="flow-intro">Follow user input through the Agent, prompt building, model calls, tool execution, and completion gates to the final response.</p>
+        <div class="flow-actions">
+          <a class="button" href="/max_ai_animation.html">Explore the interactive flow →</a>
+          <a href="/images/max_ai.png" target="_blank" rel="noopener">Open full-size image ↗</a>
+        </div>
+        <figure class="flow-figure">
+          <a href="/images/max_ai.png" target="_blank" rel="noopener" aria-label="Open the message flow diagram at full size in a new tab">
+            <img src="/images/max_ai.png" alt="Message flow through Max AI: user input enters Agent.run APIs; the Agent loads capabilities and builds prompt layers; the model calls tools through ToolExecutor and receives their results in a ReAct loop; the completion gate accepts the answer or returns it to the loop before AgentResponse reaches the user.">
+          </a>
+          <figcaption class="flow-caption">Select the diagram to read it at full size, or open the interactive flow to explore the stages with playback controls.</figcaption>
+        </figure>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

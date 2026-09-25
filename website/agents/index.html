@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/><script>try { const saved = localStorage.getItem('max-ai-theme'); document.documentElement.dataset.theme = saved || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); } catch (_) {}</script>
+<meta content="Agent configuration · Max AI framework documentation." name="description"/>
+<title>Agents · Max AI Docs</title>
+<link href="/assets/styles.css" rel="stylesheet"/>
+<script defer="" src="/assets/app.js"></script>
+<link href="/assets/favicon.svg" rel="icon" type="image/svg+xml"/></head>
+<body data-page="agents/index.html">
+
+<a class="skip-link" href="#main-content">Skip to content</a>
+<header class="topbar">
+<a aria-label="Max AI home" class="brand" href="/overview/index.html"><svg aria-hidden="true" class="brand-logo" fill="none" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"><rect fill="currentColor" height="38" rx="10" width="38" x="1" y="1"></rect><path d="M10 28V12l10 12 10-12v16" stroke="var(--bg)" stroke-linejoin="round" stroke-width="3"></path><circle cx="30" cy="12" fill="#b9a5f4" r="3"></circle></svg><span>max<span class="brand-accent">ai</span></span><span class="brand-divider"></span><span class="header-label">Documentation</span></a>
+<div class="topbar-actions">
+<button aria-controls="search-dialog" aria-haspopup="dialog" class="search-trigger" type="button"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><span>Search documentation</span><kbd>⌘ K</kbd></button>
+
+<button aria-label="Switch color theme" class="icon-button" id="theme-toggle" type="button"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"></path></svg></button>
+<button aria-controls="sidebar" aria-expanded="false" aria-label="Open navigation" class="menu-button" id="menu-toggle" type="button"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M4 6h16M4 12h16M4 18h16"></path></svg></button>
+</div>
+</header>
+<nav aria-label="Primary" class="tabs-bar">
+<a class="selected" href="/overview/index.html">Documentation</a><a href="/overview/index.html#installation">Installation</a><a href="/agents/index.html#agent">API guide</a>
+<span class="release-label"><span class="status-dot"></span>v0.1.0 <span class="release-status">· in development</span></span>
+</nav>
+<aside class="sidebar" id="sidebar">
+<div class="sidebar-title">Max AI documentation</div>
+<nav aria-label="Documentation">
+<div class="nav-group nav-group-start">
+<details class="nav-disclosure nav-section">
+<summary class="nav-label nav-label-section">Start</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/overview/index.html">Overview</a>
+</div></details>
+</div>
+<div class="nav-group">
+<details class="nav-disclosure nav-section" open>
+<summary aria-current="location" class="nav-label nav-label-section">Agents</summary>
+<div class="nav-children">
+<a aria-current="page" class="nav-link nav-sub-link active" href="/agents/index.html#agent-top">Agent</a>
+</div></details>
+</div>
+<div class="nav-group">
+<details class="nav-disclosure nav-basecomponents">
+<summary class="nav-label nav-label-basecomponents">BaseComponents</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/basecomponents/clients.html#clients-top">Clients</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/compaction.html#compaction-top">Compaction</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/executor.html#executor-top">Executor</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/knowledge.html#knowledge-top">Knowledge</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/layers.html#layers-top">Layers</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/memory.html#memory-top">Memory</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/middleware.html#middleware-top">Middleware</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/reasoning.html#reasoning-top">Reasoning</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/skills.html#skills-top">Skills</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/tools.html#tools-top">Tools</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/workspace.html#workspace-top">Workspace</a>
+<a class="nav-link nav-sub-link" href="https://github.com/main-msfj/max_ai/tree/main/max_ai/base" target="_blank" rel="noopener">More in GitHub</a>
+</div></details>
+</div>
+<div class="nav-group">
+<details class="nav-disclosure nav-capability-root">
+<summary class="nav-label nav-label-capabilities">Capabilities</summary>
+<div class="nav-children">
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Client</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/clients/ollama.html#capability-clients-ollama-top">Ollama</a>
+<a class="nav-link nav-sub-link" href="/capabilities/clients/openai.html#capability-clients-openai-top">OpenAI</a>
+<a class="nav-link nav-sub-link" href="/capabilities/clients/openrouter.html#capability-clients-openrouter-top">OpenRouter</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Tool</summary>
+<div class="nav-children">
+<details class="nav-disclosure nav-category"><summary class="nav-link nav-sub-link">Native</summary><div class="nav-children">
+<a class="nav-link nav-example-link" href="/capabilities/tools/native/bash.html#capability-tool-bash-top">Bash</a>
+<a class="nav-link nav-example-link" href="/capabilities/tools/native/ask-user.html#capability-tool-ask-user-top">Ask User</a>
+<a class="nav-link nav-example-link" href="/capabilities/tools/native/filesystem.html#capability-tool-filesystem-top">File system</a>
+<a class="nav-link nav-example-link" href="/capabilities/tools/native/plan.html#capability-tool-plan-top">Plan</a>
+</div></details>
+<details class="nav-disclosure nav-category"><summary class="nav-link nav-sub-link">Decorator</summary><div class="nav-children">
+<a class="nav-link nav-example-link" href="/capabilities/tools/decorator/decorator.html#capability-tool-decorator-top">Decorator</a>
+<a class="nav-link nav-example-link" href="/capabilities/tools/decorator/function.html#capability-tool-function-top">Function wrapper</a>
+</div></details>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">MCP</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/mcp/stdio.html#capability-mcp-stdio-top">Stdio</a>
+<a class="nav-link nav-sub-link" href="/capabilities/mcp/http.html#capability-mcp-http-top">HTTP</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Memory</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/memory/local.html#capability-memory-local-top">Local</a>
+<a class="nav-link nav-sub-link" href="/capabilities/memory/sqlite.html#capability-memory-sqlite-top">SQLite</a>
+<a class="nav-link nav-sub-link" href="/capabilities/memory/mongodb.html#capability-memory-mongodb-top">MongoDB</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Knowledge</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/knowledge/local.html#capability-knowledge-local-top">Local</a>
+<a class="nav-link nav-sub-link" href="/capabilities/knowledge/sqlite.html#capability-knowledge-sqlite-top">SQLite</a>
+<a class="nav-link nav-sub-link" href="/capabilities/knowledge/mongodb.html#capability-knowledge-mongodb-top">MongoDB</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Skills</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/skills/local.html#capability-skills-local-top">Local</a>
+<a class="nav-link nav-sub-link" href="/capabilities/skills/github.html#capability-skills-github-top">GitHub</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Reasoning</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/reasoning/react.html#capability-reasoning-react-top">ReAct</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Compaction</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/compaction/summary.html#capability-compaction-summary-top">Summary</a>
+<a class="nav-link nav-sub-link" href="/capabilities/compaction/sliding-window.html#capability-compaction-sliding-window-top">Sliding window</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Middleware</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/middleware/budget.html#capability-middleware-budget-top">Budget</a>
+<a class="nav-link nav-sub-link" href="/capabilities/middleware/logging.html#capability-middleware-logging-top">Logging</a>
+<a class="nav-link nav-sub-link" href="/capabilities/middleware/tracing.html#capability-middleware-tracing-top">Tracing</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Gates</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/completion-gates/runtime.html#capability-completion-gate-runtime-top">Runtime completion gate</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Output format</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/output-formats/structured.html#capability-output-format-top">Structured output</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Prompt layers</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/agent-policy.html#capability-stack-agent-policy-top">Agent policy</a>
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/context.html#capability-stack-context-top">Context</a>
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/knowledge.html#capability-stack-knowledge-top">Knowledge</a>
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/memory.html#capability-stack-memory-top">Memory</a>
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/rendering.html#capability-stack-rendering-top">Rendering</a>
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/session-state.html#capability-stack-session-state-top">Session state</a>
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/skills.html#capability-stack-skills-top">Skills</a>
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/task-analysis.html#capability-stack-task-analysis-top">Task analysis</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Workspace</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/workspaces/local.html#capability-workspace-local-top">Local</a>
+<a class="nav-link nav-sub-link" href="/capabilities/workspaces/azure-blob.html#capability-workspace-azure-blob-top">Azure Blob</a>
+<a class="nav-link nav-sub-link" href="/capabilities/workspaces/minio.html#capability-workspace-minio-top">MinIO</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Executor</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/executors/local.html#capability-executor-local-top">Local</a>
+<a class="nav-link nav-sub-link" href="/capabilities/executors/docker.html#capability-executor-docker-top">Docker</a>
+<a class="nav-link nav-sub-link" href="/capabilities/executors/modal.html#capability-executor-modal-top">Modal</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Context</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/context/local.html#capability-context-local-top">Local</a>
+<a class="nav-link nav-sub-link" href="/capabilities/context/sqlite.html#capability-context-sqlite-top">SQLite</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Session store</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/session-stores/local.html#capability-session-store-local-top">Local</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Quota store</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/quota-stores/local.html#capability-quota-store-local-top">Local</a>
+<a class="nav-link nav-sub-link" href="/capabilities/quota-stores/mongodb.html#capability-quota-store-mongodb-top">MongoDB</a>
+</div></details>
+</div></details>
+</div>
+<div class="nav-group">
+<details class="nav-disclosure nav-examples">
+<summary class="nav-label nav-label-capabilities">Examples</summary>
+<div class="nav-children">
+<details class="nav-disclosure nav-category">
+<summary class="nav-link nav-sub-link">Basic</summary>
+<div class="nav-children">
+<a class="nav-link nav-example-link" href="/examples/basic/basic-agent.html#basic-agent">Basic agent</a>
+<a class="nav-link nav-example-link" href="/examples/basic/ollama-agent.html#ollama-agent">Ollama agent</a>
+<a class="nav-link nav-example-link" href="/examples/basic/function-tools.html#function-tools">Function tools</a>
+<a class="nav-link nav-example-link" href="/examples/basic/tool-approval.html#tool-approval">Tool approval</a>
+<a class="nav-link nav-example-link" href="/examples/basic/sessions.html#sessions">Sessions</a>
+<a class="nav-link nav-example-link" href="/examples/basic/memory.html#memory">Memory</a>
+<a class="nav-link nav-example-link" href="/examples/basic/knowledge-search.html#knowledge-search">Knowledge search</a>
+<a class="nav-link nav-example-link" href="/examples/basic/structured-output.html#structured-output">Structured output</a>
+<a class="nav-link nav-example-link" href="/examples/basic/mcp-tools.html#mcp-tools">MCP tools</a>
+<a class="nav-link nav-example-link" href="/examples/basic/skills.html#skills">Skills</a>
+<a class="nav-link nav-example-link" href="/examples/basic/streaming-events.html#streaming-events">Streaming events</a>
+<a class="nav-link nav-example-link" href="/examples/basic/middleware-tracing.html#middleware-tracing">Middleware and tracing</a>
+<a class="nav-link nav-example-link" href="/examples/basic/workspace-files.html#workspace-files">Workspace files</a>
+<a class="nav-link nav-example-link" href="/examples/basic/concurrent-runs.html#concurrent-runs">Concurrent runs</a>
+<a class="nav-link nav-example-link" href="/examples/basic/full-agent.html#full-agent">Full agent</a>
+</div></details>
+<details class="nav-disclosure nav-category">
+<summary class="nav-link nav-sub-link">Advanced</summary>
+<div class="nav-children">
+<a class="nav-link nav-example-link" href="/examples/advanced/native-tool.html#native-tool">Native tool</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/postgres-memory.html#postgres-memory">PostgreSQL memory</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/postgres-knowledge.html#postgres-knowledge">PostgreSQL knowledge</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/custom-middleware.html#custom-middleware">Custom middleware</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/in-memory-session-store.html#in-memory-session-store">In-memory session store</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/custom-prompt-layer.html#custom-prompt-layer">Custom prompt layer</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/custom-embedding.html#custom-embedding">Custom embedding</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/custom-workspace.html#custom-workspace">Custom workspace</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/serialize-agent.html#serialize-agent">Serialize an agent</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/deserialize-agent.html#deserialize-agent">Deserialize an agent</a>
+</div></details>
+</div></details>
+</div>
+<div class="nav-group">
+<details class="nav-disclosure nav-types">
+<summary class="nav-label nav-label-capabilities">Types</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/types/agent-response.html#agent-response-top">AgentResponse</a>
+<a class="nav-link nav-sub-link" href="/types/completion.html#completion-top">Completion</a>
+<a class="nav-link nav-sub-link" href="/types/tool.html#tool-top">Tool</a>
+<a class="nav-link nav-sub-link" href="/types/tool-call.html#tool-call-top">Tool call</a>
+<a class="nav-link nav-sub-link" href="/types/run-context.html#run-context-top">RunContext</a>
+</div></details>
+</div>
+<div class="nav-group">
+<details class="nav-disclosure nav-events">
+<summary class="nav-label nav-label-capabilities">Events</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/events/index.html#events-top">Event types</a>
+</div></details>
+</div>
+<div class="nav-group">
+<details class="nav-disclosure nav-cli">
+<summary class="nav-label nav-label-capabilities">CLI</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/cli/index.html#cli-top">Command line</a>
+</div></details>
+</div>
+</nav>
+
+</aside><button aria-label="Close navigation" class="nav-backdrop" tabindex="-1" type="button"></button>
+<main class="main-content" id="main-content" tabindex="-1">
+<nav aria-label="Breadcrumb" class="breadcrumb"><a href="/overview/index.html">Docs</a><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m9 5 7 7-7 7"></path></svg><span>Core concepts</span><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m9 5 7 7-7 7"></path></svg><span>Agent configuration</span>
+</nav>
+<details class="mobile-toc"><summary>On this page</summary>
+<nav aria-label="Page sections"><a class="toc-link" href="#agent-top">Overview</a><a class="toc-link" href="#agent">Agent configuration</a><a class="toc-link" href="#agent-lifecycle">Run lifecycle and events</a>
+</nav></details>
+<section class="hero content-section page-hero" id="agent-top">
+<h1>Agent</h1>
+<p class="hero-copy"><code>Agent</code> is the coordinator for one configured assistant. It combines identity and instructions with a model client, then connects the tools, capabilities, and runtime components that the assistant can use.</p>
+<p class="hero-copy">On each run, Agent prepares the prompt, calls the reasoning loop, routes tool calls, and returns the response and updated context. You can add memory, knowledge, skills, middleware, output rules, a workspace, and an executor as the application needs them.</p>
+</section>
+<section class="section-block content-section" id="agent">
+<h2>Agent configuration<a aria-label="Link to Agent configuration" class="heading-anchor" href="#agent">#</a></h2>
+<p>This constructor shows the complete configuration surface. Only <code>name</code>, <code>description</code>, <code>instructions</code>, and <code>client</code> are required; the other components are optional.</p>
+<div class="code-card"><div class="code-head"><span>Agent constructor · max_ai.agents.Agent</span></div><pre tabindex="0"><code>def __init__(
+    self,
+    name: str,
+    description: str,
+    instructions: str,
+    client: CoreChatCompletionClient,
+    *,
+    # Most used first; the infrastructure (workspace, executor) has defaults.
+    toolset: Sequence[CoreTool | Callable[..., Any]] | None = None,
+    mcp: Sequence[MCPServerConfig] | None = None,
+    memory: CoreMemoryRegistry | None = None,
+    knowledge: Sequence[CoreKnowledgeRegistry] | None = None,
+    skills: CoreSkillRegistry | None = None,
+    reasoning: BaseReasoning | None = None,
+    compaction: CoreCompaction | None = None,
+    middlewares: Sequence[CoreMiddleware] | None = None,
+    gates: Sequence[CompletionBase] | None = None,
+    output_format: type[BaseModel] | None = None,
+    prompt_layers: Sequence[CoreLayer] | None = None,
+    workspace: WorkspaceBase | None = None,
+    executor: ExecutorBase | None = None,
+) -&gt; None:</code></pre></div>
+<div class="table-wrap"><table class="doc-table"><thead><tr><th>Argument</th><th>Purpose</th></tr></thead><tbody>
+<tr><td><code>name</code></td><td>Names the agent in the runtime and CLI.</td></tr>
+<tr><td><code>description</code></td><td>Summarizes the agent’s role for users and the model.</td></tr>
+<tr><td><code>instructions</code></td><td>Sets the agent’s behavior, priorities, and response style.</td></tr>
+<tr><td><code>client</code></td><td>Sends model requests and normalizes provider responses.</td></tr>
+<tr><td><code>toolset</code></td><td>Lists the tools and Python callables the model can invoke.</td></tr>
+<tr><td><code>mcp</code></td><td>Connects the agent to tools exposed by MCP servers.</td></tr>
+<tr><td><code>memory</code></td><td>Stores and retrieves user or session information across turns.</td></tr>
+<tr><td><code>knowledge</code></td><td>Provides searchable reference sources for the agent.</td></tr>
+<tr><td><code>skills</code></td><td>Provides task procedures and their supporting files.</td></tr>
+<tr><td><code>reasoning</code></td><td>Controls the model and tool loop; defaults to ReAct.</td></tr>
+<tr><td><code>compaction</code></td><td>Summarizes older context when enabled; omitted means no compaction.</td></tr>
+<tr><td><code>middlewares</code></td><td>Hooks that observe or adjust run, model, and tool events.</td></tr>
+<tr><td><code>gates</code></td><td>Checks whether the agent may finish with its proposed response.</td></tr>
+<tr><td><code>output_format</code></td><td>A Pydantic schema for validated structured responses.</td></tr>
+<tr><td><code>prompt_layers</code></td><td>Reusable components that add or customize prompt content.</td></tr>
+<tr><td><code>workspace</code></td><td>Manages persistent user files; defaults to local storage.</td></tr>
+<tr><td><code>executor</code></td><td>Runs tools and commands; defaults to local execution.</td></tr>
+</tbody></table></div>
+</section>
+<section class="section-block content-section" id="agent-lifecycle">
+<h2>Run lifecycle and event stream<a aria-label="Link to Run lifecycle and event stream" class="heading-anchor" href="#agent-lifecycle">#</a></h2>
+<p><code>run_stream_events()</code> is the low-level interface for one agent turn. It accepts a task and optional conversation context, then yields lifecycle events as they happen and an <code>AgentResponse</code> at the end. Use it when your application needs to show progress, inspect tool activity, or decide how to handle a paused run.</p>
+<div class="code-card"><div class="code-head"><span>Agent.run_stream_events</span></div><pre tabindex="0"><code>async def run_stream_events(
+    self,
+    task: str | CoreMessage | list[CoreMessage] | None = None,
+    run_context: RunContext | None = None,
+    cancellation_token: CancellationToken | None = None,
+    stream_tokens: bool = False,
+    **kwargs: Any,
+) -&gt; AsyncGenerator[CoreEvent | AgentResponse, None]:</code></pre></div>
+<p>The stream ends with an <code>AgentResponse</code>; preceding items are <code>CoreEvent</code> instances. This example keeps a stable user/session identity and prints event types while the run is active.</p>
+<div class="code-card"><div class="code-head"><span>Consume one session's event stream</span></div><pre tabindex="0"><code>from max_ai.agents import Agent
+from max_ai.core.event_type import CoreEvent
+from max_ai.types.agent_response import AgentResponse
+from max_ai.types.run_context import RunContext
+
+context = RunContext(user_id="user_001", session_id="support_session")
+response: AgentResponse | None = None
+
+async with agent:
+    async for item in agent.run_stream_events(
+        task="Summarize the open support request.",
+        run_context=context,
+        stream_tokens=True,
+    ):
+        if isinstance(item, AgentResponse):
+            response = item
+        elif isinstance(item, CoreEvent):
+            print(item.event_type)
+
+if response is not None:
+    print(response.final_text)
+    print(response.finish_reason)</code></pre></div>
+<h3>Arguments</h3>
+<div class="table-wrap"><table class="doc-table"><thead><tr><th>Argument</th><th>Purpose</th></tr></thead><tbody>
+<tr><td><code>task</code></td><td>A text task, one <code>CoreMessage</code>, a list of messages, or <code>None</code>. This is the new input for the turn; pass messages when you need a non-text or prebuilt conversation input.</td></tr>
+<tr><td><code>run_context</code></td><td>The <code>RunContext</code> holding user/session IDs, conversation messages, tool state, and runtime state. Reuse it to continue a conversation; if omitted, Agent creates a fresh context.</td></tr>
+<tr><td><code>cancellation_token</code></td><td>An optional <code>CancellationToken</code> linked to the run. Trigger it when the caller needs to stop an active turn.</td></tr>
+<tr><td><code>stream_tokens</code></td><td>When <code>True</code>, the stream includes model token-chunk events as they arrive. Keep it <code>False</code> when only lifecycle and tool events are needed.</td></tr>
+<tr><td><code>kwargs</code></td><td>Additional keyword arguments forwarded to the configured reasoning loop. Use these for loop-specific options.</td></tr>
+</tbody></table></div>
+<h3>Events and final response</h3>
+<p><code>CoreEvent</code> items describe activity such as a task starting, a reasoning step, a tool call, a model chunk, or a pause. Read <code>event_type</code> to identify the event and inspect its fields for details. The final <code>AgentResponse</code> includes <code>final_text</code>, <code>finish_reason</code>, usage, and the updated <code>context</code>.</p>
+<p>If a response needs approval or user input, resolve the pending item in its context before resuming. The application should collect the user's decision; do not start a new task with unresolved tool calls.</p>
+<div class="code-card"><div class="code-head"><span>Resolve an approval and continue</span></div><pre tabindex="0"><code>context = RunContext(user_id="user_001", session_id="support_session")
+
+async with agent:
+    response = await agent.run(
+        "Send the prepared email?",
+        run_context=context,
+    )
+
+    if response.needs_approval and response.context is not None:
+        pending = response.pending_approvals[0]
+        approved_by_user = input("Approve this action? [y/N] ").lower() == "y"
+        response.context.tool_state.apply_approval(
+            pending.id,
+            approved=approved_by_user,
+        )
+        response = await agent.resume(run_context=response.context)</code></pre></div>
+<p>For a pending question, use <code>response.context.tool_state.apply_user_answer(record.id, answer)</code> and then call <code>agent.resume(run_context=response.context)</code>. Resume uses the same conversation and does not add a new task.</p>
+<h3>Other run methods and cleanup</h3>
+<div class="table-wrap"><table class="doc-table"><thead><tr><th>Method</th><th>Use it when</th></tr></thead><tbody><tr><td><code>run()</code></td><td>You want one final <code>AgentResponse</code> without consuming intermediate events.</td></tr><tr><td><code>run_stream()</code></td><td>You want assistant text chunks as they arrive.</td></tr><tr><td><code>run_stream_events()</code></td><td>You want typed lifecycle events and the final response in one stream.</td></tr><tr><td><code>resume()</code></td><td>You have resolved a pending approval or question and want the same turn to continue.</td></tr></tbody></table></div>
+<p>Use <code>async with agent</code> so the Agent closes managed execution sessions and MCP connections when the scope ends. The default local executor runs on the host; use Docker or Modal when you need an isolated execution environment. See the <a href="/basecomponents/executor.html#executor-top">Executor guide</a>.</p>
+</section>
+<nav aria-label="Previous and next page" class="page-pagination"><a href="/examples/index.html"><small>← Previous</small><strong>Examples</strong></a><a class="next" href="/basecomponents/index.html"><small>Next →</small><strong>Base contracts</strong></a>
+</nav>
+<footer class="footer"><span>Max AI · Python agent framework</span>
+</footer>
+</main>
+<aside aria-label="On this page" class="page-toc">
+<p><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"></path></svg>On this page</p>
+<nav><a class="toc-link" href="#agent-top">Overview</a><a class="toc-link" href="#agent">Agent configuration</a><a class="toc-link" href="#agent-lifecycle">Run lifecycle and events</a>
+</nav>
+<div class="toc-extra"><a href="#agent-top"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5 12h14m-5-5 5 5-5 5"></path></svg>Back to top</a>
+</div>
+</aside>
+<dialog aria-labelledby="search-title" class="search-dialog" id="search-dialog">
+<h2 class="sr-only" id="search-title">Search documentation</h2>
+<div class="search-input-row"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><label class="sr-only" for="docs-search">Search documentation</label><input autocomplete="off" id="docs-search" placeholder="Search documentation…" spellcheck="false" type="search"/><button aria-label="Close search" id="search-close" type="button">Esc</button>
+</div>
+<div class="search-results" id="search-results">
+</div>
+<p class="sr-only" id="search-status" role="status">
+</p>
+<div class="search-footer"><span><kbd>↑</kbd> <kbd>↓</kbd> navigate   <kbd>↵</kbd> open</span><span>Search Max AI docs</span>
+</div>
+</dialog>
+</body>
+</html>

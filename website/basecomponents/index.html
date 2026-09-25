@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/><script>try { const saved = localStorage.getItem('max-ai-theme'); document.documentElement.dataset.theme = saved || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); } catch (_) {}</script>
+<meta content="Base contracts · Max AI framework documentation." name="description"/>
+<title>Base contracts · Max AI Docs</title>
+<link href="/assets/styles.css" rel="stylesheet"/>
+<script defer="" src="/assets/app.js"></script>
+<link href="/assets/favicon.svg" rel="icon" type="image/svg+xml"/></head>
+<body data-page="basecomponents/index.html">
+
+<a class="skip-link" href="#main-content">Skip to content</a>
+<header class="topbar">
+<a aria-label="Max AI home" class="brand" href="/overview/index.html"><svg aria-hidden="true" class="brand-logo" fill="none" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"><rect fill="currentColor" height="38" rx="10" width="38" x="1" y="1"></rect><path d="M10 28V12l10 12 10-12v16" stroke="var(--bg)" stroke-linejoin="round" stroke-width="3"></path><circle cx="30" cy="12" fill="#b9a5f4" r="3"></circle></svg><span>max<span class="brand-accent">ai</span></span><span class="brand-divider"></span><span class="header-label">Documentation</span></a>
+<div class="topbar-actions">
+<button aria-controls="search-dialog" aria-haspopup="dialog" class="search-trigger" type="button"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><span>Search documentation</span><kbd>⌘ K</kbd></button>
+
+<button aria-label="Switch color theme" class="icon-button" id="theme-toggle" type="button"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"></path></svg></button>
+<button aria-controls="sidebar" aria-expanded="false" aria-label="Open navigation" class="menu-button" id="menu-toggle" type="button"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M4 6h16M4 12h16M4 18h16"></path></svg></button>
+</div>
+</header>
+<nav aria-label="Primary" class="tabs-bar">
+<a class="selected" href="/overview/index.html">Documentation</a><a href="/overview/index.html#installation">Installation</a><a href="/agents/index.html#agent">API guide</a>
+<span class="release-label"><span class="status-dot"></span>v0.1.0 <span class="release-status">· in development</span></span>
+</nav>
+<aside class="sidebar" id="sidebar">
+<div class="sidebar-title">Max AI documentation</div>
+<nav aria-label="Documentation">
+<div class="nav-group nav-group-start">
+<details class="nav-disclosure nav-section">
+<summary class="nav-label nav-label-section">Start</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/overview/index.html">Overview</a>
+</div></details>
+</div>
+<div class="nav-group">
+<details class="nav-disclosure nav-section">
+<summary class="nav-label nav-label-section">Agents</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/agents/index.html#agent-top">Agent</a>
+</div></details>
+</div>
+<div class="nav-group">
+<details class="nav-disclosure nav-basecomponents">
+<summary class="nav-label nav-label-basecomponents">BaseComponents</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/basecomponents/clients.html#clients-top">Clients</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/compaction.html#compaction-top">Compaction</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/executor.html#executor-top">Executor</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/knowledge.html#knowledge-top">Knowledge</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/layers.html#layers-top">Layers</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/memory.html#memory-top">Memory</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/middleware.html#middleware-top">Middleware</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/reasoning.html#reasoning-top">Reasoning</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/skills.html#skills-top">Skills</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/tools.html#tools-top">Tools</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/workspace.html#workspace-top">Workspace</a>
+<a class="nav-link nav-sub-link" href="https://github.com/main-msfj/max_ai/tree/main/max_ai/base" target="_blank" rel="noopener">More in GitHub</a>
+</div></details>
+</div>
+<div class="nav-group">
+<details class="nav-disclosure nav-capability-root">
+<summary class="nav-label nav-label-capabilities">Capabilities</summary>
+<div class="nav-children">
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Client</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/clients/ollama.html#capability-clients-ollama-top">Ollama</a>
+<a class="nav-link nav-sub-link" href="/capabilities/clients/openai.html#capability-clients-openai-top">OpenAI</a>
+<a class="nav-link nav-sub-link" href="/capabilities/clients/openrouter.html#capability-clients-openrouter-top">OpenRouter</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Tool</summary>
+<div class="nav-children">
+<details class="nav-disclosure nav-category"><summary class="nav-link nav-sub-link">Native</summary><div class="nav-children">
+<a class="nav-link nav-example-link" href="/capabilities/tools/native/bash.html#capability-tool-bash-top">Bash</a>
+<a class="nav-link nav-example-link" href="/capabilities/tools/native/ask-user.html#capability-tool-ask-user-top">Ask User</a>
+<a class="nav-link nav-example-link" href="/capabilities/tools/native/filesystem.html#capability-tool-filesystem-top">File system</a>
+<a class="nav-link nav-example-link" href="/capabilities/tools/native/plan.html#capability-tool-plan-top">Plan</a>
+</div></details>
+<details class="nav-disclosure nav-category"><summary class="nav-link nav-sub-link">Decorator</summary><div class="nav-children">
+<a class="nav-link nav-example-link" href="/capabilities/tools/decorator/decorator.html#capability-tool-decorator-top">Decorator</a>
+<a class="nav-link nav-example-link" href="/capabilities/tools/decorator/function.html#capability-tool-function-top">Function wrapper</a>
+</div></details>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">MCP</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/mcp/stdio.html#capability-mcp-stdio-top">Stdio</a>
+<a class="nav-link nav-sub-link" href="/capabilities/mcp/http.html#capability-mcp-http-top">HTTP</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Memory</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/memory/local.html#capability-memory-local-top">Local</a>
+<a class="nav-link nav-sub-link" href="/capabilities/memory/sqlite.html#capability-memory-sqlite-top">SQLite</a>
+<a class="nav-link nav-sub-link" href="/capabilities/memory/mongodb.html#capability-memory-mongodb-top">MongoDB</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Knowledge</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/knowledge/local.html#capability-knowledge-local-top">Local</a>
+<a class="nav-link nav-sub-link" href="/capabilities/knowledge/sqlite.html#capability-knowledge-sqlite-top">SQLite</a>
+<a class="nav-link nav-sub-link" href="/capabilities/knowledge/mongodb.html#capability-knowledge-mongodb-top">MongoDB</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Skills</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/skills/local.html#capability-skills-local-top">Local</a>
+<a class="nav-link nav-sub-link" href="/capabilities/skills/github.html#capability-skills-github-top">GitHub</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Reasoning</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/reasoning/react.html#capability-reasoning-react-top">ReAct</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Compaction</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/compaction/summary.html#capability-compaction-summary-top">Summary</a>
+<a class="nav-link nav-sub-link" href="/capabilities/compaction/sliding-window.html#capability-compaction-sliding-window-top">Sliding window</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Middleware</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/middleware/budget.html#capability-middleware-budget-top">Budget</a>
+<a class="nav-link nav-sub-link" href="/capabilities/middleware/logging.html#capability-middleware-logging-top">Logging</a>
+<a class="nav-link nav-sub-link" href="/capabilities/middleware/tracing.html#capability-middleware-tracing-top">Tracing</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Gates</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/completion-gates/runtime.html#capability-completion-gate-runtime-top">Runtime completion gate</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Output format</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/output-formats/structured.html#capability-output-format-top">Structured output</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Prompt layers</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/agent-policy.html#capability-stack-agent-policy-top">Agent policy</a>
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/context.html#capability-stack-context-top">Context</a>
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/knowledge.html#capability-stack-knowledge-top">Knowledge</a>
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/memory.html#capability-stack-memory-top">Memory</a>
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/rendering.html#capability-stack-rendering-top">Rendering</a>
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/session-state.html#capability-stack-session-state-top">Session state</a>
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/skills.html#capability-stack-skills-top">Skills</a>
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/task-analysis.html#capability-stack-task-analysis-top">Task analysis</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Workspace</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/workspaces/local.html#capability-workspace-local-top">Local</a>
+<a class="nav-link nav-sub-link" href="/capabilities/workspaces/azure-blob.html#capability-workspace-azure-blob-top">Azure Blob</a>
+<a class="nav-link nav-sub-link" href="/capabilities/workspaces/minio.html#capability-workspace-minio-top">MinIO</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Executor</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/executors/local.html#capability-executor-local-top">Local</a>
+<a class="nav-link nav-sub-link" href="/capabilities/executors/docker.html#capability-executor-docker-top">Docker</a>
+<a class="nav-link nav-sub-link" href="/capabilities/executors/modal.html#capability-executor-modal-top">Modal</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Context</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/context/local.html#capability-context-local-top">Local</a>
+<a class="nav-link nav-sub-link" href="/capabilities/context/sqlite.html#capability-context-sqlite-top">SQLite</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Session store</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/session-stores/local.html#capability-session-store-local-top">Local</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Quota store</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/quota-stores/local.html#capability-quota-store-local-top">Local</a>
+<a class="nav-link nav-sub-link" href="/capabilities/quota-stores/mongodb.html#capability-quota-store-mongodb-top">MongoDB</a>
+</div></details>
+</div></details>
+</div>
+<div class="nav-group">
+<details class="nav-disclosure nav-examples">
+<summary class="nav-label nav-label-capabilities">Examples</summary>
+<div class="nav-children">
+<details class="nav-disclosure nav-category">
+<summary class="nav-link nav-sub-link">Basic</summary>
+<div class="nav-children">
+<a class="nav-link nav-example-link" href="/examples/basic/basic-agent.html#basic-agent">Basic agent</a>
+<a class="nav-link nav-example-link" href="/examples/basic/ollama-agent.html#ollama-agent">Ollama agent</a>
+<a class="nav-link nav-example-link" href="/examples/basic/function-tools.html#function-tools">Function tools</a>
+<a class="nav-link nav-example-link" href="/examples/basic/tool-approval.html#tool-approval">Tool approval</a>
+<a class="nav-link nav-example-link" href="/examples/basic/sessions.html#sessions">Sessions</a>
+<a class="nav-link nav-example-link" href="/examples/basic/memory.html#memory">Memory</a>
+<a class="nav-link nav-example-link" href="/examples/basic/knowledge-search.html#knowledge-search">Knowledge search</a>
+<a class="nav-link nav-example-link" href="/examples/basic/structured-output.html#structured-output">Structured output</a>
+<a class="nav-link nav-example-link" href="/examples/basic/mcp-tools.html#mcp-tools">MCP tools</a>
+<a class="nav-link nav-example-link" href="/examples/basic/skills.html#skills">Skills</a>
+<a class="nav-link nav-example-link" href="/examples/basic/streaming-events.html#streaming-events">Streaming events</a>
+<a class="nav-link nav-example-link" href="/examples/basic/middleware-tracing.html#middleware-tracing">Middleware and tracing</a>
+<a class="nav-link nav-example-link" href="/examples/basic/workspace-files.html#workspace-files">Workspace files</a>
+<a class="nav-link nav-example-link" href="/examples/basic/concurrent-runs.html#concurrent-runs">Concurrent runs</a>
+<a class="nav-link nav-example-link" href="/examples/basic/full-agent.html#full-agent">Full agent</a>
+</div></details>
+<details class="nav-disclosure nav-category">
+<summary class="nav-link nav-sub-link">Advanced</summary>
+<div class="nav-children">
+<a class="nav-link nav-example-link" href="/examples/advanced/native-tool.html#native-tool">Native tool</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/postgres-memory.html#postgres-memory">PostgreSQL memory</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/postgres-knowledge.html#postgres-knowledge">PostgreSQL knowledge</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/custom-middleware.html#custom-middleware">Custom middleware</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/in-memory-session-store.html#in-memory-session-store">In-memory session store</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/custom-prompt-layer.html#custom-prompt-layer">Custom prompt layer</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/custom-embedding.html#custom-embedding">Custom embedding</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/custom-workspace.html#custom-workspace">Custom workspace</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/serialize-agent.html#serialize-agent">Serialize an agent</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/deserialize-agent.html#deserialize-agent">Deserialize an agent</a>
+</div></details>
+</div></details>
+</div>
+<div class="nav-group">
+<details class="nav-disclosure nav-types">
+<summary class="nav-label nav-label-capabilities">Types</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/types/agent-response.html#agent-response-top">AgentResponse</a>
+<a class="nav-link nav-sub-link" href="/types/completion.html#completion-top">Completion</a>
+<a class="nav-link nav-sub-link" href="/types/tool.html#tool-top">Tool</a>
+<a class="nav-link nav-sub-link" href="/types/tool-call.html#tool-call-top">Tool call</a>
+<a class="nav-link nav-sub-link" href="/types/run-context.html#run-context-top">RunContext</a>
+</div></details>
+</div>
+<div class="nav-group">
+<details class="nav-disclosure nav-events">
+<summary class="nav-label nav-label-capabilities">Events</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/events/index.html#events-top">Event types</a>
+</div></details>
+</div>
+<div class="nav-group">
+<details class="nav-disclosure nav-cli">
+<summary class="nav-label nav-label-capabilities">CLI</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/cli/index.html#cli-top">Command line</a>
+</div></details>
+</div>
+</nav>
+
+</aside><button aria-label="Close navigation" class="nav-backdrop" tabindex="-1" type="button"></button>
+<main class="main-content" id="main-content" tabindex="-1"><nav aria-label="Breadcrumb" class="breadcrumb"><a href="/overview/index.html">Docs</a><span>›</span><span>Base contracts</span></nav><details class="mobile-toc"><summary>On this page</summary><nav aria-label="Page sections"><a class="toc-link" href="#base-top">Overview</a><a class="toc-link" href="#boundary">Where Base fits</a><a class="toc-link" href="#base-catalog">The contract catalog</a><a class="toc-link" href="#extend-base">How to implement one</a><a class="toc-link" href="#base-execution-contracts">Reasoning and middleware</a><a class="toc-link" href="#base-contracts-full">Base contracts</a><a class="toc-link" href="#base-files">Source map</a></nav></details><section class="hero content-section page-hero" id="base-top"><h1>Base contracts</h1><p class="hero-copy">The stable interfaces behind a pluggable harness. Start here when you want to add a provider or understand which object owns which responsibility.</p></section><section class="section-block content-section" id="boundary"><h2>Where Base fits<a class="heading-anchor" href="#boundary" aria-label="Link to Where Base fits">#</a></h2><p><code>max_ai.base</code> defines what a component must provide. <code>max_ai.capabilities</code> contains implementations that satisfy those contracts. <code>max_ai.core</code> supplies the runtime types and machinery that connect them. <code>Agent</code> is the composition point.</p><div class="event-flow"><span>Base contract</span><i>→</i><span>Capability implementation</span><i>→</i><span>Agent configuration</span><i>→</i><span>Core runtime</span></div></section><section class="section-block content-section" id="base-catalog"><h2>The contract catalog<a class="heading-anchor" href="#base-catalog" aria-label="Link to The contract catalog">#</a></h2><div class="capability-list"><div><span class="list-number">Model</span><strong><code>CoreChatCompletionClient</code></strong><small>A provider-neutral call/stream interface for messages, prompts, tools, and usage.</small></div><div><span class="list-number">Prompt</span><strong><code>CoreLayer</code></strong><small>A Jinja2-backed layer with declared variables and serializable template configuration.</small></div><div><span class="list-number">Tools</span><strong><code>CoreTool</code></strong><small>A tool name, description, JSON Schema parameters, approval mode, and async execute method.</small></div><div><span class="list-number">Reason</span><strong><code>BaseReasoning</code></strong><small>A per-run bound loop; ReAct supplies the default iterative implementation.</small></div><div><span class="list-number">Close</span><strong><code>CompletionBase</code></strong><small>A gate that observes a turn and decides whether the proposed final answer may close it.</small></div><div><span class="list-number">Context</span><strong><code>CoreMemoryRegistry</code>, <code>CoreSkillBase</code>, <code>CoreKnowledgeRegistry</code></strong><small>Distinct contracts for personal memory, packaged procedures, and on-demand retrieval.</small></div><div><span class="list-number">Runtime</span><strong><code>WorkspaceBase</code>, <code>ExecutorBase</code></strong><small>Separate persistent user files from execution of runtime tools.</small></div><div><span class="list-number">Control</span><strong><code>CoreCompaction</code>, <code>CoreMiddleware</code></strong><small>Manage long conversations and intercept run/model/tool lifecycle hooks.</small></div><div><span class="list-number">Stores</span><strong><code>CoreContextRegistry</code>, session and quota stores</strong><small>Additional storage contracts; context registries are available independently of the current Agent constructor.</small></div><div><span class="list-number">Component</span><strong><code>ComponentBase</code></strong><small>Defines provider identity and config serialization/deserialization for trusted components.</small></div></div></section><section class="section-block content-section" id="extend-base"><h2>How to implement one<a class="heading-anchor" href="#extend-base" aria-label="Link to How to implement one">#</a></h2><p>Choose the contract for the behavior you want to replace. A concrete class implements its abstract methods and exposes a provider path. Add a Pydantic config schema plus <code>_to_config()</code>/<code>_from_config()</code> when the instance must survive serialization. Runtime data belongs in <code>RunContext</code> or the per-run binding, rather than shared mutable fields on a reusable component.</p><div class="code-card"><div class="code-head"><span>Shape of a component</span></div><pre tabindex="0"><code>class MyLayer(Component[StackConfig], CoreLayer):
+    component_schema = StackConfig
+    component_type = &quot;prompts&quot;
+    # Provide _default_template() and any variable declarations.</code></pre></div><p><a href="/core/prompt-layers.html#custom-layers">See a small layer example →</a> <a href="/basecomponents/tools.html#abstract-methods">See the CoreTool contract →</a></p></section><section class="section-block content-section" id="base-execution-contracts"><h2>Reasoning and middleware contracts<a class="heading-anchor" href="#base-execution-contracts" aria-label="Link to Reasoning and middleware contracts">#</a></h2><p>These contracts receive different parts of a run. Reasoning drives the loop; middleware observes or changes selected lifecycle events.</p><div class="backend-panels"><details class="backend-panel" id="base-reasoning"><summary><code>BaseReasoning</code>: the loop and its inputs</summary><div class="backend-copy"><p><strong>Receives:</strong> <code>RunContext</code> (messages, tool records, and run state), a rendered <code>PromptCtx</code>, per-run <code>BaseLoopState</code>, and optional streaming, cancellation, output-format, and evaluation settings. The Agent binds runtime dependencies such as the client, dispatcher, middleware chain, compaction strategy, and memory when a run starts.</p><p><strong>Returns:</strong> An async stream of <code>CoreEvent</code> objects. A custom loop records assistant and tool messages in the context, registers tool calls before dispatch, and emits a completion event when the turn ends.</p><div class="code-card"><div class="code-head"><span>Reasoning loop contract</span></div><pre tabindex="0"><code>async def execute_reasoning_loop(
+    self,
+    ctx: RunContext,
+    prompts: PromptCtx,
+    loop_state: BaseLoopState,
+    stream_tokens: bool = False,
+    cancellation_token: CancellationToken | None = None,
+    output_format: type[BaseModel] | None = None,
+    eval_criteria: list[str] | None = None,
+    **kwargs: Any,
+) -&gt; AsyncGenerator[CoreEvent, None]:
+    ...</code></pre></div><p>The default implementation is <code>ReactLoop</code>. Use <code>Agent(reasoning=...)</code> to select a strategy; keep per-run mutable state in the bound loop state or <code>RunContext</code>, not on the reusable strategy object.</p></div></details><details class="backend-panel" id="base-middleware"><summary><code>CoreMiddleware</code>: run, model, and tool hooks</summary><div class="backend-copy"><p><strong>Receives:</strong> Each hook gets a <code>MiddlewareContext</code> with the current <code>RunContext</code>, agent name, event emitter, and a per-run state helper. The second argument depends on the hook: a task at run start, a <code>ModelRequest</code> before a model call, or a <code>ToolRequest</code> before an approved tool call.</p><p><strong>Can return:</strong> Model hooks may edit requests or responses; returning a replacement <code>ToolResult</code> from <code>on_tool_request</code> skips that tool execution. The default methods do nothing, so a subclass only needs the hooks it uses.</p><div class="code-card"><div class="code-head"><span>A small run-start middleware</span></div><pre tabindex="0"><code>from max_ai.agents import Agent
+from max_ai.base.middleware import CoreMiddleware
+
+class RunLogMiddleware(CoreMiddleware):
+    async def on_run_start(self, mw, task):
+        kind = "new run" if task is not None else "resumed run"
+        print(f"{mw.agent}: {kind}")
+
+agent = Agent(..., middlewares=[RunLogMiddleware()])</code></pre></div><p>Use <code>mw.state(self)</code> for state that must survive pause and resume. Middleware receives hooks; a completion gate makes the separate decision to accept or reject a final answer.</p></div></details></div></section><section class="section-block content-section" id="base-contracts-full"><h2>Base contracts, explained<a class="heading-anchor" href="#base-contracts-full" aria-label="Link to Base contracts, explained">#</a></h2><p>Everything in <code>max_ai.base</code> defines the interfaces that framework components follow. The examples below show what each contract owns and how it is connected to an Agent.</p><div class="backend-panels">
+<details class="backend-panel" id="contract-capabilities"><summary><code>CoreAgentCapabilities</code>: capability base</summary><div class="backend-copy"><p><strong>Receives:</strong> A typed configuration schema through its component base. Capability registries can connect to resources during the Agent lifecycle and optionally expose tools.</p><p><strong>Use it for:</strong> The shared base of memory, knowledge, skills, and workspace capabilities.</p><div class="code-card"><div class="code-head"><span>Capability contract</span></div><pre tabindex="0"><code>class CoreAgentCapabilities(CoreLifecycleComponent[ConfigT], ABC):
+    @property
+    def tools(self) -&gt; list[CoreTool]:
+        return []</code></pre></div></div></details>
+<details class="backend-panel" id="contract-client"><summary><code>CoreChatCompletionClient</code>: model provider</summary><div class="backend-copy"><p><strong>Receives:</strong> A model name, optional API key or environment variable, and provider configuration. Its <code>run()</code> method receives rendered prompt context and messages, plus optional tools and streaming settings.</p><p><strong>Returns:</strong> Normalized completion results or chunks, independent of provider wire formats.</p><div class="code-card"><div class="code-head"><span>Configure the client contract</span></div><pre tabindex="0"><code>from max_ai.agents import Agent
+from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
+
+client = OpenAIChatCompletionClient(
+    model="gpt-5.6-luna",
+    api_key="YOUR_API_KEY",
+)
+agent = Agent(..., client=client)</code></pre></div></div></details>
+<details class="backend-panel" id="contract-compaction"><summary><code>CoreCompaction</code>: conversation history</summary><div class="backend-copy"><p><strong>Receives:</strong> The conversation, rendered prompts, token limits, and current compaction state. A strategy implements <code>_compact</code>; shared contract code validates and returns the updated message groups and state.</p><p><strong>Use it for:</strong> Keeping the conversation within a model's context window while preserving useful earlier details.</p><div class="code-card"><div class="code-head"><span>Choose a compaction strategy</span></div><pre tabindex="0"><code>from max_ai.agents import Agent
+from max_ai.capabilities.compaction.window import SlidingWindowCompaction
+
+agent = Agent(..., compaction=SlidingWindowCompaction(
+    max_turns=10,
+))</code></pre></div></div></details>
+<details class="backend-panel" id="contract-knowledge"><summary><code>CoreKnowledgeRegistry</code>: searchable reference data</summary><div class="backend-copy"><p><strong>Receives:</strong> A source <code>name</code>, a description for its search tool, and a query with an optional result limit.</p><p><strong>Returns:</strong> Matching <code>KnowledgeBlock</code> records. The registry exposes <code>search_{name}</code> when tool access is enabled.</p><div class="code-card"><div class="code-head"><span>Connect knowledge to an agent</span></div><pre tabindex="0"><code>from max_ai.agents import Agent
+from max_ai.capabilities.knowledge.local import LocalKnowledgeRegistry
+
+knowledge = LocalKnowledgeRegistry(
+    name="product_docs",
+    description="Search product documentation.",
+    base_path="./agent-data",
+)
+agent = Agent(..., knowledge=[knowledge])</code></pre></div></div></details>
+<details class="backend-panel" id="contract-layer"><summary><code>CoreLayer</code>: prompt content</summary><div class="backend-copy"><p><strong>Receives:</strong> Declared variables from the Agent and runtime context. Its Jinja2 template renders into prompt text before the client call.</p><p><strong>Use it for:</strong> Adding reusable instructions or context while keeping prompt construction composable.</p><div class="code-card"><div class="code-head"><span>Define a prompt layer</span></div><pre tabindex="0"><code>class TeamRulesLayer(CoreLayer):
+    def _default_template(self) -&gt; str:
+        return "Follow the team rules for {{ team }}."
+
+    def _required_variables(self) -&gt; set[str]:
+        return {"team"}</code></pre></div></div></details>
+<details class="backend-panel" id="contract-memory"><summary><code>CoreMemoryRegistry</code>: user and session memory</summary><div class="backend-copy"><p><strong>Receives:</strong> A user and session scope from <code>RunContext</code>, plus memory records to create, update, list, or search.</p><p><strong>Use it for:</strong> Information that changes over time and belongs to a particular user or conversation.</p><div class="code-card"><div class="code-head"><span>Attach memory</span></div><pre tabindex="0"><code>from max_ai.agents import Agent
+from max_ai.capabilities.memory.local import LocalMemoryRegistry
+from max_ai.types.run_context import RunContext
+
+memory = LocalMemoryRegistry(base_path="./agent-data")
+agent = Agent(..., memory=memory)
+context = RunContext(user_id="user_001", session_id="session_001")</code></pre></div></div></details>
+<details class="backend-panel" id="contract-middleware"><summary><code>CoreMiddleware</code>: lifecycle hooks</summary><div class="backend-copy"><p><strong>Receives:</strong> A middleware context and the event payload for run, model, or tool hooks. Hooks may observe or return an updated request or response.</p><p><strong>Use it for:</strong> Logging, tracing, request changes, or handling tool results around an Agent run.</p><div class="code-card"><div class="code-head"><span>Register middleware</span></div><pre tabindex="0"><code>from max_ai.agents import Agent
+from max_ai.base.middleware import CoreMiddleware
+
+class RunLogMiddleware(CoreMiddleware):
+    async def on_run_start(self, mw, task):
+        print(mw.agent, "started")
+
+agent = Agent(..., middlewares=[RunLogMiddleware()])</code></pre></div></div></details>
+<details class="backend-panel" id="contract-skill"><summary><code>CoreSkillBase</code>: reusable procedures</summary><div class="backend-copy"><p><strong>Receives:</strong> A source location and a list of selected skill names. Preparation loads each skill's <code>SKILL.md</code> and metadata into the registry.</p><p><strong>Use it for:</strong> Giving an Agent task-specific procedures and supporting files that it can consult when needed.</p><div class="code-card"><div class="code-head"><span>Attach skills</span></div><pre tabindex="0"><code>from max_ai.agents import Agent
+from max_ai.capabilities.skills.local import LocalSkillRegistry
+
+skills = LocalSkillRegistry(
+    source="./skills",
+    skills=["invoice-review"],
+)
+agent = Agent(..., skills=skills)</code></pre></div></div></details>
+<details class="backend-panel" id="contract-workspace"><summary><code>WorkspaceBase</code>: user files</summary><div class="backend-copy"><p><strong>Receives:</strong> A user ID and optional conversation ID at run time. The workspace prepares directories and downloads or uploads files for local or remote storage.</p><p><strong>Use it for:</strong> Keeping files available between runs for a user, including files used by tools and skills.</p><div class="code-card"><div class="code-head"><span>Attach a workspace</span></div><pre tabindex="0"><code>from max_ai.agents import Agent
+from max_ai.capabilities.workspace.local import LocalWorkspace
+
+workspace = LocalWorkspace(root="./agent-data")
+agent = Agent(..., workspace=workspace)</code></pre></div></div></details>
+</div><p class="installation-note">For more, see GitHub.</p></section><section class="section-block content-section" id="base-files"><h2>Source map<a class="heading-anchor" href="#base-files" aria-label="Link to Source map">#</a></h2><p>Contract modules live directly in <code>max_ai/base/</code>: <code>clients.py</code>, <code>layer.py</code>, <code>tools.py</code>, <code>reasoning.py</code>, <code>memory.py</code>, <code>skills.py</code>, <code>knowledge.py</code>, <code>compaction.py</code>, <code>completion_gate.py</code>, <code>middleware.py</code>, <code>workspace.py</code>, <code>executor.py</code>, <code>embedding.py</code>, <code>component.py</code>, and the storage/context contracts.</p></section><nav aria-label="Previous and next page" class="page-pagination"><a href="/agents/index.html"><small>← Previous</small><strong>Agent</strong></a><a class="next" href="/core/concepts.html"><small>Next →</small><strong>Loop & conversations</strong></a></nav><footer class="footer"><span>Max AI · Python agent framework</span></footer></main><aside aria-label="On this page" class="page-toc"><p>On this page</p><nav><a class="toc-link" href="#base-top">Overview</a><a class="toc-link" href="#boundary">Where Base fits</a><a class="toc-link" href="#base-catalog">The contract catalog</a><a class="toc-link" href="#extend-base">How to implement one</a><a class="toc-link" href="#base-execution-contracts">Reasoning and middleware</a><a class="toc-link" href="#base-contracts-full">Base contracts</a><a class="toc-link" href="#base-files">Source map</a></nav><div class="toc-extra"><a href="#base-top">Back to top ↑</a></div></aside><dialog aria-labelledby="search-title" class="search-dialog" id="search-dialog">
+<h2 class="sr-only" id="search-title">Search documentation</h2>
+<div class="search-input-row"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><label class="sr-only" for="docs-search">Search documentation</label><input autocomplete="off" id="docs-search" placeholder="Search documentation…" spellcheck="false" type="search"/><button aria-label="Close search" id="search-close" type="button">Esc</button>
+</div>
+<div class="search-results" id="search-results">
+</div>
+<p class="sr-only" id="search-status" role="status">
+</p>
+<div class="search-footer"><span><kbd>↑</kbd> <kbd>↓</kbd> navigate   <kbd>↵</kbd> open</span><span>Search Max AI docs</span>
+</div>
+</dialog>
+</body>
+</html>

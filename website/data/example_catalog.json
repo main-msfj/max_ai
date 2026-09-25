@@ -1,0 +1,202 @@
+[
+  {
+    "slug": "basic-agent",
+    "title": "Basic agent",
+    "level": "Basic",
+    "source": "examples/basic/01_basic_agent.py",
+    "what": "Creates a minimal assistant backed by the OpenAI provider.",
+    "how": "Builds an Agent with a model configuration and sends it a prompt, showing the smallest useful agent setup."
+  },
+  {
+    "slug": "ollama-agent",
+    "title": "Ollama agent",
+    "level": "Basic",
+    "source": "examples/basic/02_ollama_agent.py",
+    "what": "Connects an agent to a model served locally by Ollama.",
+    "how": "Sets the local provider and model name, then sends a prompt through the same Agent interface."
+  },
+  {
+    "slug": "function-tools",
+    "title": "Function tools",
+    "level": "Basic",
+    "source": "examples/basic/03_function_tools.py",
+    "what": "Gives a financial assistant a compound interest calculator.",
+    "how": "Defines a Python function with typed arguments and registers it so the agent can call it for a calculation."
+  },
+  {
+    "slug": "tool-approval",
+    "title": "Tool approval",
+    "level": "Basic",
+    "source": "examples/basic/04_tool_approval.py",
+    "what": "Requires approval before a tool saves a report to a file.",
+    "how": "Defines a file saving tool and configures approval for the tool call before it runs."
+  },
+  {
+    "slug": "sessions",
+    "title": "Sessions",
+    "level": "Basic",
+    "source": "examples/basic/05_sessions.py",
+    "what": "Continues a conversation across separate runs.",
+    "how": "Runs the agent with the same user and session identifiers so conversation context can be restored."
+  },
+  {
+    "slug": "memory",
+    "title": "Memory",
+    "level": "Basic",
+    "source": "examples/basic/06_memory.py",
+    "what": "Stores and reuses a user preference with local memory.",
+    "how": "Configures a local memory backend and uses the same user identity on later runs to recall saved information."
+  },
+  {
+    "slug": "knowledge-search",
+    "title": "Knowledge search",
+    "level": "Basic",
+    "source": "examples/basic/07_knowledge_search.py",
+    "what": "Lets an assistant search local reference documents.",
+    "how": "Creates a local knowledge collection and connects it to the agent for retrieval relevant to the prompt."
+  },
+  {
+    "slug": "structured-output",
+    "title": "Structured output",
+    "level": "Basic",
+    "source": "examples/basic/08_structured_output.py",
+    "what": "Returns data validated against a Pydantic model.",
+    "how": "Defines a response schema and asks the agent to produce a result that conforms to its fields."
+  },
+  {
+    "slug": "mcp-tools",
+    "title": "MCP tools",
+    "level": "Basic",
+    "source": "examples/basic/09_mcp_tools.py",
+    "what": "Connects an agent to tools exposed by an HTTP MCP server.",
+    "how": "Configures the MCP server connection and makes its available tools usable during the agent run."
+  },
+  {
+    "slug": "skills",
+    "title": "Skills",
+    "level": "Basic",
+    "source": "examples/basic/10_skills.py",
+    "what": "Adds a repository skill to a writing assistant.",
+    "how": "Loads a skill from the project and includes it in the agent configuration so its instructions guide the task."
+  },
+  {
+    "slug": "streaming-events",
+    "title": "Streaming events",
+    "level": "Basic",
+    "source": "examples/basic/11_streaming_events.py",
+    "what": "Prints an agent response as it arrives.",
+    "how": "Consumes the run event stream and displays text chunks as the model produces them."
+  },
+  {
+    "slug": "middleware-tracing",
+    "title": "Middleware and tracing",
+    "level": "Basic",
+    "source": "examples/basic/12_middleware_and_tracing.py",
+    "what": "Logs run activity and can emit traces through an OpenTelemetry provider.",
+    "how": "Adds middleware around the agent run; tracing is available when a telemetry provider is configured."
+  },
+  {
+    "slug": "workspace-files",
+    "title": "Workspace files",
+    "level": "Basic",
+    "source": "examples/basic/13_workspace_files.py",
+    "what": "Creates a file in a user-specific workspace.",
+    "how": "Configures workspace access and asks the agent to write a file, keeping its files scoped to the user."
+  },
+  {
+    "slug": "concurrent-runs",
+    "title": "Concurrent runs",
+    "level": "Basic",
+    "source": "examples/basic/14_concurrent_runs.py",
+    "what": "Serves two users concurrently with one agent configuration.",
+    "how": "Starts independent asynchronous runs with separate user context so their conversations remain distinct."
+  },
+  {
+    "slug": "full-agent",
+    "title": "Full agent",
+    "level": "Basic",
+    "source": "examples/basic/15_full_agent.py",
+    "what": "Combines tools, memory, knowledge, skills, and sessions in one assistant.",
+    "how": "Builds a complete configuration from the smaller capabilities and runs an agent with the combined setup."
+  },
+  {
+    "slug": "native-tool",
+    "title": "Native tool",
+    "level": "Advanced",
+    "source": "examples/advance/01_native_tool.py",
+    "what": "Implements a compound interest calculator as a native framework tool.",
+    "how": "Extends CoreTool, defines its input schema and execution method, then registers the tool with an agent."
+  },
+  {
+    "slug": "postgres-memory",
+    "title": "PostgreSQL memory",
+    "level": "Advanced",
+    "source": "examples/advance/02_postgres_memory.py",
+    "what": "Shows a minimal memory backend stored in PostgreSQL.",
+    "how": "Implements the memory registry interface with database operations for storing and retrieving user memories."
+  },
+  {
+    "slug": "postgres-knowledge",
+    "title": "PostgreSQL knowledge",
+    "level": "Advanced",
+    "source": "examples/advance/03_postgres_knowledge.py",
+    "what": "Demonstrates a small PostgreSQL-backed knowledge registry for office notes.",
+    "how": "The url constructor argument supplies the PostgreSQL connection string. On connect, the example creates an example_knowledge table and inserts one sample office-hours note. Search runs a parameterized ILIKE query with a result limit, then returns matching rows as KnowledgeBlock objects. This minimal example uses text matching; it does not implement embeddings or semantic search."
+  },
+  {
+    "slug": "custom-middleware",
+    "title": "Custom middleware",
+    "level": "Advanced",
+    "source": "examples/advance/04_custom_middleware.py",
+    "what": "Observes when an agent run starts and finishes.",
+    "how": "Extends CoreMiddleware and implements lifecycle hooks that receive the run context and final response."
+  },
+  {
+    "slug": "in-memory-session-store",
+    "title": "In-memory session store",
+    "level": "Advanced",
+    "source": "examples/advance/05_in_memory_session_store.py",
+    "what": "Implements session persistence with a Python dictionary.",
+    "how": "Extends CoreSessionStore and defines async load and save operations keyed by user and session."
+  },
+  {
+    "slug": "custom-prompt-layer",
+    "title": "Custom prompt layer",
+    "level": "Advanced",
+    "source": "examples/advance/06_custom_prompt_layer.py",
+    "what": "Adds a reusable English style instruction to an agent.",
+    "how": "Defines a CoreLayer component that contributes instructions to the prompt stack."
+  },
+  {
+    "slug": "custom-embedding",
+    "title": "Custom embedding",
+    "level": "Advanced",
+    "source": "examples/advance/07_custom_embedding.py",
+    "what": "Provides a small teaching embedding implementation based on word counts.",
+    "how": "Extends CoreEmbedding and maps input text to vectors, demonstrating the embedding interface without a remote model."
+  },
+  {
+    "slug": "custom-workspace",
+    "title": "Custom workspace",
+    "level": "Advanced",
+    "source": "examples/advance/08_custom_workspace.py",
+    "what": "Stores workspace files in a local folder that represents an alternate backend.",
+    "how": "Extends WorkspaceBase and implements download and upload behavior between workspace files and the configured folders."
+  },
+  {
+    "slug": "serialize-agent",
+    "title": "Serialize an agent",
+    "level": "Advanced",
+    "source": "examples/advance/09_serialize_agent.py",
+    "what": "Saves an agent configuration as JSON.",
+    "how": "Creates an Agent and serializes its configuration so it can be stored and restored later."
+  },
+  {
+    "slug": "deserialize-agent",
+    "title": "Deserialize an agent",
+    "level": "Advanced",
+    "source": "examples/advance/10_deserialize_agent.py",
+    "what": "Rebuilds an agent from previously saved JSON.",
+    "how": "Loads serialized configuration and passes it to the framework to reconstruct the Agent."
+  }
+]

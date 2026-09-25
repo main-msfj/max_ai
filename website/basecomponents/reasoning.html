@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/><script>try { const saved = localStorage.getItem('max-ai-theme'); document.documentElement.dataset.theme = saved || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); } catch (_) {}</script>
+<meta content="Reasoning controls the cycle that moves a run forward. The default ReAct loop asks the model what to do, executes requested tools, and repeats until the response is ready or the run pauses. · Max AI documentation." name="description"/>
+<title>Reasoning · Max AI Docs</title>
+<link href="/assets/styles.css" rel="stylesheet"/>
+<script defer="" src="/assets/app.js"></script>
+<link href="/assets/favicon.svg" rel="icon" type="image/svg+xml"/></head>
+<body data-page="basecomponents/reasoning.html">
+
+<a class="skip-link" href="#main-content">Skip to content</a>
+<header class="topbar">
+<a aria-label="Max AI home" class="brand" href="/overview/index.html"><svg aria-hidden="true" class="brand-logo" fill="none" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"><rect fill="currentColor" height="38" rx="10" width="38" x="1" y="1"></rect><path d="M10 28V12l10 12 10-12v16" stroke="var(--bg)" stroke-linejoin="round" stroke-width="3"></path><circle cx="30" cy="12" fill="#b9a5f4" r="3"></circle></svg><span>max<span class="brand-accent">ai</span></span><span class="brand-divider"></span><span class="header-label">Documentation</span></a>
+<div class="topbar-actions">
+<button aria-controls="search-dialog" aria-haspopup="dialog" class="search-trigger" type="button"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><span>Search documentation</span><kbd>⌘ K</kbd></button>
+
+<button aria-label="Switch color theme" class="icon-button" id="theme-toggle" type="button"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"></path></svg></button>
+<button aria-controls="sidebar" aria-expanded="false" aria-label="Open navigation" class="menu-button" id="menu-toggle" type="button"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M4 6h16M4 12h16M4 18h16"></path></svg></button>
+</div>
+</header>
+<nav aria-label="Primary" class="tabs-bar">
+<a class="selected" href="/overview/index.html">Documentation</a><a href="/overview/index.html#installation">Installation</a><a href="/agents/index.html#agent">API guide</a>
+<span class="release-label"><span class="status-dot"></span>v0.1.0 <span class="release-status">· in development</span></span>
+</nav>
+<aside class="sidebar" id="sidebar">
+<div class="sidebar-title">Max AI documentation</div>
+<nav aria-label="Documentation">
+<div class="nav-group nav-group-start">
+<details class="nav-disclosure nav-section">
+<summary class="nav-label nav-label-section">Start</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/overview/index.html">Overview</a>
+</div></details>
+</div>
+<div class="nav-group">
+<details class="nav-disclosure nav-section">
+<summary class="nav-label nav-label-section">Agents</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/agents/index.html#agent-top">Agent</a>
+</div></details>
+</div>
+<div class="nav-group">
+<details class="nav-disclosure nav-basecomponents" open>
+<summary aria-current="location" class="nav-label nav-label-basecomponents">BaseComponents</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/basecomponents/clients.html#clients-top">Clients</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/compaction.html#compaction-top">Compaction</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/executor.html#executor-top">Executor</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/knowledge.html#knowledge-top">Knowledge</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/layers.html#layers-top">Layers</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/memory.html#memory-top">Memory</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/middleware.html#middleware-top">Middleware</a>
+<a aria-current="page" class="nav-link nav-sub-link active" href="/basecomponents/reasoning.html#reasoning-top">Reasoning</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/skills.html#skills-top">Skills</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/tools.html#tools-top">Tools</a>
+<a class="nav-link nav-sub-link" href="/basecomponents/workspace.html#workspace-top">Workspace</a>
+<a class="nav-link nav-sub-link" href="https://github.com/main-msfj/max_ai/tree/main/max_ai/base" target="_blank" rel="noopener">More in GitHub</a>
+</div></details>
+</div>
+<div class="nav-group">
+<details class="nav-disclosure nav-capability-root">
+<summary class="nav-label nav-label-capabilities">Capabilities</summary>
+<div class="nav-children">
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Client</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/clients/ollama.html#capability-clients-ollama-top">Ollama</a>
+<a class="nav-link nav-sub-link" href="/capabilities/clients/openai.html#capability-clients-openai-top">OpenAI</a>
+<a class="nav-link nav-sub-link" href="/capabilities/clients/openrouter.html#capability-clients-openrouter-top">OpenRouter</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Tool</summary>
+<div class="nav-children">
+<details class="nav-disclosure nav-category"><summary class="nav-link nav-sub-link">Native</summary><div class="nav-children">
+<a class="nav-link nav-example-link" href="/capabilities/tools/native/bash.html#capability-tool-bash-top">Bash</a>
+<a class="nav-link nav-example-link" href="/capabilities/tools/native/ask-user.html#capability-tool-ask-user-top">Ask User</a>
+<a class="nav-link nav-example-link" href="/capabilities/tools/native/filesystem.html#capability-tool-filesystem-top">File system</a>
+<a class="nav-link nav-example-link" href="/capabilities/tools/native/plan.html#capability-tool-plan-top">Plan</a>
+</div></details>
+<details class="nav-disclosure nav-category"><summary class="nav-link nav-sub-link">Decorator</summary><div class="nav-children">
+<a class="nav-link nav-example-link" href="/capabilities/tools/decorator/decorator.html#capability-tool-decorator-top">Decorator</a>
+<a class="nav-link nav-example-link" href="/capabilities/tools/decorator/function.html#capability-tool-function-top">Function wrapper</a>
+</div></details>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">MCP</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/mcp/stdio.html#capability-mcp-stdio-top">Stdio</a>
+<a class="nav-link nav-sub-link" href="/capabilities/mcp/http.html#capability-mcp-http-top">HTTP</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Memory</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/memory/local.html#capability-memory-local-top">Local</a>
+<a class="nav-link nav-sub-link" href="/capabilities/memory/sqlite.html#capability-memory-sqlite-top">SQLite</a>
+<a class="nav-link nav-sub-link" href="/capabilities/memory/mongodb.html#capability-memory-mongodb-top">MongoDB</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Knowledge</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/knowledge/local.html#capability-knowledge-local-top">Local</a>
+<a class="nav-link nav-sub-link" href="/capabilities/knowledge/sqlite.html#capability-knowledge-sqlite-top">SQLite</a>
+<a class="nav-link nav-sub-link" href="/capabilities/knowledge/mongodb.html#capability-knowledge-mongodb-top">MongoDB</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Skills</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/skills/local.html#capability-skills-local-top">Local</a>
+<a class="nav-link nav-sub-link" href="/capabilities/skills/github.html#capability-skills-github-top">GitHub</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Reasoning</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/reasoning/react.html#capability-reasoning-react-top">ReAct</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Compaction</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/compaction/summary.html#capability-compaction-summary-top">Summary</a>
+<a class="nav-link nav-sub-link" href="/capabilities/compaction/sliding-window.html#capability-compaction-sliding-window-top">Sliding window</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Middleware</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/middleware/budget.html#capability-middleware-budget-top">Budget</a>
+<a class="nav-link nav-sub-link" href="/capabilities/middleware/logging.html#capability-middleware-logging-top">Logging</a>
+<a class="nav-link nav-sub-link" href="/capabilities/middleware/tracing.html#capability-middleware-tracing-top">Tracing</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Gates</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/completion-gates/runtime.html#capability-completion-gate-runtime-top">Runtime completion gate</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Output format</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/output-formats/structured.html#capability-output-format-top">Structured output</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Prompt layers</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/agent-policy.html#capability-stack-agent-policy-top">Agent policy</a>
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/context.html#capability-stack-context-top">Context</a>
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/knowledge.html#capability-stack-knowledge-top">Knowledge</a>
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/memory.html#capability-stack-memory-top">Memory</a>
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/rendering.html#capability-stack-rendering-top">Rendering</a>
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/session-state.html#capability-stack-session-state-top">Session state</a>
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/skills.html#capability-stack-skills-top">Skills</a>
+<a class="nav-link nav-sub-link" href="/capabilities/prompt-layers/task-analysis.html#capability-stack-task-analysis-top">Task analysis</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Workspace</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/workspaces/local.html#capability-workspace-local-top">Local</a>
+<a class="nav-link nav-sub-link" href="/capabilities/workspaces/azure-blob.html#capability-workspace-azure-blob-top">Azure Blob</a>
+<a class="nav-link nav-sub-link" href="/capabilities/workspaces/minio.html#capability-workspace-minio-top">MinIO</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Executor</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/executors/local.html#capability-executor-local-top">Local</a>
+<a class="nav-link nav-sub-link" href="/capabilities/executors/docker.html#capability-executor-docker-top">Docker</a>
+<a class="nav-link nav-sub-link" href="/capabilities/executors/modal.html#capability-executor-modal-top">Modal</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Context</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/context/local.html#capability-context-local-top">Local</a>
+<a class="nav-link nav-sub-link" href="/capabilities/context/sqlite.html#capability-context-sqlite-top">SQLite</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Session store</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/session-stores/local.html#capability-session-store-local-top">Local</a>
+</div></details>
+<details class="nav-disclosure nav-capability">
+<summary class="nav-link">Quota store</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/capabilities/quota-stores/local.html#capability-quota-store-local-top">Local</a>
+<a class="nav-link nav-sub-link" href="/capabilities/quota-stores/mongodb.html#capability-quota-store-mongodb-top">MongoDB</a>
+</div></details>
+</div></details>
+</div>
+<div class="nav-group">
+<details class="nav-disclosure nav-examples">
+<summary class="nav-label nav-label-capabilities">Examples</summary>
+<div class="nav-children">
+<details class="nav-disclosure nav-category">
+<summary class="nav-link nav-sub-link">Basic</summary>
+<div class="nav-children">
+<a class="nav-link nav-example-link" href="/examples/basic/basic-agent.html#basic-agent">Basic agent</a>
+<a class="nav-link nav-example-link" href="/examples/basic/ollama-agent.html#ollama-agent">Ollama agent</a>
+<a class="nav-link nav-example-link" href="/examples/basic/function-tools.html#function-tools">Function tools</a>
+<a class="nav-link nav-example-link" href="/examples/basic/tool-approval.html#tool-approval">Tool approval</a>
+<a class="nav-link nav-example-link" href="/examples/basic/sessions.html#sessions">Sessions</a>
+<a class="nav-link nav-example-link" href="/examples/basic/memory.html#memory">Memory</a>
+<a class="nav-link nav-example-link" href="/examples/basic/knowledge-search.html#knowledge-search">Knowledge search</a>
+<a class="nav-link nav-example-link" href="/examples/basic/structured-output.html#structured-output">Structured output</a>
+<a class="nav-link nav-example-link" href="/examples/basic/mcp-tools.html#mcp-tools">MCP tools</a>
+<a class="nav-link nav-example-link" href="/examples/basic/skills.html#skills">Skills</a>
+<a class="nav-link nav-example-link" href="/examples/basic/streaming-events.html#streaming-events">Streaming events</a>
+<a class="nav-link nav-example-link" href="/examples/basic/middleware-tracing.html#middleware-tracing">Middleware and tracing</a>
+<a class="nav-link nav-example-link" href="/examples/basic/workspace-files.html#workspace-files">Workspace files</a>
+<a class="nav-link nav-example-link" href="/examples/basic/concurrent-runs.html#concurrent-runs">Concurrent runs</a>
+<a class="nav-link nav-example-link" href="/examples/basic/full-agent.html#full-agent">Full agent</a>
+</div></details>
+<details class="nav-disclosure nav-category">
+<summary class="nav-link nav-sub-link">Advanced</summary>
+<div class="nav-children">
+<a class="nav-link nav-example-link" href="/examples/advanced/native-tool.html#native-tool">Native tool</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/postgres-memory.html#postgres-memory">PostgreSQL memory</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/postgres-knowledge.html#postgres-knowledge">PostgreSQL knowledge</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/custom-middleware.html#custom-middleware">Custom middleware</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/in-memory-session-store.html#in-memory-session-store">In-memory session store</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/custom-prompt-layer.html#custom-prompt-layer">Custom prompt layer</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/custom-embedding.html#custom-embedding">Custom embedding</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/custom-workspace.html#custom-workspace">Custom workspace</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/serialize-agent.html#serialize-agent">Serialize an agent</a>
+<a class="nav-link nav-example-link" href="/examples/advanced/deserialize-agent.html#deserialize-agent">Deserialize an agent</a>
+</div></details>
+</div></details>
+</div>
+<div class="nav-group">
+<details class="nav-disclosure nav-types">
+<summary class="nav-label nav-label-capabilities">Types</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/types/agent-response.html#agent-response-top">AgentResponse</a>
+<a class="nav-link nav-sub-link" href="/types/completion.html#completion-top">Completion</a>
+<a class="nav-link nav-sub-link" href="/types/tool.html#tool-top">Tool</a>
+<a class="nav-link nav-sub-link" href="/types/tool-call.html#tool-call-top">Tool call</a>
+<a class="nav-link nav-sub-link" href="/types/run-context.html#run-context-top">RunContext</a>
+</div></details>
+</div>
+<div class="nav-group">
+<details class="nav-disclosure nav-events">
+<summary class="nav-label nav-label-capabilities">Events</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/events/index.html#events-top">Event types</a>
+</div></details>
+</div>
+<div class="nav-group">
+<details class="nav-disclosure nav-cli">
+<summary class="nav-label nav-label-capabilities">CLI</summary>
+<div class="nav-children">
+<a class="nav-link nav-sub-link" href="/cli/index.html#cli-top">Command line</a>
+</div></details>
+</div>
+</nav>
+
+</aside><button aria-label="Close navigation" class="nav-backdrop" tabindex="-1" type="button"></button>
+<main class="main-content" id="main-content" tabindex="-1"><nav aria-label="Breadcrumb" class="breadcrumb"><a href="/overview/index.html">Docs</a><span>›</span><span>Core concepts</span><span>›</span><span>Reasoning</span></nav>
+<details class="mobile-toc"><summary>On this page</summary><nav aria-label="Page sections"><a class="toc-link" href="#reasoning-top">Overview</a><a class="toc-link" href="#abstract-methods">Base contract</a></nav></details><section class="hero content-section page-hero" id="reasoning-top"><h1>Reasoning</h1><p class="hero-copy">The reasoning contract defines the loop that drives one Agent turn.</p></section><section class="section-block content-section" id="abstract-methods"><h2>Base class and contract methods<a class="heading-anchor" href="#abstract-methods" aria-label="Link to Contract methods">#</a></h2><p>BaseReasoning is the turn-loop contract. The Agent binds it to the client, dispatcher, and middleware for each run. The subclass implements the loop that requests model output, handles tool calls, and yields runtime events.</p><div class="code-card"><div class="code-head"><span>BaseReasoning · complete class API</span></div><pre tabindex="0"><code>class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
+    &quot;&quot;&quot;Abstract reasoning cycle.&quot;&quot;&quot;
+    component_type = &quot;reasoning&quot;
+
+    component_schema: t.ClassVar[type[BaseModel]] = ReasoningConfig
+
+    LOOP_STATE_CLS: t.ClassVar[type[BaseLoopState]] = BaseLoopState
+
+    def __init__(
+        self, max_connection_retries: int = 3, enable_human_input: bool = True
+    ) -&gt; None:
+        &quot;&quot;&quot;Initialize config-only state. The base class provides this behavior;
+            override it only to customize it.&quot;&quot;&quot;
+        ...
+
+    def _set_loop_state(self, state: BaseLoopState) -&gt; None:
+        &quot;&quot;&quot;Set the loop state shared with runtime callbacks. The base class provides
+            this behavior; override it only to customize it.&quot;&quot;&quot;
+        ...
+
+    def bind(
+        self,
+        name: str,
+        client: CoreChatCompletionClient,
+        middleware_chain: MiddlewareChain | None = None,
+        compaction: CoreCompaction | None = None,
+        max_context_tokens: int = 0,
+        *,
+        dispatcher: ToolDispatcher | None = None,
+        tool_context: ToolContext | None = None,
+        completion_bus: EventBus | None = None,
+        memory: CoreMemoryRegistry | None = None,
+    ) -&gt; t.Self:
+        &quot;&quot;&quot;A copy of this loop wired to one run&#x27;s dependencies (client, tool
+            context, memory...). Called by the agent inside ``run()``. The base
+            class provides this behavior; override it only to customize it.&quot;&quot;&quot;
+        ...
+
+    def _refresh_session_state(self, ctx: RunContext, prompts: PromptCtx) -&gt; None:
+        &quot;&quot;&quot;Keep the prompt&#x27;s session state (compaction summary, plan) in sync with
+            ``ctx``. Re-renders the stack only when one of them changed. The base
+            class provides this behavior; override it only to customize it.&quot;&quot;&quot;
+        ...
+
+    @property
+    def _prompt_counter(self) -&gt; TokenCounter:
+        &quot;&quot;&quot;Counter with the client&#x27;s tokenizer, built once per loop. The base class
+            provides this behavior; override it only to customize it.&quot;&quot;&quot;
+        ...
+
+    async def _compact_if_needed(
+        self,
+        ctx: RunContext,
+        prompts: PromptCtx,
+    ) -&gt; t.AsyncGenerator[CoreEvent, None]:
+        &quot;&quot;&quot;Run the strategy before a model call and apply its result to ``ctx``. The
+            base class provides this behavior; override it only to customize it.&quot;&quot;&quot;
+        ...
+
+    @property
+    def name(self) -&gt; str:
+        &quot;&quot;&quot;Return the name of the agent bound to this reasoning loop. The base class
+            provides this behavior; override it only to customize it.&quot;&quot;&quot;
+        ...
+
+    @property
+    def client(self) -&gt; CoreChatCompletionClient:
+        &quot;&quot;&quot;Return the chat completion client bound to this loop. The base class
+            provides this behavior; override it only to customize it.&quot;&quot;&quot;
+        ...
+
+    @property
+    def dispatcher(self) -&gt; ToolDispatcher:
+        &quot;&quot;&quot;Return the tool dispatcher bound to this loop. The base class provides
+            this behavior; override it only to customize it.&quot;&quot;&quot;
+        ...
+
+    @property
+    def middleware_chain(self) -&gt; MiddlewareChain:
+        &quot;&quot;&quot;Return the middleware chain bound to this loop. The base class provides
+            this behavior; override it only to customize it.&quot;&quot;&quot;
+        ...
+
+    def _middleware_context(self, ctx: RunContext) -&gt; MiddlewareContext:
+        &quot;&quot;&quot;Build middleware context for the current run. The base class provides
+            this behavior; override it only to customize it.&quot;&quot;&quot;
+        ...
+
+    @property
+    def completion_bus(self) -&gt; EventBus:
+        &quot;&quot;&quot;Return the event bus used for completion events. The base class provides
+            this behavior; override it only to customize it.&quot;&quot;&quot;
+        ...
+
+    @property
+    def _tools(self) -&gt; list[CoreTool]:
+        &quot;&quot;&quot;Tools currently available to the agent. The base class provides this
+            behavior; override it only to customize it.&quot;&quot;&quot;
+        ...
+
+    @property
+    def tool_catalog(self) -&gt; dict[str, CoreTool]:
+        &quot;&quot;&quot;Return the tools indexed by their model-visible names. The base class
+            provides this behavior; override it only to customize it.&quot;&quot;&quot;
+        ...
+
+    async def _execute_tools(
+        self,
+        ctx: RunContext,
+        records: t.Any,
+        cancellation_token: CancellationToken | None = None,
+    ):
+        &quot;&quot;&quot;Execute tool calls and update the current run context. The base class
+            provides this behavior; override it only to customize it.&quot;&quot;&quot;
+        ...
+
+    @staticmethod
+    def _conversation_messages(ctx: RunContext) -&gt; list[CoreMessage]:
+        &quot;&quot;&quot;Return persisted history followed by the current live transcript. The
+            base class provides this behavior; override it only to customize it.&quot;&quot;&quot;
+        ...
+
+    @staticmethod
+    def _without_assistant_thinking(
+        messages: t.Sequence[CoreMessage],
+    ) -&gt; list[CoreMessage]:
+        &quot;&quot;&quot;Strip private assistant reasoning from model-facing messages. The base
+            class provides this behavior; override it only to customize it.&quot;&quot;&quot;
+        ...
+
+    def _model_context(
+        self,
+        ctx: RunContext,
+        transient_messages: t.Sequence[CoreMessage] | None = None,
+    ) -&gt; RunContext:
+        &quot;&quot;&quot;Return a copy safe to hand to chat-completion clients. The base class
+            provides this behavior; override it only to customize it.&quot;&quot;&quot;
+        ...
+
+    def _model_input_messages(self, ctx: RunContext) -&gt; list[CoreMessage]:
+        &quot;&quot;&quot;Build the conversation messages sent to the model. The base class
+            provides this behavior; override it only to customize it.&quot;&quot;&quot;
+        ...
+
+    def _input_messages_with_token_counts(
+        self, messages: t.Sequence[CoreMessage]
+    ) -&gt; list[CoreMessage]:
+        &quot;&quot;&quot;Return model input messages with per-message token counts attached. The
+            base class provides this behavior; override it only to customize it.&quot;&quot;&quot;
+        ...
+
+    async def _call_llm(
+        self,
+        ctx: RunContext,
+        prompts: PromptCtx,
+        loop_state: BaseLoopState,
+        cancellation_token: CancellationToken | None = None,
+        output_format: type[BaseModel] | None = None,
+        transient_messages: t.Sequence[CoreMessage] | None = None,
+        tools_override: t.Sequence[CoreTool] | None = None,
+        **kwargs: t.Any,
+    ) -&gt; t.AsyncGenerator[CoreEvent, None]:
+        &quot;&quot;&quot;Make one non-streaming LLM call through middleware. The base class
+            provides this behavior; override it only to customize it.&quot;&quot;&quot;
+        ...
+
+    async def _call_llm_stream(
+        self,
+        ctx: RunContext,
+        prompts: PromptCtx,
+        loop_state: BaseLoopState,
+        cancellation_token: CancellationToken | None = None,
+        output_format: type[BaseModel] | None = None,
+        transient_messages: t.Sequence[CoreMessage] | None = None,
+        tools_override: t.Sequence[CoreTool] | None = None,
+        **kwargs: t.Any,
+    ) -&gt; t.AsyncGenerator[CoreEvent, None]:
+        &quot;&quot;&quot;Make one streaming LLM call through middleware. The base class provides
+            this behavior; override it only to customize it.&quot;&quot;&quot;
+        ...
+
+    @staticmethod
+    def _merge_tool_call_chunk(
+        accumulated: dict[str, dict[str, t.Any]],
+        fragment: dict[str, t.Any],
+    ) -&gt; None:
+        &quot;&quot;&quot;Merge an incoming tool-call fragment into the accumulator. The base class
+            provides this behavior; override it only to customize it.&quot;&quot;&quot;
+        ...
+
+    @staticmethod
+    def _build_tool_calls_from_chunks(
+        accumulated: dict[str, dict[str, t.Any]],
+        _log: ScopedLogger,
+    ) -&gt; list[&quot;ToolCall&quot;]:
+        &quot;&quot;&quot;Convert accumulated chunk fragments into ``ToolCall`` instances. The base
+            class provides this behavior; override it only to customize it.&quot;&quot;&quot;
+        ...
+
+    @abstractmethod
+    async def execute_reasoning_loop(
+        self,
+        ctx: RunContext,
+        prompts: PromptCtx,
+        loop_state: BaseLoopState,
+        stream_tokens: bool = False,
+        cancellation_token: CancellationToken | None = None,
+        output_format: t.Type[BaseModel] | None = None,
+        eval_criteria: list[str] | None = None,
+        **kwargs: t.Any,
+    ) -&gt; t.AsyncGenerator[CoreEvent, None]:
+        &quot;&quot;&quot;Execute the reasoning loop for one agent turn. A concrete subclass must
+            implement this method.&quot;&quot;&quot;
+        ...</code></pre></div><div class="table-wrap"><table class="doc-table"><thead><tr><th>Method</th><th>What it receives or returns</th></tr></thead><tbody><tr><td><code>ctx</code></td><td>Current conversation messages, tool state, user/session IDs, and runtime state.</td></tr><tr><td><code>prompts</code></td><td>Rendered prompt layers that will be supplied to the model.</td></tr><tr><td><code>loop_state</code></td><td>Mutable per-run state for loop progress and counters.</td></tr><tr><td><code>yielded events</code></td><td>CoreEvent objects that describe model, reasoning, and tool activity.</td></tr></tbody></table></div></section><nav aria-label="Previous and next page" class="page-pagination"><a href="/agents/index.html"><small>← Previous</small><strong>Agent</strong></a><a class="next" href="/basecomponents/tools.html"><small>Next →</small><strong>Tools</strong></a></nav><footer class="footer"><span>Max AI · Python agent framework</span></footer></main>
+<aside aria-label="On this page" class="page-toc"><p>On this page</p><nav><a class="toc-link" href="#reasoning-top">Overview</a><a class="toc-link" href="#abstract-methods">Base contract</a></nav><div class="toc-extra"><a href="#reasoning-top">Back to top ↑</a></div></aside>
+<dialog aria-labelledby="search-title" class="search-dialog" id="search-dialog">
+<h2 class="sr-only" id="search-title">Search documentation</h2>
+<div class="search-input-row"><svg aria-hidden="true" class="" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><label class="sr-only" for="docs-search">Search documentation</label><input autocomplete="off" id="docs-search" placeholder="Search documentation…" spellcheck="false" type="search"/><button aria-label="Close search" id="search-close" type="button">Esc</button>
+</div>
+<div class="search-results" id="search-results">
+</div>
+<p class="sr-only" id="search-status" role="status">
+</p>
+<div class="search-footer"><span><kbd>↑</kbd> <kbd>↓</kbd> navigate   <kbd>↵</kbd> open</span><span>Search Max AI docs</span>
+</div>
+</dialog>
+</body>
+</html>
