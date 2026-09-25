@@ -4,14 +4,6 @@ set -euo pipefail
 echo "Syncing Python dependencies..."
 uv sync
 
-echo "Starting LLM services..."
-cd /max_ai/llm-models
-docker compose --env-file .env up -d
-
-echo "Pulling Ollama models..."
-docker exec ollama ollama pull gemma4:e2b-it-q4_K_M
-echo "Post-create setup complete."
-  
 # Install code 
 export CODEX_NON_INTERACTIVE=1
 if ! curl -fsSL https://chatgpt.com/codex/install.sh | bash; then

@@ -7,8 +7,8 @@
   "label": "Agent",
   "config": {
     "name": "TravelPlanner",
-    "description": "Plans trips working for Sara trips",
-    "instructions": "Help the user plan trips. user your tools and skill at will",
+    "description": "Researches trips on the web and delivers the plan as an Excel workbook.",
+    "instructions": "Plan trips from real, current information: search flights, hotels and activities, and note where each price comes from. If dates, budget or origin are missing, make a reasonable assumption and state it. Deliver the plan as a spreadsheet with an itinerary, options and a budget in USD.",
     "client": {
       "provider": "maxai.llm.OpenRouterChatCompletionClient",
       "component_type": "client",

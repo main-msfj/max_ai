@@ -301,7 +301,7 @@ Skills require a sandbox executor. If skills are registered with the default loc
 
 `DockerExecutor` runs `bash` in one container per session. The container runs as a non-root user with a read-only root filesystem and all capabilities dropped. It has no network by default (`network="none"`; `"internet"` opens it), CPU, memory and PID limits, and the user's directory bind-mounted at `/workspaces/<user_id>`. Docker cannot filter by domain, so `allow_list` does not apply to it.
 
-`ModalExecutor` (`pip install 'maxai[runtime-modal]'`) runs the same commands in a Modal sandbox and syncs the workspace in and out. Its default network is `"packages"`: the agent can install with pip, uv or npm and nothing else is reachable. Add domains with `allow_list=[...]`, or use `"internet"` / `"none"`. `examples/verify_modal_executor.py` checks a Modal account end to end.
+`ModalExecutor` (`pip install 'maxai[runtime-modal]'`) runs the same commands in a Modal sandbox and syncs the workspace in and out. Its default network is `"packages"`: the agent can install with pip, uv or npm and nothing else is reachable. Add domains with `allow_list=[...]`, or use `"internet"` / `"none"`.
 
 Both build their image on first use and cache it: max_ai's runtime (Python, uv, Node/npm, git, ripgrep) by default, or your own image or Dockerfile. Yours never needs max_ai; the executor adds it (from `framework`), the agent user and `/workspaces` on top. It only needs Linux, bash, git and python3 with pip and venv.
 
@@ -444,7 +444,7 @@ asyncio.run(main())
 
 ## Full-Featured Agent Example
 
-`examples/01_agent_with_openai.py` demonstrates a complete agent with memory, knowledge, skills, and the CLI:
+`example-for-deployment/cli_global_agent_openai.py` demonstrates a complete agent with memory, knowledge, skills, and the CLI:
 
 ```python
 from pathlib import Path
@@ -566,9 +566,9 @@ max_ai/
 examples/
   basic/             One feature per file: tools, approvals, memory, MCP, skills, tracing...
   advance/           Custom backends, middleware, layers, embeddings, serialization
-  01_agent_with_openai.py    Full agent with OpenAI, memory, knowledge, skills
-  02_agent_with_openrouter.py Full agent with OpenRouter
-  LocalSkills/       Example skill packages
+example-for-deployment/
+  travel_agent.py    Web search (Exa MCP), GitHub skill, Modal, MinIO, MongoDB, Langfuse
+  cli_global_agent_openai.py / _openrouter.py   Full agents with memory, knowledge and skills
 tests/               Unit, integration, executor, reasoning, and tool tests
 ```
 

@@ -249,7 +249,7 @@ devcontainer puedes comprobar los puentes con `curl -I http://localhost:8081`
 `bash /max_ai/.devcontainer/post-start.sh` en el devcontainer para reconectar
 las redes y reiniciar los puentes.
 
-Con esas variables, `examples/01_agent_with_openai.py` y `02_...` activan el
+Con esas variables, los agentes de `example-for-deployment/` activan el
 tracing solos. En código: `provider = configure_langfuse()` y
 `Agent(..., middlewares=[TracingMiddleware()])`.
 
@@ -281,13 +281,13 @@ y `AZURE_STORAGE_KEY` la clave de la cuenta o un token SAS.
 
 ## Probar todo junto
 
-Con todo arriba, `examples/03_agent_with_mongodb.py` abre la CLI con memoria,
-knowledge (búsqueda vectorial) y cuotas en MongoDB, los archivos del usuario en
-Azurite o MinIO, y trazas en Langfuse:
+Con todo arriba, `example-for-deployment/travel_agent.py` abre la CLI con
+búsqueda web (Exa), el skill de spreadsheet, el sandbox de Modal, los archivos
+del usuario en MinIO, las sesiones en MongoDB y trazas en Langfuse:
 
 ```bash
 docker compose --profile observability up -d --wait
-cd .. && WORKSPACE=azure .venv/bin/python -m examples.03_agent_with_mongodb   # o minio / local
+cd .. && .venv/bin/python example-for-deployment/travel_agent.py
 ```
 
 Si ejecutas este ejemplo desde un devcontainer, usa primero la conexión a la

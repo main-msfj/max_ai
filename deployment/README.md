@@ -1,22 +1,8 @@
-# Despliegues desde Azure Pipelines
+# Publicación de la librería
 
-El repositorio completo puede vivir en Azure Repos. Crea dos pipelines mediante
-**Pipelines → New pipeline → Azure Repos Git → Existing Azure Pipelines YAML file**:
+Este repositorio publica `maxai` en PyPI mediante GitHub Actions. El workflow
+está en [`.github/workflows/publish-library.yml`](../.github/workflows/publish-library.yml)
+y la verificación de las distribuciones en [`library/verify_release.py`](library/verify_release.py).
 
-| Pipeline | Archivo YAML | Activación | Variable secreta |
-| --- | --- | --- | --- |
-| Librería → PyPI | `/deployment/library/azure-pipelines.yml` | Tags `v*` | `PYPI_API_TOKEN` |
-| Web → Azure Static Web Apps | `/deployment/website/azure-pipelines.yml` | Cambios en `website/**` o `deployment/website/**` en `main` | `AZURE_STATIC_WEB_APPS_API_TOKEN` |
-
-Guarda cada variable en su pipeline y marca **Keep this value secret**.
-La web requiere un recurso Azure Static Web Apps y su token de despliegue.
-La librería requiere permiso para publicar el paquete `maxai` en PyPI.
-
-Una ejecución manual de la librería sobre una rama solo valida y construye;
-para publicar, selecciona un tag de versión. La web solo despliega desde `main`.
-Los pipelines requieren un agente Linux; usan `ubuntu-latest`. La organización
-Azure DevOps debe tener capacidad disponible para ejecutar jobs hospedados.
-
-Consulta [librería](library/README.md) y [web](website/README.md) para los pasos
-completos. No hace falta separar carpetas con `.gitignore` ni crear repositorios
-Git anidados.
+Consulta [la guía de publicación](library/README.md). El sitio tiene su propio
+repositorio `max_ai_website` y su pipeline de Azure DevOps en la raíz.
