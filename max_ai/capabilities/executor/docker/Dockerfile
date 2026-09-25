@@ -1,5 +1,4 @@
-# The default runtime for DockerExecutor and ModalExecutor:
-# docker build -t maxai-runtime:latest max_ai/capabilities/executor/docker
+# The default runtime for DockerExecutor and ModalExecutor; both build it on first use.
 FROM ghcr.io/astral-sh/uv:latest AS uv
 FROM python:3.11-slim-bookworm
 

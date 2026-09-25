@@ -76,7 +76,7 @@ async def test_the_prompt_says_where_commands_run(tmp_path):
     assert "Install what a script needs with pip, uv or npm before running it; other sites are blocked" in text
 
     docker = make_agent(tmp_path, RecordingClient(), executor=DockerExecutor(network="internet"))
-    assert "Docker container (maxai-runtime:latest)" in await policy_prompt(docker)
+    assert "isolated Docker container as a non-root user" in await policy_prompt(docker)
     assert "It has internet access." in await policy_prompt(docker)
 
     # The local executor runs on the host: nothing to add.
