@@ -6,8 +6,8 @@ tmp/
 # Runtime/state dir (skills staging, pytest artifacts)
 var/
 # Local model weights
-llm-models/
 .vscode/
+max_ai.code-workspace
 .codex/
 .claude/
 .ruff_cache/
@@ -27,10 +27,12 @@ __pycache__/
 *.backup
 *.swp
 
-# Personal notes, research and the project website (kept out of the repo)
-website/
-deployment/website/
+# Personal notes and research
 agent_update.md
 architecture.md
 a-harness-max-ai/
 ai-harness-research/
+
+# Local state produced by deployment examples
+example-for-deployment/local/
+example-for-deployment/data/

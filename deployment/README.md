@@ -1,5 +1,8 @@
-# Despliegues
+# Publicación de la librería
 
-- [Librería](library/README.md): GitHub Actions prueba y empaqueta `maxai`, y publica wheel y sdist en PyPI desde un tag `v*`. El workflow está en `.github/workflows/publish-library.yml`.
+Este repositorio publica `maxai` en PyPI mediante GitHub Actions. El workflow
+está en [`.github/workflows/publish-library.yml`](../.github/workflows/publish-library.yml)
+y la verificación de las distribuciones en [`library/verify_release.py`](library/verify_release.py).
 
-Después de la primera publicación en PyPI, los usuarios podrán instalar la librería con `pip install maxai` o agregarla a un proyecto con `uv add maxai`. Los parámetros y pasos de preparación están en [library/README.md](library/README.md).
+Consulta [la guía de publicación](library/README.md). El sitio tiene su propio
+repositorio `max_ai_website` y su pipeline de Azure DevOps en la raíz.

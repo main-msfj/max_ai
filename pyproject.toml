@@ -49,7 +49,7 @@ packages = ["max_ai"]
 
 [tool.hatch.build.targets.sdist]
 exclude = [
-    "website", "docker-infra", "llm-models", "examples/local",
+    "website", "docker-infra", "llm-models", "examples/local", "example-for-deployment/local",
     "/*.png", ".devcontainer", "deployment",
 ]
 

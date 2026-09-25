@@ -12,7 +12,7 @@ from max_ai.capabilities.knowledge.local import LocalKnowledgeRegistry
 from max_ai.capabilities.memory.local import LocalMemoryRegistry
 from max_ai.capabilities.middleware import LoggingMiddleware
 from max_ai.capabilities.session_store import LocalSessionStore
-from max_ai.capabilities.skills.local import LocalSkillRegistry
+from max_ai.capabilities.skills.github import GithubSkillRegistry
 from max_ai.capabilities.tools.function_as_tool import FunctionAsTool
 from max_ai.core.embeddings import FastEmbedEmbedding
 from max_ai.types.run_context import RunContext
@@ -41,7 +41,7 @@ async def main() -> None:
         tool_mode=KnowledgeToolMode.FULL,
         embedding=FastEmbedEmbedding(),
     )
-    skills = LocalSkillRegistry(source=EXAMPLES_DIR / "LocalSkills", skills=["create-report"])
+    skills = GithubSkillRegistry("trailofbits/skills-curated", ["openai-spreadsheet"], path="plugins/openai-spreadsheet/skills")
     agent = Agent(
         name="FullAssistant",
         description="An assistant with local framework components.",

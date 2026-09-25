@@ -1,12 +1,12 @@
-"""Shared paths, example tools, and the ``--session`` argument."""
+"""Paths, example tools and the ``--session`` argument shared by these agents."""
 
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
 
-EXAMPLES_DIR = Path(__file__).resolve().parent
-LOCAL_DIR = EXAMPLES_DIR / "local"  # fixture memory, knowledge and sessions
+EXAMPLES_DIR = Path(__file__).resolve().parents[1]
+LOCAL_DIR = EXAMPLES_DIR / "local"  # fixture knowledge, plus memory and sessions
 USER_ID = "user_001"
 
 

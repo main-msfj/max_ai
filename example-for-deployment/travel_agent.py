@@ -33,7 +33,7 @@ from max_ai.capabilities.workspace import MinIOWorkspace
 from max_ai.cli import run_cli
 from max_ai.types.tools import ToolApprovalMode
 
-# PreConfig Vales
+# Free OpenRouter models, with fallbacks when one is busy.
 _client: dict[str, t.Any] = {
     "model": "nvidia/nemotron-3-super-120b-a12b:free",
     "fallback_models": ["qwen/qwen3.8-27b:free", "google/gemma-4-31b-it:free"],
@@ -42,16 +42,21 @@ _client: dict[str, t.Any] = {
 }
 
 
-CONFIG = Path(__file__).with_name("travel_agent.json")
+CONFIG = Path(__file__).parent / "agents" / "travel_agent.json"
 
 
 def build_agent(tracing: bool) -> Agent:
     return Agent(
         name="TravelPlanner",
-        description="Plans trips working for Sara trips",
-        instructions="Help the user plan trips. user your tools and skill at will",
+        description="Researches trips on the web and delivers the plan as an Excel workbook.",
+        instructions=(
+            "Plan trips from real, current information: search flights, hotels and "
+            "activities, and note where each price comes from. If dates, budget or "
+            "origin are missing, make a reasonable assumption and state it. Deliver "
+            "the plan as a spreadsheet with an itinerary, options and a budget in USD."
+        ),
         client=OpenRouterChatCompletionClient(**_client),
-        mcp=[
+        mcp=[  # web search
             HTTPServerConfig(
                 server_id="exa",
                 url="https://mcp.exa.ai/mcp",
@@ -61,15 +66,15 @@ def build_agent(tracing: bool) -> Agent:
                 approval_mode=ToolApprovalMode.AUTO_APPROVED,
             )
         ],
-        skills=GithubSkillRegistry(
+        skills=GithubSkillRegistry(  # someone else's skill, straight from GitHub
             "trailofbits/skills-curated",
             ["openai-spreadsheet"],
             path="plugins/openai-spreadsheet/skills",
         ),
-        workspace=MinIOWorkspace(
+        workspace=MinIOWorkspace(  # the user's files, in object storage
             os.getenv("MINIO_ENDPOINT", "http://localhost:9000"), bucket="workspaces"
         ),
-        executor=ModalExecutor(),
+        executor=ModalExecutor(),  # isolated sandbox; can only reach pip/npm registries
         middlewares=[TracingMiddleware()] if tracing else [],
     )
 

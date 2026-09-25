@@ -13,10 +13,18 @@
         "ollama:11434"
     ],
     "portsAttributes": {
-        "8081": { "label": "Mongo Express" },
-        "3000": { "label": "Langfuse" },
-        "9001": { "label": "MinIO Console" },
-        "ollama:11434": { "label": "Ollama API" }
+        "8081": {
+            "label": "Mongo Express"
+        },
+        "3000": {
+            "label": "Langfuse"
+        },
+        "9001": {
+            "label": "MinIO Console"
+        },
+        "ollama:11434": {
+            "label": "Ollama API"
+        }
     },
     "runArgs": [
         "--network=llm-vnet",
@@ -28,7 +36,6 @@
         "--cap-add=SYS_PTRACE",
         "--security-opt=seccomp=unconfined",
         "--security-opt=apparmor=unconfined"
-    
     ],
     "hostRequirements": {
         "gpu": "optional"
@@ -37,7 +44,8 @@
         "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind",
         "source=max_ai_volume,target=/root/.codex,type=volume,volume-subpath=max_ai_codex_config",
         "source=max_ai_volume,target=/root/.claude,type=volume,volume-subpath=max_ai_claude_config",
-        "source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/root/.ssh-host,type=bind,consistency=cached,readonly"
+        "source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/root/.ssh-host,type=bind,consistency=cached,readonly",
+        "source=${localWorkspaceFolder}/../max_ai_website,target=/workspaces/max_ai_website,type=bind,consistency=cached"
     ],
     "features": {
         "ghcr.io/devcontainers/features/docker-outside-of-docker:1.10.0": {
@@ -48,7 +56,6 @@
     "overrideCommand": true,
     "initializeCommand": "docker network create llm-vnet 2>/dev/null || true",
     "postCreateCommand": "bash /max_ai/.devcontainer/post-create.sh",
-
     "remoteEnv": {
         "OLLAMA_BASE_URL": "http://ollama:11434"
     },

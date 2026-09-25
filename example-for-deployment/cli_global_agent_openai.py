@@ -1,11 +1,9 @@
-"""A full Agent on OpenRouter free models, run inside the MaxAI Textual CLI.
+"""A full Agent on OpenAI, run inside the MaxAI Textual CLI.
 
 From the repository root:
-    .venv/bin/python -m examples.02_agent_with_openrouter [--session <id>]
+    .venv/bin/python example-for-deployment/cli_global_agent_openai.py [--session <id>]
 
-Loads OPENROUTER_API_KEY from the environment/.env. Free (``:free``) models
-get rate-limited upstream often, so a fallback list lets OpenRouter switch
-models inside the same request. The Agent carries everything
+Loads OPENAI_API_KEY from the environment/.env. The Agent carries everything
 it is (model, tools, memory, knowledge, skills, compaction); the CLI is only
 the host: it saves every turn in the store and resumes sessions.
 """
@@ -17,52 +15,45 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-
-from examples.shared import (
-    EXAMPLES_DIR,
+from tools_shared import (
     LOCAL_DIR,
     USER_ID,
     calculate_compound_interest,
     save_report,
     session_arg,
 )
+
 from max_ai.agents import Agent
 from max_ai.base.knowledge import KnowledgeToolMode
 from max_ai.base.memory import MemoryToolMode
-from max_ai.capabilities.clients.openrouter import OpenRouterChatCompletionClient
+from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
 from max_ai.capabilities.compaction import SummaryCompaction
 from max_ai.capabilities.knowledge.local import LocalKnowledgeRegistry
 from max_ai.capabilities.memory.local import LocalMemoryRegistry
 from max_ai.capabilities.middleware import TracingMiddleware, configure_langfuse
 from max_ai.capabilities.session_store import LocalSessionStore
-from max_ai.capabilities.skills.local import LocalSkillRegistry
+from max_ai.capabilities.skills.github import GithubSkillRegistry
 from max_ai.capabilities.tools.function_as_tool import FunctionAsTool
 from max_ai.cli import run_cli
 from max_ai.core.embeddings import FastEmbedEmbedding
 from max_ai.core.model.llm import ModelConfig
 from max_ai.types.tools import ToolApprovalMode
 
-# All support tool calling; check https://openrouter.ai/models?q=free for
-# the current list — free models come and go.
-MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
-FALLBACK_MODELS = ["qwen/qwen3.8-27b:free", "google/gemma-4-31b-it:free"]
+MODEL = "gpt-5.6-luna"
 
 
 async def main() -> None:
     load_dotenv(Path(__file__).resolve().parents[1] / ".env")
-    if not os.getenv("OPENROUTER_API_KEY"):
-        raise SystemExit("Set OPENROUTER_API_KEY in the environment or in .env.")
+    if not os.getenv("OPENAI_API_KEY"):
+        raise SystemExit("Set OPENAI_API_KEY in the environment or in .env.")
 
     # The client stores the env var's name, never the key itself.
-    client = OpenRouterChatCompletionClient(
+    client = OpenAIChatCompletionClient(
         model=MODEL,
-        fallback_models=FALLBACK_MODELS,
-        # Reasoning tokens count against max_tokens; keep them bounded.
-        reasoning={"effort": "low"},
+        reasoning_effort="none",
         # Room for a whole file in one tool call; 32K is the framework's cap
         # and compaction reserves it in the window.
         max_tokens=32_000,
-        app_name="max_ai",
         # Default window 128K; MAX_CONTEXT_WINDOW changes it (kept within 128K–1M).
         config=ModelConfig(
             supports_function_calling=True,
@@ -75,7 +66,7 @@ async def main() -> None:
 
     agent = Agent(
         name="LocalDemo",
-        description="A conversational agent with local components and OpenRouter models.",
+        description="A conversational agent with local components and an OpenAI model.",
         instructions="Continue the conversation and help the user with their requests.",
         client=client,
         toolset=[
@@ -84,8 +75,7 @@ async def main() -> None:
         ],
         # Backend only: each run binds it to its RunContext's user and session.
         memory=LocalMemoryRegistry(
-            base_path=LOCAL_DIR,
-            tool_mode=MemoryToolMode.FULL,
+            base_path=LOCAL_DIR, tool_mode=MemoryToolMode.FULL,
             embedding=FastEmbedEmbedding(),  # search_memory by meaning, in any language
         ),
         knowledge=[
@@ -96,9 +86,7 @@ async def main() -> None:
                 tool_mode=KnowledgeToolMode.FULL,
             ),
         ],
-        skills=LocalSkillRegistry(
-            source=EXAMPLES_DIR / "LocalSkills", skills=["create-report", "create-ppt"]
-        ),
+        skills=GithubSkillRegistry("trailofbits/skills-curated", ["openai-spreadsheet"], path="plugins/openai-spreadsheet/skills"),
         compaction=SummaryCompaction(threshold=threshold, keep_ratio=threshold / 2),
         # With LANGFUSE_PUBLIC_KEY/SECRET_KEY set, every turn is a trace in Langfuse.
         middlewares=[TracingMiddleware()] if tracing else [],
