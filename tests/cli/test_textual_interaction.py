@@ -56,6 +56,41 @@ async def test_approval_enter_while_busy(tmp_path, answer):
 
 
 @pytest.mark.asyncio
+async def test_always_allow_stops_asking_for_that_tool(tmp_path):
+    app = make_app(tmp_path)
+
+    def pending(record_id, tool):
+        ctx = RunContext()
+        record = ToolCallRecord(id=record_id, tool_name=tool, parameters={})
+        ctx.tool_state.add(record)
+        return record, AgentResponse(source="test", context=ctx, usage=Usage(),
+                                     finish_reason="approval_needed")
+
+    async with app.run_test() as pilot:
+        app._busy = True
+        first, response = pending("a", "bash")
+        worker = asyncio.create_task(app._resolve_requests(response))
+        await pilot.pause()
+        app.query_one(TextArea).text = "2"
+        await pilot.press("enter")
+        await asyncio.wait_for(worker, 2)
+        assert not first.is_pending_approval and app._always_allowed == {"bash"}
+
+        # The next bash call is approved without a prompt; other tools still ask.
+        second, response = pending("b", "bash")
+        await asyncio.wait_for(app._resolve_requests(response), 2)
+        assert not second.is_pending_approval
+        other, response = pending("c", "write_file")
+        worker = asyncio.create_task(app._resolve_requests(response))
+        await pilot.pause()
+        assert not worker.done() and other.is_pending_approval
+        app.query_one(TextArea).text = "3"
+        await pilot.press("enter")
+        await asyncio.wait_for(worker, 2)
+        assert not other.is_pending_approval
+
+
+@pytest.mark.asyncio
 async def test_question_button_and_token_events(tmp_path):
     app = make_app(tmp_path)
     ctx = RunContext()
@@ -83,3 +118,12 @@ def test_runtime_event_lines():
     skill = event_line(FileReadEvent(source="test", tool_call_id="s", path="skills/demo/SKILL.md", root_dir="/tmp", content_hash="abc"))
     assert "bash finished" in bash.plain
     assert "skills/demo/SKILL.md" in skill.plain
+
+
+def test_tool_summaries_stay_on_one_short_line():
+    from max_ai.cli.blocks import tool_summary
+
+    script = "cat > plan.py << 'EOF'\n" + "x = 1\n" * 200 + "EOF"
+    assert tool_summary("bash", {"command": script}) == "cat > plan.py << 'EOF' … (+201 lines)"
+    assert tool_summary("write_file", {"file_name": "a.py", "content": "x\n" * 300}) == "a.py"
+    assert len(tool_summary("bash", {"command": "echo " + "a" * 500})) == 100

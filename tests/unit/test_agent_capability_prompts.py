@@ -6,10 +6,13 @@ import pytest
 
 from max_ai.agents.agent import Agent
 from max_ai.base.memory import MemoryToolMode
+from max_ai.capabilities.executor.docker import DockerExecutor
+from max_ai.capabilities.executor.modal import ModalExecutor
 from max_ai.capabilities.knowledge.local import LocalKnowledgeRegistry
 from max_ai.capabilities.memory.local import LocalMemoryRegistry
 from max_ai.capabilities.skills.local import LocalSkillRegistry
 from max_ai.capabilities.stacks import (
+    AgentPolicyLayer,
     KnowledgeLayer,
     MemoryLayer,
     SessionStateLayer,
@@ -58,6 +61,26 @@ async def test_no_capabilities(tmp_path):
         assert names == {"AgentPolicyLayer", "TaskAnalysisLayer", "RenderingLayer", "SessionStateLayer"}
         assert client.prompts[0].rendered_layers[SessionStateLayer] == ""  # empty until needed
         assert "get_context" not in {tool.name for tool in agent._registry.all_tools()}
+
+
+async def policy_prompt(agent) -> str:
+    prompts = await agent._prompts(RunContext(user_id="u", session_id="s"))
+    return prompts.rendered_layers[AgentPolicyLayer]
+
+
+@pytest.mark.asyncio
+async def test_the_prompt_says_where_commands_run(tmp_path):
+    modal = make_agent(tmp_path, RecordingClient(), executor=ModalExecutor())
+    text = await policy_prompt(modal)
+    assert "Execution environment:" in text
+    assert "Install what a script needs with pip, uv or npm before running it; other sites are blocked" in text
+
+    docker = make_agent(tmp_path, RecordingClient(), executor=DockerExecutor(network="internet"))
+    assert "isolated Docker container as a non-root user" in await policy_prompt(docker)
+    assert "It has internet access." in await policy_prompt(docker)
+
+    # The local executor runs on the host: nothing to add.
+    assert "Execution environment" not in await policy_prompt(make_agent(tmp_path, RecordingClient()))
 
 
 @pytest.mark.asyncio

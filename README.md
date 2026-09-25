@@ -283,7 +283,13 @@ skills = GithubSkillRegistry(
     ref="v1.2.0",                # branch or tag
     token_env="SKILLS_GH_TOKEN", # private repos only: the env var name, never the token
 )
+
+# Skills nested in a folder of the repo:
+GithubSkillRegistry("trailofbits/skills-curated", ["openai-spreadsheet"],
+                    path="plugins/openai-spreadsheet/skills")
 ```
+
+Check each skill's license before using it. Some public skill repos mix open-source skills with proprietary ones.
 
 The token is read from the environment when the repo is cloned. It is never serialized or placed on the command line. The host needs `git` installed.
 
@@ -293,26 +299,20 @@ Skills require a sandbox executor. If skills are registered with the default loc
 
 `LocalExecutor` is fast and simple. It runs tool code in the current Python process and is suitable for trusted helpers.
 
-`DockerExecutor` runs `bash` in one container per session. The container runs as a non-root user with a read-only root filesystem and all capabilities dropped. It has no network (`network="none"`, the default), CPU, memory and PID limits, and the user's directory bind-mounted at `/workspaces/<user_id>`. Build the image once:
+`DockerExecutor` runs `bash` in one container per session. The container runs as a non-root user with a read-only root filesystem and all capabilities dropped. It has no network by default (`network="none"`; `"internet"` opens it), CPU, memory and PID limits, and the user's directory bind-mounted at `/workspaces/<user_id>`. Docker cannot filter by domain, so `allow_list` does not apply to it.
 
-```bash
-docker build -f max_ai/capabilities/executor/docker/Dockerfile -t maxai-runtime:latest .
-```
+`ModalExecutor` (`pip install 'maxai[runtime-modal]'`) runs the same commands in a Modal sandbox and syncs the workspace in and out. Its default network is `"packages"`: the agent can install with pip, uv or npm and nothing else is reachable. Add domains with `allow_list=[...]`, or use `"internet"` / `"none"`. `examples/verify_modal_executor.py` checks a Modal account end to end.
 
-`ModalExecutor` (`pip install 'maxai[runtime-modal]'`) runs the same commands in a Modal sandbox and syncs the workspace in and out. `examples/verify_modal_executor.py` checks a Modal account end to end.
-
-Import executors from `max_ai.capabilities.executor`:
+Both build their image on first use and cache it: max_ai's runtime (Python, uv, Node/npm, git, ripgrep) by default, or your own image or Dockerfile. Yours never needs max_ai; the executor adds it (from `framework`), the agent user and `/workspaces` on top. It only needs Linux, bash, git and python3 with pip and venv.
 
 ```python
-from max_ai.capabilities.executor import LocalExecutor, DockerExecutor
+from max_ai.capabilities.executor import DockerExecutor
+from max_ai.capabilities.executor.modal import ModalExecutor
 
-agent = Agent(
-    name="assistant",
-    description="Uses Docker",
-    instructions="Help the user",
-    client=client,
-    executor=DockerExecutor(image="maxai-runtime:latest"),
-)
+DockerExecutor()                                  # max_ai's runtime image
+DockerExecutor(image="python:3.12-slim")          # your image
+ModalExecutor(dockerfile="./my.Dockerfile")       # your Dockerfile
+ModalExecutor(allow_list=["api.github.com"])      # package registries + GitHub API
 ```
 
 Per-user runtime layout on the host:

@@ -7,9 +7,9 @@ docker-infra/
 ├── compose.yaml           # Reúne los grupos
 ├── .env.example           # Imágenes, puertos y credenciales locales
 ├── llm/compose.yaml       # Ollama
-├── backend/compose.yaml   # MongoDB y Mongo Express
-├── storage/compose.yaml   # Azurite (Azure Blob) y MinIO (S3): workspaces remotos
-├── observability/compose.yaml # Langfuse y sus dependencias
+├── capabilities/compose.yaml  # Lo que usan los agentes: MongoDB, Mongo Express,
+│                              # MinIO y Azurite (workspaces)
+├── observability/compose.yaml # Langfuse y sus dependencias (con su propio MinIO)
 └── mcp/compose.yaml       # DuckDuckGo MCP por stdio
 
 llm-models/ollama/          # Datos de Ollama, fuera de Git
@@ -48,7 +48,7 @@ docker compose exec ollama ollama pull qwen3:8b
 docker compose exec ollama ollama list
 ```
 
-## Backend: MongoDB
+## Capabilities: MongoDB
 
 Con las credenciales predeterminadas, la URI desde el host es:
 
@@ -84,7 +84,7 @@ Puedes explorar las bases, abrir una colección y ver sus documentos. La base
 permite editar documentos y colecciones.
 
 Mongo Express espera a que MongoDB esté saludable y se conecta por la red
-`backend`, usando el nombre `mongodb` y las credenciales de la base. El acceso
+`capabilities`, usando el nombre `mongodb` y las credenciales de la base. El acceso
 web tiene credenciales independientes, configurables con
 `MONGO_EXPRESS_USERNAME` y `MONGO_EXPRESS_PASSWORD`; el puerto se cambia con
 `MONGO_EXPRESS_PORT`.
@@ -95,11 +95,11 @@ web tiene credenciales independientes, configurables con
 Docker. El script `.devcontainer/post-start.sh` conecta el devcontainer a las
 redes de infraestructura que ya existan y abre puentes locales para las
 interfaces en los puertos 8081 y 3000. Si levantaste Compose después de abrir
-el devcontainer, conecta la red del backend desde su terminal:
+el devcontainer, conecta la red de capabilities desde su terminal:
 
 ```bash
 docker compose -f docker-infra/compose.yaml up -d --wait mongodb mongo-express
-docker network connect max-ai-infra_backend "$(hostname)"
+docker network connect max-ai-infra_capabilities "$(hostname)"
 export MONGODB_URI='mongodb://maxai:maxai-local-dev@mongodb:27017/max_ai?authSource=admin&directConnection=true'
 ```
 
@@ -192,7 +192,8 @@ principal para mantener el mismo proyecto y los mismos volúmenes.
 
 Langfuse recibe las trazas de `TracingMiddleware` (OpenTelemetry) y las muestra
 en su UI. Son cinco contenedores (web, worker, Postgres, ClickHouse y Redis) y
-guarda sus eventos en el MinIO del grupo `storage`; van en el perfil
+guarda sus eventos en su propio MinIO (`langfuse-minio`, separado del de los
+agentes); van en el perfil
 `observability` y no arrancan con el `up` normal. Postgres, ClickHouse y Redis
 son de Langfuse, no del framework (Langfuse no soporta MongoDB):
 
@@ -255,7 +256,7 @@ tracing solos. En código: `provider = configure_langfuse()` y
 Para detenerlo: `docker compose --profile observability down` (agrega `-v` para
 borrar también las trazas guardadas).
 
-## Almacenamiento: workspaces remotos
+## Capabilities: workspaces remotos (MinIO y Azurite)
 
 `AzureBlobWorkspace` y `MinIOWorkspace` guardan los archivos del usuario fuera
 del proceso: el agente los descarga al empezar cada run y sube lo que cambió al

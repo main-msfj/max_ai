@@ -59,6 +59,12 @@ class ExecutorBase(ComponentBase[BaseModel], ABC):
 
     component_type = "executor"
 
+    def describe_environment(self) -> str | None:
+        """What the model should know about where its commands run (network,
+        preinstalled packages), or ``None``. The Agent reads it once, when it
+        is built, and puts it in the system prompt."""
+        return None
+
     # -------- RUN CODE -----------------------------------------------------------
     @abstractmethod
     async def run_tool(

@@ -10,6 +10,7 @@ renaming this file requires updating that string too.
 """
 
 import asyncio
+import contextlib
 import json
 import sys
 from dataclasses import asdict
@@ -43,7 +44,9 @@ async def main():
     finally:
         watcher.cancel()
         await asyncio.gather(watcher, return_exceptions=True)
-        marker.unlink(missing_ok=True)
+        # The host writes the marker as root; /tmp's sticky bit may forbid us removing it.
+        with contextlib.suppress(OSError):
+            marker.unlink(missing_ok=True)
     print(json.dumps(asdict(result)), flush=True)
 
 

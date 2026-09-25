@@ -3,13 +3,27 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from dataclasses import dataclass
+from pathlib import Path
 from uuid import uuid4
 
 from ....base.executor import ExecutionSession
 from ....core.executor.process import run_process
-from ....core.executor.remote import RemoteExecutor
+from ....core.executor.remote import DEFAULT_FRAMEWORK, RemoteExecutor
 from ._model import DockerExecutorConfig
+
+_RUNTIME_DOCKERFILE = Path(__file__).with_name("Dockerfile")
+_UID = 1000
+# Added on top of a developer's image: max_ai, the agent user, /workspaces.
+_FRAMEWORK_LAYER = """FROM {base}
+USER root
+RUN python3 -m venv /opt/maxai && /opt/maxai/bin/pip install --no-cache-dir "{framework}" \\
+ && (id -u {uid} >/dev/null 2>&1 || useradd --uid {uid} --create-home agent) \\
+ && mkdir -p /workspaces && chown {uid}:{uid} /workspaces && chmod 755 /root
+ENV HOME=/tmp
+WORKDIR /workspaces
+"""
 
 
 @dataclass
@@ -21,36 +35,105 @@ class _Container:
 
 
 class DockerExecutor(RemoteExecutor):
-    """DockerExecutor provides the Dockerexecution implementation."""
+    """Runs commands in a local Docker container.
+
+    Network is ``"none"`` (default) or ``"internet"``. Docker cannot filter
+    by domain, so ``"packages"`` and ``allow_list`` are not supported here;
+    use ModalExecutor for that.
+
+    The image is built on first use and cached by Docker: max_ai's runtime
+    Dockerfile by default, or your ``image``/``dockerfile`` with max_ai, the
+    agent user and /workspaces added on top, so you never install max_ai.
+    """
+
+    supports_allow_list = False
     component_schema = DockerExecutorConfig
     component_provider_override = "max_ai.capabilities.executor.docker.DockerExecutor"
 
-    def __init__(self, *, image: str = "maxai-runtime:latest", network: str = "none",
+    def __init__(self, *, image: str | None = None, dockerfile: str | None = None,
+                 framework: str = DEFAULT_FRAMEWORK, network: str = "none",
                  max_output_bytes: int = 1 << 20):
         """Initialize ``DockerExecutor``.
 
 Parameters
 ----------
-image : str
-    Value supplied for ``image``.
+image : str | None
+    Your image (``"python:3.12-slim"``). It only needs Linux, bash, git and
+    python3 with pip and venv.
+dockerfile : str | None
+    Path to your own Dockerfile, built with its folder as context.
+framework : str
+    pip requirement that installs max_ai inside the container.
 network : str
-    Value supplied for ``network``.
+    "none" (default) or "internet". ``allow_list`` does not apply to Docker.
 max_output_bytes : int
     Value supplied for ``max_output_bytes``."""
-        if network not in {"none", "unrestricted"}:
-            raise ValueError("network must be 'none' or 'unrestricted'")
+        self._init_network(network, None)
         if max_output_bytes <= 0:
             raise ValueError("max_output_bytes must be positive")
-        self.image, self.network, self.max_output_bytes = image, network, max_output_bytes
+        if image is not None and dockerfile is not None:
+            raise ValueError("Pass image or dockerfile, not both")
+        self.image, self.dockerfile, self.framework = image, dockerfile, framework
+        self.max_output_bytes = max_output_bytes
+        self._runtime_image: str | None = None
+        self._image_lock = asyncio.Lock()
         super().__init__()
         self._sessions = {}
         self._locks = {}
         self._closed = {}
 
+    def describe_environment(self) -> str:
+        """Describe the environment exposed by ``DockerExecutor``."""
+        ours = self.image is None and self.dockerfile is None
+        text = ("Commands run in an isolated Docker container as a non-root user. "
+                + self._network_description("pip, uv or npm" if ours else "pip")
+                + " Only the workspace and /tmp are writable.")
+        if ours:
+            text += " Python 3.11, uv, Node.js/npm, git and ripgrep are available."
+        return text
+
+    async def _ensure_image(self) -> str:
+        """Build the runtime image once (Docker caches it by tag) and return its tag."""
+        async with self._image_lock:
+            if self._runtime_image is None:
+                self._runtime_image = await self._build_image()
+            return self._runtime_image
+
+    async def _build_image(self) -> str:
+        """Perform the internal ``build image`` operation for ``DockerExecutor``."""
+        if self.image is None and self.dockerfile is None:
+            tag = _tag("maxai-runtime", _RUNTIME_DOCKERFILE.read_text(), self.framework)
+            await self._docker_build(tag, ["--build-arg", f"MAXAI={self.framework}", "-"],
+                                     stdin=_RUNTIME_DOCKERFILE.read_text())
+            return tag
+        base = self.image
+        if self.dockerfile is not None:
+            path = Path(self.dockerfile).resolve()
+            base = _tag("maxai-base", path.read_text())
+            await self._docker_build(base, ["-f", str(path), str(path.parent)])
+        layer = _FRAMEWORK_LAYER.format(base=base, framework=self.framework, uid=_UID)
+        tag = _tag("maxai-runtime", layer)
+        await self._docker_build(tag, ["-"], stdin=layer)
+        return tag
+
+    async def _docker_build(self, tag: str, args: list[str], stdin: str | None = None) -> None:
+        """``docker build`` unless ``tag`` already exists locally."""
+        exists = await run_process(["docker", "image", "inspect", tag], timeout=30)
+        if exists.exit_code == 0:
+            return
+        result = await run_process(["docker", "build", "-t", tag, *args], stdin=stdin,
+                                   timeout=3600, max_output_bytes=self.max_output_bytes)
+        if result.exit_code != 0:
+            raise RuntimeError(
+                f"Building the Docker image {tag} failed. Your image needs Linux, bash, "
+                f"git and python3 with pip and venv.\n{result.stderr[-2000:]}"
+            )
+
     def _to_config(self) -> DockerExecutorConfig:
         """Build the serializable configuration for ``DockerExecutor``."""
         return DockerExecutorConfig(
-            image=self.image, network=self.network,
+            image=self.image, dockerfile=self.dockerfile, framework=self.framework,
+            network=self.network,
             max_output_bytes=self.max_output_bytes,
         )
 
@@ -85,6 +168,7 @@ user_id
     Value supplied for ``user_id``.
 conversation_id
     Value supplied for ``conversation_id``."""
+        await self._ensure_image()
         directory = workspace.materialize(user_id, conversation_id)
         handle = _Container(f"maxai-runtime-{uuid4().hex}")
         session = ExecutionSession(uuid4().hex, user_id, conversation_id, workspace,
@@ -110,14 +194,14 @@ root
         h = session.handle
         if "," in str(root):
             raise ValueError("Docker workspace paths cannot contain commas")
-        args = ["run", "--detach", "--pull=never", "--name", h.name,
+        args = ["run", "--detach", "--pull=never", "--name", h.name, "--user", f"{_UID}:{_UID}",
                 "--network=none" if self.network == "none" else "--network=bridge",
                 "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
                 "--init", "--pids-limit=128", "--memory=512m", "--cpus=1",
                 "--tmpfs", "/tmp:rw,nosuid,nodev,size=64m", "--mount",
                 f"type=bind,src={root},dst={session.workspace_path}",
                 "--workdir", session.workspace_path, "--env", f"WORKSPACE={session.workspace_path}",
-                self.image, "sleep", "infinity"]
+                await self._ensure_image(), "sleep", "infinity"]
         h.may_exist = True
         try:
             result = await run_process(["docker", *args], timeout=30, max_output_bytes=self.max_output_bytes)
@@ -287,3 +371,9 @@ session
         conversation_id = session.conversation_id
         await self.clean(session)
         return await self.connect(workspace, user_id, conversation_id)
+
+
+def _tag(name: str, *parts: str) -> str:
+    """A local tag that changes whenever the recipe changes."""
+    digest = hashlib.sha256("\0".join(parts).encode()).hexdigest()[:12]
+    return f"{name}:{digest}"

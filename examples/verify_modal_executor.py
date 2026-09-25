@@ -5,9 +5,9 @@ Not part of the test suite (needs a real Modal account). Run after
 
     .venv/bin/python -m examples.verify_modal_executor
 
-Builds a small image with Modal's own builder (no registry push needed),
-starts a sandbox, runs a shell command in it, and confirms the network is
-blocked as configured.
+Uses the executor's default image (built and cached by Modal the first
+time), starts a sandbox, runs a shell command in it as a non-root user, and
+confirms the network is blocked.
 """
 
 from __future__ import annotations
@@ -18,19 +18,9 @@ from max_ai.capabilities.workspace import LocalWorkspace
 
 
 async def main() -> None:
-    import modal
-
     from max_ai.capabilities.executor.modal import ModalExecutor
 
-    image = (
-        modal.Image.debian_slim(python_version="3.11")
-        .apt_install("bash")
-        .run_commands(
-            "useradd --uid 1000 --create-home agent",
-            "mkdir /workspaces && chown agent:agent /workspaces",
-        )
-    )
-    executor = ModalExecutor(image=image, network="none", lifetime=120)
+    executor = ModalExecutor(network="none", lifetime=120)
     workspace = LocalWorkspace()
     session = await executor.connect(workspace, user_id="verify", conversation_id="c1")
     try:

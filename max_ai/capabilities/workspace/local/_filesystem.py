@@ -31,6 +31,11 @@ _MAX_SEGMENT_BYTES = 255
 _MAX_FILE_BYTES = 8 * 1024 * 1024
 _MAX_READ_BYTES = 8 * 1024 * 1024
 _MAX_WRITE_BYTES = 1024 * 1024
+# Formats that text tools can only corrupt: they must be produced by a program.
+_BINARY_SUFFIXES = frozenset({
+    ".xlsx", ".xlsm", ".xls", ".docx", ".doc", ".pptx", ".ppt", ".pdf", ".zip",
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp3", ".mp4", ".sqlite", ".db",
+})
 _MAX_BINARY_WRITE_BYTES = 8 * 1024 * 1024
 _MAX_LIST_LIMIT = 500
 _MAX_SCAN_FILES = 1000
@@ -463,6 +468,12 @@ user_root : bool
     ) -> dict[str, Any]:
         """Create a new text file at a fully-resolved path (caller prefixes the root)."""
         parts = self._write_parts(path)
+        if Path(parts[-1]).suffix.lower() in _BINARY_SUFFIXES:
+            # Text written into e.g. .xlsx is a broken file, not a spreadsheet.
+            raise ValueError(
+                f"{parts[-1]} is a binary format: create it by running code "
+                "(for example a Python script with bash), not with write_file"
+            )
         data = self._text_bytes(content)
         target_parts = parts
         lock = _path_lock(

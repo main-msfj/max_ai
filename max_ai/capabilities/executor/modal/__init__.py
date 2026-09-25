@@ -13,9 +13,9 @@ import typing as t
 if t.TYPE_CHECKING:
     from ._executor import ModalExecutor
 
-from ._model import ModalExecutorConfig
+from ._model import PACKAGE_REGISTRIES, ModalExecutorConfig
 
-__all__ = ["ModalExecutor", "ModalExecutorConfig"]
+__all__ = ["ModalExecutor", "ModalExecutorConfig", "PACKAGE_REGISTRIES"]
 
 
 def __getattr__(name: str) -> t.Any:

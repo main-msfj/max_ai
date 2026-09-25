@@ -10,6 +10,7 @@ class GithubSkillRegistryConfig(BaseModel):
     source: str
     skills: list[str]
     ref: str = "main"
+    path: str = Field(default="", description="Folder inside the repo that holds the skills.")
     token_env: str | None = Field(
         default=None, description="Env var holding a GitHub token; never the token itself."
     )

@@ -83,6 +83,14 @@ async def test_paths_returned_by_the_tools_can_be_passed_back(root):
     assert scratch.result["content"] == "tmp"
 
 
+async def test_binary_formats_are_refused_with_a_way_forward(root):
+    tools = FileSystemTools(root)
+    result = await invoke(tools, "write_file", context("u1", "s1"), file_name="trip.XLSX", content="UEsDBBQ")
+    assert refused(result) and "running code" in result.error
+    assert not (root / "u1" / "workspace" / "trip.XLSX").exists()
+    assert (await invoke(tools, "write_file", context("u1", "s1"), file_name="make_trip.py", content="x")).success
+
+
 # -------- ESCAPES -----------------------------------------------------------
 async def test_traversal_absolute_and_blocked_paths_are_refused(root):
     tools = FileSystemTools(root)

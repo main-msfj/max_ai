@@ -689,11 +689,18 @@ class QuestionForm(Vertical):
 
 def tool_summary(tool_name: str, parameters: dict[str, t.Any]) -> str:
     """The one argument that says what the call does, not the whole payload."""
-    for key in ("command", "path", "file_path", "query", "url", "city", "to"):
+    for key in ("command", "file_name", "path", "file_path", "query", "url", "city", "to"):
         if key in parameters:
-            return str(parameters[key]).replace("\n", " ⏎ ")
+            return _first_line(str(parameters[key]))
     parts = [f"{k}={v}" for k, v in parameters.items() if k != "description"]
-    return ", ".join(parts).replace("\n", " ")
+    return _first_line(", ".join(parts))
+
+
+def _first_line(text: str, limit: int = 100) -> str:
+    """A whole script becomes ``cat > x.py << 'EOF' … (+214 lines)``."""
+    lines = text.strip().splitlines() or [""]
+    first = lines[0] if len(lines[0]) <= limit else lines[0][: limit - 1] + "…"
+    return f"{first} … (+{len(lines) - 1} lines)" if len(lines) > 1 else first
 
 
 def result_text(result: ToolResult) -> str:
