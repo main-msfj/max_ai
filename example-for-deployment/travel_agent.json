@@ -73,12 +73,11 @@
       "description": "ModalExecutor provides the Modalexecution implementation.",
       "label": "ModalExecutor",
       "config": {
-        "packages": [
-          "openpyxl",
-          "pandas"
-        ],
+        "framework": "maxai @ git+https://github.com/main-msfj/max_ai@main",
+        "packages": [],
         "app_name": "maxai-runtime",
-        "network": "none",
+        "network": "packages",
+        "allow_list": [],
         "lifetime": 3600,
         "max_output_bytes": 1048576,
         "uid": 1000

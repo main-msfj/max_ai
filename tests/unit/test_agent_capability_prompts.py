@@ -70,14 +70,14 @@ async def policy_prompt(agent) -> str:
 
 @pytest.mark.asyncio
 async def test_the_prompt_says_where_commands_run(tmp_path):
-    modal = make_agent(tmp_path, RecordingClient(), executor=ModalExecutor(packages=["openpyxl", "pandas"]))
+    modal = make_agent(tmp_path, RecordingClient(), executor=ModalExecutor())
     text = await policy_prompt(modal)
-    assert "Execution environment:" in text and "no network access" in text
-    assert "openpyxl, pandas; these are already installed" in text
+    assert "Execution environment:" in text
+    assert "Install what a script needs with pip, uv or npm before running it; other sites are blocked" in text
 
-    docker = make_agent(tmp_path, RecordingClient(), executor=DockerExecutor(network="unrestricted"))
+    docker = make_agent(tmp_path, RecordingClient(), executor=DockerExecutor(network="internet"))
     assert "Docker container (maxai-runtime:latest)" in await policy_prompt(docker)
-    assert "with network access" in await policy_prompt(docker)
+    assert "It has internet access." in await policy_prompt(docker)
 
     # The local executor runs on the host: nothing to add.
     assert "Execution environment" not in await policy_prompt(make_agent(tmp_path, RecordingClient()))

@@ -69,7 +69,7 @@ def build_agent(tracing: bool) -> Agent:
         workspace=MinIOWorkspace(
             os.getenv("MINIO_ENDPOINT", "http://localhost:9000"), bucket="workspaces"
         ),
-        executor=ModalExecutor(packages=["openpyxl", "pandas"]),
+        executor=ModalExecutor(),
         middlewares=[TracingMiddleware()] if tracing else [],
     )
 

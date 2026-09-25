@@ -2,25 +2,26 @@
 
 SDK references: https://modal.com/docs/guide/sandbox-spawn and
 https://modal.com/docs/guide/sandbox-files (reviewed 2026-09-15).
-The optional SDK is imported only when connecting. Without ``image`` the
-executor builds one (Debian + max_ai + its dependencies + ``packages``);
-a custom image must contain max_ai, Bash, and /workspaces writable by ``uid``.
+The optional SDK is imported only when connecting. By default the image is
+max_ai's runtime Dockerfile; with your own ``image`` or ``dockerfile`` the
+executor adds max_ai (from ``framework``), the agent user and /workspaces.
 """
 
 from __future__ import annotations
 
 import asyncio
-import importlib.metadata
 import json
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from ....base.executor import ExecutionResult, ExecutionSession
-from ....core.executor.remote import RemoteExecutor
+from ....core.executor.remote import DEFAULT_FRAMEWORK, FRAMEWORK_PYTHON, RemoteExecutor
 from ....core.ids import short_id
 from ._model import ModalExecutorConfig
 from .sync import apply_snapshot, snapshot
+
+_RUNTIME_DOCKERFILE = str(Path(__file__).resolve().parents[1] / "docker" / "Dockerfile")
 
 
 @dataclass
@@ -37,37 +38,51 @@ class ModalExecutor(RemoteExecutor):
     component_schema = ModalExecutorConfig
     component_provider_override = "max_ai.capabilities.executor.modal.ModalExecutor"
 
-    def __init__(self, *, image=None, packages: list[str] | None = None,
+    def __init__(self, *, image=None, dockerfile: str | None = None,
+                 framework: str = DEFAULT_FRAMEWORK, packages: list[str] | None = None,
                  app_name: str = "maxai-runtime",
-                 network: str = "none", lifetime: int = 3600,
+                 network: str = "packages", allow_list: list[str] | None = None,
+                 lifetime: int = 3600,
                  max_output_bytes: int = 1 << 20, uid: int = 1000):
         """Initialize ``ModalExecutor``.
 
 Parameters
 ----------
 image
-    Value supplied for ``image``.
+    A registry image (``"python:3.12-slim"``) or a ``modal.Image``.
+dockerfile : str | None
+    Path to your own Dockerfile. With neither ``image`` nor ``dockerfile``,
+    max_ai's runtime Dockerfile is used (Python, uv, Node/npm, git, ripgrep).
+    Your image only needs Linux, bash, git and python3 with pip and venv:
+    the executor adds max_ai, the agent user and /workspaces on top.
+framework : str
+    pip requirement that installs max_ai inside the sandbox.
 packages : list[str] | None
-    Value supplied for ``packages``.
+    Extra pip packages baked into the image (optional: the agent can also
+    install what it needs when the network allows it).
 app_name : str
     Value supplied for ``app_name``.
 network : str
-    Value supplied for ``network``.
+    "packages" (default): only package registries (pip, uv, npm) plus
+    ``allow_list``. "internet": every site, or only ``allow_list`` when
+    given. "none": no network.
+allow_list : list[str] | None
+    Extra domains the sandbox may reach; ``*.`` wildcards allowed.
 lifetime : int
     Value supplied for ``lifetime``.
 max_output_bytes : int
     Value supplied for ``max_output_bytes``.
 uid : int
     Value supplied for ``uid``."""
-        if network not in {"none", "unrestricted"}:
-            raise ValueError("network must be 'none' or 'unrestricted'")
+        self._init_network(network, allow_list)
         if not 1 <= lifetime <= 86400 or max_output_bytes <= 0:
             raise ValueError("Invalid lifetime or output limit")
         if isinstance(uid, bool) or not isinstance(uid, int) or uid <= 0:
             raise ValueError("uid must be a positive (non-root) user id")
-        if packages and image is not None:
-            raise ValueError("packages only apply to the default image; install them in yours")
-        self.image, self.app_name, self.network = image, app_name, network
+        if image is not None and dockerfile is not None:
+            raise ValueError("Pass image or dockerfile, not both")
+        self.image, self.dockerfile, self.framework = image, dockerfile, framework
+        self.app_name = app_name
         self.packages = list(packages or [])
         self.lifetime, self.max_output_bytes, self.uid = lifetime, max_output_bytes, uid
         self._sessions: dict[str, ExecutionSession] = {}
@@ -77,38 +92,48 @@ uid : int
         if self.image is not None and not isinstance(self.image, str):
             raise TypeError("Modal image must be a registry string to serialize")
         return ModalExecutorConfig(
-            image=self.image, packages=self.packages, app_name=self.app_name, network=self.network,
-            lifetime=self.lifetime, max_output_bytes=self.max_output_bytes, uid=self.uid,
+            image=self.image, dockerfile=self.dockerfile, framework=self.framework,
+            packages=self.packages, app_name=self.app_name, network=self.network,
+            allow_list=self.allow_list, lifetime=self.lifetime, max_output_bytes=self.max_output_bytes, uid=self.uid,
         )
 
     def describe_environment(self) -> str:
         """Describe the environment exposed by ``ModalExecutor``."""
-        parts = ["Commands run in an isolated Linux sandbox (Modal) as a non-root user"]
-        if self.network == "none":
-            parts.append("with no network access: pip install and downloads fail")
-        else:
-            parts.append("with internet access")
-        text = " ".join(parts) + "."
-        if self.image is None:
-            extra = f", plus {', '.join(self.packages)}" if self.packages else ""
-            text += f" Python 3.11 is available{extra}; these are already installed."
+        ours = self.image is None and self.dockerfile is None
+        text = ("Commands run in an isolated Linux sandbox (Modal) as a non-root user. "
+                + self._network_description("pip, uv or npm" if ours else "pip"))
+        if ours:
+            text += " Python 3.11, uv, Node.js/npm, git and ripgrep are available."
+        if self.packages:
+            text += f" Preinstalled: {', '.join(self.packages)}."
         return text
 
-    def _default_image(self, modal):
-        """Debian + max_ai's own dependencies + ``packages`` (Modal caches the
-        build), with this machine's max_ai source mounted at start."""
-        requires = [r for r in importlib.metadata.requires("maxai") or [] if "extra ==" not in r]
-        source = Path(__file__).resolve().parents[3]  # .../max_ai
-        return (
-            modal.Image.debian_slim(python_version="3.11")
-            .pip_install(*requires, *self.packages)
-            .run_commands(
-                f"useradd --uid {self.uid} --create-home agent",
-                f"mkdir /workspaces && chown {self.uid}:{self.uid} /workspaces",
+    def _build_image(self, modal):
+        """The image, with max_ai in /opt/maxai, the agent user and /workspaces.
+        Modal caches every layer, so this builds once per change."""
+        if self.image is None and self.dockerfile is None:
+            image = modal.Image.from_dockerfile(
+                _RUNTIME_DOCKERFILE,
+                build_args={"MAXAI": self.framework, "AGENT_UID": str(self.uid),
+                            "AGENT_GID": str(self.uid)},
             )
-            .env({"PYTHONPATH": "/opt/maxai", "HOME": "/home/agent"})
-            .add_local_dir(source, "/opt/maxai/max_ai", ignore=["**/__pycache__"])
-        )
+        else:
+            if self.dockerfile is not None:
+                image = modal.Image.from_dockerfile(self.dockerfile)
+            elif isinstance(self.image, str):
+                image = modal.Image.from_registry(self.image)
+            else:
+                image = self.image
+            image = image.run_commands(
+                f'python3 -m venv /opt/maxai && /opt/maxai/bin/pip install "{self.framework}"',
+                f"id -u {self.uid} >/dev/null 2>&1 || useradd --uid {self.uid} --create-home agent",
+                f"mkdir -p /workspaces && chown {self.uid}:{self.uid} /workspaces",
+                # Modal puts /root on sys.path; pip scans it and fails as non-root.
+                "chmod 755 /root",
+            ).env({"HOME": "/tmp"})  # so `pip install --user` works as the agent user
+        if self.packages:
+            image = image.pip_install(*self.packages)
+        return image
 
     @classmethod
     def _from_config(cls, config: ModalExecutorConfig) -> "ModalExecutor":
@@ -152,17 +177,13 @@ conversation_id
             raise RuntimeError("Install Modal with: uv sync --extra runtime-modal") from error
         workspace.materialize(user_id, conversation_id)
         app = await modal.App.lookup.aio(self.app_name, create_if_missing=True)
-        if self.image is None:
-            image = self._default_image(modal)
-        elif isinstance(self.image, str):
-            image = modal.Image.from_registry(self.image)
-        else:
-            image = self.image
+        image = self._build_image(modal)
         root = f"/workspaces/{user_id}"
         sandbox = await modal.Sandbox.create.aio(
             "sleep", "infinity", app=app, image=image,
             timeout=self.lifetime, workdir="/workspaces",
             env={"WORKSPACE": root}, block_network=self.network == "none",
+            outbound_domain_allowlist=self._allowed_domains(),
         )
         session = ExecutionSession(short_id(), user_id, conversation_id, workspace,
                                    root, _Sandbox(sandbox))
@@ -209,7 +230,7 @@ limit
             raise ValueError("Command and finite positive timeout required")
         invocation = short_id()
         process = await handle.sandbox.exec.aio(
-            *self._as_user("python", "-m", "max_ai.capabilities.executor.modal.modal_command"),
+            *self._as_user(FRAMEWORK_PYTHON, "-m", "max_ai.capabilities.executor.modal.modal_command"),
             workdir=session.workspace_path, timeout=math.ceil(timeout + 30),
         )
         payload = {"id": invocation, "argv": argv, "stdin": stdin, "timeout": timeout,
@@ -308,7 +329,7 @@ direction
             root = session.workspace.materialize(session.user_id, session.conversation_id).root
             local = snapshot(root)
             remote_result = await self._command(
-                session, ["python", "-m", "max_ai.capabilities.executor.modal.sync", "snapshot", session.workspace_path],
+                session, [FRAMEWORK_PYTHON, "-m", "max_ai.capabilities.executor.modal.sync", "snapshot", session.workspace_path],
                 timeout=120, limit=24 << 20,
             )
             if remote_result.exit_code != 0 or remote_result.truncated or remote_result.timed_out:
@@ -333,7 +354,7 @@ direction
             if desired != destination:
                 if direction == "to_environment":
                     result = await self._command(
-                        session, ["python", "-m", "max_ai.capabilities.executor.modal.sync", "apply", session.workspace_path],
+                        session, [FRAMEWORK_PYTHON, "-m", "max_ai.capabilities.executor.modal.sync", "apply", session.workspace_path],
                         stdin=json.dumps({"desired": desired, "expected": destination}), timeout=120,
                     )
                     if result.exit_code != 0 or result.timed_out:

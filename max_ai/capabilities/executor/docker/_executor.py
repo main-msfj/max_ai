@@ -21,7 +21,14 @@ class _Container:
 
 
 class DockerExecutor(RemoteExecutor):
-    """DockerExecutor provides the Dockerexecution implementation."""
+    """Runs commands in a local Docker container.
+
+    Network is ``"none"`` (default) or ``"internet"``. Docker cannot filter
+    by domain, so ``"packages"`` and ``allow_list`` are not supported here;
+    use ModalExecutor for that.
+    """
+
+    supports_allow_list = False
     component_schema = DockerExecutorConfig
     component_provider_override = "max_ai.capabilities.executor.docker.DockerExecutor"
 
@@ -34,14 +41,13 @@ Parameters
 image : str
     Value supplied for ``image``.
 network : str
-    Value supplied for ``network``.
+    "none" (default) or "internet". ``allow_list`` does not apply to Docker.
 max_output_bytes : int
     Value supplied for ``max_output_bytes``."""
-        if network not in {"none", "unrestricted"}:
-            raise ValueError("network must be 'none' or 'unrestricted'")
+        self._init_network(network, None)
         if max_output_bytes <= 0:
             raise ValueError("max_output_bytes must be positive")
-        self.image, self.network, self.max_output_bytes = image, network, max_output_bytes
+        self.image, self.max_output_bytes = image, max_output_bytes
         super().__init__()
         self._sessions = {}
         self._locks = {}
@@ -49,10 +55,8 @@ max_output_bytes : int
 
     def describe_environment(self) -> str:
         """Describe the environment exposed by ``DockerExecutor``."""
-        network = ("with no network access: pip install and downloads fail"
-                   if self.network == "none" else "with network access")
         return (f"Commands run in an isolated Docker container ({self.image}) as a non-root "
-                f"user, {network}. Only the workspace and /tmp are writable.")
+                f"user. {self._network_description()} Only the workspace and /tmp are writable.")
 
     def _to_config(self) -> DockerExecutorConfig:
         """Build the serializable configuration for ``DockerExecutor``."""
@@ -117,7 +121,7 @@ root
         h = session.handle
         if "," in str(root):
             raise ValueError("Docker workspace paths cannot contain commas")
-        args = ["run", "--detach", "--pull=never", "--name", h.name,
+        args = ["run", "--detach", "--pull=never", "--name", h.name, "--user", "1000:1000",
                 "--network=none" if self.network == "none" else "--network=bridge",
                 "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
                 "--init", "--pids-limit=128", "--memory=512m", "--cpus=1",

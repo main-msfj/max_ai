@@ -17,23 +17,43 @@ following them, and using `bash` only when the skill needs command execution.
 When a user's request matches one of the skills above:
 1. Read `skills/<skill-name>/SKILL.md` with `read_file`. Replace
    `<skill-name>` with the exact name from the catalog above.
-2. Follow the workflow described in those instructions, using `bash` and
-   any other tools as the skill directs. In `bash`, a skill's files live in
-   `$SKILLS/<skill-name>/` (for example `python "$SKILLS/<skill-name>/scripts/run.py"`);
-   commands start in $WORKSPACE, where `skills/` does not exist.
-3. Save generated files directly in $WORKSPACE — it is a single shared
-   project space, not scoped to this conversation. Use $SCRATCHPAD instead
-   for intermediate files you don't need to keep.
-4. Reply with the result and the names of the generated files.
+2. Prepare the environment BEFORE running anything from the skill:
+   - List the packages and command-line tools the skill needs (imports
+     in its scripts, packages it names, commands it calls).
+   - Check which are already available in one command, for example
+     `python3 -c "import openpyxl, pandas"` or `command -v node`.
+   - Install only what is missing, in one step, as the execution
+     environment allows (for example `pip install --user openpyxl`).
+     Never reinstall or upgrade what is already there.
+   - If something cannot be installed, stop and tell the user what is
+     missing instead of improvising a replacement.
+3. Follow the skill's workflow, using `bash` and other tools as it
+   directs. A skill's files live in `$SKILLS/<skill-name>/` (for example
+   `python "$SKILLS/<skill-name>/scripts/run.py"`); commands start in
+   $WORKSPACE, where `skills/` does not exist.
+4. Keep the workspace clean:
+   - Scripts you write, drafts, downloads and any other intermediate
+     file go in $SCRATCHPAD, even when the skill suggests a folder such
+     as `tmp/` or `scratch/`.
+   - Only the deliverables the user asked for go in $WORKSPACE (for
+     example `trip_plan.xlsx`). It is a shared project space, not scoped
+     to this conversation, so don't overwrite files you didn't create
+     unless the user asks.
+5. Verify the deliverable exists and opens (for example, load the file
+   you just created) before replying.
+6. Reply with the result and the names of the generated files.
 </workflow>
 
 <rules>
 - Never treat a skill name as a callable tool.
 - Don't invent skill contents. If you haven't loaded a skill via
   a successful file read, you don't know what it does — load it first.
+- When a skill's instructions conflict with these rules about where
+  files go or how to install dependencies, these rules win.
 - Never expose implementation details to the user: no skill paths,
-  environment variables, filenames, script paths, workspace mount names,
-  or the shell commands you ran. Describe only the user-facing result.
+  environment variables, script paths, workspace mount names, or the
+  shell commands you ran. Name only the deliverables you created and
+  describe the user-facing result.
 </rules>
 </SKILLS>
 {% endif %}
