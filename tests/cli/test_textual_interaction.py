@@ -127,3 +127,48 @@ def test_tool_summaries_stay_on_one_short_line():
     assert tool_summary("bash", {"command": script}) == "cat > plan.py << 'EOF' … (+201 lines)"
     assert tool_summary("write_file", {"file_name": "a.py", "content": "x\n" * 300}) == "a.py"
     assert len(tool_summary("bash", {"command": "echo " + "a" * 500})) == 100
+
+
+def _notes(app):
+    from max_ai.cli.blocks import NoteLine
+    return [str(note.render()) for note in app.query(NoteLine)]
+
+
+@pytest.mark.asyncio
+async def test_mcp_servers_are_listed_at_start_and_with_slash_mcp(tmp_path):
+    from max_ai.types.tools import ToolApprovalMode
+
+    tools = [
+        SimpleNamespace(name="acme_hr_send_email", server_id="acme_hr", description="d",
+                        approval_mode=ToolApprovalMode.ASK_APPROVED),
+        SimpleNamespace(name="acme_hr_calculate", server_id="acme_hr", description="d",
+                        approval_mode=ToolApprovalMode.AUTO_APPROVED),
+        SimpleNamespace(name="acme_hr_read_resource", server_id="acme_hr", description="d",
+                        available_resources=[SimpleNamespace(uri="acme://guides/parking")],
+                        resource_templates=[]),
+        SimpleNamespace(name="bash", description="d"),
+    ]
+    app = MaxAIApp(SimpleNamespace(name="test", memory=None, skills=None, knowledge=[], tools=tools,
+                                   workspace=SimpleNamespace(base_root=tmp_path)))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert any("acme_hr (2 tools, 1 resources)" in note for note in _notes(app))
+        await app._run_command("/mcp")
+        await pilot.pause()
+        listing = _notes(app)[-1]
+        assert "send_email" in listing and "asks approval" in listing
+        assert "acme://guides/parking" in listing and "bash" not in listing
+
+
+@pytest.mark.asyncio
+async def test_the_turn_summary_shows_the_gate(tmp_path):
+    from max_ai.base.completion_gate import CompletionDecision
+
+    app = make_app(tmp_path)
+    async with app.run_test() as pilot:
+        done = AgentResponse(source="test", context=RunContext(), usage=Usage(), finish_reason="stop",
+                             completion=CompletionDecision(status="completed"))
+        app._gate_retries = ["plan still open"]
+        await app._write_turn_summary(done)
+        await pilot.pause()
+        assert "gate ✓ after 1 fix" in _notes(app)[-1]

@@ -1,0 +1,209 @@
+{
+  "provider": "maxai.agents.Agent",
+  "component_type": "agent",
+  "version": 1,
+  "component_version": 1,
+  "description": "Connect a pluggable reasoning loop to workspace, skills and execution.",
+  "label": "Agent",
+  "config": {
+    "name": "AcmeAssistant",
+    "description": "Acme AI's company assistant.",
+    "instructions": "You help Acme AI employees with company policies, vacation and parking.",
+    "client": {
+      "provider": "maxai.llm.OpenAIChatCompletionClient",
+      "component_type": "client",
+      "version": 1,
+      "component_version": 1,
+      "description": "OpenAI implementation of ``CoreChatCompletionClient``.",
+      "label": "OpenAIChatCompletionClient",
+      "config": {
+        "model": "gpt-5.6-luna",
+        "api_key_env": "OPENAI_API_KEY",
+        "options": {
+          "reasoning_effort": "none"
+        },
+        "config": {
+          "max_context_window": 128000,
+          "max_output_tokens": 0,
+          "supports_vision": false,
+          "supports_audio": false,
+          "supports_function_calling": true,
+          "supports_thinking": false,
+          "tokenizer_base": "o200k_base"
+        }
+      }
+    },
+    "reasoning": {
+      "provider": "maxai.reasoning.ReactLoop",
+      "component_type": "reasoning",
+      "version": 1,
+      "component_version": 1,
+      "description": "ReAct loop: call the model, run any tool calls, repeat.",
+      "label": "ReactLoop",
+      "config": {
+        "max_connection_retries": 3
+      }
+    },
+    "workspace": {
+      "provider": "max_ai.capabilities.workspace.minio.MinIOWorkspace",
+      "component_type": "workspace",
+      "version": 1,
+      "component_version": 1,
+      "description": "Needs the endpoint, the bucket and the env vars holding the keys.",
+      "label": "MinIOWorkspace",
+      "config": {
+        "endpoint_url": "http://minio:9000",
+        "bucket": "workspaces",
+        "access_key_env": "MINIO_ACCESS_KEY",
+        "secret_key_env": "MINIO_SECRET_KEY"
+      }
+    },
+    "executor": {
+      "provider": "max_ai.capabilities.executor.docker.DockerExecutor",
+      "component_type": "executor",
+      "version": 1,
+      "component_version": 1,
+      "description": "Runs commands in a local Docker container.",
+      "label": "DockerExecutor",
+      "config": {
+        "framework": "maxai @ git+https://github.com/main-msfj/max_ai@main",
+        "network": "internet",
+        "max_output_bytes": 1048576
+      }
+    },
+    "memory": {
+      "provider": "max_ai.capabilities.memory.mongodb.MongoDBMemoryRegistry",
+      "component_type": "memory",
+      "version": 1,
+      "component_version": 1,
+      "description": "Owns one async client; PyMongo is an optional dependency.",
+      "label": "MongoDBMemoryRegistry",
+      "config": {
+        "tool_mode": "full",
+        "context_days": 30,
+        "search_limit": 20,
+        "embedding": {
+          "provider": "max_ai.core.embeddings.FastEmbedEmbedding",
+          "component_type": "embedding",
+          "version": 1,
+          "component_version": 1,
+          "description": "Runs on CPU in this process; needs ``pip install 'maxai[embeddings]'``.\n    Good for local and server deployments; for serverless, where downloading\n    a model per cold start is slow, prefer ``OpenAIEmbedding``.",
+          "label": "FastEmbedEmbedding",
+          "config": {
+            "model_name": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+          }
+        },
+        "database": "max_ai",
+        "collection": "memory",
+        "uri_env": "MONGODB_URI",
+        "server_selection_timeout_ms": 5000
+      }
+    },
+    "skills": {
+      "provider": "max_ai.capabilities.skills.github.GithubSkillRegistry",
+      "component_type": "skills",
+      "version": 1,
+      "component_version": 1,
+      "description": "Skills cloned from a GitHub repository with ``git``.",
+      "label": "GithubSkillRegistry",
+      "config": {
+        "source": "trailofbits/skills-curated",
+        "skills": [
+          "openai-doc"
+        ],
+        "ref": "main",
+        "path": "plugins/openai-doc/skills"
+      }
+    },
+    "knowledge": [
+      {
+        "provider": "max_ai.capabilities.knowledge.mongodb.MongoDBKnowledgeRegistry",
+        "component_type": "knowledge",
+        "version": 1,
+        "component_version": 1,
+        "description": "Owns one async client; PyMongo is an optional dependency.",
+        "label": "MongoDBKnowledgeRegistry",
+        "config": {
+          "name": "hr_policies",
+          "description": "Acme AI HR policies: vacation, parking, sick leave, remote work, parental leave, expenses and public holidays.",
+          "tool_mode": "full",
+          "database": "max_ai",
+          "collection": "knowledge",
+          "uri_env": "MONGODB_URI",
+          "server_selection_timeout_ms": 5000,
+          "embedding": {
+            "provider": "max_ai.core.embeddings.FastEmbedEmbedding",
+            "component_type": "embedding",
+            "version": 1,
+            "component_version": 1,
+            "description": "Runs on CPU in this process; needs ``pip install 'maxai[embeddings]'``.\n    Good for local and server deployments; for serverless, where downloading\n    a model per cold start is slow, prefer ``OpenAIEmbedding``.",
+            "label": "FastEmbedEmbedding",
+            "config": {
+              "model_name": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+            }
+          },
+          "min_score": 0.2
+        }
+      }
+    ],
+    "toolset": [],
+    "mcp": [
+      {
+        "server_id": "acme_hr",
+        "transport_protocol": "streamable-http",
+        "env": {},
+        "approval_mode": "ask_for_approval",
+        "resource_approval_mode": null,
+        "tool_approval_modes": {},
+        "timeout_seconds": 240.0,
+        "url": "http://127.0.0.1:8765/mcp",
+        "headers": {},
+        "headers_env": {},
+        "token_env": "ACME_MCP_TOKEN"
+      }
+    ],
+    "gates": [
+      {
+        "provider": "maxai.completion.RuntimeCompletionGate",
+        "component_type": "completion",
+        "version": 1,
+        "component_version": 1,
+        "description": "Check plan closure, declared deliverables and unacknowledged failures.",
+        "label": "RuntimeCompletionGate",
+        "config": {
+          "enabled": true,
+          "plan_must_close": true,
+          "check_bash_outputs": true,
+          "nudge_bash_failures": true
+        }
+      }
+    ],
+    "middlewares": [
+      {
+        "provider": "max_ai.capabilities.middleware.BudgetMiddleware",
+        "component_type": "middleware",
+        "version": 1,
+        "component_version": 1,
+        "description": "Stop a task before it spends more than it, or its user, may.",
+        "label": "BudgetMiddleware",
+        "config": {
+          "max_tokens": 200000,
+          "max_tool_calls": 30
+        }
+      },
+      {
+        "provider": "max_ai.capabilities.middleware.TracingMiddleware",
+        "component_type": "middleware",
+        "version": 1,
+        "component_version": 1,
+        "description": "Trace what the agent does with OpenTelemetry.",
+        "label": "TracingMiddleware",
+        "config": {
+          "capture_content": true,
+          "max_content_chars": 20000
+        }
+      }
+    ],
+    "prompt_layers": []
+  }
+}

@@ -60,7 +60,7 @@ class BashTool(CoreRuntimeTool):
         self,
         name: str = "bash",
         description: str | None = None,
-        timeout_seconds: float = 120,
+        timeout_seconds: float = 360,
         max_output_chars: int = 20000,
         approval_mode: ToolApprovalMode | str = ToolApprovalMode.ASK_APPROVED,
         *,

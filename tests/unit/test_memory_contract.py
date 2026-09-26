@@ -30,6 +30,13 @@ class SessionMemory(CoreMemoryRegistry):
     async def _read_session(self):
         return list(self.store.get((self.user_id, self.session_id), {}).values())
 
+    async def _read_user(self):
+        return [
+            MemorySearchResult(**record.model_dump(), session_id=session)
+            for (user, session), entries in self.store.items() if user == self.user_id
+            for record in entries.values()
+        ]
+
     async def _write_memory(self, record):
         entries = self.store.setdefault((self.user_id, self.session_id), {})
         created = record.category not in entries
@@ -61,7 +68,7 @@ async def test_replacement_and_deletion_are_scoped_to_session():
     assert [(r.category, r.memory) for r in await current.get_context()] == [("project", "replacement")]
     assert await current.delete_memory("project") == "Memory deleted: project"
     assert await current.delete_memory("project") == "Memory category not found: project"
-    assert await current.get_context() == []
+    assert [r.memory for r in await current.get_context()] == ["other session"]  # the user's other session
     assert (await other.get_context())[0].memory == "other session"
     assert current.connect_count == 1
 
@@ -85,7 +92,7 @@ async def test_search_delegates_and_preserves_provenance_without_copying():
     await SessionMemory(store, user_id="someone_else", session_id="past").create_or_update("project", "python private")
     results = await mem.search_memory(" python ")
     assert [(r.session_id, r.memory) for r in results] == [("past", "python historical")]
-    assert (await mem.get_context())[0].memory == "python current"
+    assert [r.memory for r in await mem.get_context()] == ["python current"]
     assert await mem.search_memory("missing") == []
 
 
@@ -128,3 +135,16 @@ async def test_blank_inputs_do_not_write_or_connect():
         await mem.delete_memory(" ")
     assert mem.store == {}
     assert mem.connect_count == 0
+
+
+async def test_context_spans_the_users_sessions_and_the_current_one_wins():
+    now = datetime.now(timezone.utc)
+    store = {
+        ("user", "old"): {"name": MemoryRecord(category="name", memory="Marvin", updated=now - timedelta(days=3)),
+                          "team": MemoryRecord(category="team", memory="Agents", updated=now - timedelta(days=3))},
+        ("user", "newer"): {"team": MemoryRecord(category="team", memory="Platform", updated=now - timedelta(days=1))},
+        ("user", "current"): {"name": MemoryRecord(category="name", memory="Marv", updated=now - timedelta(days=5))},
+        ("someone_else", "x"): {"secret": MemoryRecord(category="secret", memory="private", updated=now)},
+    }
+    context = {r.category: r.memory for r in await SessionMemory(store).get_context()}
+    assert context == {"name": "Marv", "team": "Platform"}  # current session first, else newest

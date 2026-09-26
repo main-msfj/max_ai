@@ -160,6 +160,14 @@ config : SQLiteMemoryRegistryConfig
         ).fetchall())
         return [MemoryRecord(category=c, memory=m, updated=u) for c, m, u in rows]
 
+    async def _read_user(self) -> list[MemorySearchResult]:
+        """Every session of this user."""
+        rows = await self._run(lambda db: db.execute(
+            "SELECT session_id, category, memory, updated FROM memory WHERE user_id=?",
+            (self.user_id,),
+        ).fetchall())
+        return [MemorySearchResult(session_id=s, category=c, memory=m, updated=u) for s, c, m, u in rows]
+
     async def _write_memory(self, record: MemoryRecord) -> bool:
         """Perform the internal ``write memory`` operation for ``SQLiteMemoryRegistry``.
 

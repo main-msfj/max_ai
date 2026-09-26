@@ -8,9 +8,8 @@ Host-side, this is a plain import (``ModalExecutor.sync()`` calls
 ``snapshot``/``apply_snapshot`` directly). Sandbox-side, it's invoked as
 ``python -m max_ai.capabilities.executor.modal.sync snapshot|apply <root>``
 (see ``_executor.py``) — the dotted path is a literal string there, so
-moving or renaming this file requires updating that string too. Only Modal
-uses this: Local/Docker already share a filesystem with the host via bind
-mount, so they never need an explicit snapshot/apply round-trip.
+moving or renaming this file requires updating that string too. Modal and
+Docker use it; only LocalExecutor shares the host filesystem directly.
 """
 
 from __future__ import annotations

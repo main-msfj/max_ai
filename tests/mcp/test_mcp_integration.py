@@ -276,3 +276,37 @@ def test_a_missing_env_var_fails_when_connecting(monkeypatch) -> None:
     http = HTTPServerConfig(server_id="remote", url="https://example.com/mcp", token_env="NOPE_TOKEN")
     with pytest.raises(MCPServerConfigError, match="needs env var NOPE_TOKEN"):
         http.request_headers
+
+async def test_a_cancellation_inside_the_client_is_a_connection_error(monkeypatch) -> None:
+    import asyncio
+
+    from max_ai.capabilities.mcp import client_manager as client_manager_module
+    from max_ai.capabilities.mcp.client_manager import MCPClientManager
+
+    class DroppingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def list_tools(self, *, cursor=None):
+            return ListToolsResult(tools=[])
+
+        async def list_resources(self, *, cursor=None):
+            return ListResourcesResult(resources=[])
+
+        async def list_resource_templates(self, *, cursor=None):
+            return ListResourceTemplatesResult(resource_templates=[])
+
+        async def call_tool(self, name, arguments, read_timeout_seconds=None):
+            raise asyncio.CancelledError  # what the transport does when the stream breaks
+
+    monkeypatch.setattr(client_manager_module, "create_mcp_client", lambda config: DroppingClient())
+    manager = MCPClientManager()
+    manager.add_server(HTTPServerConfig(server_id="web", url="http://localhost:3000/mcp"))
+    await manager.connect("web")
+    with pytest.raises(RuntimeError, match="interrupted the request"):
+        await manager.call_tool("web", "search", {}, 5)
+
+    await manager.disconnect_all()

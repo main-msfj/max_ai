@@ -1,4 +1,4 @@
-"""Memory scoped to (user, session, category), stored in MongoDB."""
+"""Memory stored per (user, session, category) in MongoDB; context spans the user."""
 
 from __future__ import annotations
 
@@ -167,6 +167,15 @@ collection : Any
             self._scope(), {"_id": 0, "vector": 0, "model_id": 0}, collation={"locale": "simple"},
         )
         return [MemoryRecord.model_validate(doc) async for doc in cursor]
+
+    async def _read_user(self) -> list[MemorySearchResult]:
+        """Every session of this user."""
+        await self._ensure_connected()
+        cursor = self._collection.find(
+            {"user_id": self.user_id}, {"_id": 0, "vector": 0, "model_id": 0},
+            collation={"locale": "simple"},
+        )
+        return [MemorySearchResult.model_validate(doc) async for doc in cursor]
 
     async def _write_memory(self, record: MemoryRecord) -> bool:
         """Replace the category atomically, including a concurrent first-insert race."""

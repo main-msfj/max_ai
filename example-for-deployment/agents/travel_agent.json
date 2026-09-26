@@ -8,7 +8,7 @@
   "config": {
     "name": "TravelPlanner",
     "description": "Researches trips on the web and delivers the plan as an Excel workbook.",
-    "instructions": "Plan trips from real, current information: search flights, hotels and activities, and note where each price comes from. If dates, budget or origin are missing, make a reasonable assumption and state it. Deliver the plan as a spreadsheet with an itinerary, options and a budget in USD.",
+    "instructions": "You help users plan trips.",
     "client": {
       "provider": "maxai.llm.OpenRouterChatCompletionClient",
       "component_type": "client",

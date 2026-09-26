@@ -72,4 +72,4 @@ class AgentPolicyLayer(Component[StackConfig], CoreLayer):
 
     def _optional_variables(self) -> set[str]:
         """Perform the internal ``optional variables`` operation for ``AgentPolicyLayer``."""
-        return {"workspace_skills", "execution_environment"}
+        return {"workspace_skills", "execution_environment", "current_date"}

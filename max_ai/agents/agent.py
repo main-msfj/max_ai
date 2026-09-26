@@ -13,6 +13,7 @@ import time
 import weakref
 from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import aclosing
+from datetime import UTC, datetime
 from types import TracebackType
 from typing import Any, Self, get_args
 
@@ -387,9 +388,11 @@ class Agent(ComponentBase[AgentSpec]):
         return self._registry.all_tools()
 
     async def prepare(self) -> None:
-        """Load selected skill metadata; retrieval backends connect on demand."""
+        """Load selected skill metadata and prepare the executor; retrieval
+        backends connect on demand."""
         if self.skills is not None:
             self._skill_blocks = await self.skills.get_skills()
+        await self.executor.prepare()
 
     async def _memory_for(self, ctx: RunContext) -> CoreMemoryRegistry | None:
         """The memory scoped to this run's user and session. The registry is
@@ -405,6 +408,7 @@ class Agent(ComponentBase[AgentSpec]):
             "name": self.name,
             "description": self.description,
             "instructions": self.instructions,
+            "current_date": datetime.now(UTC).date().isoformat(),
         }
         if self._environment:
             variables["execution_environment"] = self._environment
