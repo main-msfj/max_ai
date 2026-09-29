@@ -21,13 +21,13 @@ async def test_files_go_in_come_back_and_deletions_follow(tmp_path):
     session = await executor.connect(workspace, "u1", "s1")
     try:
         await executor.sync(session, "to_environment")
-        result = await executor.execute(session, "cat notes.txt && mkdir -p docs && echo x > docs/a.md && id -u")
+        result = await executor.execute(session, "cat notes.txt && mkdir -p docs && echo x > docs/a.md && id -u", timeout=60)
         assert result.exit_code == 0 and result.stdout.split() == ["from", "the", "host", "1000"]
         await executor.sync(session, "to_workspace")
         assert (directory.root / "docs" / "a.md").read_text() == "x\n"
 
         (directory.root / "notes.txt").unlink()
         await executor.sync(session, "to_environment")
-        assert "notes.txt" not in (await executor.execute(session, "ls")).stdout
+        assert "notes.txt" not in (await executor.execute(session, "ls", timeout=60)).stdout
     finally:
         await executor.clean(session)

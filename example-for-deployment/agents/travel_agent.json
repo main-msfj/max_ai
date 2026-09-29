@@ -70,7 +70,7 @@
       "component_type": "executor",
       "version": 1,
       "component_version": 1,
-      "description": "ModalExecutor provides the Modalexecution implementation.",
+      "description": "Runs commands in a Modal sandbox, one per conversation.",
       "label": "ModalExecutor",
       "config": {
         "framework": "maxai @ git+https://github.com/main-msfj/max_ai@main",
@@ -109,7 +109,6 @@
         "approval_mode": "auto_approval",
         "resource_approval_mode": null,
         "tool_approval_modes": {},
-        "timeout_seconds": 240.0,
         "url": "https://mcp.exa.ai/mcp",
         "headers": {},
         "headers_env": {

@@ -40,13 +40,6 @@ class ToolReference(BaseModel):
 
 def reference_for(tool: CoreTool) -> ToolReference:
     """Adapt existing docker_ref definitions; never pickle live tool objects."""
-    from ...capabilities.tools.bash import BashTool
-
-    if type(tool) is BashTool:
-        return ToolReference(
-            module="max_ai.capabilities.tools.bash", qualname="BashTool",
-            config=tool.docker_ref().config,
-        )
     try:
         old = tool.docker_ref()
     except Exception as error:

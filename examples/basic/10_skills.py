@@ -4,6 +4,7 @@ import asyncio
 
 from max_ai.agents import Agent
 from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
+from max_ai.capabilities.executor.local import LocalExecutor
 from max_ai.capabilities.skills.github import GithubSkillRegistry
 
 
@@ -19,6 +20,8 @@ async def main() -> None:
         instructions="Help the user with data and spreadsheets.",
         client=OpenAIChatCompletionClient(model="gpt-5.6-luna", api_key="YOUR_API_KEY"),
         skills=skills,
+        # Skills run scripts: commands on this machine, approved one by one.
+        executor=LocalExecutor(allow_commands=True),
     )
     async with agent:
         response = await agent.run("Create budget.xlsx with a monthly budget for a student.")

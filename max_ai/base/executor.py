@@ -11,13 +11,17 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from pydantic import BaseModel
 
 from ..core.termination import CancellationToken
 from .component import ComponentBase
 from .workspace import WorkspaceBase
+
+if TYPE_CHECKING:
+    from ..types.tool_call import ToolCallRecord, ToolResult
+    from .tools import CoreTool, ToolContext
 
 SyncDirection = Literal["to_environment", "to_workspace"]
 
@@ -27,6 +31,7 @@ class ExecutionResult:
     """
     Describe the result of running a command in an execution session.
     """
+
     stdout: str
     stderr: str
     exit_code: int | None
@@ -58,6 +63,14 @@ class ExecutorBase(ComponentBase[BaseModel], ABC):
     """
 
     component_type = "executor"
+    # Commands run away from the host (a container, a VM). When they don't,
+    # the user approves every command.
+    isolated: ClassVar[bool] = False
+
+    @property
+    def runs_commands(self) -> bool:
+        """Whether the Agent gives the model the bash tool."""
+        return True
 
     async def prepare(self) -> None:
         """Slow one-time setup (building an image), run by the Agent before
@@ -74,11 +87,11 @@ class ExecutorBase(ComponentBase[BaseModel], ABC):
     async def run_tool(
         self,
         session: ExecutionSession,
-        tool,
-        record,
-        context,
+        tool: CoreTool,
+        record: ToolCallRecord,
+        context: ToolContext,
         cancellation_token: CancellationToken | None = None,
-    ):
+    ) -> ToolResult:
         """Invoke a native CoreTool in this provider; never fall back to host."""
 
     @abstractmethod
@@ -90,10 +103,12 @@ class ExecutorBase(ComponentBase[BaseModel], ABC):
         timeout: float = 60,
         cancellation_token: CancellationToken | None = None,
     ) -> ExecutionResult:
-        """Run Bash; timeout/cancellation must terminate its owned processes.
+        """Run ``command`` with bash and return its output and exit code.
 
-        Return command failures as exit codes. Raise infrastructure errors.
-        Cancellation propagates CancelledError after process cleanup.
+        This is the only way a command reaches the environment: the harness
+        builds the script, the provider only runs it. Timeout and cancellation
+        must stop every process the command started. A failing command is an
+        exit code; only infrastructure problems raise.
         """
 
     @abstractmethod

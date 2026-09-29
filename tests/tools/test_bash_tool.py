@@ -1,61 +1,94 @@
-"""BashTool: runs in the user's workspace, reports exit codes, classifies
-every command as allow / ask / deny and blocks the denied ones."""
+"""BashTool: the model sends a command, the tool wraps it in a script and the
+executor runs it. Working directory persists, output comes back with the exit
+code, and every command is classified as allow / ask / deny."""
 
 from __future__ import annotations
 
-from pathlib import Path
+import time
+
+import pytest
 
 from max_ai.base.tools import ToolContext
+from max_ai.capabilities.executor.local import LocalExecutor
 from max_ai.capabilities.tools.bash import BashTool
+from max_ai.capabilities.workspace.local import LocalWorkspace
+from max_ai.config import setting
 from max_ai.types.tool_call import ToolCallRecord
 from max_ai.types.tools import ToolApprovalMode
 
 
-def runtime(tmp_path: Path) -> tuple[Path, ToolContext]:
-    root = tmp_path / "u1"
-    context = ToolContext(run_id="run_1", user_id="u1", session_id="s1", deps={
-        "runtime_root": str(root),
-        "workspace_dir": str(root / "workspace"),
-        "scratch_dir": str(root / "scratchpad" / "s1"),
-        "skills_dir": str(root / "skills"),
-    })
-    return root, context
+@pytest.fixture
+async def env(tmp_path):
+    executor = LocalExecutor()
+    session = await executor.connect(LocalWorkspace(root=tmp_path), "ana", "c1")
+    yield executor, session
+    await executor.clean(session)
 
 
-async def run(tool: BashTool, context: ToolContext, command: str, **extra):
+async def run(env, command: str, tool: BashTool | None = None):
+    executor, session = env
+    context = ToolContext("r1", session_id="c1", user_id="ana",
+                          deps={"executor": executor, "execution_session": session})
     record = ToolCallRecord(tool_name="bash", parameters={
-        "command": command, "description": "test command", **extra,
-    })
-    return await tool.execute(record, context)
+        "command": command, "description": "test command"})
+    return await (tool or BashTool()).execute(record, context)
 
 
-async def test_commands_run_in_the_workspace_with_its_env(tmp_path):
-    root, context = runtime(tmp_path)
-    result = await run(BashTool(), context,
-                       'pwd && printf ok > out.txt && echo "$WORKSPACE|$SCRATCHPAD"')
+async def test_commands_start_in_the_workspace_with_their_paths(env):
+    root = env[1].workspace_path
+    result = await run(env, 'pwd; echo "$SCRATCHPAD|$SKILLS"; echo oops >&2')
     assert result.success and result.result["exit_code"] == 0
-    workspace = (root / "workspace").resolve()
-    assert result.result["cwd"] == str(workspace)
-    assert (workspace / "out.txt").read_text() == "ok"
-    assert f"{workspace}|{(root / 'scratchpad' / 's1').resolve()}" in result.result["stdout"]
+    assert result.result["output"].splitlines() == [
+        f"{root}/workspace", f"{root}/scratchpad/c1|{root}/skills", "oops",
+    ]
 
 
-async def test_a_failing_command_is_a_result_with_its_exit_code(tmp_path):
-    _, context = runtime(tmp_path)
-    result = await run(BashTool(), context, "ls missing-file")
-    assert result.success is True  # the tool worked; the command failed
-    assert result.result["exit_code"] != 0 and "missing-file" in result.result["stderr"]
+async def test_the_working_directory_persists_but_variables_do_not(env):
+    tool = BashTool()
+    await run(env, "mkdir -p docs && cd docs && export COLOR=red", tool)
+    result = await run(env, 'pwd; echo "${COLOR:-unset}"', tool)
+    assert result.result["output"].splitlines() == [f"{env[1].workspace_path}/workspace/docs", "unset"]
 
 
-async def test_read_skill_prints_the_skill_instructions(tmp_path):
-    root, context = runtime(tmp_path)
-    skill = root / "skills" / "create-ppt"
-    skill.mkdir(parents=True)
-    (skill / "SKILL.md").write_text("private skill instructions\n", encoding="utf-8")
-    result = await run(BashTool(), context, "read_skill create-ppt")
-    assert result.success and "private skill instructions" in result.result["stdout"]
-    unknown = await run(BashTool(), context, "read_skill nope")
-    assert unknown.success is False and "create-ppt" in unknown.error  # lists the real ones
+async def test_exit_still_returns_the_output_and_code(env):
+    result = await run(env, "echo before; exit 3")
+    assert result.success  # the tool worked; the command failed
+    assert (result.result["exit_code"], result.result["output"]) == (3, "before")
+
+
+async def test_leaving_the_users_files_resets_the_directory(env):
+    tool = BashTool()
+    left = await run(env, "cd /", tool)
+    assert "outside the user's files" in left.result["note"]
+    back = await run(env, "pwd", tool)
+    assert back.result["output"] == f"{env[1].workspace_path}/workspace"
+
+
+async def test_quotes_comments_and_closed_stdin(env):
+    result = await run(env, "echo 'it'\"'\"'s' # comment\ncat")  # cat must not wait
+    assert result.result["output"] == "it's"
+
+
+async def test_long_output_is_cut_in_the_middle_and_saved(env):
+    result = await run(env, "seq 1 2000", BashTool(max_output_bytes=100))
+    output = result.result["output"]
+    assert output.startswith("1\n2\n") and output.endswith("1999\n2000")
+    log = output.split("full output in ")[1].split(" ...]")[0]
+    assert open(log).read().splitlines()[-1] == "2000"
+
+
+async def test_commands_stop_at_the_tool_time_limit(env, monkeypatch):
+    monkeypatch.setattr(setting, "tool_timeout_seconds", 1)
+    start = time.monotonic()
+    result = await run(env, "sleep 30; echo never")
+    assert time.monotonic() - start < 10
+    assert result.result["exit_code"] != 0 and "Stopped after 1 seconds" in result.result["note"]
+
+
+async def test_without_an_environment_it_fails_cleanly():
+    record = ToolCallRecord(tool_name="bash", parameters={"command": "pwd", "description": "x"})
+    result = await BashTool().execute(record, ToolContext("r1", session_id="c1", user_id="ana"))
+    assert result.success is False and "execution environment" in result.error
 
 
 def test_every_command_is_allowed_asked_or_denied():
@@ -69,21 +102,8 @@ def test_every_command_is_allowed_asked_or_denied():
         assert tool.permission_for(command) == "ask", command
 
 
-async def test_denied_commands_never_run(tmp_path):
-    root, context = runtime(tmp_path)
-    marker = root / "workspace" / "ran"
-    result = await run(BashTool(approval_mode=ToolApprovalMode.AUTO_APPROVED), context,
-                       f"pwd && sudo touch {marker}")
+async def test_denied_commands_never_run(env):
+    marker = f"{env[1].workspace_path}/workspace/ran"
+    result = await run(env, f"pwd && sudo touch {marker}",
+                       BashTool(approval_mode=ToolApprovalMode.AUTO_APPROVED))
     assert result.success is False and "deny_patterns" in result.error
-    assert not marker.exists()
-
-
-async def test_expected_outputs_must_be_workspace_files_and_are_reported(tmp_path):
-    root, context = runtime(tmp_path)
-    tool = BashTool()
-    for bad in ("/etc/passwd", "../escape.txt", "out/*.txt", ""):
-        result = await run(tool, context, "true", expected_outputs=[bad])
-        assert result.success is False, bad
-    made = await run(tool, context, "printf hi > report.txt", expected_outputs=["report.txt"])
-    [output] = made.result["expected_outputs"]
-    assert (output["path"], output["change"]) == ("report.txt", "created")

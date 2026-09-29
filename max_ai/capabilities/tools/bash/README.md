@@ -1,7 +1,12 @@
-# Bash permissions
+# Bash tool
+
+The model sends only a command. The harness wraps it in a script and the
+executor runs that script with `bash -c` wherever it lives: on the host
+(`LocalExecutor`), in Docker or in Modal. Nothing of max_ai runs inside the
+environment; any image with bash and coreutils works.
 
 ```python
-from max_ai.tools.bash import BashTool
+from max_ai.capabilities.tools.bash import BashTool
 
 bash = BashTool(
     allowed_patterns=["git status", "npm test:*"],
@@ -10,47 +15,58 @@ bash = BashTool(
 )
 ```
 
-The three lists are validated by the Pydantic `BashPermissions` model.
-Omitting a list uses its defaults; passing a list replaces that category;
-passing `[]` clears it. Defaults allow `pwd` and `git status`, ask for
-`git push:*`, and deny selected destructive/system commands. Unmatched commands
-always return `ask`.
+The Agent registers a default `BashTool`; pass your own in `toolset` to change
+its permissions.
 
-Patterns match words, with shell-style globs within each word. A trailing `:*`
-matches the preceding command with zero or more additional arguments.
-Thus `git status` is exact, while `git status:*` accepts arguments.
-Patterns describe individual commands, not shell pipelines or scripts.
+## What the model sends and gets back
 
-`bash.permission_for(command)` returns `deny`, `ask`, or `allow`, in that
-priority order. Every part of `&&`, `||`, `;`, newline-separated commands and
-pipes is evaluated. All parts must return `allow` to allow the whole command.
-For example, `git status && git push origin main` returns `ask`, and
-`git status && git push --force origin main` returns `deny` with the lists above.
+```json
+{"command": "python make.py", "description": "Build the report"}
+```
 
-This first version treats quotes, expansions, redirects, background jobs,
-subshells and control structures conservatively: they require approval even
-when an allow pattern matches. It checks visible deny matches but does not
-interpret dynamically constructed commands or scripts. Patterns do not provide
-filesystem or process isolation.
+```json
+{"exit_code": 0, "output": "Report written"}
+```
 
-Denied commands are rejected by tool validation and execution. ToolDispatcher
-uses `permission_for` for each Bash call: allow grants automatic approval, ask
-emits an approval request and leaves the call pending, and deny blocks execution.
-Other tools retain their tool-wide approval mode. Calling Bash.execute directly
-does not perform the dispatcher's approval workflow.
+- The command starts in the user's workspace. The working directory persists
+  between calls of a conversation; environment variables do not (every call is
+  a fresh shell).
+- stdout and stderr come back together, in order, and stdin is closed.
+- Output over `max_output_bytes` (30 KB) is cut in the middle; the full text
+  stays in a file whose path is in the output.
+- Every call stops after `TOOL_TIMEOUT_SECONDS` (360 by default, one setting
+  for every tool). A stopped command returns its partial output and a `note`.
+- A failing command is a normal result with its exit code, not a tool error.
 
-## Execution
+## The script
 
-The caller supplies a conversation-bound `ToolContext.environment`. Bash checks
-its user and conversation, calls `start()` and delegates to `execute()`. The
-environment owns process cleanup and its caller owns release/stop. There is no
-host-shell fallback, fixed mount path, directory creation or `read_skill`
-expansion in the tool.
+`build_script()` builds what the executor runs:
 
-Optional `action` and `description` arguments describe intent for display.
-They never grant permissions or prove file changes. Events are emitted through
-`ToolContext.emit_event`: `bash_started`, `bash_finished`, `bash_failed`, and
-`bash_cancelled`. Nonzero exit codes remain completed command results; timeouts
-return a timeout failure (with partial output when provided by the environment).
-Cancellation during execution emits an event and propagates `CancelledError`.
-The per-command timeout cannot exceed the configured tool timeout.
+1. Export `WORKSPACE`, `SKILLS` and `SCRATCHPAD`, create them, and `cd` to the
+   directory the previous command ended in.
+2. Set an EXIT trap that prints the output (cut if long) and the final working
+   directory after a marker. It runs even when the command calls `exit` or the
+   time limit stops it (TERM).
+3. Run the command with `eval`, in the same shell (so `cd` sticks), with stdin
+   from `/dev/null` and stdout and stderr into one log file.
+
+The tool strips the marker, keeps the directory for the next call (only if it
+is inside the user's files), and returns the rest.
+
+## Permissions
+
+`bash.permission_for(command)` returns `deny`, `ask` or `allow`, in that
+priority order, and the dispatcher uses it for each call: allow runs it, ask
+waits for the user, deny blocks it.
+
+- Omitting a list keeps its defaults; passing a list replaces it; `[]` clears
+  it. Defaults allow `pwd` and `git status`, ask for `git push:*`, and deny
+  destructive or system commands (`sudo`, `mkfs`, `rm -rf /*`, ...).
+- Patterns match words, with shell globs inside each word. A trailing `:*`
+  allows extra arguments: `git status` is exact, `git status:*` is not.
+- Every part of `&&`, `||`, `;`, newlines and pipes is checked; all must be
+  allowed. Quotes, expansions, redirects, subshells and control structures
+  always ask.
+
+Patterns decide approval; they are not isolation. Isolation comes from the
+executor (Docker or Modal).

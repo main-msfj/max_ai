@@ -12,6 +12,7 @@ from concurrent.futures import CancelledError as FuturesCancelledError
 from pydantic import ConfigDict, TypeAdapter, ValidationError, create_model
 
 from ...base.tools import CoreTool, ToolContext
+from ...config import setting
 from ...core.termination import CancellationToken
 from ...errors.tools import DockerToolReferenceError, ToolRetry
 from ...loggers import ScopedLogger
@@ -35,7 +36,6 @@ class FunctionAsTool(CoreTool):
         description: str | None = None,
         version: str = "1.0.0",
         approval_mode: ToolApprovalMode | str = ToolApprovalMode.ASK_APPROVED,
-        timeout_seconds: float = 300,
         max_retries: int = 3,
         read_only: bool = False,
     ):
@@ -47,7 +47,6 @@ class FunctionAsTool(CoreTool):
             description: Custom description (defaults to function docstring).
             version: Semver string.
             approval_mode: Whether approval is required before execution.
-            timeout_seconds: Max execution time in seconds.
             max_retries: Consumed by the executor on ToolRetry.
             read_only: The function has no side effects, so the agent may run
                 it at the same time as other read-only calls.
@@ -58,7 +57,6 @@ class FunctionAsTool(CoreTool):
             description=description or func.__doc__ or f"Execute {func.__name__}",
             version=version,
             approval_mode=approval_mode,
-            timeout_seconds=timeout_seconds,
             max_retries=max_retries,
             read_only=read_only,
         )
@@ -118,7 +116,6 @@ class FunctionAsTool(CoreTool):
                     if isinstance(self.approval_mode, ToolApprovalMode)
                     else self.approval_mode
                 ),
-                "timeout_seconds": self.timeout_seconds,
                 "max_retries": self.max_retries,
             },
         )
@@ -203,7 +200,7 @@ cancellation_token : CancellationToken | None
             if cancellation_token:
                 cancellation_token.link_future(task)
 
-            result = await asyncio.wait_for(task, timeout=self.timeout_seconds)
+            result = await asyncio.wait_for(task, timeout=setting.tool_timeout_seconds)
             return ToolResult.success_result(
                 tool_request.id, result, {"name": self.name}
             )
@@ -214,7 +211,7 @@ cancellation_token : CancellationToken | None
                 action="Yielding timeout error to LLM/UI.",
             )
             return ToolResult.timeout(
-                tool_request.id, timeout_seconds=self.timeout_seconds
+                tool_request.id, timeout_seconds=setting.tool_timeout_seconds
             )
 
         except (AsyncioCancelledError, FuturesCancelledError):

@@ -17,6 +17,7 @@ from mcp.types import (
 )
 
 from max_ai.base.tools import CoreTool
+from max_ai.config import setting
 from max_ai.capabilities.mcp import (
     HTTPServerConfig,
     MCPClientManager,
@@ -74,7 +75,6 @@ async def test_mcp_tool_executes_remote_tool_and_returns_core_result() -> None:
         client_manager=t.cast(t.Any, manager),
         server_id="docs",
         approval_mode=ToolApprovalMode.AUTO_APPROVED,
-        timeout_seconds=12,
     )
 
     result = await tool.execute(
@@ -85,7 +85,7 @@ async def test_mcp_tool_executes_remote_tool_and_returns_core_result() -> None:
     assert result.result == "hello from mcp"
     assert result.metadata["server_id"] == "docs"
     assert result.metadata["mcp_tool_name"] == "search"
-    assert manager.calls == [("docs", "search", {"q": "abc"}, 12)]
+    assert manager.calls == [("docs", "search", {"q": "abc"}, setting.tool_timeout_seconds)]
 
 
 def test_http_server_config_adds_bearer_token_header() -> None:

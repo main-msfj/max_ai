@@ -8,6 +8,7 @@ from max_ai.base.knowledge import KnowledgeToolMode
 from max_ai.base.memory import MemoryToolMode
 from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
 from max_ai.capabilities.compaction import SummaryCompaction
+from max_ai.capabilities.executor.local import LocalExecutor
 from max_ai.capabilities.knowledge.local import LocalKnowledgeRegistry
 from max_ai.capabilities.memory.local import LocalMemoryRegistry
 from max_ai.capabilities.middleware import LoggingMiddleware
@@ -57,6 +58,8 @@ async def main() -> None:
         memory=memory,
         knowledge=[knowledge],
         skills=skills,
+        # Skills run scripts: commands on this machine, approved one by one.
+        executor=LocalExecutor(allow_commands=True),
         compaction=SummaryCompaction(threshold=0.8, keep_ratio=0.4),
         middlewares=[LoggingMiddleware()],
     )

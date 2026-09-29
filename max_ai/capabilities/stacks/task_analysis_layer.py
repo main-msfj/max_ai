@@ -42,6 +42,9 @@ class TaskAnalysisLayer(Component[StackConfig], CoreLayer):
             extra_variables=extra_variables,
         )
 
+    def _optional_variables(self) -> set[str]:
+        return {"can_run_commands"}
+
     def _default_template(self) -> str:
         """Perform the internal ``default template`` operation for ``TaskAnalysisLayer``."""
         return self._load_file(self._DEFAULT_TEMPLATE_PATH / f"{self.name}.j2")

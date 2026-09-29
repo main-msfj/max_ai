@@ -5,15 +5,29 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from dataclasses import dataclass, field
+import time
+from collections.abc import Sequence
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from ....base.executor import ExecutionSession
+from ....base.executor import ExecutionResult, ExecutionSession, SyncDirection
 from ....core.executor.process import run_process
-from ....core.executor.remote import DEFAULT_FRAMEWORK, FRAMEWORK_PYTHON, RemoteExecutor
+from ....core.executor.remote import (
+    DEFAULT_FRAMEWORK,
+    FRAMEWORK_PYTHON,
+    RemoteExecutor,
+    kill_argv,
+    supervised,
+)
+from ....core.ids import short_id
 from ..modal.sync import apply_snapshot, snapshot
 from ._model import DockerExecutorConfig
+
+if TYPE_CHECKING:
+    from ....base.workspace import WorkspaceBase
+    from ....core.termination import CancellationToken
 
 _RUNTIME_DOCKERFILE = Path(__file__).with_name("Dockerfile")
 _UID = 1000
@@ -30,7 +44,8 @@ WORKDIR /workspaces
 
 @dataclass
 class _Container:
-    """_Container represents structured data used by the capability system."""
+    """One session's container and its last synced workspace state."""
+
     name: str
     started: bool = False
     may_exist: bool = False
@@ -55,24 +70,31 @@ class DockerExecutor(RemoteExecutor):
     component_schema = DockerExecutorConfig
     component_provider_override = "max_ai.capabilities.executor.docker.DockerExecutor"
 
-    def __init__(self, *, image: str | None = None, dockerfile: str | None = None,
-                 framework: str = DEFAULT_FRAMEWORK, network: str = "none",
-                 max_output_bytes: int = 1 << 20):
+    def __init__(
+        self,
+        *,
+        image: str | None = None,
+        dockerfile: str | None = None,
+        framework: str = DEFAULT_FRAMEWORK,
+        network: str = "none",
+        max_output_bytes: int = 1 << 20,
+    ) -> None:
         """Initialize ``DockerExecutor``.
 
-Parameters
-----------
-image : str | None
-    Your image (``"python:3.12-slim"``). It only needs Linux, bash, git and
-    python3 with pip and venv.
-dockerfile : str | None
-    Path to your own Dockerfile, built with its folder as context.
-framework : str
-    pip requirement that installs max_ai inside the container.
-network : str
-    "none" (default) or "internet". ``allow_list`` does not apply to Docker.
-max_output_bytes : int
-    Value supplied for ``max_output_bytes``."""
+        Parameters
+        ----------
+        image : str | None
+            Your image (``"python:3.12-slim"``). It only needs Linux, bash, git and
+            python3 with pip and venv.
+        dockerfile : str | None
+            Path to your own Dockerfile, built with its folder as context.
+        framework : str
+            pip requirement that installs max_ai inside the container.
+        network : str
+            "none" (default) or "internet". ``allow_list`` does not apply to Docker.
+        max_output_bytes : int
+            Most bytes kept from a command's stdout and from its stderr.
+        """
         self._init_network(network, None)
         if max_output_bytes <= 0:
             raise ValueError("max_output_bytes must be positive")
@@ -83,16 +105,18 @@ max_output_bytes : int
         self._runtime_image: str | None = None
         self._image_lock = asyncio.Lock()
         super().__init__()
-        self._sessions = {}
-        self._locks = {}
-        self._closed = {}
+        self._sessions: dict[str, ExecutionSession] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+        self._closed: dict[str, ExecutionSession] = {}
 
     def describe_environment(self) -> str:
-        """Describe the environment exposed by ``DockerExecutor``."""
+        """Where commands run, for the system prompt."""
         ours = self.image is None and self.dockerfile is None
-        text = ("Commands run in an isolated Docker container as a non-root user. "
-                + self._network_description("pip, uv or npm" if ours else "pip")
-                + " Only the workspace and /tmp are writable.")
+        text = (
+            "Commands run in an isolated Docker container as a non-root user. "
+            + self._network_description("pip, uv or npm" if ours else "pip")
+            + " Only the workspace and /tmp are writable."
+        )
         if ours:
             text += " Python 3.11, uv, Node.js/npm, git and ripgrep are available."
         return text
@@ -108,11 +132,14 @@ max_output_bytes : int
             return self._runtime_image
 
     async def _build_image(self) -> str:
-        """Perform the internal ``build image`` operation for ``DockerExecutor``."""
+        """Our runtime image, or the developer's with the framework layer on top."""
         if self.image is None and self.dockerfile is None:
             tag = _tag("maxai-runtime", _RUNTIME_DOCKERFILE.read_text(), self.framework)
-            await self._docker_build(tag, ["--build-arg", f"MAXAI={self.framework}", "-"],
-                                     stdin=_RUNTIME_DOCKERFILE.read_text())
+            await self._docker_build(
+                tag,
+                ["--build-arg", f"MAXAI={self.framework}", "-"],
+                stdin=_RUNTIME_DOCKERFILE.read_text(),
+            )
             return tag
         base = self.image
         if self.dockerfile is not None:
@@ -129,8 +156,12 @@ max_output_bytes : int
         exists = await run_process(["docker", "image", "inspect", tag], timeout=30)
         if exists.exit_code == 0:
             return
-        result = await run_process(["docker", "build", "-t", tag, *args], stdin=stdin,
-                                   timeout=3600, max_output_bytes=self.max_output_bytes)
+        result = await run_process(
+            ["docker", "build", "-t", tag, *args],
+            stdin=stdin,
+            timeout=3600,
+            max_output_bytes=self.max_output_bytes,
+        )
         if result.exit_code != 0:
             raise RuntimeError(
                 f"Building the Docker image {tag} failed. Your image needs Linux, bash, "
@@ -138,49 +169,37 @@ max_output_bytes : int
             )
 
     def _to_config(self) -> DockerExecutorConfig:
-        """Build the serializable configuration for ``DockerExecutor``."""
         return DockerExecutorConfig(
-            image=self.image, dockerfile=self.dockerfile, framework=self.framework,
+            image=self.image,
+            dockerfile=self.dockerfile,
+            framework=self.framework,
             network=self.network,
             max_output_bytes=self.max_output_bytes,
         )
 
     @classmethod
-    def _from_config(cls, config: DockerExecutorConfig) -> "DockerExecutor":
-        """Create an instance from its configuration for ``DockerExecutor``.
-
-Parameters
-----------
-config : DockerExecutorConfig
-    Value supplied for ``config``."""
+    def _from_config(cls, config: DockerExecutorConfig) -> DockerExecutor:
         return cls(**config.model_dump())
 
-    def _check(self, session):
-        """Perform the internal ``check`` operation for ``DockerExecutor``.
-
-Parameters
-----------
-session
-    Value supplied for ``session``."""
+    def _check(self, session: ExecutionSession) -> None:
         if self._sessions.get(session.id) is not session:
             raise ValueError("session does not belong to this executor")
 
-    async def connect(self, workspace, user_id, conversation_id):
-        """Open required resources for ``DockerExecutor``.
-
-Parameters
-----------
-workspace
-    Value supplied for ``workspace``.
-user_id
-    Value supplied for ``user_id``.
-conversation_id
-    Value supplied for ``conversation_id``."""
+    async def connect(
+        self, workspace: WorkspaceBase, user_id: str, conversation_id: str
+    ) -> ExecutionSession:
+        """Start a container for this conversation."""
         await self._ensure_image()
         directory = workspace.materialize(user_id, conversation_id)
         handle = _Container(f"maxai-runtime-{uuid4().hex}")
-        session = ExecutionSession(uuid4().hex, user_id, conversation_id, workspace,
-                                   f"/workspaces/{user_id}", handle)
+        session = ExecutionSession(
+            uuid4().hex,
+            user_id,
+            conversation_id,
+            workspace,
+            f"/workspaces/{user_id}",
+            handle,
+        )
         self._sessions[session.id] = session
         self._locks[session.id] = asyncio.Lock()
         try:
@@ -190,109 +209,156 @@ conversation_id
             await self.clean(session)
             raise
 
-    async def _start(self, session, root):
-        """Perform the internal ``start`` operation for ``DockerExecutor``.
-
-Parameters
-----------
-session
-    Value supplied for ``session``.
-root
-    Value supplied for ``root``."""
+    async def _start(self, session: ExecutionSession, root: Path | None) -> None:
+        """Run the container and check its user can write the workspace."""
         h = session.handle
-        args = ["run", "--detach", "--pull=never", "--name", h.name, "--user", f"{_UID}:{_UID}",
-                "--network=none" if self.network == "none" else "--network=bridge",
-                "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
-                "--init", "--pids-limit=128", "--memory=512m", "--cpus=1",
-                "--tmpfs", "/tmp:rw,nosuid,nodev,size=64m",
-                # An anonymous volume: no host path, removed with the container.
-                "--mount", "type=volume,dst=/workspaces",
-                "--workdir", "/workspaces", "--env", f"WORKSPACE={session.workspace_path}",
-                await self._ensure_image(), "sleep", "infinity"]
+        args = [
+            "run",
+            "--detach",
+            "--pull=never",
+            "--name",
+            h.name,
+            "--user",
+            f"{_UID}:{_UID}",
+            "--network=none" if self.network == "none" else "--network=bridge",
+            "--read-only",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            "--init",
+            "--pids-limit=128",
+            "--memory=512m",
+            "--cpus=1",
+            "--tmpfs",
+            "/tmp:rw,nosuid,nodev,size=64m",
+            # An anonymous volume: no host path, removed with the container.
+            "--mount",
+            "type=volume,dst=/workspaces",
+            "--workdir",
+            "/workspaces",
+            "--env",
+            f"WORKSPACE={session.workspace_path}",
+            await self._ensure_image(),
+            "sleep",
+            "infinity",
+        ]
         h.may_exist = True
         try:
-            result = await run_process(["docker", *args], timeout=30, max_output_bytes=self.max_output_bytes)
+            result = await run_process(
+                ["docker", *args], timeout=30, max_output_bytes=self.max_output_bytes
+            )
             if result.exit_code != 0:
                 raise RuntimeError(result.stderr or "Docker startup failed")
             h.started = True
             h.baseline = {}
-            verify = await self._docker_exec(session, ["sh", "-c", 'test "$(id -u)" -ne 0 && mkdir -p "$WORKSPACE" && test -w "$WORKSPACE"'],
-                                             workdir="/workspaces")
+            verify = await self._docker_exec(
+                session,
+                [
+                    "sh",
+                    "-c",
+                    'test "$(id -u)" -ne 0 && mkdir -p "$WORKSPACE" && test -w "$WORKSPACE"',
+                ],
+                workdir="/workspaces",
+            )
             if verify.exit_code != 0:
                 raise RuntimeError("Docker image user must be non-root and workspace-writable")
         except BaseException:
             await self._destroy_container(session)
             raise
 
-    async def _docker_exec(self, session, argv, **kwargs):
-        """Perform the internal ``docker exec`` operation for ``DockerExecutor``.
-
-Parameters
-----------
-session
-    Value supplied for ``session``.
-argv
-    Value supplied for ``argv``.
-kwargs
-    Value supplied for ``kwargs``."""
-        stdin = kwargs.get("stdin")
+    async def _docker_exec(
+        self,
+        session: ExecutionSession,
+        argv: Sequence[str],
+        *,
+        stdin: str | None = None,
+        timeout: float = 60,
+        workdir: str | None = None,
+        max_output_bytes: int | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> ExecutionResult:
+        """``docker exec`` in the session's container, from the workspace by default."""
         interactive = ["-i"] if stdin is not None else []
-        workdir = kwargs.pop("workdir", session.workspace_path)
-        kwargs.setdefault("max_output_bytes", self.max_output_bytes)
-        return await run_process(["docker", "exec", *interactive, "--workdir", workdir,
-                                  session.handle.name, *argv], **kwargs)
+        return await run_process(
+            [
+                "docker",
+                "exec",
+                *interactive,
+                "--workdir",
+                workdir or session.workspace_path,
+                session.handle.name,
+                *argv,
+            ],
+            stdin=stdin,
+            timeout=timeout,
+            max_output_bytes=max_output_bytes or self.max_output_bytes,
+            cancellation_token=cancellation_token,
+        )
 
-    async def execute_argv(self, session, argv, *, stdin=None, timeout=60, cancellation_token=None):
-        """Run an argument vector for ``DockerExecutor``.
-
-Parameters
-----------
-session
-    Value supplied for ``session``.
-argv
-    Value supplied for ``argv``.
-stdin
-    Value supplied for ``stdin``.
-timeout
-    Value supplied for ``timeout``.
-cancellation_token
-    Value supplied for ``cancellation_token``."""
+    async def execute_argv(
+        self,
+        session: ExecutionSession,
+        argv: list[str],
+        *,
+        stdin: str | None = None,
+        timeout: float = 60,
+        cancellation_token: CancellationToken | None = None,
+    ) -> ExecutionResult:
+        """Run ``argv`` in the container; any failure destroys the container."""
         self._check(session)
         async with self._locks[session.id]:
             try:
                 if not session.handle.started:
                     await self._start(session, None)
-                result = await self._docker_exec(session, list(argv), stdin=stdin, timeout=timeout,
-                                                 cancellation_token=cancellation_token)
+                result = await self._docker_exec(
+                    session,
+                    argv,
+                    stdin=stdin,
+                    timeout=timeout,
+                    cancellation_token=cancellation_token,
+                )
                 if result.timed_out:
                     await self._destroy_container(session)
                 return result
-            except (asyncio.CancelledError,):
-                await self._destroy_container(session)
-                raise
-            except Exception:
+            except BaseException:
                 await self._destroy_container(session)
                 raise
 
-    async def execute(self, session, command, *, timeout=60, cancellation_token=None):
-        """Execute the requested operation for ``DockerExecutor``.
-
-Parameters
-----------
-session
-    Value supplied for ``session``.
-command
-    Value supplied for ``command``.
-timeout
-    Value supplied for ``timeout``.
-cancellation_token
-    Value supplied for ``cancellation_token``."""
-        if not isinstance(command, str) or not command.strip():
+    async def execute(
+        self,
+        session: ExecutionSession,
+        command: str,
+        *,
+        timeout: float,
+        cancellation_token: CancellationToken | None = None,
+    ) -> ExecutionResult:
+        """Run ``command`` with bash in the container; see ``supervised``."""
+        if not command.strip():
             raise ValueError("command cannot be empty")
-        return await self.execute_argv(session, ["bash", "--noprofile", "--norc", "-c", command],
-                                       timeout=timeout, cancellation_token=cancellation_token)
+        self._check(session)
+        run_id = short_id()
+        async with self._locks[session.id]:
+            if not session.handle.started:
+                await self._start(session, None)
+            start = time.monotonic()
+            try:
+                result = await self._docker_exec(
+                    session,
+                    supervised(command, timeout, run_id),
+                    timeout=timeout + 30,
+                    cancellation_token=cancellation_token,
+                )
+            except asyncio.CancelledError:
+                # Stopping `docker exec` leaves the command running inside.
+                await asyncio.shield(self._docker_exec(session, kill_argv(run_id), timeout=10))
+                raise
+            if result.timed_out:
+                # Not even timeout could stop it: the container goes.
+                await self._destroy_container(session)
+                return result
+        timed_out = result.exit_code != 0 and time.monotonic() - start >= timeout
+        return replace(result, timed_out=timed_out)
 
-    async def sync(self, session, direction):
+    async def sync(self, session: ExecutionSession, direction: SyncDirection) -> None:
         """Copy the workspace into the container ("to_environment") or back
         ("to_workspace"), only what changed since the last sync."""
         self._check(session)
@@ -306,15 +372,25 @@ cancellation_token
                 await self._start(session, None)
             root = session.workspace.materialize(session.user_id, session.conversation_id).root
             command = [FRAMEWORK_PYTHON, "-m", "max_ai.capabilities.executor.modal.sync"]
-            result = await self._docker_exec(session, [*command, "snapshot", session.workspace_path],
-                                             timeout=120, max_output_bytes=24 << 20)
+            result = await self._docker_exec(
+                session,
+                [*command, "snapshot", session.workspace_path],
+                timeout=120,
+                max_output_bytes=24 << 20,
+            )
             if result.exit_code != 0 or result.timed_out:
                 raise RuntimeError(result.stderr or "Workspace snapshot failed")
             local, remote = snapshot(root), json.loads(result.stdout)
-            source, destination = (local, remote) if direction == "to_environment" else (remote, local)
+            source, destination = (
+                (local, remote) if direction == "to_environment" else (remote, local)
+            )
             desired = dict(destination)
             for name in set(source) | set(h.baseline):
-                before, incoming, current = h.baseline.get(name), source.get(name), destination.get(name)
+                before, incoming, current = (
+                    h.baseline.get(name),
+                    source.get(name),
+                    destination.get(name),
+                )
                 if incoming == before:
                     continue
                 if current != before and current != incoming:
@@ -326,46 +402,35 @@ cancellation_token
             if desired != destination:
                 if direction == "to_environment":
                     applied = await self._docker_exec(
-                        session, [*command, "apply", session.workspace_path],
-                        stdin=json.dumps({"desired": desired, "expected": destination}), timeout=120,
+                        session,
+                        [*command, "apply", session.workspace_path],
+                        stdin=json.dumps({"desired": desired, "expected": destination}),
+                        timeout=120,
                     )
                     if applied.exit_code != 0 or applied.timed_out:
                         raise RuntimeError(applied.stderr or "Workspace upload failed")
                 else:
                     apply_snapshot(root, desired, destination)
-            h.baseline = {name: data for name, data in desired.items()}
+            h.baseline = dict(desired)
 
-    async def disconnect(self, session):
-        """Release resources held for ``DockerExecutor``.
-
-Parameters
-----------
-session
-    Value supplied for ``session``."""
+    async def disconnect(self, session: ExecutionSession) -> None:
         self._check(session)
 
-    async def _remove_owned(self, handle):
-        """Perform the internal ``remove owned`` operation for ``DockerExecutor``.
-
-Parameters
-----------
-handle
-    Value supplied for ``handle``."""
+    async def _remove_owned(self, handle: _Container) -> None:
+        """``docker rm`` the container and its anonymous workspace volume."""
         if not handle.may_exist:
             return
-        result = await run_process(["docker", "rm", "--force", "--volumes", handle.name], timeout=15,
-                                   max_output_bytes=self.max_output_bytes)
+        result = await run_process(
+            ["docker", "rm", "--force", "--volumes", handle.name],
+            timeout=15,
+            max_output_bytes=self.max_output_bytes,
+        )
         if result.exit_code != 0 and "No such container" not in result.stderr:
             raise RuntimeError(result.stderr or "Docker cleanup failed")
         handle.may_exist = False
 
-    async def _destroy_container(self, session):
-        """Perform the internal ``destroy container`` operation for ``DockerExecutor``.
-
-Parameters
-----------
-session
-    Value supplied for ``session``."""
+    async def _destroy_container(self, session: ExecutionSession) -> None:
+        """Remove the container even if the caller is cancelled meanwhile."""
         handle = session.handle
         if handle.may_exist:
             cleanup = asyncio.create_task(self._remove_owned(handle))
@@ -376,38 +441,19 @@ session
                 raise
             handle.started = False
 
-    async def clean(self, session):
-        """Remove temporary resources owned for ``DockerExecutor``.
-
-Parameters
-----------
-session
-    Value supplied for ``session``."""
+    async def clean(self, session: ExecutionSession) -> None:
+        """Remove the container; calling it twice is fine."""
         if self._sessions.get(session.id) is not session:
             if self._closed.get(session.id) is session:
                 return
             raise ValueError("session does not belong to this executor")
-        h = session.handle
-        if h.may_exist:
-            try:
-                cleanup = asyncio.create_task(self._remove_owned(h))
-                await asyncio.shield(cleanup)
-            except asyncio.CancelledError:
-                await cleanup
-                raise
-            else:
-                h.started = False
+        await self._destroy_container(session)
         self._sessions.pop(session.id, None)
         self._locks.pop(session.id, None)
         self._closed[session.id] = session
 
-    async def rebuild(self, session):
-        """Recreate the runtime environment for ``DockerExecutor``.
-
-Parameters
-----------
-session
-    Value supplied for ``session``."""
+    async def rebuild(self, session: ExecutionSession) -> ExecutionSession:
+        """A fresh container for the same conversation."""
         self._check(session)
         workspace = session.workspace
         user_id = session.user_id

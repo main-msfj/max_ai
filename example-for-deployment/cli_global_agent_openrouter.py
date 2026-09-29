@@ -30,6 +30,7 @@ from max_ai.base.knowledge import KnowledgeToolMode
 from max_ai.base.memory import MemoryToolMode
 from max_ai.capabilities.clients.openrouter import OpenRouterChatCompletionClient
 from max_ai.capabilities.compaction import SummaryCompaction
+from max_ai.capabilities.executor.local import LocalExecutor
 from max_ai.capabilities.knowledge.local import LocalKnowledgeRegistry
 from max_ai.capabilities.memory.local import LocalMemoryRegistry
 from max_ai.capabilities.middleware import TracingMiddleware, configure_langfuse
@@ -96,6 +97,8 @@ async def main() -> None:
             ),
         ],
         skills=GithubSkillRegistry("trailofbits/skills-curated", ["openai-spreadsheet"], path="plugins/openai-spreadsheet/skills"),
+        # Skills run scripts: commands on this machine, approved one by one.
+        executor=LocalExecutor(allow_commands=True),
         compaction=SummaryCompaction(threshold=threshold, keep_ratio=threshold / 2),
         # With LANGFUSE_PUBLIC_KEY/SECRET_KEY set, every turn is a trace in Langfuse.
         middlewares=[TracingMiddleware()] if tracing else [],

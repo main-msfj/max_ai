@@ -3,71 +3,84 @@
 from __future__ import annotations
 
 import asyncio
-import math
 import os
+from typing import TYPE_CHECKING
 
-from ....base.executor import ExecutionSession, ExecutorBase
+from ....base.executor import ExecutionResult, ExecutionSession, ExecutorBase
 from ....base.tools import ToolContext
+from ....config import setting
 from ....core.executor.process import run_process
 from ....core.ids import short_id
+from ....types.tool_call import ToolResult
 from ._model import LocalExecutorConfig
+
+if TYPE_CHECKING:
+    from ....base.tools import CoreTool
+    from ....base.workspace import WorkspaceBase
+    from ....core.termination import CancellationToken
+    from ....types.tool_call import ToolCallRecord
 
 
 class LocalExecutor(ExecutorBase):
-    """LocalExecutor provides the Localexecution implementation."""
+    """Runs on the host, in the user's workspace. No isolation.
+
+    Commands are off by default: the Agent gets no bash tool. With
+    ``allow_commands=True`` bash runs on this machine and the user approves
+    every command.
+    """
+
     component_provider_override = "max_ai.capabilities.executor.local.LocalExecutor"
     component_schema = LocalExecutorConfig
 
-    def __init__(self, *, max_output_bytes: int = 1 << 20) -> None:
+    def __init__(self, *, allow_commands: bool = False, max_output_bytes: int = 1 << 20) -> None:
         """Initialize ``LocalExecutor``.
 
-Parameters
-----------
-max_output_bytes : int
-    Value supplied for ``max_output_bytes``."""
+        Parameters
+        ----------
+        allow_commands : bool
+            Give the agent bash on this machine, with approval for each command.
+        max_output_bytes : int
+            Most bytes kept from a command's stdout and from its stderr.
+        """
         super().__init__()
         if max_output_bytes <= 0:
             raise ValueError("max_output_bytes must be positive")
+        self.allow_commands = allow_commands
         self.max_output_bytes = max_output_bytes
         self._sessions: dict[str, ExecutionSession] = {}
         self._closed: dict[str, ExecutionSession] = {}
         self._locks: dict[str, asyncio.Lock] = {}
 
+    @property
+    def runs_commands(self) -> bool:
+        return self.allow_commands
+
+    def describe_environment(self) -> str | None:
+        """Where commands run, for the system prompt."""
+        if not self.allow_commands:
+            return None
+        return (
+            "Commands run on the user's own machine, not in a sandbox, and the "
+            "user approves each one; prefer the file tools when they are enough."
+        )
+
     def _to_config(self) -> LocalExecutorConfig:
-        """Build the serializable configuration for ``LocalExecutor``."""
-        return LocalExecutorConfig(max_output_bytes=self.max_output_bytes)
+        return LocalExecutorConfig(
+            allow_commands=self.allow_commands, max_output_bytes=self.max_output_bytes
+        )
 
     @classmethod
-    def _from_config(cls, config: LocalExecutorConfig) -> "LocalExecutor":
-        """Create an instance from its configuration for ``LocalExecutor``.
-
-Parameters
-----------
-config : LocalExecutorConfig
-    Value supplied for ``config``."""
-        return cls(max_output_bytes=config.max_output_bytes)
+    def _from_config(cls, config: LocalExecutorConfig) -> LocalExecutor:
+        return cls(allow_commands=config.allow_commands, max_output_bytes=config.max_output_bytes)
 
     def _check(self, session: ExecutionSession) -> None:
-        """Perform the internal ``check`` operation for ``LocalExecutor``.
-
-Parameters
-----------
-session : ExecutionSession
-    Value supplied for ``session``."""
         if self._sessions.get(session.id) is not session:
             raise ValueError("session does not belong to this executor")
 
-    async def connect(self, workspace, user_id, conversation_id) -> ExecutionSession:
-        """Open required resources for ``LocalExecutor``.
-
-Parameters
-----------
-workspace
-    Value supplied for ``workspace``.
-user_id
-    Value supplied for ``user_id``.
-conversation_id
-    Value supplied for ``conversation_id``."""
+    async def connect(
+        self, workspace: WorkspaceBase, user_id: str, conversation_id: str
+    ) -> ExecutionSession:
+        """Use the user's workspace folder on the host."""
         directory = workspace.materialize(user_id, conversation_id)
         session = ExecutionSession(
             short_id(), user_id, conversation_id, workspace,
@@ -78,21 +91,10 @@ conversation_id
         return session
 
     async def disconnect(self, session: ExecutionSession) -> None:
-        """Release resources held for ``LocalExecutor``.
-
-Parameters
-----------
-session : ExecutionSession
-    Value supplied for ``session``."""
         self._check(session)
 
     async def clean(self, session: ExecutionSession) -> None:
-        """Remove temporary resources owned for ``LocalExecutor``.
-
-Parameters
-----------
-session : ExecutionSession
-    Value supplied for ``session``."""
+        """Forget the session; calling it twice is fine."""
         if self._sessions.get(session.id) is not session:
             if self._closed.get(session.id) is session:
                 return
@@ -102,12 +104,7 @@ session : ExecutionSession
         self._closed[session.id] = session
 
     async def rebuild(self, session: ExecutionSession) -> ExecutionSession:
-        """Recreate the runtime environment for ``LocalExecutor``.
-
-Parameters
-----------
-session : ExecutionSession
-    Value supplied for ``session``."""
+        """A new session over the same workspace."""
         self._check(session)
         workspace, user_id, conversation_id = (
             session.workspace, session.user_id, session.conversation_id,
@@ -116,22 +113,15 @@ session : ExecutionSession
         return await self.connect(workspace, user_id, conversation_id)
 
     async def execute_argv(
-        self, session, argv, *, stdin=None, timeout=60, cancellation_token=None
-    ):
-        """Run an argument vector for ``LocalExecutor``.
-
-Parameters
-----------
-session
-    Value supplied for ``session``.
-argv
-    Value supplied for ``argv``.
-stdin
-    Value supplied for ``stdin``.
-timeout
-    Value supplied for ``timeout``.
-cancellation_token
-    Value supplied for ``cancellation_token``."""
+        self,
+        session: ExecutionSession,
+        argv: list[str],
+        *,
+        stdin: str | None = None,
+        timeout: float = 60,
+        cancellation_token: CancellationToken | None = None,
+    ) -> ExecutionResult:
+        """Run ``argv`` from the workspace, one command at a time per session."""
         self._check(session)
         lock = self._locks.setdefault(session.id, asyncio.Lock())
         async with lock:
@@ -147,28 +137,27 @@ cancellation_token
                 cancellation_token=cancellation_token,
             )
 
-    async def execute(self, session, command, *, timeout=60, cancellation_token=None):
-        """Execute the requested operation for ``LocalExecutor``.
-
-Parameters
-----------
-session
-    Value supplied for ``session``.
-command
-    Value supplied for ``command``.
-timeout
-    Value supplied for ``timeout``.
-cancellation_token
-    Value supplied for ``cancellation_token``."""
-        if not isinstance(command, str) or not command.strip():
+    async def execute(
+        self,
+        session: ExecutionSession,
+        command: str,
+        *,
+        timeout: float,
+        cancellation_token: CancellationToken | None = None,
+    ) -> ExecutionResult:
+        """Run ``command`` with bash; run_process kills its whole process group."""
+        if not command.strip():
             raise ValueError("command cannot be empty")
-        # Clear shell startup variables (notably BASH_ENV) inherited from the host.
+        # A clean environment: the host's PATH, HOME and locale so its tools
+        # work, but none of its secrets (API keys) and no BASH_ENV.
         return await self.execute_argv(
             session,
             [
                 "/usr/bin/env",
                 "-i",
-                "PATH=/usr/bin:/bin",
+                f"PATH={os.environ.get('PATH', '/usr/bin:/bin')}",
+                f"HOME={os.environ.get('HOME', '/tmp')}",
+                f"LANG={os.environ.get('LANG', 'C.UTF-8')}",
                 f"WORKSPACE={session.workspace_path}",
                 "/bin/bash",
                 "--noprofile",
@@ -180,21 +169,15 @@ cancellation_token
             cancellation_token=cancellation_token,
         )
 
-    async def run_tool(self, session, tool, record, context, cancellation_token=None):
-        """Run a tool through this component for ``LocalExecutor``.
-
-Parameters
-----------
-session
-    Value supplied for ``session``.
-tool
-    Value supplied for ``tool``.
-record
-    Value supplied for ``record``.
-context
-    Value supplied for ``context``.
-cancellation_token
-    Value supplied for ``cancellation_token``."""
+    async def run_tool(
+        self,
+        session: ExecutionSession,
+        tool: CoreTool,
+        record: ToolCallRecord,
+        context: ToolContext,
+        cancellation_token: CancellationToken | None = None,
+    ) -> ToolResult:
+        """Run the tool in this process, with the workspace paths in its deps."""
         deps = dict(context.deps)
         directory = session.handle
         deps.update(
@@ -215,14 +198,10 @@ cancellation_token
         task = asyncio.create_task(tool.execute(record, ctx, cancellation_token))
         if cancellation_token is not None:
             cancellation_token.link_future(task)
-        timeout = getattr(tool, "timeout_seconds", None)
-        if timeout is None or not math.isfinite(timeout) or timeout <= 0:
-            timeout = 60
+        timeout = setting.tool_timeout_seconds
         try:
             return await asyncio.wait_for(task, timeout=timeout)
         except asyncio.TimeoutError:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-            from ....types.tool_call import ToolResult
-
             return ToolResult.timeout(record.id, timeout_seconds=timeout)

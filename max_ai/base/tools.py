@@ -84,7 +84,6 @@ class CoreTool(ComponentBase[BaseModel], ABC):
         description: str,
         version: str = "1.0.0",
         approval_mode: ToolApprovalMode | str = ToolApprovalMode.ASK_APPROVED,
-        timeout_seconds: float = 300,
         max_retries: int = 3,
         read_only: bool = False,
     ):
@@ -101,8 +100,6 @@ class CoreTool(ComponentBase[BaseModel], ABC):
             Version number of the saved configuration.
         approval_mode : ToolApprovalMode | str, default=ToolApprovalMode.ASK_APPROVED
             Value used to configure the tool or its run-scoped context.
-        timeout_seconds : float, default=300
-            Value used to configure the tool or its run-scoped context.
         max_retries : int, default=3
             Value used to configure the tool or its run-scoped context.
         read_only : bool, default=False
@@ -112,7 +109,6 @@ class CoreTool(ComponentBase[BaseModel], ABC):
         self.version = version
         self.description = description
         self.approval_mode = approval_mode
-        self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
         # No side effects: may run at the same time as other read-only calls.
         self.read_only = read_only

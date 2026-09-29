@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     environment_idle_timeout: float = Field(default=300, ge=0)
     # Read-only tool calls of one model reply that may run at once (MAX_PARALLEL_TOOLS).
     max_parallel_tools: int = Field(default=8, ge=1)
+    # Max seconds a tool call may run, for every tool (TOOL_TIMEOUT_SECONDS).
+    tool_timeout_seconds: float = Field(default=360, gt=0)
 
     # Context compaction budgets. Environment overrides use the uppercase
     # field names, e.g. COMPACTION_PROMPT_BUDGET_TOKENS=6000.

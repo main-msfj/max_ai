@@ -38,12 +38,7 @@ class BashPermissions(BaseModel):
     @field_validator("allowed_patterns", "ask_patterns", "deny_patterns")
     @classmethod
     def validate_patterns(cls, patterns: list[str]) -> list[str]:
-        """Validate patterns for ``BashPermissions``.
-
-Parameters
-----------
-patterns : list[str]
-    Value supplied for ``patterns``."""
+        """Each pattern is one line that names a command."""
         for pattern in patterns:
             if not pattern.strip() or any(c in pattern for c in "\0\n\r"):
                 raise ValueError("Patterns must be non-empty single-line strings")
@@ -54,14 +49,7 @@ patterns : list[str]
 
     @staticmethod
     def _matches(words: list[str], pattern: str) -> bool:
-        """Perform the internal ``matches`` operation for ``BashPermissions``.
-
-Parameters
-----------
-words : list[str]
-    Value supplied for ``words``.
-pattern : str
-    Value supplied for ``pattern``."""
+        """``words`` (one command) matches ``pattern`` word by word."""
         prefix = pattern.endswith(":*")
         expected = shlex.split(pattern[:-2] if prefix else pattern)
         if len(words) < len(expected) or (not prefix and len(words) != len(expected)):

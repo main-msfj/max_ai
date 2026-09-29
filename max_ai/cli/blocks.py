@@ -707,6 +707,8 @@ def result_text(result: ToolResult) -> str:
     if not result.success:
         return result.error or "failed"
     value = result.result
+    if isinstance(value, dict) and "output" in value and "exit_code" in value:
+        return str(value["output"]).rstrip() or "(no output)"
     if isinstance(value, dict) and ("stdout" in value or "stderr" in value):
         out = str(value.get("stdout") or "").rstrip()
         err = str(value.get("stderr") or "").rstrip()

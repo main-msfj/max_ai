@@ -12,6 +12,7 @@ from mcp import MCPError
 from mcp.types import CallToolResult, ImageContent, TextContent
 
 from ...base.tools import CoreTool, ToolContext
+from ...config import setting
 from ...core.termination import CancellationToken
 from ...errors.mcp import (
     MCPToolContentError,
@@ -50,7 +51,6 @@ class MCPTool(CoreTool):
         server_id: str,
         version: str = "1.0.0",
         approval_mode: ToolApprovalMode | str = ToolApprovalMode.ASK_APPROVED,
-        timeout_seconds: float = 240.0,
         max_retries: int = 3,
         read_only: bool = False,
     ) -> None:
@@ -72,8 +72,6 @@ version : str
     Value supplied for ``version``.
 approval_mode : ToolApprovalMode | str
     Value supplied for ``approval_mode``.
-timeout_seconds : float
-    Value supplied for ``timeout_seconds``.
 max_retries : int
     Value supplied for ``max_retries``.
 read_only : bool
@@ -87,7 +85,6 @@ read_only : bool
             description=mcp_tool_description,
             version=version,
             approval_mode=approval_mode,
-            timeout_seconds=timeout_seconds,
             max_retries=max_retries,
             read_only=read_only,
         )
@@ -133,7 +130,7 @@ cancellation_token : CancellationToken | None
                 self.server_id,
                 self.mcp_tool_name,
                 tool_request.parameters,
-                self.timeout_seconds,
+                setting.tool_timeout_seconds,
             )
 
             if result.is_error:
@@ -216,7 +213,6 @@ class MCPResourceTool(CoreTool):
         available_resources: list[t.Any] | None = None,
         resource_templates: list[t.Any] | None = None,
         approval_mode: ToolApprovalMode | str = ToolApprovalMode.ASK_APPROVED,
-        timeout_seconds: float = 240.0,
     ) -> None:
         """Initialize ``MCPResourceTool``.
 
@@ -231,9 +227,7 @@ available_resources : list[t.Any] | None
 resource_templates : list[t.Any] | None
     Value supplied for ``resource_templates``.
 approval_mode : ToolApprovalMode | str
-    Value supplied for ``approval_mode``.
-timeout_seconds : float
-    Value supplied for ``timeout_seconds``."""
+    Value supplied for ``approval_mode``."""
         self.client_manager = client_manager
         self.server_id = server_id
         self.available_resources = list(available_resources or [])
@@ -242,7 +236,6 @@ timeout_seconds : float
             name=_sanitize_name(f"{server_id}_read_resource"),
             description=self._build_description(),
             approval_mode=approval_mode,
-            timeout_seconds=timeout_seconds,
             read_only=True,  # reading a resource changes nothing
         )
         self._parameter_schema: dict[str, t.Any] = {

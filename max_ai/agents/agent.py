@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import time
 import weakref
 from collections.abc import AsyncGenerator, Callable, Sequence
@@ -72,6 +73,15 @@ from ..types.agent_response import AgentResponse, FinishReason
 from ..types.completions import ChatCompletionResult, Usage
 from ..types.run_context import RunContext
 from ..types.stacks import PromptCtx
+
+logger = logging.getLogger(__name__)
+
+COMMANDS_OFF = (
+    "Commands are off: the agent runs on this machine (LocalExecutor), so it has "
+    "no bash tool and skills cannot run scripts. Use DockerExecutor or "
+    "ModalExecutor, or LocalExecutor(allow_commands=True) to run commands here "
+    "with your approval for each one."
+)
 
 
 def _storable(component: Any, what: str) -> ComponentBase[Any]:
@@ -226,7 +236,8 @@ class Agent(ComponentBase[AgentSpec]):
             )
 
     def _register_control_tools(self) -> None:
-        """Plan and user input run on the host; Bash uses the executor."""
+        """Plan and user input run on the host; Bash uses the executor, and
+        only when the executor runs commands."""
         if (
             self.reasoning.enable_human_input
             and self._registry.get(AskUserTool.TOOL_NAME) is None
@@ -234,6 +245,10 @@ class Agent(ComponentBase[AgentSpec]):
             self._registry.register(AskUserTool(), host=True)
         if self._registry.get(AgentUpdatePlanTool.TOOL_NAME) is None:
             self._registry.register(AgentUpdatePlanTool(), host=True)
+        if not self.executor.runs_commands:
+            if any(isinstance(tool, BashTool) for tool in self._registry.all_tools()):
+                raise ValueError(COMMANDS_OFF)
+            return
         if self._registry.get("bash") is None:
             self._registry.register(BashTool())
 
@@ -245,6 +260,8 @@ class Agent(ComponentBase[AgentSpec]):
     ) -> None:
         """Keep optional registries and register only their exposed tools."""
         self.skills = skills
+        if skills is not None and not self.executor.runs_commands:
+            logger.warning(COMMANDS_OFF)
         self.memory = memory
         self.knowledge = tuple(knowledge or ())
         self._skill_blocks = []
@@ -409,6 +426,8 @@ class Agent(ComponentBase[AgentSpec]):
             "description": self.description,
             "instructions": self.instructions,
             "current_date": datetime.now(UTC).date().isoformat(),
+            # Prompts mention bash, scripts and $SCRATCHPAD only when it exists.
+            "can_run_commands": self.executor.runs_commands,
         }
         if self._environment:
             variables["execution_environment"] = self._environment

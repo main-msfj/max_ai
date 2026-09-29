@@ -1,9 +1,15 @@
 {% if loaded_skills %}
 <SKILLS>
 <purpose>
+{% if can_run_commands != false %}
 Skills are workflow instructions stored under $SKILLS (outside $WORKSPACE) in the configured execution environment.
 They are NOT callable tool names. Engage one by reading its instructions,
 following them, and using `bash` only when the skill needs command execution.
+{% else %}
+Skills are workflow instructions stored under `skills/`.
+They are NOT callable tool names. Engage one by reading its instructions
+and following them with your file tools.
+{% endif %}
 </purpose>
 
 <available_skills>
@@ -17,6 +23,7 @@ following them, and using `bash` only when the skill needs command execution.
 When a user's request matches one of the skills above:
 1. Read `skills/<skill-name>/SKILL.md` with `read_file`. Replace
    `<skill-name>` with the exact name from the catalog above.
+{% if can_run_commands != false %}
 2. Prepare the environment BEFORE running anything from the skill:
    - List the packages and command-line tools the skill needs (imports
      in its scripts, packages it names, commands it calls).
@@ -42,14 +49,24 @@ When a user's request matches one of the skills above:
 5. Verify the deliverable exists and opens (for example, load the file
    you just created) before replying.
 6. Reply with the result and the names of the generated files.
+{% else %}
+2. Follow the skill's workflow with your file tools. Its other files
+   (references, templates) are in `skills/<skill-name>/`.
+3. Only the deliverables the user asked for go in the workspace. It is a
+   shared project space, not scoped to this conversation, so don't
+   overwrite files you didn't create unless the user asks.
+4. Reply with the result and the names of the generated files.
+{% endif %}
 </workflow>
 
 <rules>
 - Never treat a skill name as a callable tool.
 - Don't invent skill contents. If you haven't loaded a skill via
   a successful file read, you don't know what it does — load it first.
+{% if can_run_commands != false %}
 - When a skill's instructions conflict with these rules about where
   files go or how to install dependencies, these rules win.
+{% endif %}
 - Never expose implementation details to the user: no skill paths,
   environment variables, script paths, workspace mount names, or the
   shell commands you ran. Name only the deliverables you created and

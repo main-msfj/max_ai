@@ -220,6 +220,11 @@ class MaxAIApp(App[None]):
                 self._skills = list(await skills.get_skills())
             except Exception as error:  # noqa: BLE001 — a bad skill dir must not kill the UI
                 await self._write_system(f"Could not load skills: {error}", style="#f87171")
+        executor = getattr(self.agent, "executor", None)
+        if self._skills and executor is not None and not executor.runs_commands:
+            from ..agents.agent import COMMANDS_OFF
+
+            await self._write_system(COMMANDS_OFF, style="#fbbf24")
         servers = self._mcp_servers()
         if servers:
             line = Text("MCP ", style="bold")

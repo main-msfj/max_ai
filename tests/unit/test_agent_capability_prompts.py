@@ -4,19 +4,22 @@ from types import SimpleNamespace
 
 import pytest
 
-from max_ai.agents.agent import Agent
+from max_ai.agents.agent import COMMANDS_OFF, Agent
 from max_ai.base.memory import MemoryToolMode
 from max_ai.capabilities.executor.docker import DockerExecutor
+from max_ai.capabilities.executor.local import LocalExecutor
 from max_ai.capabilities.executor.modal import ModalExecutor
 from max_ai.capabilities.knowledge.local import LocalKnowledgeRegistry
 from max_ai.capabilities.memory.local import LocalMemoryRegistry
 from max_ai.capabilities.skills.local import LocalSkillRegistry
+from max_ai.capabilities.tools.bash import BashTool
 from max_ai.capabilities.stacks import (
     AgentPolicyLayer,
     KnowledgeLayer,
     MemoryLayer,
     SessionStateLayer,
     SkillsLayer,
+    TaskAnalysisLayer,
 )
 from max_ai.capabilities.workspace.local import LocalWorkspace
 from max_ai.core.messages import AssistantMessage, ToolCall
@@ -150,3 +153,44 @@ def test_duplicate_capability_tool_fails(tmp_path):
     with pytest.raises(ValueError, match="duplicate tool name"):
         make_agent(tmp_path, RecordingClient(), toolset=[get_context],
                    memory=LocalMemoryRegistry("u", "s", tmp_path))
+
+
+# -------- Commands on the host --------------------------------------------------
+def has_bash(agent) -> bool:
+    return any(tool.name == "bash" for tool in agent.tools)
+
+
+def test_bash_only_when_the_executor_runs_commands(tmp_path):
+    assert not has_bash(make_agent(tmp_path, RecordingClient()))  # LocalExecutor: off
+    assert has_bash(make_agent(tmp_path, RecordingClient(), executor=LocalExecutor(allow_commands=True)))
+    assert has_bash(make_agent(tmp_path, RecordingClient(), executor=DockerExecutor()))
+    with pytest.raises(ValueError, match="allow_commands=True"):
+        make_agent(tmp_path, RecordingClient(), toolset=[BashTool()])
+
+
+@pytest.mark.asyncio
+async def test_without_commands_the_prompt_never_mentions_them(tmp_path, monkeypatch, caplog):
+    skill = tmp_path / "source" / "writing"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("---\nname: writing\ndescription: Write reports\n---\nSteps.")
+    monkeypatch.setattr(LocalSkillRegistry, "_resolve_cache_root", staticmethod(lambda: tmp_path / "cache"))
+    skills = LocalSkillRegistry(source=tmp_path / "source", skills=["writing"])
+    agent = make_agent(tmp_path, RecordingClient(), skills=skills)
+    assert COMMANDS_OFF in caplog.text
+    async with agent:
+        await agent.prepare()  # loads the skills
+        prompts = await agent._prompts(RunContext(user_id="u", session_id="s"))
+        text = "".join(prompts.rendered_layers[layer] for layer in (SkillsLayer, AgentPolicyLayer, TaskAnalysisLayer))
+        assert "skills/writing/SKILL.md" in text
+        assert "bash" not in text.lower() and "SCRATCHPAD" not in text  # only what it has
+
+
+@pytest.mark.asyncio
+async def test_on_the_host_even_allowed_commands_ask(tmp_path):
+    client = RecordingClient([ToolCall(id="c1", tool_name="bash",
+                                       parameters={"command": "pwd", "description": "where am I"})])
+    agent = make_agent(tmp_path, client, executor=LocalExecutor(allow_commands=True))
+    assert BashTool().permission_for("pwd") == "allow"  # allowed by the patterns...
+    async with agent:
+        response = await agent.run("where?", run_context=RunContext(user_id="u", session_id="s"))
+    assert response.finish_reason == "approval_needed"  # ...but the host asks anyway

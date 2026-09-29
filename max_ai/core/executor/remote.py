@@ -1,9 +1,11 @@
 """Common native-tool invocation for Docker and Modal."""
 
 import json
+import math
 from datetime import datetime
 
 from ...base.executor import ExecutorBase
+from ...config import setting
 from ...types.tool_call import ToolResult
 from .reference import reference_for
 
@@ -17,6 +19,23 @@ NETWORK_MODES = ("packages", "internet", "none")
 FRAMEWORK_PYTHON = "/opt/maxai/bin/python"
 # Until the PyPI release; then "maxai==<version>".
 DEFAULT_FRAMEWORK = "maxai @ git+https://github.com/main-msfj/max_ai@main"
+
+def supervised(script: str, timeout: float, run_id: str) -> list[str]:
+    """argv that runs ``script`` in a sandbox, bounded by ``timeout``.
+
+    GNU timeout gives the command its own process group and kills the whole
+    group; its PID goes to /tmp so ``kill_argv`` can stop it on cancel.
+    """
+    return [
+        "bash", "--noprofile", "--norc", "-c",
+        'echo $$ > "/tmp/maxai-$1.pid"; exec timeout -k 5 "$2" bash --noprofile --norc -c "$3"',
+        "maxai", run_id, str(math.ceil(timeout)), script,
+    ]
+
+
+def kill_argv(run_id: str) -> list[str]:
+    """argv that stops a ``supervised`` command; timeout forwards it to the group."""
+    return ["bash", "-c", 'kill -TERM "$(cat "/tmp/maxai-$1.pid")" 2>/dev/null; true', "maxai", run_id]
 
 
 class RemoteExecutor(ExecutorBase):
@@ -33,6 +52,7 @@ class RemoteExecutor(ExecutorBase):
     """
 
     supports_allow_list = True
+    isolated = True
     network: str = "none"
     allow_list: list[str] = []
 
@@ -116,11 +136,11 @@ class RemoteExecutor(ExecutorBase):
         # filesystem handles, tokens, callbacks or credentials are serialized.
         result = await self.execute_argv(
             session, [FRAMEWORK_PYTHON, "-m", "max_ai.core.executor.worker"],
-            stdin=json.dumps(payload), timeout=tool.timeout_seconds,
+            stdin=json.dumps(payload), timeout=setting.tool_timeout_seconds,
             cancellation_token=cancellation_token,
         )
         if result.timed_out:
-            return ToolResult.timeout(record.id, tool.timeout_seconds)
+            return ToolResult.timeout(record.id, setting.tool_timeout_seconds)
         if result.exit_code != 0 or result.truncated:
             return ToolResult.execution_error(
                 record.id, result.stderr or "Remote worker failed or output exceeded limit",

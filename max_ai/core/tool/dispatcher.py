@@ -228,6 +228,8 @@ class ToolDispatcher:
 
             if isinstance(tool, BashTool):
                 permission = tool.permission_for(record.parameters["command"])
+                if permission == "allow" and self.manager is not None and not self.manager.executor.isolated:
+                    permission = "ask"  # on the host itself: the user approves every command
                 if permission == "deny":
                     return finish(ToolResult.approval_denied(record.id, "Command denied by Bash permissions"))
                 approval_mode = (
@@ -282,17 +284,22 @@ class ToolDispatcher:
             retry_count=context.retry_count, deps=deps, emit_event=context.emit_event,
         )
 
+        async def run_in(session: "ExecutionSession"):
+            if isinstance(tool, BashTool):
+                # bash runs here; only its script reaches the environment.
+                call_context.deps.update(executor=self.manager.executor, execution_session=session)
+                return await tool.execute(record, call_context, cancellation_token)
+            return await self.manager.executor.run_tool(
+                session, tool, record, call_context, cancellation_token,
+            )
+
         async def invoke():
             if self.registry.runs_on_host(tool.name):
                 return await tool.execute(record, call_context, cancellation_token)
             if shared_session is not None:
-                return await self.manager.executor.run_tool(
-                    shared_session, tool, record, call_context, cancellation_token,
-                )
+                return await run_in(shared_session)
             async with self.manager.acquire(context.user_id, context.session_id) as session:
-                return await self.manager.executor.run_tool(
-                    session, tool, record, call_context, cancellation_token,
-                )
+                return await run_in(session)
 
         # Middleware sees only approved calls about to run; it may answer
         # in the tool's place (e.g. a budget that blocks it).
@@ -311,11 +318,14 @@ class ToolDispatcher:
             )
             if cancellation_token is not None:
                 cancellation_token.link_future(task)
-            result = await asyncio.wait_for(task, timeout=tool.timeout_seconds)
+            # Tools stop themselves at tool_timeout_seconds (bash inside the
+            # sandbox); this is only the net for one that never returns.
+            limit = setting.tool_timeout_seconds + 30
+            result = await asyncio.wait_for(task, timeout=limit)
             if not isinstance(result, ToolResult) or result.tool_call_id != record.id:
                 result = ToolResult.execution_error(record.id, "Invalid tool result")
         except asyncio.TimeoutError:
-            result = ToolResult.timeout(record.id, tool.timeout_seconds)
+            result = ToolResult.timeout(record.id, setting.tool_timeout_seconds)
         except asyncio.CancelledError:
             finish(ToolResult.cancelled_during_execution(record.id))
             raise

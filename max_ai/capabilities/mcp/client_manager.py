@@ -259,7 +259,6 @@ client : Client
                 client_manager=self,
                 server_id=config.server_id,
                 approval_mode=self._approval_mode_for_tool(config, tool_def),
-                timeout_seconds=config.timeout_seconds,
                 read_only=self._is_read_only(tool_def),
             ))
         resources, templates = await self._list_resources(client)
@@ -270,7 +269,6 @@ client : Client
                 available_resources=resources,
                 resource_templates=templates,
                 approval_mode=config.effective_resource_approval_mode,
-                timeout_seconds=config.timeout_seconds,
             ))
         return discovered
 

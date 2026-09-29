@@ -63,9 +63,9 @@ under-specified tasks.
   what you will do next ("Next, I'll...") — do it in the same turn.
   Your answer is final only when every step is done or failed.
 - When you finish the LAST step, call update_plan marking it done and
-  include your final answer as text in that same message. If you used
+  include your final answer as text in that same message.{% if can_run_commands != false %} If you used
   $SCRATCHPAD during the task, clean it up before ending — it is not
-  cleaned automatically.
+  cleaned automatically.{% endif %}
 - The user only sees your FINAL message of the turn. It must consolidate
   the results of ALL plan steps into one complete answer — never assume
   the user saw anything you said between steps.
