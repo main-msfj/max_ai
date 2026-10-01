@@ -6,10 +6,16 @@ import asyncio
 import typing as t
 from dataclasses import dataclass, field
 
+import httpx
 from mcp import Client, MCPError
 
 from ...base.tools import CoreTool
-from ...errors.mcp import MCPServerNotFoundError, MCPServerRegistrationError
+from ...core.retry import RetryPolicy, retrying
+from ...errors.mcp import (
+    MCPConnectionLost,
+    MCPServerNotFoundError,
+    MCPServerRegistrationError,
+)
 from ...types.tools import ToolApprovalMode
 from ._model import MCPServerConfig
 from .tool import MCPResourceTool, MCPTool
@@ -23,14 +29,25 @@ class _ManagedServer:
     worker: asyncio.Task[None] | None = None
     requests: asyncio.Queue[t.Any] = field(default_factory=asyncio.Queue)
     tools: list[CoreTool] = field(default_factory=list)
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+
+def _unreachable(error: BaseException) -> bool:
+    """The server couldn't be reached (network, process, timeout): worth
+    trying again. anyio wraps these in exception groups."""
+    if isinstance(error, BaseExceptionGroup):
+        return any(_unreachable(inner) for inner in error.exceptions)
+    return isinstance(error, (OSError, TimeoutError, httpx.TransportError))
 
 
 class MCPClientManager:
     """Own MCP clients in dedicated tasks so SDK calls share their lifecycle."""
 
-    def __init__(self) -> None:
-        """Initialize ``MCPClientManager``."""
+    def __init__(self, retry: RetryPolicy | None = None) -> None:
+        """Initialize ``MCPClientManager``. ``retry``: connecting, and
+        sending read-only calls again when the connection drops."""
         self._servers: dict[str, _ManagedServer] = {}
+        self.retry = retry or RetryPolicy()
 
     @property
     def server_ids(self) -> list[str]:
@@ -60,17 +77,25 @@ Parameters
 server_id : str
     Value supplied for ``server_id``."""
         server = self._get_server(server_id)
-        if server.worker is not None:
-            if not server.worker.done():
-                return
-            server.worker = None  # the connection died: open a new one
-        ready = asyncio.get_running_loop().create_future()
-        server.worker = asyncio.create_task(self._serve(server, ready))
-        try:
-            server.tools = await ready
-        except BaseException:
-            await self.disconnect(server_id)
-            raise
+        async with server.lock:
+            if server.worker is not None:
+                if not server.worker.done():
+                    return
+                # The connection died: open a new one.
+                if not server.worker.cancelled():
+                    server.worker.exception()  # retrieved, so asyncio doesn't warn
+                server.worker = None
+
+            async def attempt() -> list[CoreTool]:
+                ready = asyncio.get_running_loop().create_future()
+                server.worker = asyncio.create_task(self._serve(server, ready))
+                try:
+                    return await ready
+                except BaseException:
+                    await self._stop(server)
+                    raise
+
+            server.tools = await retrying(attempt, policy=self.retry, transient=_unreachable)
 
     async def _serve(self, server: _ManagedServer, ready: asyncio.Future) -> None:
         """Perform the internal ``serve`` operation for ``MCPClientManager``.
@@ -104,15 +129,16 @@ ready : asyncio.Future
                         result = await getattr(client, method)(*args)
                         if not future.done():
                             future.set_result(result)
-                    except asyncio.CancelledError as exc:
+                    except asyncio.CancelledError:
                         if asyncio.current_task().cancelling():
+                            # The connection is closing: the caller wasn't cancelled.
                             if not future.done():
-                                future.set_exception(exc)
+                                future.set_exception(MCPConnectionLost("MCP connection closed"))
                             raise
                         # Cancelled inside the client (the transport failed), not by us.
                         if not future.done():
-                            future.set_exception(RuntimeError(
-                                "The MCP server connection interrupted the request; try again."))
+                            future.set_exception(MCPConnectionLost(
+                                "The MCP server connection interrupted the request."))
                     except BaseException as exc:
                         if not future.done():
                             future.set_exception(exc)
@@ -142,7 +168,7 @@ ready : asyncio.Future
                 if request is not None:
                     future = request[2]
                     if not future.done():
-                        future.set_exception(RuntimeError("MCP connection closed"))
+                        future.set_exception(MCPConnectionLost("MCP connection closed"))
 
     async def connect_all(self) -> None:
         """Connect all for ``MCPClientManager``."""
@@ -165,12 +191,17 @@ Parameters
 server_id : str
     Value supplied for ``server_id``."""
         server = self._get_server(server_id)
-        worker = server.worker
-        server.worker = None
         server.tools = []
+        await self._stop(server)
+
+    @staticmethod
+    async def _stop(server: _ManagedServer) -> None:
+        """End the server's worker task and its connection."""
+        worker, server.worker = server.worker, None
         if worker is not None:
-            await server.requests.put(None)
-            await worker
+            if not worker.done():
+                await server.requests.put(None)
+            await asyncio.gather(worker, return_exceptions=True)
 
     async def disconnect_all(self) -> None:
         """Disconnect all for ``MCPClientManager``."""
@@ -180,6 +211,7 @@ server_id : str
     async def call_tool(
         self, server_id: str, tool_name: str,
         arguments: dict[str, t.Any], timeout_seconds: float,
+        *, read_only: bool = False,
     ) -> t.Any:
         """Call tool for ``MCPClientManager``.
 
@@ -193,7 +225,9 @@ arguments : dict[str, t.Any]
     Value supplied for ``arguments``.
 timeout_seconds : float
     Value supplied for ``timeout_seconds``."""
-        return await self._request(server_id, "call_tool", tool_name, arguments, timeout_seconds)
+        return await self._request(
+            server_id, "call_tool", tool_name, arguments, timeout_seconds, again=read_only
+        )
 
     async def read_resource(self, server_id: str, uri: str) -> t.Any:
         """Read resource for ``MCPClientManager``.
@@ -204,9 +238,11 @@ server_id : str
     Value supplied for ``server_id``.
 uri : str
     Value supplied for ``uri``."""
-        return await self._request(server_id, "read_resource", uri)
+        return await self._request(server_id, "read_resource", uri, again=True)
 
-    async def _request(self, server_id: str, method: str, *args: t.Any) -> t.Any:
+    async def _request(
+        self, server_id: str, method: str, *args: t.Any, again: bool = False
+    ) -> t.Any:
         """Perform the internal ``request`` operation for ``MCPClientManager``.
 
 Parameters
@@ -218,14 +254,20 @@ method : str
 args : t.Any
     Value supplied for ``args``."""
         server = self._get_server(server_id)
-        if server.worker is None:
-            await self.connect(server_id)
-        elif server.worker.done():
-            await server.worker
-            raise RuntimeError(f"MCP connection closed: {server_id}")
-        future = asyncio.get_running_loop().create_future()
-        await server.requests.put((method, args, future))
-        return await future
+
+        async def send() -> t.Any:
+            # A closed connection is opened again first: nothing was sent yet.
+            if server.worker is None or server.worker.done():
+                await self.connect(server_id)
+            future = asyncio.get_running_loop().create_future()
+            await server.requests.put((method, args, future))
+            return await future
+
+        # Lost mid-request, it may have run: only read-only calls go again.
+        policy = self.retry if again else RetryPolicy(attempts=1)
+        return await retrying(
+            send, policy=policy, transient=lambda error: isinstance(error, MCPConnectionLost)
+        )
 
     def _get_server(self, server_id: str) -> _ManagedServer:
         """Perform the internal ``get server`` operation for ``MCPClientManager``.

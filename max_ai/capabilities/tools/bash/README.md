@@ -6,17 +6,18 @@ executor runs that script with `bash -c` wherever it lives: on the host
 environment; any image with bash and coreutils works.
 
 ```python
-from max_ai.capabilities.tools.bash import BashTool
+from max_ai.agents import Agent, Policy
+from max_ai.core.policy import DEFAULT_DENY
 
-bash = BashTool(
-    allowed_patterns=["git status", "npm test:*"],
-    ask_patterns=["git push:*"],
-    deny_patterns=["rm -rf /*", "git push --force:*"],
-)
+agent = Agent(..., policy=Policy(
+    allow=["Bash(git status)", "Bash(npm test:*)"],
+    ask=["Bash(git push:*)"],
+    deny=[*DEFAULT_DENY, "Bash(curl:*)"],
+))
 ```
 
-The Agent registers a default `BashTool`; pass your own in `toolset` to change
-its permissions.
+The Agent registers a default `BashTool`. Which commands run is the agent's
+`Policy`, the same one every tool goes through.
 
 ## What the model sends and gets back
 
@@ -25,48 +26,58 @@ its permissions.
 ```
 
 ```json
-{"exit_code": 0, "output": "Report written"}
+{"exit_code": 0, "output": "Report written",
+ "files": {"created": ["report.xlsx"], "modified": ["data/raw.csv"]}}
 ```
 
 - The command starts in the user's workspace. The working directory persists
   between calls of a conversation; environment variables do not (every call is
   a fresh shell).
 - stdout and stderr come back together, in order, and stdin is closed.
+- `files` lists the workspace files the command created, modified or deleted
+  (paths from the workspace, `.git` skipped, 50 per group). It is left out
+  when nothing changed. Needs GNU `find`; without it the list is empty.
 - Output over `max_output_bytes` (30 KB) is cut in the middle; the full text
-  stays in a file whose path is in the output.
+  stays in `/tmp/maxai-bash/<conversation>/`, and its path is in the output.
 - Every call stops after `TOOL_TIMEOUT_SECONDS` (360 by default, one setting
   for every tool). A stopped command returns its partial output and a `note`.
 - A failing command is a normal result with its exit code, not a tool error.
 
 ## The script
 
-`build_script()` builds what the executor runs:
+The script lives in `wrapper.sh`. `build_script()` puts its values on top
+(`WORKSPACE`, `SKILLS`, the directory, the log path, the output limit and the
+command, each shell-quoted) and the executor runs the result:
 
-1. Export `WORKSPACE`, `SKILLS` and `SCRATCHPAD`, create them, and `cd` to the
-   directory the previous command ended in.
-2. Set an EXIT trap that prints the output (cut if long) and the final working
-   directory after a marker. It runs even when the command calls `exit` or the
-   time limit stops it (TERM).
-3. Run the command with `eval`, in the same shell (so `cd` sticks), with stdin
-   from `/dev/null` and stdout and stderr into one log file.
+1. Export `WORKSPACE` and `SKILLS` and `cd` to the directory the previous
+   command ended in.
+2. Set an EXIT trap that prints the output (cut if long), the files that
+   changed and the final working directory, each after a mark. It runs even
+   when the command calls `exit` or the time limit stops it (TERM).
+3. List the workspace files (path, size, mtime), then run the command with
+   `eval`, in the same shell (so `cd` sticks), with stdin from `/dev/null` and
+   stdout and stderr into one log file. The trap lists them again; `comm -3`
+   of the two lists is what changed.
 
-The tool strips the marker, keeps the directory for the next call (only if it
-is inside the user's files), and returns the rest.
+The tool strips the marks, keeps the directory for the next call (only if it
+is inside the user's files), and returns the rest. Strings and limits are in
+`constant.py`.
 
 ## Permissions
 
-`bash.permission_for(command)` returns `deny`, `ask` or `allow`, in that
-priority order, and the dispatcher uses it for each call: allow runs it, ask
-waits for the user, deny blocks it.
+The agent's `Policy` decides each call (see `max_ai/core/policy.py`): deny,
+then ask, then allow; with no rule, bash asks.
 
-- Omitting a list keeps its defaults; passing a list replaces it; `[]` clears
-  it. Defaults allow `pwd` and `git status`, ask for `git push:*`, and deny
+- `Bash(pattern)` rules match each command in the line. Patterns match words,
+  with shell globs inside each word. A trailing `:*` allows extra arguments:
+  `git status` is exact, `git status:*` is not.
+- Every part of `&&`, `||`, `;`, newlines and pipes is checked: one denied
+  part denies the line, and all must be allowed to run without asking.
+  Quotes, expansions, redirects, subshells and control structures always ask.
+- Defaults allow `pwd` and `git status`, ask for `git push:*`, and deny
   destructive or system commands (`sudo`, `mkfs`, `rm -rf /*`, ...).
-- Patterns match words, with shell globs inside each word. A trailing `:*`
-  allows extra arguments: `git status` is exact, `git status:*` is not.
-- Every part of `&&`, `||`, `;`, newlines and pipes is checked; all must be
-  allowed. Quotes, expansions, redirects, subshells and control structures
-  always ask.
+- Without a sandbox (`LocalExecutor`) the agent's allow rules still ask; only
+  the user's own "always allow" in the session runs a command unasked.
 
 Patterns decide approval; they are not isolation. Isolation comes from the
 executor (Docker or Modal).

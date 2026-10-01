@@ -1,13 +1,8 @@
-"""Common native-tool invocation for Docker and Modal."""
+"""What Docker and Modal share: network settings and the command wrapper."""
 
-import json
 import math
-from datetime import datetime
 
 from ...base.executor import ExecutorBase
-from ...config import setting
-from ...types.tool_call import ToolResult
-from .reference import reference_for
 
 # Where pip, uv and npm download packages from.
 PACKAGE_REGISTRIES: tuple[str, ...] = (
@@ -15,10 +10,6 @@ PACKAGE_REGISTRIES: tuple[str, ...] = (
     "registry.npmjs.org", "*.npmjs.org",
 )
 NETWORK_MODES = ("packages", "internet", "none")
-# max_ai runs inside the sandbox from its own venv, apart from the agent's python.
-FRAMEWORK_PYTHON = "/opt/maxai/bin/python"
-# Until the PyPI release; then "maxai==<version>".
-DEFAULT_FRAMEWORK = "maxai @ git+https://github.com/main-msfj/max_ai@main"
 
 def supervised(script: str, timeout: float, run_id: str) -> list[str]:
     """argv that runs ``script`` in a sandbox, bounded by ``timeout``.
@@ -86,70 +77,3 @@ class RemoteExecutor(ExecutorBase):
             return (f"Install what a script needs with {installers} before running it; besides the "
                     f"package registries it can only reach: {extra}.")
         return f"Install what a script needs with {installers} before running it; other sites are blocked."
-
-    @staticmethod
-    def _emit_events(context, events):
-        if context.emit_event is None:
-            return
-        from ..event_type import (
-            BashCancelledEvent,
-            BashFailedEvent,
-            BashFinishedEvent,
-            BashStartedEvent,
-            DirectoryCreatedEvent,
-            DirectoryListedEvent,
-            FileDeletedEvent,
-            FileInfoEvent,
-            FileReadEvent,
-            FilesSearchedEvent,
-            FileWrittenEvent,
-        )
-        event_types = {event.EVENT_TYPE: event for event in (
-            BashStartedEvent, BashFinishedEvent, BashFailedEvent, BashCancelledEvent,
-            DirectoryCreatedEvent, DirectoryListedEvent, FileDeletedEvent,
-            FileInfoEvent, FileReadEvent, FileWrittenEvent, FilesSearchedEvent,
-        )}
-        for raw in events if isinstance(events, list) else ():
-            if not isinstance(raw, dict) or raw.get("event_type") not in event_types:
-                continue
-            data = dict(raw)
-            event_type = data.pop("event_type")
-            timestamp = data.get("timestamp")
-            if isinstance(timestamp, str):
-                data["timestamp"] = datetime.fromisoformat(timestamp)
-            context.emit_event(event_types[event_type](**data))
-
-    async def run_tool(self, session, tool, record, context, cancellation_token=None):
-        reference = context.deps.get("tool_reference") or reference_for(tool)
-        payload = {
-            "reference": reference.model_dump(mode="json"),
-            "record": record.model_dump(mode="json"),
-            "context": {
-                "run_id": context.run_id, "user_id": context.user_id,
-                "session_id": context.session_id,
-                "retry_count": context.retry_count,
-            },
-            "workspace_path": session.workspace_path,
-            "tool_parameters": tool.parameters,
-        }
-        # Only explicit JSON context crosses this boundary; no host clients,
-        # filesystem handles, tokens, callbacks or credentials are serialized.
-        result = await self.execute_argv(
-            session, [FRAMEWORK_PYTHON, "-m", "max_ai.core.executor.worker"],
-            stdin=json.dumps(payload), timeout=setting.tool_timeout_seconds,
-            cancellation_token=cancellation_token,
-        )
-        if result.timed_out:
-            return ToolResult.timeout(record.id, setting.tool_timeout_seconds)
-        if result.exit_code != 0 or result.truncated:
-            return ToolResult.execution_error(
-                record.id, result.stderr or "Remote worker failed or output exceeded limit",
-            )
-        try:
-            response = ToolResult.model_validate_json(result.stdout)
-        except ValueError:
-            return ToolResult.execution_error(record.id, "Invalid remote worker response")
-        if response.tool_call_id != record.id:
-            return ToolResult.execution_error(record.id, "Remote result identity mismatch")
-        self._emit_events(context, response.metadata.get("events"))
-        return response

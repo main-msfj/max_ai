@@ -73,7 +73,6 @@
       "description": "Runs commands in a Modal sandbox, one per conversation.",
       "label": "ModalExecutor",
       "config": {
-        "framework": "maxai @ git+https://github.com/main-msfj/max_ai@main",
         "packages": [],
         "app_name": "maxai-runtime",
         "network": "packages",
@@ -100,7 +99,50 @@
       }
     },
     "knowledge": [],
+    "compaction": {
+      "provider": "maxai.compaction.SummaryCompaction",
+      "component_type": "compaction",
+      "version": 1,
+      "component_version": 1,
+      "description": "Keep ``[summary] + [recent messages]`` once the window fills up.",
+      "label": "SummaryCompaction",
+      "config": {
+        "threshold": 0.8,
+        "keep_ratio": 0.4,
+        "min_keep_groups": 2,
+        "truncate_tool_outputs": true,
+        "tool_output_max_tokens": 500,
+        "drop_harness_messages": true,
+        "update_memory": true,
+        "memory_max_tokens": 1000,
+        "summary_max_tokens": 2000,
+        "message_cap_tokens": 2000
+      }
+    },
     "toolset": [],
+    "policy": {
+      "allow": [
+        "Bash(pwd)",
+        "Bash(git status)"
+      ],
+      "ask": [
+        "Bash(git push:*)"
+      ],
+      "deny": [
+        "Bash(sudo:*)",
+        "Bash(su:*)",
+        "Bash(doas:*)",
+        "Bash(shutdown:*)",
+        "Bash(reboot:*)",
+        "Bash(halt:*)",
+        "Bash(poweroff:*)",
+        "Bash(mkfs:*)",
+        "Bash(mount:*)",
+        "Bash(umount:*)",
+        "Bash(rm -rf /*)",
+        "Bash(git push --force:*)"
+      ]
+    },
     "mcp": [
       {
         "server_id": "exa",
@@ -123,13 +165,13 @@
         "component_type": "completion",
         "version": 1,
         "component_version": 1,
-        "description": "Check plan closure, declared deliverables and unacknowledged failures.",
+        "description": "Check plan closure, unacknowledged failures and leftover files.",
         "label": "RuntimeCompletionGate",
         "config": {
           "enabled": true,
           "plan_must_close": true,
-          "check_bash_outputs": true,
-          "nudge_bash_failures": true
+          "nudge_bash_failures": true,
+          "nudge_leftover_files": true
         }
       }
     ],

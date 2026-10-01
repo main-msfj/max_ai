@@ -112,20 +112,20 @@ def closing_with_open_plan() -> RunContext:
 
 
 def test_gate_options_turn_checks_off():
-    strict = RuntimeCompletionGate(workspace=None)
+    strict = RuntimeCompletionGate()
     assert strict.on_final_response(closing_with_open_plan()).status == "incomplete"
 
-    relaxed = RuntimeCompletionGate(workspace=None, config=RuntimeGateConfig(plan_must_close=False))
+    relaxed = RuntimeCompletionGate(config=RuntimeGateConfig(plan_must_close=False))
     assert relaxed.on_final_response(closing_with_open_plan()).status == "completed"
 
-    off = RuntimeCompletionGate(workspace=None, config=RuntimeGateConfig(enabled=False))
+    off = RuntimeCompletionGate(config=RuntimeGateConfig(enabled=False))
     empty = RunContext(messages=[AssistantMessage(source="a", content="")])
     assert off.on_final_response(empty).status == "completed"
 
 
 def test_gate_options_are_plain_config():
-    gate = RuntimeCompletionGate(workspace=None, config=RuntimeGateConfig(check_bash_outputs=False))
+    gate = RuntimeCompletionGate(config=RuntimeGateConfig(nudge_leftover_files=False))
     assert gate.serialize().config == {
         "enabled": True, "plan_must_close": True,
-        "check_bash_outputs": False, "nudge_bash_failures": True,
+        "nudge_bash_failures": True, "nudge_leftover_files": False,
     }

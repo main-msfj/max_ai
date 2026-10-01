@@ -12,7 +12,6 @@ from max_ai.capabilities.executor.modal import ModalExecutor
 from max_ai.capabilities.knowledge.local import LocalKnowledgeRegistry
 from max_ai.capabilities.memory.local import LocalMemoryRegistry
 from max_ai.capabilities.skills.local import LocalSkillRegistry
-from max_ai.capabilities.tools.bash import BashTool
 from max_ai.capabilities.stacks import (
     AgentPolicyLayer,
     KnowledgeLayer,
@@ -21,6 +20,7 @@ from max_ai.capabilities.stacks import (
     SkillsLayer,
     TaskAnalysisLayer,
 )
+from max_ai.capabilities.tools.bash import BashTool
 from max_ai.capabilities.workspace.local import LocalWorkspace
 from max_ai.core.messages import AssistantMessage, ToolCall
 from max_ai.types.completions import ChatCompletionResult, Usage
@@ -100,7 +100,6 @@ async def test_memory_tools_execute_and_snapshot_refreshes(tmp_path):
         assert (await memory.get_context())[0].memory == "First line\nSecond line"
         await agent.run("recall", run_context=ctx)
         assert "First line\nSecond line" in client.prompts[-1].rendered_layers[MemoryLayer]
-        assert agent._registry.runs_on_host("create_or_update")
         # The user's other sessions see it too; other users never do.
         await agent.run("other session", run_context=RunContext(user_id="u", session_id="other"))
         assert "First line" in client.prompts[-1].rendered_layers[MemoryLayer]
@@ -141,7 +140,6 @@ async def test_skills_and_knowledge(tmp_path, monkeypatch):
         assert "Write reports" in prompt.rendered_layers[SkillsLayer]
         assert "Full instructions." not in prompt.rendered_layers[SkillsLayer]
         assert "search_docs" in prompt.rendered_layers[KnowledgeLayer]
-        assert agent._registry.runs_on_host("search_docs")
         directory = agent.workspace.materialize("u", "s")
         assert (directory.skill_dir / "writing" / "SKILL.md").is_file()
         assert len(client.prompts) == 2
@@ -182,7 +180,7 @@ async def test_without_commands_the_prompt_never_mentions_them(tmp_path, monkeyp
         prompts = await agent._prompts(RunContext(user_id="u", session_id="s"))
         text = "".join(prompts.rendered_layers[layer] for layer in (SkillsLayer, AgentPolicyLayer, TaskAnalysisLayer))
         assert "skills/writing/SKILL.md" in text
-        assert "bash" not in text.lower() and "SCRATCHPAD" not in text  # only what it has
+        assert "bash" not in text.lower() and "/tmp" not in text  # only what it has
 
 
 @pytest.mark.asyncio
@@ -190,7 +188,21 @@ async def test_on_the_host_even_allowed_commands_ask(tmp_path):
     client = RecordingClient([ToolCall(id="c1", tool_name="bash",
                                        parameters={"command": "pwd", "description": "where am I"})])
     agent = make_agent(tmp_path, client, executor=LocalExecutor(allow_commands=True))
-    assert BashTool().permission_for("pwd") == "allow"  # allowed by the patterns...
+    assert "Bash(pwd)" in agent.policy.allow  # allowed by the policy...
     async with agent:
         response = await agent.run("where?", run_context=RunContext(user_id="u", session_id="s"))
     assert response.finish_reason == "approval_needed"  # ...but the host asks anyway
+
+
+@pytest.mark.asyncio
+async def test_a_denied_command_never_runs_and_says_why(tmp_path):
+    marker = tmp_path / "ran"
+    client = RecordingClient([ToolCall(id="c1", tool_name="bash", parameters={
+        "command": f"pwd && sudo touch {marker}", "description": "try sudo"})])
+    agent = make_agent(tmp_path, client, executor=LocalExecutor(allow_commands=True))
+    ctx = RunContext(user_id="u", session_id="s")
+    async with agent:
+        await agent.run("go", run_context=ctx)
+    assert not marker.exists()
+    result = next(m for m in ctx.messages if getattr(m, "tool_name", None) == "bash")
+    assert "Denied by policy: Bash(sudo:*)" in str(result.content)

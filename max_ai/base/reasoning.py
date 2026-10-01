@@ -42,11 +42,13 @@ from ..core.event_type import (
     ErrorEvent,
     ModelCallEvent,
     ModelResponseEvent,
+    ModelRetryEvent,
     ModelStreamChunkEvent,
 )
 from ..core.events_bus import EventBus
 from ..core.messages import AssistantMessage, CoreMessage
 from ..core.middleware.chain import MiddlewareChain
+from ..core.retry import RetryPolicy, retry_after
 from ..core.termination import CancellationToken
 from ..errors.client import ClientError
 from ..loggers import ScopedLogger
@@ -69,14 +71,6 @@ if t.TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 log = ScopedLogger(logger, scope=["ReasoningLoop"])
-
-
-# Kinds of ClientError that warrant a retry with exponential backoff.
-# Everything else (auth, validation, token_limit, invalid_response, ...)
-# fails immediately.
-_TRANSIENT_KINDS: frozenset[str] = frozenset(
-    {"rate_limit", "timeout", "stream_interrupted", "api_error", "provider"}
-)
 
 
 # -------- LOOP STATE -----------------------------------------------------------
@@ -691,56 +685,11 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
             prompt_tokens=prompts.prompt_tokens,
         )
 
-        backoff = 1.0
-        for attempt in range(self.max_connection_retries + 1):
-            try:
-                result = await _single_call()
-                break
+        async def attempt() -> t.AsyncGenerator[CoreEvent | ChatCompletionResult, None]:
+            yield await _single_call()
 
-            except asyncio.CancelledError:
-                _log.info("LLM call cancelled by user request")
-                raise
-
-            except Exception as e:
-                is_transient = isinstance(e, ClientError) and e.kind in _TRANSIENT_KINDS
-                if not is_transient or attempt >= self.max_connection_retries:
-                    recovered = await self.middleware_chain.model_error(mw, request, e)
-                    if recovered is not None:
-                        result = recovered
-                        break
-                    yield ErrorEvent(
-                        source=self.name,
-                        error_message=(
-                            f"LLM call failed after {attempt + 1} attempt(s): {e}"
-                        ),
-                        error_type=type(e).__name__,
-                        is_recoverable=False,
-                    )
-                    raise
-
-                _log.warning(
-                    "Transient LLM error",
-                    attempt=attempt + 1,
-                    max_attempts=self.max_connection_retries + 1,
-                    error=str(e),
-                    action="retry",
-                )
-                await asyncio.sleep(backoff)
-                backoff *= 2
-
-        result = await self.middleware_chain.model_response(mw, request, result)
-        loop_state.record_completion(result)
-        msg = result.message
-        yield ModelResponseEvent(
-            source=self.name,
-            response=(
-                msg.structured_output.model_dump_json()
-                if msg.structured_output is not None
-                else msg.text()
-            ),
-            has_tool_calls=bool(msg.tool_calls),
-            usage=result.usage,
-        )
+        async for event in self._with_retries(ctx, mw, request, loop_state, attempt):
+            yield event
 
     # -------- STREAMING LLM CALL -----------------------------------------------------------
     async def _call_llm_stream(
@@ -824,140 +773,133 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
                 ) is not None:
                     yield chunk
 
-        backoff = 1.0
-        for attempt in range(self.max_connection_retries + 1):
+        async def attempt() -> t.AsyncGenerator[CoreEvent | ChatCompletionResult, None]:
             content_chunks: list[str] = []
             thinking_chunks: list[str] = []
             accumulated_tool_calls: dict[str, dict[str, t.Any]] = {}
-            final_chunk: ChatCompletionChunk | None = None
+            async for chunk in _streaming_call():
+                if not chunk.is_complete:
+                    if chunk.content:
+                        content_chunks.append(chunk.content)
+                        yield ModelStreamChunkEvent(
+                            source=self.name, chunk=chunk.content, is_final=False
+                        )
+                    if chunk.thinking:
+                        thinking_chunks.append(chunk.thinking)
+                        yield ModelStreamChunkEvent(
+                            source=self.name, chunk="", thinking=chunk.thinking, is_final=False
+                        )
+                    if chunk.tool_call_chunk:
+                        self._merge_tool_call_chunk(accumulated_tool_calls, chunk.tool_call_chunk)
+                    continue
 
-            try:
-                yield ModelCallEvent(
-                    source=self.name,
-                    model=model_name,
-                    input_messages=self._input_messages_with_token_counts(
-                        self._model_input_messages(ctx)
-                    ),
-                    prompt_tokens=prompts.prompt_tokens,
-                )
-                async for chunk in _streaming_call():
-                    if not chunk.is_complete:
-                        if chunk.content:
-                            content_chunks.append(chunk.content)
-                            yield ModelStreamChunkEvent(
-                                source=self.name,
-                                chunk=chunk.content,
-                                is_final=False,
-                            )
-
-                        if chunk.thinking:
-                            thinking_chunks.append(chunk.thinking)
-                            yield ModelStreamChunkEvent(
-                                source=self.name,
-                                chunk="",
-                                thinking=chunk.thinking,
-                                is_final=False,
-                            )
-
-                        if chunk.tool_call_chunk:
-                            self._merge_tool_call_chunk(
-                                accumulated_tool_calls, chunk.tool_call_chunk
-                            )
-                        continue
-
-                    final_chunk = chunk
-
-                    tool_calls = self._build_tool_calls_from_chunks(
-                        accumulated_tool_calls, _log
-                    )
-                    full_content = "".join(content_chunks)
-                    full_thinking = (
-                        "".join(thinking_chunks) if thinking_chunks else None
-                    )
-
-                    assistant_msg = AssistantMessage(
+                tool_calls = self._build_tool_calls_from_chunks(accumulated_tool_calls, _log)
+                usage = chunk.usage or Usage()
+                if tool_calls:
+                    usage = usage.model_copy(update={"tool_calls": len(tool_calls)})
+                yield ChatCompletionResult(
+                    message=AssistantMessage(
                         source=self.name,
-                        content=full_content,
+                        content="".join(content_chunks),
                         tool_calls=tool_calls,
-                        thinking=full_thinking,
-                        structured_output=final_chunk.structured_output,
-                    )
-
-                    usage = final_chunk.usage or Usage()
-                    if tool_calls:
-                        usage = usage.model_copy(update={"tool_calls": len(tool_calls)})
-
-                    result = ChatCompletionResult(
-                        message=assistant_msg,
-                        usage=usage,
-                        model=model_name,
-                        finish_reason=(
-                            final_chunk.finish_reason
-                            or ("tool_calls" if tool_calls else "stop")
-                        ),
-                    )
-                    result = await self.middleware_chain.model_response(
-                        mw, request, result
-                    )
-                    loop_state.record_completion(result)
-                    yield ModelResponseEvent(
-                        source=self.name,
-                        response=result.message.text(),
-                        has_tool_calls=bool(result.message.tool_calls),
-                        usage=result.usage,
-                    )
-
-                    yield ModelStreamChunkEvent(
-                        source=self.name,
-                        chunk="",
-                        is_final=True,
-                    )
-
+                        thinking="".join(thinking_chunks) if thinking_chunks else None,
+                        structured_output=chunk.structured_output,
+                    ),
+                    usage=usage,
+                    model=model_name,
+                    finish_reason=chunk.finish_reason or ("tool_calls" if tool_calls else "stop"),
+                )
                 return
 
-            except asyncio.CancelledError:
-                _log.info(
-                    "Streaming LLM call cancelled by user request",
-                    attempt=attempt + 1,
-                )
-                raise
+        yield ModelCallEvent(
+            source=self.name,
+            model=model_name,
+            input_messages=self._input_messages_with_token_counts(
+                self._model_input_messages(ctx)
+            ),
+            prompt_tokens=prompts.prompt_tokens,
+        )
+        async for event in self._with_retries(ctx, mw, request, loop_state, attempt):
+            yield event
+        yield ModelStreamChunkEvent(source=self.name, chunk="", is_final=True)
 
-            except Exception as e:
-                is_transient = isinstance(e, ClientError) and e.kind in _TRANSIENT_KINDS
-                if not is_transient or attempt >= self.max_connection_retries:
-                    recovered = await self.middleware_chain.model_error(mw, request, e)
-                    if recovered is not None:
-                        recovered = await self.middleware_chain.model_response(
-                            mw, request, recovered
-                        )
-                        loop_state.record_completion(recovered)
-                        yield ModelResponseEvent(
-                            source=self.name,
-                            response=recovered.message.text(),
-                            has_tool_calls=bool(recovered.message.tool_calls),
-                            usage=recovered.usage,
-                        )
-                        return
+    # -------- RETRIES -----------------------------------------------------------
+    @property
+    def retry_policy(self) -> RetryPolicy:
+        """Model calls: ``max_connection_retries`` retries after the first try."""
+        return RetryPolicy(attempts=self.max_connection_retries + 1)
+
+    async def _with_retries(
+        self,
+        ctx: RunContext,
+        mw: MiddlewareContext,
+        request: ModelRequest,
+        loop_state: BaseLoopState,
+        attempt: t.Callable[[], t.AsyncGenerator[CoreEvent | ChatCompletionResult, None]],
+    ) -> t.AsyncGenerator[CoreEvent, None]:
+        """Run ``attempt`` (one model call: events, then its result) until it
+        works, then record the result and yield ``ModelResponseEvent``.
+
+        A transient ``ClientError`` is retried, unless the answer was already
+        streaming to the user: calling again would show it twice. When retries
+        run out, middleware may recover; otherwise ``ErrorEvent`` and raise.
+        """
+        _log = log.child(run_id=ctx.run_id, session_id=ctx.session_id)
+        policy = self.retry_policy
+        result: ChatCompletionResult | None = None
+        for number in range(1, policy.attempts + 1):
+            shown = False
+            try:
+                async for item in attempt():
+                    if isinstance(item, ChatCompletionResult):
+                        result = item
+                    else:
+                        shown = shown or isinstance(item, ModelStreamChunkEvent)
+                        yield item
+                if result is None:
+                    raise ClientError.stream_interrupted("the stream ended without a final chunk")
+                break
+            except asyncio.CancelledError:
+                _log.info("LLM call cancelled by user request", attempt=number)
+                raise
+            except Exception as error:
+                transient = isinstance(error, ClientError) and error.transient
+                if not transient or shown or number >= policy.attempts:
+                    result = await self.middleware_chain.model_error(mw, request, error)
+                    if result is not None:
+                        break
+                    why = "after the answer started" if shown else f"after {number} attempt(s)"
                     yield ErrorEvent(
                         source=self.name,
-                        error_message=(
-                            f"Streaming LLM call failed after "
-                            f"{attempt + 1} attempt(s): {e}"
-                        ),
-                        error_type=type(e).__name__,
+                        error_message=f"LLM call failed {why}: {error}",
+                        error_type=type(error).__name__,
                         is_recoverable=False,
                     )
                     raise
-
+                wait = policy.delay(number - 1, retry_after(error))
                 _log.warning(
-                    "Transient streaming LLM error",
-                    attempt=attempt + 1,
-                    max_attempts=self.max_connection_retries + 1,
-                    error=str(e),
-                    action="retry",
+                    "Transient LLM error", attempt=number, max_attempts=policy.attempts,
+                    error=str(error), action="retry", delay=round(wait, 2),
                 )
-                await asyncio.sleep(backoff)
-                backoff *= 2
+                yield ModelRetryEvent(
+                    source=self.name, attempt=number, max_attempts=policy.attempts,
+                    delay=wait, reason=error.kind if isinstance(error, ClientError) else str(error),
+                )
+                await asyncio.sleep(wait)
+
+        result = await self.middleware_chain.model_response(mw, request, t.cast(ChatCompletionResult, result))
+        loop_state.record_completion(result)
+        msg = result.message
+        yield ModelResponseEvent(
+            source=self.name,
+            response=(
+                msg.structured_output.model_dump_json()
+                if msg.structured_output is not None
+                else msg.text()
+            ),
+            has_tool_calls=bool(msg.tool_calls),
+            usage=result.usage,
+        )
 
     # -------- STREAM HELPERS -----------------------------------------------------------
     @staticmethod

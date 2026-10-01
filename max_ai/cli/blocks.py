@@ -11,15 +11,26 @@ from pathlib import Path
 from rich.text import Text
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
-from textual.widgets import Markdown, Static
+from textual.widgets import Input, Markdown, Static
 from textual.widgets._markdown import MarkdownStream
 
 from ..types.tool_call import ToolResult
+from .theme import (
+    BORDER,
+    DIM,
+    ELEMENT,
+    ERROR,
+    LOGO,
+    MUTED,
+    PRIMARY,
+    SUCCESS,
+    TEXT,
+    WARNING,
+)
 
-# MaxAI look: neutral text and surfaces; lilac only for accents (glyphs,
-# spinner, focus/hover, command names).
+# Neutral text and surfaces; PRIMARY only for accents (glyphs, spinner,
+# focus/hover, command names). Colors live in theme.py.
 SPINNER = "◇◈◆◈"
-ACCENT = "#b794f6"
 
 
 def _plural(count: int, word: str) -> str:
@@ -27,37 +38,39 @@ def _plural(count: int, word: str) -> str:
 
 
 class WelcomeBox(Static):
-    """Session banner: who is running, on what model, in which workspace."""
+    """Session banner: the MAX-AI logo, then agent, model and workspace."""
 
-    DEFAULT_CSS = f"""
-    WelcomeBox {{
-        border: round {ACCENT}; padding: 0 1; margin: 1 0 1 0; height: auto; width: auto;
-        max-width: 90;
-    }}
+    DEFAULT_CSS = """
+    WelcomeBox { width: 1fr; height: auto; margin: 2 0 1 0; content-align: center top; text-align: center; }
     """
 
     def __init__(self, agent_name: str, model: str, workspace: Path) -> None:
-        body = Text()
-        body.append("◆ ", style=f"bold {ACCENT}")
-        body.append("M A X · A I", style=f"bold {ACCENT}")
-        body.append("   agent workspace", style="#71717a")
-        body.append(f"\n\n  agent      {agent_name}", style="#a1a1aa")
-        body.append(f"\n  model      {model}", style="#a1a1aa")
-        body.append(f"\n  workspace  {workspace}", style="#a1a1aa")
-        body.append("\n\n  /help commands · esc interrupt · ctrl+t thinking", style="dim")
+        body = Text(justify="center")
+        for left, right in LOGO:
+            body.append(left, style=MUTED)
+            body.append(right + "\n", style=f"bold {TEXT}")
+        body.append(f"\n{agent_name}", style=f"bold {PRIMARY}")
+        body.append(f" · {model}\n", style=MUTED)
+        body.append(f"{workspace}\n\n", style=DIM)
+        body.append("/help", style=f"bold {TEXT}")
+        body.append(" commands · ", style=DIM)
+        body.append("esc", style=f"bold {TEXT}")
+        body.append(" interrupt · ", style=DIM)
+        body.append("ctrl+t", style=f"bold {TEXT}")
+        body.append(" thinking", style=DIM)
         super().__init__(body)
 
 
 class UserBlock(Static):
-    DEFAULT_CSS = """
-    UserBlock {
-        background: #1c1c1f; color: #e4e4e7; padding: 0 1; margin: 1 0 0 0; height: auto;
-        border-left: outer #b794f6;
-    }
+    DEFAULT_CSS = f"""
+    UserBlock {{
+        background: {ELEMENT}; color: {TEXT}; padding: 0 1; margin: 1 0 0 0; height: auto;
+        border-left: outer {PRIMARY};
+    }}
     """
 
     def __init__(self, text: str) -> None:
-        body = Text("❯ ", style="bold #b794f6")
+        body = Text("❯ ", style=f"bold {PRIMARY}")
         body.append(text)
         super().__init__(body)
 
@@ -65,8 +78,8 @@ class UserBlock(Static):
 class NoteLine(Static):
     """One dim harness line (gate retries, done marker, errors, verbose events)."""
 
-    DEFAULT_CSS = """
-    NoteLine { height: auto; padding: 0 0 0 2; color: #71717a; }
+    DEFAULT_CSS = f"""
+    NoteLine {{ height: auto; padding: 0 0 0 2; color: {DIM}; }}
     """
 
     def __init__(self, text: str | Text, style: str = "") -> None:
@@ -77,10 +90,10 @@ class AssistantBlock(Horizontal):
     """``✦`` + streamed Markdown. Streaming goes through MarkdownStream so a long
     answer isn't re-parsed from scratch on every chunk."""
 
-    DEFAULT_CSS = """
-    AssistantBlock { height: auto; margin: 1 0 0 0; }
-    AssistantBlock > .bullet { width: 2; color: #b794f6; }
-    AssistantBlock > Markdown { width: 1fr; margin: 0; padding: 0; background: transparent; }
+    DEFAULT_CSS = f"""
+    AssistantBlock {{ height: auto; margin: 1 0 0 0; }}
+    AssistantBlock > .bullet {{ width: 2; color: {PRIMARY}; }}
+    AssistantBlock > Markdown {{ width: 1fr; margin: 0; padding: 0; background: transparent; }}
     """
 
     def __init__(self) -> None:
@@ -111,16 +124,16 @@ class FoldBlock(Vertical):
     while the content is still live (streaming thinking, pending question).
     """
 
-    DEFAULT_CSS = """
-    FoldBlock {
-        height: auto; border: round #3f3f46; padding: 0 1; margin: 1 0 0 0;
-    }
-    FoldBlock:hover { border: round #b794f6; }
-    FoldBlock > .header { color: #a1a1aa; }
-    FoldBlock > .body { color: #d4d4d8; max-height: 16; overflow-y: auto; }
-    FoldBlock.-collapsed { width: auto; }
-    FoldBlock.-collapsed > .header { width: auto; }
-    FoldBlock.-collapsed > .body { display: none; }
+    DEFAULT_CSS = f"""
+    FoldBlock {{
+        height: auto; border: round {BORDER}; padding: 0 1; margin: 1 0 0 0;
+    }}
+    FoldBlock:hover {{ border: round {PRIMARY}; }}
+    FoldBlock > .header {{ color: {MUTED}; }}
+    FoldBlock > .body {{ color: {TEXT}; max-height: 16; overflow-y: auto; }}
+    FoldBlock.-collapsed {{ width: auto; }}
+    FoldBlock.-collapsed > .header {{ width: auto; }}
+    FoldBlock.-collapsed > .body {{ display: none; }}
     """
 
     foldable = True
@@ -167,8 +180,8 @@ class ThinkingBlock(FoldBlock):
     back on reveals past thoughts.
     """
 
-    DEFAULT_CSS = """
-    ThinkingBlock > .body { color: #8b8b94; text-style: italic; max-height: 12; }
+    DEFAULT_CSS = f"""
+    ThinkingBlock > .body {{ color: {MUTED}; text-style: italic; max-height: 12; }}
     """
 
     def __init__(self) -> None:
@@ -183,13 +196,13 @@ class ThinkingBlock(FoldBlock):
         return self.done
 
     def _header(self) -> Text:
-        header = Text("◈ ", style=ACCENT)
+        header = Text("◈ ", style=PRIMARY)
         if not self.done:
             header.append("Thinking…", style="italic")
             return header
         words = len(self.text.split())
         took = f"{self._elapsed:.0f}s" if self._elapsed >= 1 else "<1s"
-        header.append(f"Thought for {took}", style="bold #a1a1aa")
+        header.append(f"Thought for {took}", style=f"bold {MUTED}")
         header.append(f" · {_plural(words, 'word')}", style="dim")
         return self._fold_hint(header)
 
@@ -212,15 +225,22 @@ class ThinkingBlock(FoldBlock):
 
 
 _PLAN_STYLES = {
-    "done": ("☒", "#71717a strike"),
-    "active": ("▶", f"bold {ACCENT}"),
-    "failed": ("✗", "#f87171"),
-    "pending": ("☐", "#d4d4d8"),
+    "done": ("☒", f"{DIM} strike"),
+    "active": ("▶", f"bold {PRIMARY}"),
+    "failed": ("✗", ERROR),
+    "pending": ("☐", TEXT),
 }
 
 
 class PlanBlock(FoldBlock):
-    """The agent's plan as a checklist; folds to progress + current step."""
+    """The agent's plan as a checklist under ``⎿``. An older plan shrinks to
+    its progress line when a newer one comes."""
+
+    DEFAULT_CSS = """
+    PlanBlock, PlanBlock:hover { border: none; padding: 0; }
+    PlanBlock > .body { max-height: 100; }
+    """
+    foldable = False
 
     def __init__(self, plan: t.Any) -> None:
         super().__init__()
@@ -233,22 +253,21 @@ class PlanBlock(FoldBlock):
     def _header(self) -> Text:
         steps = list(self.plan.steps)
         done = sum(step.status == "done" for step in steps)
-        header = Text("◇ ", style=f"bold {ACCENT}")
-        header.append(f"Plan {done}/{len(steps)}", style="bold #e4e4e7")
+        header = Text("● ", style=f"bold {PRIMARY}")
+        header.append(f"Plan {done}/{len(steps)}", style=f"bold {TEXT}")
         current = next((s for s in steps if s.status == "active"), None)
         current = current or next((s for s in steps if s.status == "pending"), None)
         if done == len(steps) and steps:
-            header.append(" · all done", style="#4ade80")
+            header.append(" · all done", style=SUCCESS)
         elif current is not None:
-            header.append(f" · {current.description[:60]}", style="#a1a1aa")
+            header.append(f" · {current.description[:60]}", style=MUTED)
         return self._fold_hint(header)
 
     def _body(self) -> Text:
         body = Text()
         for index, step in enumerate(self.plan.steps):
             icon, style = _PLAN_STYLES.get(step.status, ("·", ""))
-            if index:
-                body.append("\n")
+            body.append("  ⎿  " if index == 0 else "\n     ", style=DIM)
             body.append(f"{icon} {step.description}", style=style)
         return body
 
@@ -256,10 +275,10 @@ class PlanBlock(FoldBlock):
 def context_bar(used: int, maximum: int, cells: int = 10) -> Text:
     """``▓▓▓▓░░░░░░ 52k / 128k``: green, amber from 60% used, red from 85%."""
     ratio = min(1.0, used / maximum) if maximum > 0 else 0.0
-    color = "#f87171" if ratio >= 0.85 else "#fbbf24" if ratio >= 0.6 else "#4ade80"
+    color = ERROR if ratio >= 0.85 else WARNING if ratio >= 0.6 else SUCCESS
     filled = round(ratio * cells)
     bar = Text("▓" * filled, style=color)
-    bar.append("░" * (cells - filled), style="#3f3f46")
+    bar.append("░" * (cells - filled), style=BORDER)
     bar.append(f" {_k(used)} / {_k(maximum)}", style=color)
     return bar
 
@@ -276,8 +295,8 @@ class CompactionBlock(FoldBlock):
     """Context compaction: live while running, then one folded line whose
     body shows what the model now sees of the past (e.g. the summary)."""
 
-    DEFAULT_CSS = """
-    CompactionBlock > .body { color: #a1a1aa; max-height: 14; }
+    DEFAULT_CSS = f"""
+    CompactionBlock > .body {{ color: {MUTED}; max-height: 14; }}
     """
 
     def __init__(self, strategy: str) -> None:
@@ -300,23 +319,23 @@ class CompactionBlock(FoldBlock):
         self.collapse()
 
     def _header(self) -> Text:
-        header = Text("◇ ", style=f"bold {ACCENT}")
+        header = Text("◇ ", style=f"bold {PRIMARY}")
         if not self.done:
-            header.append("Compacting context…", style="italic #a1a1aa")
+            header.append("Compacting context…", style=f"italic {MUTED}")
             return header
         if self.failed is not None:
-            header.append("Compaction failed", style="bold #f87171")
-            header.append(f" · {self.failed[:80]} · continuing uncompacted", style="#a1a1aa")
+            header.append("Compaction failed", style=f"bold {ERROR}")
+            header.append(f" · {self.failed[:80]} · continuing uncompacted", style=MUTED)
             return header
         event = self.event
         left = len(event.old_messages)
         if event.pruned_only:
-            header.append("Trimmed old tool output", style="bold #e4e4e7")
+            header.append("Trimmed old tool output", style=f"bold {TEXT}")
         elif event.summary:
-            header.append(f"Compacted · {_plural(left, 'message')} → summary", style="bold #e4e4e7")
+            header.append(f"Compacted · {_plural(left, 'message')} → summary", style=f"bold {TEXT}")
         else:
-            header.append(f"Window slid · {_plural(left, 'message')} out", style="bold #e4e4e7")
-        header.append(f" · {_k(event.tokens_before)} → {_k(event.tokens_after)} tokens", style="#a1a1aa")
+            header.append(f"Window slid · {_plural(left, 'message')} out", style=f"bold {TEXT}")
+        header.append(f" · {_k(event.tokens_before)} → {_k(event.tokens_after)} tokens", style=MUTED)
         return self._fold_hint(header)
 
     def _details(self) -> str:
@@ -331,8 +350,8 @@ class CompactionBlock(FoldBlock):
 class PastSummaryBlock(FoldBlock):
     """On resume: what the model remembers of messages compacted away."""
 
-    DEFAULT_CSS = """
-    PastSummaryBlock > .body { color: #a1a1aa; max-height: 14; }
+    DEFAULT_CSS = f"""
+    PastSummaryBlock > .body {{ color: {MUTED}; max-height: 14; }}
     """
 
     def __init__(self, archived: int, summary: str | None) -> None:
@@ -344,9 +363,9 @@ class PastSummaryBlock(FoldBlock):
         return bool(self.summary)
 
     def _header(self) -> Text:
-        header = Text("◇ ", style=f"bold {ACCENT}")
+        header = Text("◇ ", style=f"bold {PRIMARY}")
         header.append(f"Earlier conversation summarized · {_plural(self.archived, 'message')}",
-                      style="bold #a1a1aa")
+                      style=f"bold {MUTED}")
         return self._fold_hint(header)
 
     def _body(self) -> Text:
@@ -407,25 +426,29 @@ class OptionRow(Static):
 
 class QuestionForm(Vertical):
     """All pending questions in one box: tabs across the top (←→), options
-    for the current one (↑↓ + enter or click) plus an "Other" row for a
-    free answer typed in the prompt, and — with several questions — a
-    Submit tab to review and send them together. Once sent it folds to
-    ``? Answered N questions`` (click expands).
+    for the current one (↑↓ + enter, a number key or click) plus an "Other"
+    row that opens a text field right in the box, and — with several
+    questions — a Submit tab to review and send them together. Once sent
+    the box gives way to each question with its answer under ``⎿``.
     """
 
-    DEFAULT_CSS = """
-    QuestionForm { height: auto; border: round #b794f6; padding: 0 1; margin: 1 0 0 0; }
-    QuestionForm > .tabs { margin-bottom: 1; }
-    QuestionForm > .question { color: #f4f4f5; }
-    QuestionForm > .option { height: 1; display: none; }
-    QuestionForm > .option.-current { display: block; }
-    QuestionForm > .hint { color: #71717a; margin-top: 1; }
-    QuestionForm.-done { border: round #3f3f46; width: auto; }
-    QuestionForm.-done:hover { border: round #b794f6; }
+    DEFAULT_CSS = f"""
+    QuestionForm {{ height: auto; border: round {PRIMARY}; padding: 0 1; margin: 1 0 0 0; }}
+    QuestionForm > .tabs {{ margin-bottom: 1; }}
+    QuestionForm > .question {{ color: {TEXT}; }}
+    QuestionForm > .option {{ height: 1; display: none; }}
+    QuestionForm > .option.-current {{ display: block; }}
+    QuestionForm > .hint {{ color: {DIM}; margin-top: 1; }}
+    QuestionForm > Input, QuestionForm > Input:focus {{
+        display: none; height: 1; border: none; padding: 0 1; margin-left: 5;
+        background: {ELEMENT}; color: {TEXT};
+    }}
+    QuestionForm.-typing > Input {{ display: block; }}
+    QuestionForm.-done {{ border: none; padding: 0; }}
     QuestionForm.-done > .option.-current, QuestionForm.-done > .question,
-    QuestionForm.-done > .hint { display: none; }
-    QuestionForm > .summary { display: none; }
-    QuestionForm.-done > .summary { display: block; width: auto; }
+    QuestionForm.-done > .hint, QuestionForm.-done > Input {{ display: none; }}
+    QuestionForm > .summary {{ display: none; }}
+    QuestionForm.-done > .summary {{ display: block; }}
     """
 
     class Completed(Message):
@@ -433,13 +456,12 @@ class QuestionForm(Vertical):
             super().__init__()
             self.form = form
 
-    class TypingRequested(Message):
-        """The user picked "Other": the prompt should ask for their answer."""
+    class TypingFinished(Message):
+        """The "Other" field closed: the prompt takes the keys again."""
 
-        def __init__(self, form: "QuestionForm", question: str) -> None:
+        def __init__(self, form: "QuestionForm") -> None:
             super().__init__()
             self.form = form
-            self.question = question
 
     def __init__(self, questions: list[Question]) -> None:
         super().__init__()
@@ -451,7 +473,6 @@ class QuestionForm(Vertical):
         self.typing = False
         self.done = False
         self.cancelled = False
-        self.expanded = False
 
     # -------- layout
     def compose(self):
@@ -460,11 +481,14 @@ class QuestionForm(Vertical):
         for q, question in enumerate(self.questions):
             for index in range(len(question.options) + 1):
                 yield OptionRow(q, index)
+        yield Input(placeholder="Type your answer · enter to send · esc to go back")
         yield Static(classes="hint")
         yield Static(classes="summary")
 
     def on_mount(self) -> None:
         self.redraw()
+        if not self.questions[0].values:
+            self.pick(0, 0)  # nothing to choose: straight to the text field
 
     @property
     def multi(self) -> bool:
@@ -514,93 +538,88 @@ class QuestionForm(Vertical):
                 row.update(self._option_line(row.question, row.index))
         if self.on_submit_tab:
             question.update(self._review())
-            hint.update(Text("enter submit all · ← back to change an answer", style="#71717a"))
+            hint.update(Text("enter submit all · ← back to change an answer", style=DIM))
             return
         q = self.questions[self.current]
         title = Text()
         if self.multi:
-            title.append(f"{self.current + 1}/{len(self.questions)}  ", style="#71717a")
+            title.append(f"{self.current + 1}/{len(self.questions)}  ", style=DIM)
         title.append(q.text, style="bold")
         question.update(title)
         if self.typing:
-            keys = "type your answer in the prompt · enter to confirm"
+            keys = "enter send · esc back to the options"
         else:
-            keys = "↑↓ choose · enter select"
+            keys = "↑↓ choose · enter or 1-9 select"
             if self.multi:
                 keys += " · ←→ switch question"
             keys += " · esc cancel"
-        hint.update(Text(keys, style="#71717a"))
+        hint.update(Text(keys, style=DIM))
 
     def _tabs(self) -> Text:
         line = Text()
         for q, question in enumerate(self.questions):
             box = "☒" if q in self.answers else "☐"
-            style = f"bold reverse {ACCENT}" if q == self.current else ("#4ade80" if q in self.answers else "#a1a1aa")
+            style = f"bold reverse {PRIMARY}" if q == self.current else (SUCCESS if q in self.answers else MUTED)
             line.append(f" {box} {self._tab_title(question)} ", style=style)
             line.append(" ")
         ready = len(self.answers) == len(self.questions)
-        style = f"bold reverse {ACCENT}" if self.on_submit_tab else ("#4ade80" if ready else "#71717a")
+        style = f"bold reverse {PRIMARY}" if self.on_submit_tab else (SUCCESS if ready else DIM)
         line.append(" ✓ Submit ", style=style)
         return line
 
     def _option_line(self, q: int, index: int) -> Text:
         highlighted = index == self.highlight[q]
-        line = Text("❯ " if highlighted else "  ", style=f"bold {ACCENT}")
+        line = Text("❯ " if highlighted else "  ", style=f"bold {PRIMARY}")
         if self._is_other(q, index):
             if self._is_custom(q):
-                line.append(f"{index + 1}. ✎ {self.answers[q]}", style="bold #4ade80")
-                line.append(" ✓", style="#4ade80")
+                line.append(f"{index + 1}. ✎ {self.answers[q]}", style=f"bold {SUCCESS}")
+                line.append(" ✓", style=SUCCESS)
             elif self.typing and highlighted:
-                line.append(f"{index + 1}. ✎ Other", style=f"bold {ACCENT}")
-                line.append(" — typing in the prompt below…", style=ACCENT)
+                line.append(f"{index + 1}. ✎ Other", style=f"bold {PRIMARY}")
             else:
-                line.append(f"{index + 1}. ✎ Other", style="bold #f4f4f5" if highlighted else "#d4d4d8")
-                line.append(" — type your own answer", style="#71717a")
+                line.append(f"{index + 1}. ✎ Other", style=f"bold {TEXT}" if highlighted else TEXT)
+                line.append(" — type your own answer", style=DIM)
             return line
         label, description = self.questions[q].options[index]
         chosen = self.answers.get(q) == self.questions[q].values[index]
-        style = "bold #4ade80" if chosen else ("bold #f4f4f5" if highlighted else "#d4d4d8")
+        style = f"bold {SUCCESS}" if chosen else (f"bold {TEXT}" if highlighted else TEXT)
         line.append(f"{index + 1}. {label}", style=style)
         if chosen:
-            line.append(" ✓", style="#4ade80")
+            line.append(" ✓", style=SUCCESS)
         if description:
-            line.append(f" — {description}", style="#71717a")
+            line.append(f" — {description}", style=DIM)
         return line
 
     def _review(self) -> Text:
-        body = Text("Review your answers\n", style="bold #f4f4f5")
+        body = Text("Review your answers\n", style=f"bold {TEXT}")
         for q, question in enumerate(self.questions):
             shown = self._display(q)
-            body.append(f"\n  {question.text}\n", style="#d4d4d8")
-            body.append("   → ", style="#71717a")
-            body.append(shown or "not answered yet", style="bold #4ade80" if shown else "#fbbf24")
+            body.append(f"\n  {question.text}\n", style=TEXT)
+            body.append("   → ", style=DIM)
+            body.append(shown or "not answered yet", style=f"bold {SUCCESS}" if shown else WARNING)
         return body
 
     def _summary(self) -> Text:
-        count = len(self.questions)
-        header = Text("? ", style=f"bold {ACCENT}")
+        """``? question`` then ``⎿ answer`` under it, for every question."""
+        body = Text()
         if self.cancelled:
-            header.append(f"{_plural(count, 'question')} · cancelled", style="#a1a1aa")
-            return header
-        if count == 1:
-            header.append(self.questions[0].text[:70], style="bold #e4e4e7")
-            header.append("  → ", style="#71717a")
-            header.append((self._display(0) or "")[:50], style="bold #4ade80")
-        else:
-            header.append(f"Answered {count} questions", style="bold #e4e4e7")
-        header.append("   " + ("▾ collapse" if self.expanded else "▸ expand"), style="dim")
-        if self.expanded:
-            for q, question in enumerate(self.questions):
-                header.append(f"\n  {question.text}", style="#a1a1aa")
-                header.append("  → ", style="#71717a")
-                header.append(self._display(q) or "", style="bold #4ade80")
-        return header
+            body.append("? ", style=f"bold {PRIMARY}")
+            body.append(f"{_plural(len(self.questions), 'question')} · cancelled", style=MUTED)
+            return body
+        for q, question in enumerate(self.questions):
+            if q:
+                body.append("\n")
+            body.append("? ", style=f"bold {PRIMARY}")
+            body.append(question.text, style=f"bold {TEXT}")
+            body.append("\n  ⎿  ", style=DIM)
+            body.append(self._display(q) or "(no answer)", style=SUCCESS)
+        return body
 
     # -------- interaction (the app forwards keys from the prompt)
     def move(self, delta: int) -> None:
         if self.done or self.on_submit_tab:
             return
-        self.typing = False
+        self._close_field()
         count = len(self.questions[self.current].values) + 1
         self.highlight[self.current] = (self.highlight[self.current] + delta) % count
         self.redraw()
@@ -608,7 +627,7 @@ class QuestionForm(Vertical):
     def switch(self, delta: int) -> None:
         if self.done or not self.multi:
             return
-        self.typing = False
+        self._close_field()
         self.current = (self.current + delta) % (len(self.questions) + 1)
         self.redraw()
 
@@ -641,13 +660,43 @@ class QuestionForm(Vertical):
         self.highlight[q] = index
         if self._is_other(q, index):
             self.typing = True
+            self.set_class(True, "-typing")
             self.redraw()
-            self.post_message(self.TypingRequested(self, self.questions[q].text))
+            field = self.query_one(Input)
+            field.value = self.answers[q] if self._is_custom(q) else ""
+            field.focus()
             return
         self._answer(q, self.questions[q].values[index])
 
+    def pick_number(self, number: int) -> bool:
+        """A number key: pick that option of the current question."""
+        if self.done or self.typing or self.on_submit_tab:
+            return False
+        question = self.questions[self.current]
+        if not question.values or not 1 <= number <= len(question.values) + 1:
+            return False
+        self.pick(self.current, number - 1)
+        return True
+
+    def stop_typing(self) -> None:
+        """Esc in the "Other" field: back to the options."""
+        self._close_field()
+        self.redraw()
+
+    def _close_field(self) -> None:
+        """Hide the "Other" field; the prompt takes the keys again."""
+        if self.typing:
+            self.typing = False
+            self.set_class(False, "-typing")
+            self.post_message(self.TypingFinished(self))
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        if event.value.strip():
+            self._answer(self.current, event.value.strip())
+
     def _answer(self, q: int, value: str) -> None:
-        self.typing = False
+        self._close_field()
         self.answers[q] = value
         if not self.multi:
             self._complete()
@@ -655,6 +704,8 @@ class QuestionForm(Vertical):
         missing = [i for i in range(len(self.questions)) if i not in self.answers]
         self.current = missing[0] if missing else len(self.questions)
         self.redraw()
+        if not self.on_submit_tab and not self.questions[self.current].values:
+            self.pick(self.current, 0)
 
     def cancel(self) -> None:
         self.done = self.cancelled = True
@@ -681,15 +732,10 @@ class QuestionForm(Vertical):
                 out[question.record_id] = answer
         return out
 
-    def on_click(self) -> None:
-        if self.done and not self.cancelled:
-            self.expanded = not self.expanded
-            self.redraw()
-
 
 def tool_summary(tool_name: str, parameters: dict[str, t.Any]) -> str:
     """The one argument that says what the call does, not the whole payload."""
-    for key in ("command", "file_name", "path", "file_path", "query", "url", "city", "to"):
+    for key in ("command", "file_path", "path", "pattern", "query", "url", "city", "to"):
         if key in parameters:
             return _first_line(str(parameters[key]))
     parts = [f"{k}={v}" for k, v in parameters.items() if k != "description"]
@@ -732,15 +778,15 @@ class ToolBlock(Vertical):
     result) are kept and drawn on mount instead of failing.
     """
 
-    DEFAULT_CSS = """
-    ToolBlock { height: auto; margin: 1 0 0 0; }
-    ToolBlock:hover > .summary { color: #d4d4d8; }
-    ToolBlock > .summary { color: #a1a1aa; padding-left: 2; }
-    ToolBlock > .output {
-        display: none; color: #d4d4d8; padding: 0 1; margin-left: 5;
-        border-left: solid #3f3f46; max-height: 20; overflow-y: auto;
-    }
-    ToolBlock.-expanded > .output { display: block; }
+    DEFAULT_CSS = f"""
+    ToolBlock {{ height: auto; margin: 1 0 0 0; }}
+    ToolBlock:hover > .summary {{ color: {TEXT}; }}
+    ToolBlock > .summary {{ color: {MUTED}; padding-left: 2; }}
+    ToolBlock > .output {{
+        display: none; color: {TEXT}; padding: 0 1; margin-left: 5;
+        border-left: solid {BORDER}; max-height: 20; overflow-y: auto;
+    }}
+    ToolBlock.-expanded > .output {{ display: block; }}
     """
 
     MAX_OUTPUT = 6000
@@ -773,25 +819,25 @@ class ToolBlock(Vertical):
 
     def _title(self) -> Text:
         if self.result is None:
-            dot = Text(SPINNER[self._frame % len(SPINNER)] + " ", style=f"bold {ACCENT}")
+            dot = Text(SPINNER[self._frame % len(SPINNER)] + " ", style=f"bold {PRIMARY}")
         elif self._interrupted:
-            dot = Text("◇ ", style="bold #71717a")
+            dot = Text("◇ ", style=f"bold {DIM}")
         elif self.result.success and not self._nonzero_exit():
-            dot = Text("◆ ", style="bold #4ade80")
+            dot = Text("◆ ", style=f"bold {SUCCESS}")
         else:
-            dot = Text("◆ ", style="bold #f87171")
+            dot = Text("◆ ", style=f"bold {ERROR}")
         dot.append(self.tool_name, style="bold")
         summary = tool_summary(self.tool_name, self.parameters)
         if summary:
             if len(summary) > 90:
                 summary = summary[:87] + "…"
-            dot.append(f"({summary})", style="#a1a1aa")
+            dot.append(f"({summary})", style=MUTED)
         return dot
 
     def _summary_line(self) -> Text:
         if self.result is None:
             if self._waiting:
-                return Text("╰─ Waiting for approval…", style="#fbbf24")
+                return Text("╰─ Waiting for approval…", style=WARNING)
             return Text("╰─ Running…", style="dim")
         summary = self._summary.copy()
         hint = "▾ click to collapse" if self.has_class("-expanded") else "▸ click to expand"
@@ -833,13 +879,13 @@ class ToolBlock(Vertical):
         ms = self.result.duration_ms
         summary = Text("╰─ ", style="dim")
         if self._interrupted:
-            summary.append("cancelled", style="#a1a1aa")
+            summary.append("cancelled", style=MUTED)
         elif not self.result.success:
-            summary.append(f"Error: {text.splitlines()[0][:120] if text else 'failed'}", style="#f87171")
+            summary.append(f"Error: {text.splitlines()[0][:120] if text else 'failed'}", style=ERROR)
         else:
             code = self.result.result.get("exit_code") if isinstance(self.result.result, dict) else None
             if code not in (None, 0):
-                summary.append(f"exit {code} · ", style="#f87171")
+                summary.append(f"exit {code} · ", style=ERROR)
             summary.append(_plural(lines, "line"))
             if ms is not None:
                 summary.append(f" · {ms}ms", style="dim")

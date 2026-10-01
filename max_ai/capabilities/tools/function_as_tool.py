@@ -14,10 +14,10 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError, create_model
 from ...base.tools import CoreTool, ToolContext
 from ...config import setting
 from ...core.termination import CancellationToken
-from ...errors.tools import DockerToolReferenceError, ToolRetry
+from ...errors.tools import ToolRetry
 from ...loggers import ScopedLogger
 from ...types.tool_call import ToolCallRecord, ToolResult
-from ...types.tools import CoreToolParameters, DockerToolRef, ToolApprovalMode
+from ...types.tools import CoreToolParameters, ToolApprovalMode
 
 # -------- LOGGER -----------------------------------------------------------
 logger = logging.getLogger(__name__)
@@ -36,8 +36,8 @@ class FunctionAsTool(CoreTool):
         description: str | None = None,
         version: str = "1.0.0",
         approval_mode: ToolApprovalMode | str = ToolApprovalMode.ASK_APPROVED,
-        max_retries: int = 3,
         read_only: bool = False,
+        policy_subject: str | None = None,
     ):
         """Create a tool from a Python function.
 
@@ -47,9 +47,10 @@ class FunctionAsTool(CoreTool):
             description: Custom description (defaults to function docstring).
             version: Semver string.
             approval_mode: Whether approval is required before execution.
-            max_retries: Consumed by the executor on ToolRetry.
             read_only: The function has no side effects, so the agent may run
                 it at the same time as other read-only calls.
+            policy_subject: Parameter that Policy rules like ``name(pattern)``
+                match against (``"url"``, ``"file_path"``).
         """
         self.func = func
         super().__init__(
@@ -57,12 +58,13 @@ class FunctionAsTool(CoreTool):
             description=description or func.__doc__ or f"Execute {func.__name__}",
             version=version,
             approval_mode=approval_mode,
-            max_retries=max_retries,
             read_only=read_only,
+            policy_subject=policy_subject,
         )
 
         self.signature = inspect.signature(func)
-        self.type_hints = t.get_type_hints(func)
+        # include_extras keeps Annotated[..., Field(description=...)] for the schema.
+        self.type_hints = t.get_type_hints(func, include_extras=True)
 
         # ToolContext detection: must be the FIRST parameter if used.
         # ``ToolContext | None`` also works outside a run (None is passed).
@@ -78,47 +80,6 @@ class FunctionAsTool(CoreTool):
     def parameters(self) -> dict[str, t.Any]:
         """Perform the ``parameters`` operation for ``FunctionAsTool``."""
         return self._parameters_schema
-
-    def docker_ref(self) -> DockerToolRef:
-        """Build the importable Docker reference for this function tool."""
-        module = self.func.__module__
-        qualname = self.func.__qualname__
-        name = self.func.__name__
-
-        if name == "<lambda>":
-            raise DockerToolReferenceError(
-                self.name,
-                "lambda functions do not have an importable reference",
-            )
-
-        if "<locals>" in qualname:
-            raise DockerToolReferenceError(
-                self.name,
-                "nested or local functions do not have an importable reference",
-            )
-
-        if module == "__main__":
-            raise DockerToolReferenceError(
-                self.name,
-                "functions defined in __main__ are not importable by the Docker worker",
-            )
-
-        return DockerToolRef(
-            kind="function",
-            module=module,
-            qualname=qualname,
-            options={
-                "name": self.name,
-                "description": self.description,
-                "version": self.version,
-                "approval_mode": (
-                    self.approval_mode.value
-                    if isinstance(self.approval_mode, ToolApprovalMode)
-                    else self.approval_mode
-                ),
-                "max_retries": self.max_retries,
-            },
-        )
 
     def validate_parameters(self, tool_request: ToolCallRecord) -> CoreToolParameters:
         """Validate parameters using the dynamic Pydantic model.

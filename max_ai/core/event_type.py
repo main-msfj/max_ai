@@ -204,6 +204,17 @@ class ModelResponseEvent(ModelEvent):
     usage: Usage | None = Field(default=None, description="Token usage statistics")
 
 
+class ModelRetryEvent(ModelEvent):
+    """Event emitted when a model call failed for a passing reason and the
+    harness calls again after ``delay`` seconds."""
+
+    EVENT_TYPE = "model_retry"
+    attempt: int = Field(..., description="The try that failed, from 1")
+    max_attempts: int = Field(..., description="Tries allowed in total")
+    delay: float = Field(..., description="Seconds before the next try")
+    reason: str = Field(..., description="Why it failed, e.g. rate_limit")
+
+
 class ModelStreamChunkEvent(ModelEvent):
     """Event emitted for each streaming chunk from LLM."""
 
@@ -381,7 +392,7 @@ class FileWrittenEvent(ToolEvent):
 
     EVENT_TYPE = "file_written"
     tool_call_id: str
-    operation: t.Literal["write_file", "edit_file"]
+    operation: t.Literal["WriteFile", "EditFile"]
     path: str
     root_dir: str
     content_hash: str
@@ -392,18 +403,11 @@ class FilesSearchedEvent(ToolEvent):
 
     EVENT_TYPE = "files_searched"
     tool_call_id: str
-    operation: t.Literal["find_files", "search_text"]
+    operation: t.Literal["FindFiles", "SearchFile"]
     path: str
     root_dir: str
     match_count: int
     truncated: bool = False
-
-
-class DirectoryCreatedEvent(ToolEvent):
-    EVENT_TYPE = "directory_created"
-    tool_call_id: str
-    path: str
-    root_dir: str
 
 
 class FileDeletedEvent(ToolEvent):
@@ -412,14 +416,6 @@ class FileDeletedEvent(ToolEvent):
     path: str
     root_dir: str
     content_hash: str
-
-
-class FileInfoEvent(ToolEvent):
-    EVENT_TYPE = "file_info"
-    tool_call_id: str
-    path: str
-    root_dir: str
-    file_type: t.Literal["file", "directory"]
 
 
 class ToolCallEvent(ToolEvent):
@@ -569,6 +565,7 @@ AgentEvents = Annotated[
         CompletionRejectedEvent,
         ModelCallEvent,
         ModelResponseEvent,
+        ModelRetryEvent,
         ModelStreamChunkEvent,
         ReasoningIterationEvent,
         ReasoningCompleteEvent,
@@ -589,9 +586,7 @@ AgentEvents = Annotated[
         DirectoryListedEvent,
         FileWrittenEvent,
         FilesSearchedEvent,
-        DirectoryCreatedEvent,
         FileDeletedEvent,
-        FileInfoEvent,
         CompactionEvent,
         MemoryUpdateEvent,
         MemoryRetrievalEvent,

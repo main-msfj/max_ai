@@ -18,6 +18,7 @@ from ..event_type import (
     UserInputRequestEvent,
 )
 from ..messages import ToolMessage
+from ..policy import Policy
 from ..termination import CancellationToken
 from .registry import ToolRegistry
 
@@ -30,20 +31,29 @@ if TYPE_CHECKING:
 class ToolDispatcher:
     """Resolve, validate, request approval and invoke a tool adapter.
 
-    Explicit host tools run in-process. Other tools run through the manager's
-    executor and conversation session, without a host fallback.
+    Every tool runs in this process. Only bash needs the environment: it gets
+    the manager's executor and the conversation's session, and only its
+    script reaches the sandbox.
     Approval is supplied by trusted application code via record.approve/reject.
     Pending approval returns None and leaves the record resumable.
     """
 
     def __init__(self, registry: ToolRegistry, *, source: str = "tool_dispatcher",
                  manager: "EnvironmentManager | None" = None,
-                 middleware: "MiddlewareChain | None" = None):
+                 middleware: "MiddlewareChain | None" = None,
+                 policy: Policy | None = None):
         self.registry = registry
         self.source = source
         self.manager = manager
         self.middleware = middleware
+        self.policy = policy or Policy()
         self._active: set[str] = set()
+
+    def _needs_environment(self, name: str) -> bool:
+        """Only bash reaches the execution environment."""
+        from ...capabilities.tools.bash import BashTool
+
+        return isinstance(self.registry.get(name), BashTool)
 
     def _batches(self, records: list[ToolCallRecord]) -> list[list[ToolCallRecord]]:
         """Consecutive read-only calls form one batch that runs at once; any
@@ -77,7 +87,7 @@ class ToolDispatcher:
                 return await self.dispatch(record, call_context, cancellation_token, session)
 
         async def run_batch(batch):
-            sandboxed = {r.id for r in batch if not self.registry.runs_on_host(r.tool_name)}
+            sandboxed = {r.id for r in batch if self._needs_environment(r.tool_name)}
             if len(batch) == 1 or not sandboxed or self.manager is None:
                 return await asyncio.gather(*(run(record) for record in batch))
             # Read-only calls share one execution lease: nothing to sync between them.
@@ -222,24 +232,21 @@ class ToolDispatcher:
             return None
         if record.is_awaiting_input:
             raise ValueError("User input must be resolved before dispatch")
-        try:
-            approval_mode = ToolApprovalMode(tool.approval_mode)
-            from ...capabilities.tools.bash import BashTool
-
-            if isinstance(tool, BashTool):
-                permission = tool.permission_for(record.parameters["command"])
-                if permission == "allow" and self.manager is not None and not self.manager.executor.isolated:
-                    permission = "ask"  # on the host itself: the user approves every command
-                if permission == "deny":
-                    return finish(ToolResult.approval_denied(record.id, "Command denied by Bash permissions"))
-                approval_mode = (
-                    ToolApprovalMode.AUTO_APPROVED if permission == "allow"
-                    else ToolApprovalMode.ASK_APPROVED
-                )
-        except ValueError:
-            return finish(
-                ToolResult.execution_error(record.id, "Unknown approval mode")
-            )
+        # One decision for every tool: the agent's Policy plus the rules the
+        # user allowed during this session.
+        run_ctx = context.deps.get("run_context")
+        decision = self.policy.decide(
+            tool, record.parameters,
+            isolated=self.manager is not None and self.manager.executor.isolated,
+            extra_allow=getattr(run_ctx, "allowed_rules", ()),
+        )
+        if decision.verdict == "deny":
+            return finish(ToolResult.approval_denied(record.id, f"Denied by policy: {decision.rule}"))
+        approval_mode = (
+            ToolApprovalMode.AUTO_APPROVED if decision.verdict == "allow"
+            else ToolApprovalMode.ASK_APPROVED
+        )
+        from ...capabilities.tools.bash import BashTool
         if record.is_pending_approval:
             if approval_mode == ToolApprovalMode.ASK_APPROVED:
                 emit(
@@ -267,34 +274,26 @@ class ToolDispatcher:
             return finish(ToolResult.execution_error(
                 record.id, "Current permissions require manual approval; submit a new tool call",
             ))
-        if not self.registry.runs_on_host(tool.name) and self.manager is None:
+        if isinstance(tool, BashTool) and self.manager is None:
             return finish(ToolResult.execution_error(
-                record.id, "A runtime tool requires an EnvironmentManager",
+                record.id, "bash requires an EnvironmentManager",
             ))
 
         # Per-call dependencies must not leak into concurrent calls or resumes.
         deps = dict(context.deps)
         deps["tool_call_id"] = record.id
-        deps.pop("tool_reference", None)
-        reference = self.registry.reference(tool.name)
-        if reference is not None:
-            deps["tool_reference"] = reference
         call_context = ToolContext(
             context.run_id, session_id=context.session_id, user_id=context.user_id,
             retry_count=context.retry_count, deps=deps, emit_event=context.emit_event,
         )
 
         async def run_in(session: "ExecutionSession"):
-            if isinstance(tool, BashTool):
-                # bash runs here; only its script reaches the environment.
-                call_context.deps.update(executor=self.manager.executor, execution_session=session)
-                return await tool.execute(record, call_context, cancellation_token)
-            return await self.manager.executor.run_tool(
-                session, tool, record, call_context, cancellation_token,
-            )
+            # bash runs here; only its script reaches the environment.
+            call_context.deps.update(executor=self.manager.executor, execution_session=session)
+            return await tool.execute(record, call_context, cancellation_token)
 
         async def invoke():
-            if self.registry.runs_on_host(tool.name):
+            if not isinstance(tool, BashTool):
                 return await tool.execute(record, call_context, cancellation_token)
             if shared_session is not None:
                 return await run_in(shared_session)
@@ -304,7 +303,6 @@ class ToolDispatcher:
         # Middleware sees only approved calls about to run; it may answer
         # in the tool's place (e.g. a budget that blocks it).
         mw = request = None
-        run_ctx = context.deps.get("run_context")
         if self.middleware and run_ctx is not None:
             mw = MiddlewareContext(ctx=run_ctx, agent=self.source, emit=emit)
             request = ToolRequest(record=record)

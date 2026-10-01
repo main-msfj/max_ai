@@ -16,6 +16,7 @@ def tool(
     description: str | None = None,
     approval_mode: str | ToolApprovalMode = ToolApprovalMode.AUTO_APPROVED,
     read_only: bool = False,
+    policy_subject: str | None = None,
 ) -> t.Callable[[t.Callable[..., t.Any]], FunctionAsTool]:
     """Perform the ``tool`` operation.
 
@@ -40,6 +41,7 @@ def tool(
     description: str | None = None,
     approval_mode: str | ToolApprovalMode = ToolApprovalMode.AUTO_APPROVED,
     read_only: bool = False,
+    policy_subject: str | None = None,
 ) -> FunctionAsTool:
     """Perform the ``tool`` operation.
 
@@ -65,6 +67,7 @@ def tool(
     description: str | None = None,
     approval_mode: str | ToolApprovalMode = ToolApprovalMode.AUTO_APPROVED,
     read_only: bool = False,
+    policy_subject: str | None = None,
 ) -> FunctionAsTool | t.Callable[[t.Callable[..., t.Any]], FunctionAsTool]:
     """Wrap a function as a FunctionAsTool.
 
@@ -84,6 +87,8 @@ def tool(
             — decorated functions are assumed to be local, non-destructive helpers.
             Use ASK_APPROVED explicitly for tools that modify state.
         read_only: No side effects: may run in parallel with other read-only calls.
+        policy_subject: Parameter that Policy rules like ``name(pattern)`` match
+            against, e.g. ``@tool(policy_subject="url")`` for ``fetch(https://acme.com/*)``.
     """
 
     def decorator(fn: t.Callable[..., t.Any]) -> FunctionAsTool:
@@ -99,6 +104,7 @@ fn : t.Callable[..., t.Any]
             description=description,
             approval_mode=approval_mode,
             read_only=read_only,
+            policy_subject=policy_subject,
         )
 
     return decorator(func) if func is not None else decorator

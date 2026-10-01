@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from ...base.completion_gate import CompletionBase, CompletionDecision
-from ...base.workspace import WorkspaceBase
 from ...core.harness import messages as harness
 from ...core.messages import AssistantMessage
 from ...core.primitives import FailureReason
@@ -14,6 +13,8 @@ from ._model import RuntimeGateConfig
 # Failures where the command actually ran (or tried to). Denials, cancels and
 # invalid parameters never ran — denials already go through ask_user.
 _RAN_AND_FAILED = {FailureReason.EXECUTION_ERROR, FailureReason.TIMEOUT}
+# Folder names that hold intermediate files, at any depth of the workspace.
+_TEMPORARY_DIRS = {"tmp", "temp", "scratch", "__pycache__"}
 
 
 def _last_assistant(ctx: RunContext) -> AssistantMessage | None:
@@ -89,51 +90,75 @@ record : ToolCallRecord
     return f"`{command}` failed ({detail})" + (f": {output}" if output else "")
 
 
+def _unresolved_failures(records: list[ToolCallRecord]) -> list[ToolCallRecord]:
+    """Failed bash commands that the same command didn't later fix."""
+    succeeded = {
+        r.parameters.get("command")
+        for r in records
+        if r.tool_name == "bash" and _exit_code(r) == 0
+    }
+    return [
+        r for r in records
+        if _bash_failed(r) and r.parameters.get("command") not in succeeded
+    ]
+
+
+def _left_in_workspace(records: list[ToolCallRecord]) -> list[str]:
+    """Workspace files this turn wrote that nothing deleted afterwards.
+
+    Each bash result lists the files its command created, modified and
+    deleted; a successful ``DeleteFile`` removes its path too.
+    """
+    alive: set[str] = set()
+    for record in records:
+        result = record.result
+        if result is None or not result.success or not isinstance(result.result, dict):
+            continue
+        if record.tool_name == "bash":
+            files = result.result.get("files", {})
+            alive.update(files.get("created", []), files.get("modified", []))
+            alive.difference_update(files.get("deleted", []))
+        elif record.tool_name == "DeleteFile":
+            alive.discard(str(result.result.get("path", "")).removeprefix("workspace/"))
+    return sorted(alive)
+
+
+def _intermediate(paths: list[str]) -> list[str]:
+    """The paths inside a folder named like ``_TEMPORARY_DIRS``."""
+    return [p for p in paths if _TEMPORARY_DIRS & set(p.split("/")[:-1])]
+
+
 class RuntimeCompletionGate(CompletionBase):
-    """Check plan closure, declared deliverables and unacknowledged failures.
+    """Check plan closure, unacknowledged failures and leftover files.
 
     Both done and failed plan steps are terminal: closing a turn does not
     imply that its domain objective succeeded. Custom gates verify that
     objective. Cancellation and pending tool calls are checked by the loop's
     runtime_status() before consulting gates, so they are not repeated here.
-    Explicit Bash deliverables from commands with exit code zero must still
-    exist at closure.
 
-    A failed Bash command is resolved when its declared deliverables exist
-    or the same command later succeeded. An unresolved failure blocks the
-    first close attempt once (with the failure details, so the model must
-    fix it or tell the user); after that it no longer blocks, but the
-    closing decision carries it as a note, so the harness reports it even
-    if the model stays silent.
+    A failed Bash command is resolved when the same command later succeeded.
+    An unresolved failure blocks the first close attempt once (with the
+    failure details, so the model must fix it or tell the user); after that
+    it no longer blocks, but the closing decision carries it as a note, so
+    the harness reports it even if the model stays silent.
+
+    Intermediate files the turn left in the workspace (inside tmp/, temp/,
+    scratch/ or __pycache__/, as the bash results report them) get the same
+    treatment: one nudge, then a note. The gate never deletes them.
     """
 
     component_schema = RuntimeGateConfig
     component_provider_override = "maxai.completion.RuntimeCompletionGate"
 
-    def __init__(
-        self, config: RuntimeGateConfig | None = None, *, workspace: WorkspaceBase | None = None,
-    ) -> None:
+    def __init__(self, config: RuntimeGateConfig | None = None) -> None:
         """Initialize ``RuntimeCompletionGate``.
 
 Parameters
 ----------
 config : RuntimeGateConfig | None
-    Value supplied for ``config``.
-workspace : WorkspaceBase | None
-    Value supplied for ``workspace``."""
+    Which checks run; all of them by default."""
         super().__init__()
         self.config = config or RuntimeGateConfig()
-        # A runtime dependency, not config: the Agent injects its workspace.
-        self._workspace = workspace
-
-    def bind_workspace(self, workspace: WorkspaceBase) -> None:
-        """Bind workspace for ``RuntimeCompletionGate``.
-
-Parameters
-----------
-workspace : WorkspaceBase
-    Value supplied for ``workspace``."""
-        self._workspace = workspace
 
     def _to_config(self) -> RuntimeGateConfig:
         """Build the serializable configuration for ``RuntimeCompletionGate``."""
@@ -194,26 +219,20 @@ ctx : RunContext
                 notes.append(harness.plan_closed_open(_plan_progress(ctx)))
 
         records = list(ctx.tool_state.records.values())
-        outputs: set[str] = set()
-        for record in records:
-            result = record.result
-            if (
-                result is not None and result.success
-                and result.metadata.get("tool_kind") == "bash"
-                and _exit_code(record) == 0
-            ):
-                outputs.update(record.parameters.get("expected_outputs", []))
-        for path in sorted(outputs) if self.config.check_bash_outputs else ():
-            missing = self._missing_output(ctx, path)
-            if missing is not None:
-                reasons.append(missing)
-
-        unresolved = self._unresolved_failures(ctx, records)
+        unresolved = _unresolved_failures(records)
         nudged = set(state.get("failures_nudged", []))
         new = [r for r in unresolved if r.id not in nudged] if self.config.nudge_bash_failures else []
         if new:
             state["failures_nudged"] = sorted(nudged | {r.id for r in new})
             reasons.extend(harness.command_failed(_describe_failure(r)) for r in new)
+
+        # Same as failures: nudge once per set of files, then only a note.
+        leftovers = _intermediate(_left_in_workspace(records)) if self.config.nudge_leftover_files else []
+        if leftovers and state.get("leftovers_nudged") != leftovers:
+            state["leftovers_nudged"] = leftovers
+            reasons.append(harness.left_intermediate_files(leftovers))
+        elif leftovers:
+            notes.append(harness.closed_with_leftovers(leftovers))
 
         if reasons:
             return CompletionDecision(status="incomplete", reasons=tuple(reasons))
@@ -223,46 +242,3 @@ ctx : RunContext
                 harness.closed_with_failure(_describe_failure(r)) for r in unresolved
             ),
         )
-
-    def _missing_output(self, ctx: RunContext, path: str) -> str | None:
-        """Why ``path`` isn't a regular workspace file, or ``None`` if it is."""
-        try:
-            listing = self._workspace.get_filesystem().list_files(
-                ctx.user_id, path=f"workspace/{path}"
-            )
-        except (OSError, ValueError) as error:
-            return harness.expected_output_unavailable(path, error)
-        if any(
-            item["path"] == listing["path"] and item["type"] == "file"
-            for item in listing["items"]
-        ):
-            return None
-        return harness.expected_output_missing(path)
-
-    def _unresolved_failures(
-        self, ctx: RunContext, records: list[ToolCallRecord]
-    ) -> list[ToolCallRecord]:
-        """Perform the internal ``unresolved failures`` operation for ``RuntimeCompletionGate``.
-
-Parameters
-----------
-ctx : RunContext
-    Value supplied for ``ctx``.
-records : list[ToolCallRecord]
-    Value supplied for ``records``."""
-        succeeded = {
-            r.parameters.get("command")
-            for r in records
-            if r.tool_name == "bash" and _exit_code(r) == 0
-        }
-        unresolved: list[ToolCallRecord] = []
-        for record in records:
-            if not _bash_failed(record):
-                continue
-            if record.parameters.get("command") in succeeded:
-                continue
-            declared = record.parameters.get("expected_outputs") or []
-            if declared and all(self._missing_output(ctx, p) is None for p in declared):
-                continue
-            unresolved.append(record)
-        return unresolved

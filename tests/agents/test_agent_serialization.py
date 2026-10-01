@@ -157,16 +157,25 @@ def test_developer_gates_are_stored_by_provider(tmp_path):
         full_agent(tmp_path, gates=[NotStorableGate()]).serialize()
 
 
-def test_the_framework_gate_is_always_there_and_gets_the_workspace(tmp_path):
+def test_the_framework_gate_is_always_there(tmp_path):
     workspace = LocalWorkspace(root=tmp_path)
     default = Agent(name="a", description="d", instructions="i",
                     client=OpenAIChatCompletionClient(model="gpt-4o-mini"), workspace=workspace)
     assert [type(g) for g in default.gates] == [RuntimeCompletionGate]
-    assert default.gates[0]._workspace is workspace
 
-    mine = RuntimeCompletionGate(RuntimeGateConfig(check_bash_outputs=False))
+    mine = RuntimeCompletionGate(RuntimeGateConfig(nudge_leftover_files=False))
     custom = Agent(name="a", description="d", instructions="i", workspace=workspace,
                    client=OpenAIChatCompletionClient(model="gpt-4o-mini"), gates=[ApprovedByFinance(), mine])
     assert custom.gates[1] is mine  # yours is used (not a second one), in your order
     assert sum(isinstance(g, RuntimeCompletionGate) for g in custom.gates) == 1
-    assert mine._workspace is workspace
+
+
+def test_compaction_is_on_unless_turned_off(tmp_path):
+    workspace = LocalWorkspace(root=tmp_path)
+    client = OpenAIChatCompletionClient(model="gpt-4o-mini")
+    default = Agent(name="a", description="d", instructions="i", client=client, workspace=workspace)
+    assert isinstance(default.compaction, SummaryCompaction)
+    off = Agent(name="a", description="d", instructions="i", client=client, workspace=workspace,
+                compaction=False)
+    assert off.compaction is None
+    assert Agent.deserialize(off.serialize()).compaction is None  # stays off once stored

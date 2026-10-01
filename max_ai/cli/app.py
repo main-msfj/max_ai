@@ -22,7 +22,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
 from textual.widget import Widget
-from textual.widgets import Button, DirectoryTree, Static, TextArea
+from textual.widgets import Button, DirectoryTree, OptionList, Static, TextArea
 
 from ..agents.agent import Agent
 from ..base.session_store import CoreSessionStore
@@ -33,6 +33,7 @@ from ..core.event_type import (
     ErrorEvent,
     ModelCallEvent,
     ModelResponseEvent,
+    ModelRetryEvent,
     ModelStreamChunkEvent,
     PlanningEvent,
     ToolCallEvent,
@@ -41,12 +42,12 @@ from ..core.event_type import (
 from ..core.ids import short_id
 from ..core.messages import HARNESS_SOURCE
 from ..core.model.session import SessionInfo
+from ..core.policy import Policy
 from ..core.termination.cancellation import CancellationToken
 from ..types.agent_response import AgentResponse
 from ..types.run_context import RunContext
 from ..types.tool_call import ToolResult
 from .blocks import (
-    ACCENT,
     SPINNER,
     AssistantBlock,
     CompactionBlock,
@@ -65,7 +66,21 @@ from .blocks import (
     tool_summary,
 )
 from .events import event_line
-from .widgets import CommandMenu, PromptEditor
+from .theme import (
+    BACKGROUND,
+    BORDER,
+    BORDER_SUBTLE,
+    DIM,
+    ELEMENT,
+    ERROR,
+    MUTED,
+    PANEL,
+    PRIMARY,
+    SUCCESS,
+    TEXT,
+    WARNING,
+)
+from .widgets import CommandMenu, InfoPanel, PromptEditor
 
 COMMANDS = {
     "/help": "show commands and shortcuts",
@@ -83,7 +98,7 @@ COMMANDS = {
 }
 
 PLACEHOLDER = 'Try "summarize this project"  ·  @file  ·  !cmd  ·  /help'
-FORM_PLACEHOLDER = "↑↓ ←→ and enter to answer · or just type your own answer"
+FORM_PLACEHOLDER = "↑↓ ←→ enter · 1-9 to pick · or type your own answer"
 
 # Rendered as their own fold-able blocks instead of a generic ToolBlock.
 _ASK_USER = "ask_user"
@@ -109,24 +124,24 @@ class MaxAIApp(App[None]):
 
     TITLE = "MaxAI"
     CSS = f"""
-    Screen {{ background: #0b0b0c; }}
+    Screen {{ background: {BACKGROUND}; }}
     #body {{ height: 1fr; }}
-    #sidebar {{ width: 34; background: #111113; border-right: solid #29292d; padding: 0 1; display: none; }}
-    .sidebar-toggle {{ height: 1; width: 1fr; margin-top: 1; padding: 0; border: none; background: #111113; color: #d4d4d8; text-align: left; }}
-    #workspace-files, #skill-files {{ height: 1fr; background: #111113; border: none; color: #d4d4d8; }}
+    #sidebar {{ width: 34; background: {PANEL}; border-right: solid {BORDER_SUBTLE}; padding: 0 1; display: none; }}
+    .sidebar-toggle {{ height: 1; width: 1fr; margin-top: 1; padding: 0; border: none; background: {PANEL}; color: {TEXT}; text-align: left; }}
+    #workspace-files, #skill-files {{ height: 1fr; background: {PANEL}; border: none; color: {TEXT}; }}
     #main {{ width: 1fr; padding: 0 1; }}
-    #transcript {{ height: 1fr; background: #0b0b0c; scrollbar-size: 1 1; padding: 0 1; }}
-    #request-card {{ height: auto; display: none; border: round {ACCENT}; padding: 0 1; margin: 1 0 0 0; }}
-    #request-detail {{ height: auto; color: #f4f4f5; margin-bottom: 1; }}
+    #transcript {{ height: 1fr; background: {BACKGROUND}; scrollbar-size: 1 1; padding: 0 1; }}
+    #request-card {{ height: auto; display: none; border: round {PRIMARY}; padding: 0 1; margin: 1 0 0 0; }}
+    #request-detail {{ height: auto; color: {TEXT}; margin-bottom: 1; }}
     #decisions {{ height: auto; display: none; }}
-    #decisions Button {{ width: 1fr; height: 1; min-height: 1; border: none; margin: 0; background: #111113; color: #d4d4d8; content-align: left middle; text-align: left; }}
-    #decisions Button:hover, #decisions Button:focus {{ background: #27272a; color: {ACCENT}; }}
+    #decisions Button {{ width: 1fr; height: 1; min-height: 1; border: none; margin: 0; background: {PANEL}; color: {TEXT}; content-align: left middle; text-align: left; }}
+    #decisions Button:hover, #decisions Button:focus {{ background: {ELEMENT}; color: {PRIMARY}; }}
     #status {{ height: 1; margin-top: 1; padding: 0 1; }}
-    #composer {{ height: auto; border: round #3f3f46; padding: 0 1; }}
-    #composer:focus-within {{ border: round {ACCENT}; }}
-    #caret {{ width: 2; color: {ACCENT}; text-style: bold; }}
-    #prompt {{ height: auto; min-height: 1; max-height: 10; border: none; background: #0b0b0c; padding: 0; }}
-    #usage {{ height: 2; padding: 0 1 1 1; color: #71717a; }}
+    #composer {{ height: auto; border: round {BORDER}; padding: 0 1; }}
+    #composer:focus-within {{ border: round {PRIMARY}; }}
+    #caret {{ width: 2; color: {PRIMARY}; text-style: bold; }}
+    #prompt {{ height: auto; min-height: 1; max-height: 10; border: none; background: {BACKGROUND}; padding: 0; }}
+    #usage {{ height: 2; padding: 0 1 1 1; color: {DIM}; }}
     """
     BINDINGS = [
         Binding("escape", "interrupt", "Interrupt", priority=True),
@@ -156,7 +171,6 @@ class MaxAIApp(App[None]):
         # The CLI is a host: it loads, runs and saves; the agent keeps nothing.
         self.store = store
         # Tools answered "always allow": approved without asking until the CLI closes.
-        self._always_allowed: set[str] = set()
         self.user_id = user_id or (initial_context.user_id if initial_context else "user")
         self._resume_id = session_id if initial_context is None else None
         self.context: RunContext = initial_context or self._new_context(session_id)
@@ -172,6 +186,8 @@ class MaxAIApp(App[None]):
         self._turn_tokens = 0
         self._frame = 0
         self._waiting = False
+        # Shown instead of "Thinking…" while the harness waits to call the model again.
+        self._retry: ModelRetryEvent | None = None
         self._cancel: CancellationToken | None = None
         self._agent_name = getattr(agent, "name", "agent")
         self._workspace_open = True
@@ -200,6 +216,7 @@ class MaxAIApp(App[None]):
                 with Vertical(id="request-card"):
                     yield Static("", id="request-detail")
                     yield Vertical(id="decisions")
+                yield InfoPanel(id="info")
                 yield Static("", id="status")
                 with Horizontal(id="composer"):
                     yield Static("❯", id="caret")
@@ -219,12 +236,12 @@ class MaxAIApp(App[None]):
             try:
                 self._skills = list(await skills.get_skills())
             except Exception as error:  # noqa: BLE001 — a bad skill dir must not kill the UI
-                await self._write_system(f"Could not load skills: {error}", style="#f87171")
+                await self._write_system(f"Could not load skills: {error}", style=ERROR)
         executor = getattr(self.agent, "executor", None)
         if self._skills and executor is not None and not executor.runs_commands:
             from ..agents.agent import COMMANDS_OFF
 
-            await self._write_system(COMMANDS_OFF, style="#fbbf24")
+            await self._write_system(COMMANDS_OFF, style=WARNING)
         servers = self._mcp_servers()
         if servers:
             line = Text("MCP ", style="bold")
@@ -232,8 +249,8 @@ class MaxAIApp(App[None]):
                 f"{sid} ({len(info['tools'])} tools"
                 + (f", {len(info['resources'])} resources" if info["resources"] else "") + ")"
                 for sid, info in servers.items()
-            ), style="#a1a1aa")
-            line.append("  /mcp for details", style="#71717a")
+            ), style=MUTED)
+            line.append("  /mcp for details", style=DIM)
             await self._mount(NoteLine(line))
         if self.store is not None:
             await self._open_session_on_start()
@@ -243,7 +260,7 @@ class MaxAIApp(App[None]):
             await self._write_system(
                 "The model's context window is unknown, so token-based compaction "
                 "won't trigger. Set max_context_window (or MAX_CONTEXT_WINDOW).",
-                style="#fbbf24",
+                style=WARNING,
             )
         self._refresh_usage()
         self._refresh_status()
@@ -306,7 +323,7 @@ class MaxAIApp(App[None]):
         if transcript.scroll_y >= transcript.max_scroll_y - 4:
             transcript.scroll_end(animate=False)
 
-    async def _write_system(self, message: str, style: str = "#71717a") -> None:
+    async def _write_system(self, message: str, style: str = DIM) -> None:
         await self._mount(NoteLine(f"• {message}", style=style))
 
     async def _write_user(self, value: str) -> None:
@@ -336,18 +353,24 @@ class MaxAIApp(App[None]):
             return
         status.display = True
         if self._waiting:
-            line = Text("⏸ Waiting for your answer… ", style="bold #fbbf24")
-            line.append("(", style="#a1a1aa")
-            line.append("esc", style="bold #a1a1aa")
-            line.append(" to cancel the turn)", style="#a1a1aa")
+            line = Text("⏸ Waiting for your answer… ", style=f"bold {WARNING}")
+            line.append("(", style=MUTED)
+            line.append("esc", style=f"bold {MUTED}")
+            line.append(" to cancel the turn)", style=MUTED)
             status.update(line)
             return
         elapsed = int(time.monotonic() - (self._turn_started_at or time.monotonic()))
-        line = Text(f"{SPINNER[self._frame % len(SPINNER)]} ", style=f"bold {ACCENT}")
-        line.append("Thinking… ", style="bold #e4e4e7")
-        line.append(f"({elapsed}s · ↓ {self._turn_tokens:,} tokens · ", style="#a1a1aa")
-        line.append("esc", style="bold #a1a1aa")
-        line.append(" to interrupt)", style="#a1a1aa")
+        if self._retry is not None:
+            retry = self._retry
+            line = Text(f"↻ Retrying in {retry.delay:.0f}s ", style=f"bold {WARNING}")
+            line.append(f"({retry.reason.replace('_', ' ')}, try {retry.attempt + 1}"
+                        f"/{retry.max_attempts}) ", style=MUTED)
+        else:
+            line = Text(f"{SPINNER[self._frame % len(SPINNER)]} ", style=f"bold {PRIMARY}")
+            line.append("Thinking… ", style=f"bold {TEXT}")
+        line.append(f"({elapsed}s · ↓ {self._turn_tokens:,} tokens · ", style=MUTED)
+        line.append("esc", style=f"bold {MUTED}")
+        line.append(" to interrupt)", style=MUTED)
         status.update(line)
 
     def _refresh_usage(self) -> None:
@@ -355,23 +378,23 @@ class MaxAIApp(App[None]):
         maximum = getattr(getattr(client, "config", None), "max_context_window", 0) or 0
         line = Text()
         if self.verbose:
-            line.append("verbose · ", style=ACCENT)
+            line.append("verbose · ", style=PRIMARY)
         line.append(f"{self._agent_name} · in {_k(self._tokens_input)} · out {_k(self._tokens_output)}",
-                    style="#71717a")
+                    style=DIM)
         if self._tokens_cached:
-            line.append(f" · cached {_k(self._tokens_cached)}", style="#71717a")
-        line.append(" · ctx ", style="#71717a")
+            line.append(f" · cached {_k(self._tokens_cached)}", style=DIM)
+        line.append(" · ctx ", style=DIM)
         if maximum > 0:
             line.append_text(context_bar(self._context_tokens, maximum))
         else:
-            line.append("? (window unknown · set MAX_CONTEXT_WINDOW)", style="#fbbf24")
+            line.append("? (window unknown · set MAX_CONTEXT_WINDOW)", style=WARNING)
         strategy = getattr(self.agent, "compaction", None)
         if strategy is not None:
             name = type(strategy).__name__.removesuffix("Compaction").lower()
-            line.append(f" · {name} compaction", style="#71717a")
+            line.append(f" · {name} compaction", style=DIM)
             trigger = self._compaction_trigger(strategy, client, maximum)
             if trigger:
-                line.append(f" at ~{trigger}%", style="#71717a")
+                line.append(f" at ~{trigger}%", style=DIM)
         usage = self._static("#usage")
         if usage is not None:
             usage.update(line)
@@ -418,6 +441,12 @@ class MaxAIApp(App[None]):
         self._refresh_usage()
 
     def action_interrupt(self) -> None:
+        if self._info().display:
+            self._info().hide()
+            return
+        if self._form is not None and self._form.typing:
+            self._form.stop_typing()
+            return
         if self._menu().display:
             self._close_menu()
             return
@@ -442,6 +471,8 @@ class MaxAIApp(App[None]):
             return
         value = prompt.text.strip()
         prompt.text = ""
+        if value:
+            self._info().hide()
         if waiting and self._form is not None:
             self._form.enter(value or None)
             if not self._form.typing:
@@ -465,6 +496,7 @@ class MaxAIApp(App[None]):
     def _begin_busy(self) -> None:
         self._busy = True
         self._turn_started_at = time.monotonic()
+        self._retry = None
         self._turn_tokens = 0
         self._plan = None
         self._gate_retries = []
@@ -492,9 +524,11 @@ class MaxAIApp(App[None]):
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         """Open the slash menu while typing a ``/command`` (before any space)."""
+        text = event.text_area.text
+        if self._pick_by_number(event.text_area, text):
+            return
         if self._form is not None:
             return
-        text = event.text_area.text
         if not text.startswith("/") or "\n" in text or " " in text:
             self._close_menu()
             return
@@ -502,8 +536,25 @@ class MaxAIApp(App[None]):
         if not matches:
             self._close_menu()
             return
-        self._menu().show(matches, ACCENT)
+        self._menu().show(matches, PRIMARY)
         self.query_one("#prompt", PromptEditor).menu_open = True
+
+    def _pick_by_number(self, prompt: TextArea, text: str) -> bool:
+        """While a question or approval waits, a lone digit picks that option."""
+        future = self._request_future
+        if len(text) != 1 or not text.isdigit() or future is None or future.done():
+            return False
+        number = int(text)
+        if self._form is not None:
+            picked = self._form.pick_number(number)
+        else:
+            buttons = list(self.query_one("#decisions", Vertical).query(Button))
+            picked = 1 <= number <= len(buttons)
+            if picked:
+                future.set_result(re.sub(r"^\d+\.\s+", "", str(buttons[number - 1].label)))
+        if picked:
+            prompt.text = ""
+        return picked
 
     def on_prompt_editor_menu_move(self, event: PromptEditor.MenuMove) -> None:
         if self._form is not None:
@@ -517,9 +568,9 @@ class MaxAIApp(App[None]):
             self._form.switch(event.delta)
             self.query_one("#prompt", PromptEditor).placeholder = FORM_PLACEHOLDER
 
-    def on_question_form_typing_requested(self, event: QuestionForm.TypingRequested) -> None:
+    def on_question_form_typing_finished(self, event: QuestionForm.TypingFinished) -> None:
         prompt = self.query_one("#prompt", PromptEditor)
-        prompt.placeholder = f"Your answer to “{event.question[:60]}” — type it and press enter"
+        prompt.placeholder = FORM_PLACEHOLDER
         prompt.focus()
 
     def on_question_form_completed(self, event: QuestionForm.Completed) -> None:
@@ -549,8 +600,8 @@ class MaxAIApp(App[None]):
         if command == "/help":
             body = Text("Commands\n", style="bold")
             for cmd, desc in COMMANDS.items():
-                body.append(f"  {cmd:<12}", style=f"bold {ACCENT}")
-                body.append(f"{desc}\n", style="#a1a1aa")
+                body.append(f"  {cmd:<12}", style=f"bold {PRIMARY}")
+                body.append(f"{desc}\n", style=MUTED)
             body.append("\nShortcuts\n", style="bold")
             for keys, desc in (
                 ("enter", "send · shift+enter or ctrl+j for a new line"),
@@ -563,46 +614,46 @@ class MaxAIApp(App[None]):
                 ("@path", "attach a workspace file"),
                 ("!cmd", "run a shell command in the workspace"),
                 ("/ ↑↓ tab", "open, move through and complete the command menu"),
-                ("click", "expand/collapse thinking, plan, questions, tool output"),
+                ("1-9", "pick an option of a question or approval"),
+                ("click", "expand/collapse thinking and tool output; run a menu command"),
             ):
-                body.append(f"  {keys:<12}", style=f"bold {ACCENT}")
-                body.append(f"{desc}\n", style="#a1a1aa")
-            await self._mount(NoteLine(body))
+                body.append(f"  {keys:<12}", style=f"bold {PRIMARY}")
+                body.append(f"{desc}\n", style=MUTED)
+            self._show("Help", body)
         elif command == "/skills":
             if not self._skills:
-                await self._write_system("This agent has no skills.")
+                self._show("Skills", Text("This agent has no skills.", style=MUTED))
             else:
-                body = Text("Skills  ", style="bold")
-                body.append("(run one with /name, e.g. " + f"/{self._skills[0].name})\n", style="#71717a")
+                body = Text(f"Run one with /name, e.g. /{self._skills[0].name}\n\n", style=DIM)
                 for item in self._skills:
-                    body.append(f"  /{item.name:<18}", style=f"bold {ACCENT}")
-                    body.append(f"{item.description}\n", style="#a1a1aa")
-                await self._mount(NoteLine(body))
+                    body.append(f"  /{item.name:<18}", style=f"bold {PRIMARY}")
+                    body.append(f"{item.description}\n", style=MUTED)
+                self._show("Skills", body)
         elif command == "/tools":
-            body = Text("Tools\n", style="bold")
+            body = Text()
             for tool in getattr(self.agent, "tools", []):
                 mode = getattr(getattr(tool, "approval_mode", None), "value", "")
                 first = (tool.description or "").strip().splitlines()[0][:80] if tool.description else ""
-                body.append(f"  {tool.name:<22}", style=f"bold {ACCENT}")
+                body.append(f"  {tool.name:<22}", style=f"bold {PRIMARY}")
                 if "ask" in str(mode).lower():
-                    body.append("asks approval · ", style="#fbbf24")
-                body.append(f"{first}\n", style="#a1a1aa")
-            await self._mount(NoteLine(body))
+                    body.append("asks approval · ", style=WARNING)
+                body.append(f"{first}\n", style=MUTED)
+            self._show("Tools", body)
         elif command == "/mcp":
             servers = self._mcp_servers()
             if not servers:
-                await self._write_system("This agent has no MCP servers.")
+                self._show("MCP servers", Text("This agent has no MCP servers.", style=MUTED))
                 return
-            body = Text("MCP servers\n", style="bold")
+            body = Text()
             for sid, info in servers.items():
-                body.append(f"  {sid}\n", style=f"bold {ACCENT}")
+                body.append(f"  {sid}\n", style=f"bold {PRIMARY}")
                 for tool in info["tools"]:
                     ask = "ask" in str(getattr(getattr(tool, "approval_mode", None), "value", "")).lower()
                     body.append(f"    {tool.name.removeprefix(sid + '_'):<26}", style="bold")
-                    body.append("asks approval\n" if ask else "auto\n", style="#fbbf24" if ask else "#71717a")
+                    body.append("asks approval\n" if ask else "auto\n", style=WARNING if ask else DIM)
                 for uri in info["resources"]:
-                    body.append(f"    {uri}\n", style="#a1a1aa")
-            await self._mount(NoteLine(body))
+                    body.append(f"    {uri}\n", style=MUTED)
+            self._show("MCP servers", body)
         elif command in ("/new", "/clear"):
             await self._switch_to(self._new_context())
             await self._write_system(f"New conversation · session {self.context.session_id}.")
@@ -611,7 +662,7 @@ class MaxAIApp(App[None]):
         elif command == "/resume":
             if self.store is None:
                 await self._write_system("No session store configured: nothing is saved.",
-                                         style="#fbbf24")
+                                         style=WARNING)
             else:
                 self._resume_picker(args.strip() or None)
         elif command == "/thinking":
@@ -625,7 +676,29 @@ class MaxAIApp(App[None]):
         elif command in ("/exit", "/quit"):
             self.exit()
         else:
-            await self._write_system(f"Unknown command {command} — try /help.", style="#f87171")
+            await self._write_system(f"Unknown command {command} — try /help.", style=ERROR)
+
+    def _info(self) -> InfoPanel:
+        return self.query_one("#info", InfoPanel)
+
+    def _show(self, title: str, body: Text) -> None:
+        """A command's output in a panel above the composer, not in the transcript."""
+        self._info().show(title, body)
+
+    async def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        """A click on the slash menu: commands run, skills wait for their task."""
+        if event.option_list is not self._menu():
+            return
+        command, _, kind = self._menu().entries[event.option_index]
+        prompt = self.query_one("#prompt", TextArea)
+        self._close_menu()
+        if kind == "command":
+            prompt.text = ""
+            await self._run_command(command)
+        else:
+            prompt.text = command + " "
+            prompt.move_cursor(prompt.document.end)
+        prompt.focus()
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "workspace-toggle":
@@ -725,6 +798,13 @@ class MaxAIApp(App[None]):
         self._follow()
 
     async def _write_event(self, event: CoreEvent) -> None:
+        if isinstance(event, ModelRetryEvent):
+            self._retry = event
+            self._refresh_status()
+            return
+        if isinstance(event, (ModelResponseEvent, ErrorEvent)) and self._retry is not None:
+            self._retry = None
+            self._refresh_status()
         if isinstance(event, PlanningEvent):
             await self._render_plan(event)
             return
@@ -771,7 +851,7 @@ class MaxAIApp(App[None]):
                 self._plan_call_ids.discard(event.tool_call_id)
                 result = event.tool_result
                 if result is not None and not result.success:
-                    await self._write_system(f"update_plan failed: {result.error}", style="#f87171")
+                    await self._write_system(f"update_plan failed: {result.error}", style=ERROR)
                 return
             block = self._tools.pop(event.tool_call_id, None)
             if block is not None:
@@ -845,30 +925,30 @@ class MaxAIApp(App[None]):
         warn = bool(reasons)
         if closed:
             icon, head = ("⚠", "Done") if warn else ("✓", "Done")
-            color = "#fbbf24" if warn else "#4ade80"
+            color = WARNING if warn else SUCCESS
             line = Text(f"{icon} {head} in {elapsed}s", style=f"bold {color}")
         else:
-            color = "#f87171" if response.finish_reason in ("error", "cancelled") else "#fbbf24"
+            color = ERROR if response.finish_reason in ("error", "cancelled") else WARNING
             line = Text(f"■ Stopped after {elapsed}s", style=f"bold {color}")
-        line.append(f" · {response.finish_reason}", style="#a1a1aa")
+        line.append(f" · {response.finish_reason}", style=MUTED)
         if closed and decision is not None and not warn:
             fixes = len(self._gate_retries)
-            line.append(" · gate ✓", style="#4ade80")
+            line.append(" · gate ✓", style=SUCCESS)
             if fixes:
-                line.append(f" after {fixes} fix{'es' if fixes > 1 else ''}", style="#a1a1aa")
+                line.append(f" after {fixes} fix{'es' if fixes > 1 else ''}", style=MUTED)
         if self._gate_retries and self.verbose:
-            line.append(" · gate asked: ", style="#fbbf24")
-            line.append(" | ".join(self._gate_retries)[:200], style="#a1a1aa")
+            line.append(" · gate asked: ", style=WARNING)
+            line.append(" | ".join(self._gate_retries)[:200], style=MUTED)
         if response.stop_message:
-            line.append(f" · {response.stop_message}", style="#a1a1aa")
+            line.append(f" · {response.stop_message}", style=MUTED)
         if response.finish_reason == "output_limit":
             line.append(
                 " · the model's replies kept hitting its output limit (max_tokens): "
-                "raise it or ask for smaller steps", style="#a1a1aa",
+                "raise it or ask for smaller steps", style=MUTED,
             )
         if reasons:
             line.append(" · gate: ", style=color)
-            line.append("; ".join(reasons)[:300], style="#a1a1aa")
+            line.append("; ".join(reasons)[:300], style=MUTED)
         await self._mount(NoteLine(line))
 
     # -------- AGENT TURN -----------------------------------------------------------
@@ -878,34 +958,43 @@ class MaxAIApp(App[None]):
         if ctx is None:
             raise RuntimeError("Cannot resume without a run context")
         self.context = ctx
+        policy = getattr(self.agent, "policy", None) or Policy()
         for record in response.pending_approvals:
-            tool = record.tool_name
-            if tool in self._always_allowed:
-                ctx.tool_state.apply_approval(record.id, approved=True)
-                await self._write_system(f"{tool}: approved (always allowed)", style="#4ade80")
-                continue
+            name = record.tool_name
+            tool = next((x for x in getattr(self.agent, "tools", []) if x.name == name), None)
+            # "Always allow" earlier in this batch may already cover this call.
+            if tool is not None and ctx.allowed_rules:
+                decision = Policy(allow=[], ask=[], deny=[]).decide(
+                    tool, record.parameters, isolated=False, extra_allow=ctx.allowed_rules)
+                if decision.verdict == "allow" and decision.rule in ctx.allowed_rules:
+                    ctx.tool_state.apply_approval(record.id, approved=True)
+                    await self._write_system(f"{name}: approved ({decision.rule})", style=SUCCESS)
+                    continue
+            rules = policy.rules_for(tool, record.parameters) if tool is not None else []
+            options = ["Yes, allow once"]
+            if rules:
+                options.append(f"Yes, always allow {', '.join(rules)}")
+            options.append("No, deny")
+            labeled = [f"{n}. {option}" for n, option in enumerate(options, start=1)]
             details = self._format_parameters(record.parameters)
-            always = f"yes, always allow {tool}".lower()
             while True:
-                answer = await self._request(
-                    "", ["1. Yes, allow once", f"2. Yes, always allow {tool}", "3. No, deny"],
-                    prompt_card=f"Allow {tool}?\n\n{details}",
-                )
-                choice = answer.strip().lower()
-                if choice in {"yes, allow once", "allow once", "yes", "y", "1"}:
+                answer = (await self._request(
+                    "", labeled, prompt_card=f"Allow {name}?\n\n{details}",
+                )).strip().lower()
+                if answer in {options[0].lower(), "allow once", "yes", "y", "1"}:
                     approved, label = True, "approved once"
                     break
-                if choice in {always, "always", "a", "2"}:
-                    self._always_allowed.add(tool)
-                    approved, label = True, "always allowed until the CLI closes"
+                if rules and answer in {options[1].lower(), "always", "a", "2"}:
+                    ctx.allowed_rules.extend(r for r in rules if r not in ctx.allowed_rules)
+                    approved, label = True, f"always allowed in this conversation: {', '.join(rules)}"
                     break
-                if choice in {"no, deny", "deny", "no", "n", "3"}:
+                if answer in {options[-1].lower(), "deny", "no", "n", str(len(options))}:
                     approved, label = False, "denied"
                     break
-                await self._write_system("Answer 1 (yes), 2 (always) or 3 (no).")
+                await self._write_system(f"Answer a number from 1 to {len(options)}.")
             ctx.tool_state.apply_approval(record.id, approved=approved)
             await self._write_system(
-                f"{tool}: {label}", style="#4ade80" if approved else "#f87171",
+                f"{name}: {label}", style=SUCCESS if approved else ERROR,
             )
         questions = [q for record in response.pending_questions for q in self._questions(record)]
         if questions:
@@ -947,7 +1036,7 @@ class MaxAIApp(App[None]):
         try:
             await self.store.save(self.context)
         except Exception as error:  # noqa: BLE001 — a failed save must not kill the UI
-            await self._write_system(f"Could not save the session: {error}", style="#f87171")
+            await self._write_system(f"Could not save the session: {error}", style=ERROR)
 
     async def _open_session_on_start(self) -> None:
         sid = self._resume_id
@@ -957,7 +1046,7 @@ class MaxAIApp(App[None]):
         try:
             ctx = await self.store.load(self.user_id, sid)
         except Exception as error:  # noqa: BLE001
-            await self._write_system(f"Could not load session {sid}: {error}", style="#f87171")
+            await self._write_system(f"Could not load session {sid}: {error}", style=ERROR)
             return
         if ctx is None:
             await self._write_system(f"No saved session {sid}: starting a new one with that id.")
@@ -995,9 +1084,9 @@ class MaxAIApp(App[None]):
                     await block.write(message.text())
                     await block.finish()
                 for call in getattr(message, "tool_calls", None) or []:
-                    line = Text("  ● ", style=ACCENT)
-                    line.append(call.tool_name, style="bold #d4d4d8")
-                    line.append(f"  {tool_summary(call.tool_name, call.parameters)}", style="#71717a")
+                    line = Text("  ● ", style=PRIMARY)
+                    line.append(call.tool_name, style=f"bold {TEXT}")
+                    line.append(f"  {tool_summary(call.tool_name, call.parameters)}", style=DIM)
                     await self._mount(NoteLine(line))
         if ctx.plan is not None and ctx.plan.steps:
             self._plan = PlanBlock(ctx.plan)
@@ -1031,7 +1120,7 @@ class MaxAIApp(App[None]):
                 self._refresh_status()
         ctx = await self.store.load(self.user_id, session_id) if session_id else None
         if ctx is None:
-            await self._write_system(f"No saved session {session_id!r}.", style="#f87171")
+            await self._write_system(f"No saved session {session_id!r}.", style=ERROR)
             return
         await self._switch_to(ctx)
         await self._write_system(f"Resumed session {session_id}.")
@@ -1088,10 +1177,10 @@ class MaxAIApp(App[None]):
             await self._write_system(
                 "Interrupted · turn discarded from the conversation "
                 "(side effects that already ran are not undone).",
-                style="#fbbf24",
+                style=WARNING,
             )
         except Exception as error:
-            await self._write_system(f"Failed: {error}", style="#f87171")
+            await self._write_system(f"Failed: {error}", style=ERROR)
         finally:
             await self._finish_assistant()
             await self._save_session()
@@ -1149,6 +1238,7 @@ class MaxAIApp(App[None]):
             if isinstance(item, AgentResponse):
                 response = item
             elif isinstance(item, ModelStreamChunkEvent):
+                self._retry = None
                 if item.thinking:
                     await self._write_thinking(item.thinking)
                 if item.chunk and not item.is_final:

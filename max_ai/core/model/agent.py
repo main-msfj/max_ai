@@ -4,6 +4,8 @@ import typing as t
 
 from pydantic import BaseModel, Field
 
+from ..policy import Policy
+
 
 class AgentSpec(BaseModel):
     """An Agent as storable data: ``Agent.serialize()`` builds it and
@@ -24,8 +26,13 @@ class AgentSpec(BaseModel):
     memory: dict[str, t.Any] | None = None
     skills: dict[str, t.Any] | None = None
     knowledge: list[dict[str, t.Any]] = Field(default_factory=list)
-    compaction: dict[str, t.Any] | None = None
+    compaction: dict[str, t.Any] | t.Literal[False] | None = Field(
+        default=None, description="None: SummaryCompaction; False: never compacted.",
+    )
     toolset: list[dict[str, t.Any]] = Field(default_factory=list)
+    policy: Policy = Field(
+        default_factory=Policy, description="allow / ask / deny rules for every tool call.",
+    )
     mcp: list[dict[str, t.Any]] = Field(default_factory=list)
     gates: list[dict[str, t.Any]] = Field(
         default_factory=list, description="Completion gates: the framework's and your own.",

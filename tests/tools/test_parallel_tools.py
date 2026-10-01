@@ -135,7 +135,7 @@ def test_built_in_read_tools_are_read_only_and_writes_are_not(tmp_path):
     agent = Agent(name="a", description="d", instructions="i", client=OneRound(),
                   workspace=LocalWorkspace(root=tmp_path))
     read_only = {tool.name for tool in agent.tools if tool.read_only}
-    assert read_only == {"list_directory", "find_files", "search_text", "read_file", "file_info"}
+    assert read_only == {"ReadFile", "ListDirectory", "FindFiles", "SearchFile"}
 
 
 async def test_tool_results_carry_their_real_start_and_end(tmp_path):

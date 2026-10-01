@@ -11,7 +11,7 @@ from max_ai.types.run_context import RunContext
 
 
 class CutOffLLM:
-    """First reply: a half-written write_file cut at max_tokens."""
+    """First reply: a half-written WriteFile cut at max_tokens."""
 
     model = "fake"
 
@@ -19,8 +19,8 @@ class CutOffLLM:
         self.config = ModelConfig()
         self.generation_options = {"max_tokens": 1500}
         self.seen: list[str] = []
-        broken = ToolCall(id="c1", tool_name="write_file", parameters={
-            "raw_error_content": '{"file_name": "snake.html", "content": "<html>', "parsing_error": True})
+        broken = ToolCall(id="c1", tool_name="WriteFile", parameters={
+            "raw_error_content": '{"file_path": "snake.html", "content": "<html>', "parsing_error": True})
         self.replies = [
             (AssistantMessage(source="llm", content="", tool_calls=[broken]), "length")
         ] * cut_offs + [(AssistantMessage(source="llm", content="Lo divido en partes."), "stop")]

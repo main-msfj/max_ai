@@ -15,6 +15,7 @@ from ...base.tools import CoreTool, ToolContext
 from ...config import setting
 from ...core.termination import CancellationToken
 from ...errors.mcp import (
+    MCPConnectionLost,
     MCPToolContentError,
     MCPToolError,
     MCPToolExecutionError,
@@ -51,7 +52,6 @@ class MCPTool(CoreTool):
         server_id: str,
         version: str = "1.0.0",
         approval_mode: ToolApprovalMode | str = ToolApprovalMode.ASK_APPROVED,
-        max_retries: int = 3,
         read_only: bool = False,
     ) -> None:
         """Initialize ``MCPTool``.
@@ -72,8 +72,6 @@ version : str
     Value supplied for ``version``.
 approval_mode : ToolApprovalMode | str
     Value supplied for ``approval_mode``.
-max_retries : int
-    Value supplied for ``max_retries``.
 read_only : bool
     Value supplied for ``read_only``."""
         self.mcp_tool_name = mcp_tool_name
@@ -85,7 +83,6 @@ read_only : bool
             description=mcp_tool_description,
             version=version,
             approval_mode=approval_mode,
-            max_retries=max_retries,
             read_only=read_only,
         )
 
@@ -131,6 +128,7 @@ cancellation_token : CancellationToken | None
                 self.mcp_tool_name,
                 tool_request.parameters,
                 setting.tool_timeout_seconds,
+                read_only=self.read_only,
             )
 
             if result.is_error:
@@ -155,6 +153,11 @@ cancellation_token : CancellationToken | None
 
         except (asyncio.CancelledError, FuturesCancelledError):
             return ToolResult.cancelled_during_execution(tool_request.id)
+        except MCPConnectionLost as exc:
+            msg = (f"{exc} The connection to {self.server_id} dropped during the call: it may "
+                   "or may not have run. Check before calling it again.")
+            logger_for_call.warning(msg)
+            return ToolResult.execution_error(tool_request.id, msg)
         except MCPError as exc:
             msg = f"MCP error: {exc}"
             logger_for_call.warning(msg)

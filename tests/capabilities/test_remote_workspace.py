@@ -121,7 +121,7 @@ class WriteFileLLM:
         else:
             self.done = True
             message = AssistantMessage(source="llm", content="", tool_calls=[ToolCall(
-                id="w", tool_name="write_file", parameters={"file_name": "report.md", "content": "# hi"})])
+                id="w", tool_name="WriteFile", parameters={"file_path": "report.md", "content": "# hi"})])
         return ChatCompletionResult(message=message, usage=Usage(), model="fake", finish_reason="stop")
 
 
@@ -129,7 +129,7 @@ async def test_the_agent_syncs_the_workspace_around_each_run(tmp_path):
     remote: dict = {}
     agent = Agent(name="a", description="d", instructions="i", client=WriteFileLLM(),
                   workspace=MemoryStore(remote, tmp_path / "server"))
-    agent._registry.get("write_file").approval_mode = ToolApprovalMode.AUTO_APPROVED
+    agent._registry.get("WriteFile").approval_mode = ToolApprovalMode.AUTO_APPROVED
     async with agent:
         await agent.run("escribe", run_context=RunContext(user_id="ana"))
     assert remote["ana/workspace/report.md"][0] == b"# hi"

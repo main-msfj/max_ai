@@ -17,14 +17,13 @@ from pathlib import Path
 from typing import Any
 
 _ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
-_RESERVED_ROOT_DIRS = {"tools", "skills", "artifacts", "scratchpad", "workspace"}
-# Hidden from root listings (list_directory/find_files at the user root).
-# workspace stays visible so find_files/search_text keep descending into it.
+_RESERVED_ROOT_DIRS = {"tools", "skills", "artifacts", "workspace"}
+# Hidden from root listings (ListDirectory/FindFiles at the user root).
+# workspace stays visible so FindFiles/SearchFile keep descending into it.
 _HIDDEN_ROOT_DIRS = _RESERVED_ROOT_DIRS - {"skills", "workspace"}
-# Blocked from explicit path resolution too. scratchpad/workspace are
-# hidden-or-visible but still reachable by name (like skills); tools/artifacts
-# stay fully off-limits.
-_BLOCKED_PATH_ROOTS = _RESERVED_ROOT_DIRS - {"skills", "scratchpad", "workspace"}
+# Blocked from explicit path resolution too. skills/workspace stay
+# reachable by name; tools/artifacts are fully off-limits.
+_BLOCKED_PATH_ROOTS = _RESERVED_ROOT_DIRS - {"skills", "workspace"}
 _INTERNAL_TEMP_PREFIX = ".maxai-"
 _MAX_PATH_BYTES = 4096
 _MAX_SEGMENT_BYTES = 255
@@ -41,6 +40,10 @@ _MAX_LIST_LIMIT = 500
 _MAX_SCAN_FILES = 1000
 _MAX_SCAN_ENTRIES = 10000
 _MAX_SCAN_DEPTH = 64
+
+# A file as the model last saw it: (mtime_ns, size). Writes compare it with
+# the file on disk, so nothing the model didn't read gets overwritten.
+Stamp = tuple[int, int]
 
 _LOCKS: dict[tuple[str, str, str], threading.RLock] = {}
 _LOCKS_GUARD = threading.Lock()
@@ -59,6 +62,11 @@ key : tuple[str, str, str]
             lock = threading.RLock()
             _LOCKS[key] = lock
         return lock
+
+
+def stamp_of(info: os.stat_result) -> Stamp:
+    """The ``Stamp`` of a file from its ``stat``."""
+    return (info.st_mtime_ns, info.st_size)
 
 
 class UserFileSystem:
@@ -98,22 +106,6 @@ root : str | os.PathLike[str]
         finally:
             os.close(user_fd)
         return self.root / user / "workspace"
-
-    def scratchpad_root(self, user_id: str, session_id: str) -> Path:
-        """Validate and securely materialize one conversation's scratchpad."""
-        user = self._safe_id(user_id, "user_id")
-        session = self._safe_session_id(session_id)
-        user_fd = self._open_user_fd(user, create=True)
-        try:
-            scratchpad_fd = self._open_dir_at(user_fd, "scratchpad", create=True)
-            try:
-                conversation_fd = self._open_dir_at(scratchpad_fd, session, create=True)
-                os.close(conversation_fd)
-            finally:
-                os.close(scratchpad_fd)
-        finally:
-            os.close(user_fd)
-        return self.root / user / "scratchpad" / session
 
     def list_files(
         self, user_id: str, path: str = "", limit: int = 200
@@ -344,32 +336,57 @@ user_root : bool
         return data
 
     def write_bytes(
-        self,
-        user_id: str,
-        path: str,
-        data: bytes,
-        expected_sha256: str | None = None,
+        self, user_id: str, path: str, data: bytes, expected: Stamp | None = None
     ) -> dict[str, Any]:
-        """Atomically create or replace a binary file using an optional digest CAS."""
-        parts = self._workspace_file_parts(path)
+        """Atomically create a file, or replace it when ``expected`` matches."""
         if not isinstance(data, bytes):
             raise ValueError("data must be bytes")
         if len(data) > _MAX_BINARY_WRITE_BYTES:
             raise ValueError(f"data exceeds {_MAX_BINARY_WRITE_BYTES} bytes")
-        if expected_sha256 is not None and (
-            not isinstance(expected_sha256, str)
-            or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_sha256)
-        ):
-            raise ValueError("expected_sha256 must be a 64-character SHA-256 digest")
+        return self._write(user_id, self._workspace_file_parts(path), data, expected)
 
+    def read_text(self, user_id: str, path: str) -> dict[str, Any]:
+        """A whole file (up to 8 MiB) with its stamp; ``text`` is None for binary."""
+        parts = self._visible_parts(path)
+        data, info = self._read_all(user_id, parts)
+        try:
+            text: str | None = data.decode("utf-8")
+            if "\0" in text:
+                text = None
+        except UnicodeDecodeError:
+            text = None
+        return {
+            "path": "/".join(parts),
+            "bytes": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "stamp": stamp_of(info),
+            "text": text,
+        }
+
+    def write_text_file(
+        self, user_id: str, path: str, content: str, expected: Stamp | None = None
+    ) -> dict[str, Any]:
+        """Create a text file, or replace it when ``expected`` matches."""
+        parts = self._workspace_file_parts(path)
+        if Path(parts[-1]).suffix.lower() in _BINARY_SUFFIXES:
+            # Text written into e.g. .xlsx is a broken file, not a spreadsheet.
+            raise ValueError(
+                f"{parts[-1]} is a binary format: create it by running code "
+                "(for example a Python script with bash), not with WriteFile"
+            )
+        return self._write(user_id, parts, self._text_bytes(content), expected)
+
+    def _write(
+        self, user_id: str, parts: tuple[str, ...], data: bytes, expected: Stamp | None
+    ) -> dict[str, Any]:
+        """Create ``parts`` (``expected`` None) or replace it if its stamp matches."""
         user = self._safe_id(user_id, "user_id")
         display_path = "/".join(parts)
-        lock = _path_lock((str(self.root), user, display_path))
-        with lock:
+        with _path_lock((str(self.root), user, display_path)):
             parent_fd: int | None = None
             temp_name: str | None = None
             try:
-                if expected_sha256 is None:
+                if expected is None:
                     parent_fd = self._open_parent_fd(user, parts, create=True)
                     temp_name = self._write_temp(parent_fd, data)
                     try:
@@ -381,25 +398,19 @@ user_root : bool
                             follow_symlinks=False,
                         )
                     except FileExistsError:
-                        raise FileExistsError("file already exists") from None
+                        raise FileExistsError(
+                            f"{display_path} already exists: read it before overwriting it"
+                        ) from None
                     os.unlink(temp_name, dir_fd=parent_fd)
                     temp_name = None
                 else:
-                    original, opened_stat = self._read_all(user, parts)
-                    if hashlib.sha256(original).hexdigest() != expected_sha256.lower():
-                        raise ValueError("file changed: expected_sha256 does not match")
                     parent_fd = self._open_parent_fd(user, parts)
-                    current_stat = os.stat(
-                        parts[-1], dir_fd=parent_fd, follow_symlinks=False
-                    )
-                    self._require_regular_single_link(current_stat)
-                    if (
-                        current_stat.st_dev != opened_stat.st_dev
-                        or current_stat.st_ino != opened_stat.st_ino
-                        or current_stat.st_size != opened_stat.st_size
-                        or current_stat.st_mtime_ns != opened_stat.st_mtime_ns
-                    ):
-                        raise ValueError("file changed while it was being written")
+                    try:
+                        current = os.stat(parts[-1], dir_fd=parent_fd, follow_symlinks=False)
+                    except FileNotFoundError:
+                        raise FileNotFoundError(f"{display_path} no longer exists") from None
+                    self._require_regular_single_link(current)
+                    self._check_stamp(parts, current, expected)
                     temp_name = self._write_temp(parent_fd, data)
                     os.replace(
                         temp_name,
@@ -409,6 +420,7 @@ user_root : bool
                     )
                     temp_name = None
                 os.fsync(parent_fd)
+                written = os.stat(parts[-1], dir_fd=parent_fd, follow_symlinks=False)
             finally:
                 if parent_fd is not None:
                     if temp_name is not None:
@@ -418,96 +430,8 @@ user_root : bool
             "path": display_path,
             "bytes": len(data),
             "sha256": hashlib.sha256(data).hexdigest(),
-        }
-
-    def read_file_details(
-        self, user_id: str, path: str, max_bytes: int
-    ) -> dict[str, Any]:
-        """Return bounded text content (or binary metadata) and a full-file digest."""
-        if isinstance(max_bytes, bool) or not isinstance(max_bytes, int):
-            raise ValueError("max_bytes must be an integer")
-        if max_bytes < 0 or max_bytes > 1024 * 1024:
-            raise ValueError("max_bytes must be between 0 and 1048576")
-        parts = self._visible_parts(path)
-        data, _ = self._read_all(user_id, parts)
-        digest = hashlib.sha256(data).hexdigest()
-        result: dict[str, Any] = {
-            "path": "/".join(parts),
-            "bytes": len(data),
-            "sha256": digest,
-        }
-        try:
-            text = data.decode("utf-8")
-            if "\0" in text:
-                raise UnicodeDecodeError("utf-8", data, 0, 1, "NUL byte")
-        except UnicodeDecodeError:
-            result["binary"] = True
-            return result
-
-        prefix = data[:max_bytes]
-        while prefix:
-            try:
-                content = prefix.decode("utf-8")
-                break
-            except UnicodeDecodeError as exc:
-                if exc.end != len(prefix) or exc.reason != "unexpected end of data":
-                    raise
-                prefix = prefix[: exc.start]
-        else:
-            content = ""
-        result.update(
-            {
-                "content": content,
-                "truncated": len(data) > len(prefix),
-            }
-        )
-        return result
-
-    def create_text_file(
-        self, user_id: str, path: str, content: str
-    ) -> dict[str, Any]:
-        """Create a new text file at a fully-resolved path (caller prefixes the root)."""
-        parts = self._write_parts(path)
-        if Path(parts[-1]).suffix.lower() in _BINARY_SUFFIXES:
-            # Text written into e.g. .xlsx is a broken file, not a spreadsheet.
-            raise ValueError(
-                f"{parts[-1]} is a binary format: create it by running code "
-                "(for example a Python script with bash), not with write_file"
-            )
-        data = self._text_bytes(content)
-        target_parts = parts
-        lock = _path_lock(
-            (str(self.root), self._safe_id(user_id, "user_id"), "/".join(target_parts))
-        )
-        with lock:
-            parent_fd = self._open_parent_fd(user_id, target_parts, create=True)
-            temp_name: str | None = None
-            try:
-                temp_name = self._write_temp(parent_fd, data)
-                try:
-                    os.link(
-                        temp_name,
-                        target_parts[-1],
-                        src_dir_fd=parent_fd,
-                        dst_dir_fd=parent_fd,
-                        follow_symlinks=False,
-                    )
-                except FileExistsError:
-                    raise FileExistsError(
-                        "file already exists; write_file only creates new files"
-                    ) from None
-                os.unlink(temp_name, dir_fd=parent_fd)
-                temp_name = None
-                os.fsync(parent_fd)
-            finally:
-                if temp_name is not None:
-                    self._unlink_if_present(parent_fd, temp_name)
-                os.close(parent_fd)
-        return {
-            "path": "/".join(target_parts),
-            "bytes": len(data),
-            "sha256": hashlib.sha256(data).hexdigest(),
-            "created": True,
+            "created": expected is None,
+            "stamp": stamp_of(written),
         }
 
     def edit_text_file(
@@ -516,33 +440,40 @@ user_root : bool
         path: str,
         old_text: str,
         new_text: str,
-        expected_sha256: str,
+        expected: Stamp,
+        replace_all: bool = False,
     ) -> dict[str, Any]:
-        """Replace one exact text occurrence after checking the full-file digest."""
+        """Replace ``old_text`` (once, or everywhere with ``replace_all``) if the
+        file still matches ``expected``."""
         parts = self._visible_parts(path)
-        if not isinstance(expected_sha256, str) or not re.fullmatch(
-            r"[0-9a-fA-F]{64}", expected_sha256
-        ):
-            raise ValueError("expected_sha256 must be a 64-character SHA-256 digest")
         if not isinstance(old_text, str) or not old_text:
-            raise ValueError("old_text must be a non-empty string")
+            raise ValueError("old_string must not be empty")
+        if old_text == new_text:
+            raise ValueError("old_string and new_string are the same: nothing to change")
         self._text_bytes(new_text)
         user = self._safe_id(user_id, "user_id")
         lock = _path_lock((str(self.root), user, "/".join(parts)))
         with lock:
             original, opened_stat = self._read_all(user, parts)
-            current_digest = hashlib.sha256(original).hexdigest()
-            if current_digest != expected_sha256.lower():
-                raise ValueError("file changed: expected_sha256 does not match")
+            self._check_stamp(parts, opened_stat, expected)
             try:
                 text = original.decode("utf-8")
             except UnicodeDecodeError:
                 raise ValueError("binary files cannot be edited as text") from None
             if "\0" in text:
                 raise ValueError("binary files cannot be edited as text")
-            if text.count(old_text) != 1:
-                raise ValueError("old_text must occur exactly once in the file")
-            updated = text.replace(old_text, new_text, 1).encode("utf-8")
+            count = text.count(old_text)
+            if count == 0:
+                raise ValueError(
+                    "old_string was not found. Copy it exactly from ReadFile, "
+                    "without the line numbers, and keep its whitespace."
+                )
+            if count > 1 and not replace_all:
+                raise ValueError(
+                    f"old_string appears {count} times. Add surrounding lines to make "
+                    "it unique, or set replace_all to change every one."
+                )
+            updated = text.replace(old_text, new_text, -1 if replace_all else 1).encode("utf-8")
             if len(updated) > _MAX_WRITE_BYTES:
                 raise ValueError(f"edited file exceeds {_MAX_WRITE_BYTES} bytes")
 
@@ -568,6 +499,7 @@ user_root : bool
                 )
                 temp_name = None
                 os.fsync(parent_fd)
+                written = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
             finally:
                 if temp_name is not None:
                     self._unlink_if_present(parent_fd, temp_name)
@@ -576,51 +508,20 @@ user_root : bool
             "path": "/".join(parts),
             "bytes": len(updated),
             "sha256": hashlib.sha256(updated).hexdigest(),
-            "edited": True,
+            "replacements": count if replace_all else 1,
+            "stamp": stamp_of(written),
         }
 
-    def create_directory(
-        self, user_id: str, path: str
-    ) -> dict[str, Any]:
-        """Create a directory at a fully-resolved path (caller prefixes the root)."""
-        parts = self._write_parts(path)
-        target_parts = parts
-        display_path = "/".join(target_parts)
-        lock = _path_lock(
-            (str(self.root), self._safe_id(user_id, "user_id"), display_path)
-        )
-        with lock:
-            parent_fd = self._open_parent_fd(user_id, target_parts, create=True)
-            try:
-                try:
-                    os.mkdir(target_parts[-1], mode=0o700, dir_fd=parent_fd)
-                    created = True
-                except FileExistsError:
-                    child_fd = self._open_dir_at(parent_fd, target_parts[-1])
-                    os.close(child_fd)
-                    created = False
-                os.fsync(parent_fd)
-            finally:
-                os.close(parent_fd)
-        return {"path": display_path, "created": created}
-
-    def delete_file(
-        self, user_id: str, path: str, expected_sha256: str
-    ) -> dict[str, Any]:
-        """Delete one regular file after verifying its content digest."""
+    def delete_file(self, user_id: str, path: str, expected: Stamp) -> dict[str, Any]:
+        """Delete one regular file if it still matches ``expected``."""
         parts = self._workspace_file_parts(path)
-        if not isinstance(expected_sha256, str) or not re.fullmatch(
-            r"[0-9a-fA-F]{64}", expected_sha256
-        ):
-            raise ValueError("expected_sha256 must be a 64-character SHA-256 digest")
         user = self._safe_id(user_id, "user_id")
         display_path = "/".join(parts)
         lock = _path_lock((str(self.root), user, display_path))
         with lock:
             original, opened_stat = self._read_all(user, parts)
+            self._check_stamp(parts, opened_stat, expected)
             digest = hashlib.sha256(original).hexdigest()
-            if digest != expected_sha256.lower():
-                raise ValueError("file changed: expected_sha256 does not match")
             parent_fd = self._open_parent_fd(user, parts)
             try:
                 current_stat = os.stat(
@@ -639,27 +540,6 @@ user_root : bool
             finally:
                 os.close(parent_fd)
         return {"path": display_path, "deleted": True, "sha256": digest}
-
-    def file_info(self, user_id: str, path: str) -> dict[str, Any]:
-        """Inspect one visible regular file or directory without following links."""
-        parts = self._visible_parts(path)
-        parent_fd = self._open_parent_fd(user_id, parts)
-        try:
-            info = os.stat(parts[-1], dir_fd=parent_fd, follow_symlinks=False)
-            if stat.S_ISLNK(info.st_mode):
-                raise ValueError("symlinks are not accessible")
-            if stat.S_ISDIR(info.st_mode):
-                return {"path": "/".join(parts), "type": "directory"}
-            self._require_regular_single_link(info)
-        finally:
-            os.close(parent_fd)
-        data, _ = self._read_all(user_id, parts)
-        return {
-            "path": "/".join(parts),
-            "type": "file",
-            "bytes": len(data),
-            "sha256": hashlib.sha256(data).hexdigest(),
-        }
 
     @staticmethod
     def _safe_id(value: str, label: str) -> str:
@@ -974,6 +854,12 @@ info : os.stat_result
         if not stat.S_ISREG(info.st_mode):
             raise ValueError("only regular files are accessible")
         cls._require_single_link(info)
+
+    @staticmethod
+    def _check_stamp(parts: tuple[str, ...], info: os.stat_result, expected: Stamp) -> None:
+        """Refuse when the file on disk is not the one the model read."""
+        if stamp_of(info) != tuple(expected):
+            raise ValueError(f"{'/'.join(parts)} changed since it was read: read it again")
 
     @staticmethod
     def _raise_safe_path_error(exc: OSError) -> None:

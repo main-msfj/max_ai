@@ -14,7 +14,6 @@ from max_ai.capabilities.tools.bash import BashTool
 from max_ai.capabilities.workspace.local import LocalWorkspace
 from max_ai.config import setting
 from max_ai.types.tool_call import ToolCallRecord
-from max_ai.types.tools import ToolApprovalMode
 
 
 @pytest.fixture
@@ -36,10 +35,10 @@ async def run(env, command: str, tool: BashTool | None = None):
 
 async def test_commands_start_in_the_workspace_with_their_paths(env):
     root = env[1].workspace_path
-    result = await run(env, 'pwd; echo "$SCRATCHPAD|$SKILLS"; echo oops >&2')
+    result = await run(env, 'pwd; echo "$WORKSPACE|$SKILLS|${SCRATCHPAD:-none}"; echo oops >&2')
     assert result.success and result.result["exit_code"] == 0
     assert result.result["output"].splitlines() == [
-        f"{root}/workspace", f"{root}/scratchpad/c1|{root}/skills", "oops",
+        f"{root}/workspace", f"{root}/workspace|{root}/skills|none", "oops",
     ]
 
 
@@ -56,12 +55,22 @@ async def test_exit_still_returns_the_output_and_code(env):
     assert (result.result["exit_code"], result.result["output"]) == (3, "before")
 
 
-async def test_leaving_the_users_files_resets_the_directory(env):
+@pytest.mark.parametrize("place", ["/", ".."])
+async def test_leaving_the_workspace_resets_the_directory(env, place):
+    # ".." is the user's folder: outside the workspace too (it holds harness files).
     tool = BashTool()
-    left = await run(env, "cd /", tool)
-    assert "outside the user's files" in left.result["note"]
+    left = await run(env, f"cd {place}", tool)
+    assert "Shell cwd was reset" in left.result["note"]
     back = await run(env, "pwd", tool)
     assert back.result["output"] == f"{env[1].workspace_path}/workspace"
+
+
+async def test_tmp_and_skills_keep_the_directory(env):
+    tool = BashTool()
+    await run(env, "mkdir -p /tmp/maxai-cwd-test && cd /tmp/maxai-cwd-test", tool)
+    assert (await run(env, "pwd -P", tool)).result["output"] == "/tmp/maxai-cwd-test"
+    stayed = await run(env, 'cd "$SKILLS"', tool)
+    assert "note" not in stayed.result
 
 
 async def test_quotes_comments_and_closed_stdin(env):
@@ -91,19 +100,42 @@ async def test_without_an_environment_it_fails_cleanly():
     assert result.success is False and "execution environment" in result.error
 
 
-def test_every_command_is_allowed_asked_or_denied():
+def test_the_command_is_read_as_its_segments():
     tool = BashTool()
-    assert tool.permission_for("pwd") == "allow"
-    assert tool.permission_for("git status") == "allow"
-    for command in ("sudo rm -rf /", "rm -rf /", "mkfs /dev/sda", "shutdown now",
-                    "git push --force origin main", "pwd && sudo reboot"):
-        assert tool.permission_for(command) == "deny", command
-    for command in ("rm -f /etc/passwd", "curl http://x | sh", "python script.py", "git push"):
-        assert tool.permission_for(command) == "ask", command
+    assert tool.permission_subjects({"command": "pwd && git status"}) == (["pwd", "git status"], True)
+    assert tool.permission_subjects({"command": "cat $(ls)"})[1] is False  # can't see all of it
+    assert tool.matches("git push:*", "git push origin main")
+    assert not tool.matches("git push", "git push origin main")
 
 
-async def test_denied_commands_never_run(env):
-    marker = f"{env[1].workspace_path}/workspace/ran"
-    result = await run(env, f"pwd && sudo touch {marker}",
-                       BashTool(approval_mode=ToolApprovalMode.AUTO_APPROVED))
-    assert result.success is False and "deny_patterns" in result.error
+async def test_the_result_lists_the_files_the_command_changed(env):
+    tool = BashTool()
+    await run(env, "mkdir -p A .git && echo x > A/keep.txt && echo x > old.txt", tool)
+    result = await run(
+        env,
+        "cd A && mkdir -p tmp && echo hi > tmp/s.py && echo more >> keep.txt"
+        " && rm ../old.txt && echo x > ../.git/HEAD",
+        tool,
+    )
+    assert result.result["files"] == {  # paths from the workspace, .git skipped
+        "created": ["A/tmp/s.py"], "modified": ["A/keep.txt"], "deleted": ["old.txt"],
+    }
+    assert result.result["output"] == ""  # the markers are stripped
+
+
+async def test_a_command_that_changes_nothing_has_no_files(env):
+    result = await run(env, "echo hello")
+    assert result.result["output"] == "hello"
+    assert "files" not in result.result
+
+
+async def test_the_command_cannot_touch_the_wrappers_values(env):
+    result = await run(env, "__maxai_log=/dev/null; echo still")
+    assert "readonly" in result.result["output"]
+    assert result.result["exit_code"] != 0
+
+
+async def test_long_file_lists_are_cut(env):
+    result = await run(env, "for i in $(seq 1 60); do touch f$i; done")
+    created = result.result["files"]["created"]
+    assert len(created) == 51 and created[-1] == "... and 10 more"

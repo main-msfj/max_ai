@@ -7,18 +7,13 @@ import os
 from typing import TYPE_CHECKING
 
 from ....base.executor import ExecutionResult, ExecutionSession, ExecutorBase
-from ....base.tools import ToolContext
-from ....config import setting
 from ....core.executor.process import run_process
 from ....core.ids import short_id
-from ....types.tool_call import ToolResult
 from ._model import LocalExecutorConfig
 
 if TYPE_CHECKING:
-    from ....base.tools import CoreTool
     from ....base.workspace import WorkspaceBase
     from ....core.termination import CancellationToken
-    from ....types.tool_call import ToolCallRecord
 
 
 class LocalExecutor(ExecutorBase):
@@ -103,40 +98,6 @@ class LocalExecutor(ExecutorBase):
         self._locks.pop(session.id, None)
         self._closed[session.id] = session
 
-    async def rebuild(self, session: ExecutionSession) -> ExecutionSession:
-        """A new session over the same workspace."""
-        self._check(session)
-        workspace, user_id, conversation_id = (
-            session.workspace, session.user_id, session.conversation_id,
-        )
-        await self.clean(session)
-        return await self.connect(workspace, user_id, conversation_id)
-
-    async def execute_argv(
-        self,
-        session: ExecutionSession,
-        argv: list[str],
-        *,
-        stdin: str | None = None,
-        timeout: float = 60,
-        cancellation_token: CancellationToken | None = None,
-    ) -> ExecutionResult:
-        """Run ``argv`` from the workspace, one command at a time per session."""
-        self._check(session)
-        lock = self._locks.setdefault(session.id, asyncio.Lock())
-        async with lock:
-            env = os.environ.copy()
-            env["WORKSPACE"] = session.workspace_path
-            return await run_process(
-                argv,
-                cwd=session.workspace_path,
-                env=env,
-                stdin=stdin,
-                timeout=timeout,
-                max_output_bytes=self.max_output_bytes,
-                cancellation_token=cancellation_token,
-            )
-
     async def execute(
         self,
         session: ExecutionSession,
@@ -148,60 +109,23 @@ class LocalExecutor(ExecutorBase):
         """Run ``command`` with bash; run_process kills its whole process group."""
         if not command.strip():
             raise ValueError("command cannot be empty")
+        self._check(session)
         # A clean environment: the host's PATH, HOME and locale so its tools
         # work, but none of its secrets (API keys) and no BASH_ENV.
-        return await self.execute_argv(
-            session,
-            [
-                "/usr/bin/env",
-                "-i",
-                f"PATH={os.environ.get('PATH', '/usr/bin:/bin')}",
-                f"HOME={os.environ.get('HOME', '/tmp')}",
-                f"LANG={os.environ.get('LANG', 'C.UTF-8')}",
-                f"WORKSPACE={session.workspace_path}",
-                "/bin/bash",
-                "--noprofile",
-                "--norc",
-                "-c",
-                command,
-            ],
-            timeout=timeout,
-            cancellation_token=cancellation_token,
-        )
-
-    async def run_tool(
-        self,
-        session: ExecutionSession,
-        tool: CoreTool,
-        record: ToolCallRecord,
-        context: ToolContext,
-        cancellation_token: CancellationToken | None = None,
-    ) -> ToolResult:
-        """Run the tool in this process, with the workspace paths in its deps."""
-        deps = dict(context.deps)
-        directory = session.handle
-        deps.update(
-            runtime_root=session.workspace_path,
-            workspace_dir=str(directory.workspace_dir),
-            skills_dir=str(directory.skill_dir),
-            filesystem_root=str(session.workspace.base_root),
-            workspace_filesystem=session.workspace.get_filesystem(),
-        )
-        ctx = ToolContext(
-            context.run_id,
-            session_id=session.conversation_id,
-            user_id=session.user_id,
-            retry_count=context.retry_count,
-            deps=deps,
-            emit_event=context.emit_event,
-        )
-        task = asyncio.create_task(tool.execute(record, ctx, cancellation_token))
-        if cancellation_token is not None:
-            cancellation_token.link_future(task)
-        timeout = setting.tool_timeout_seconds
-        try:
-            return await asyncio.wait_for(task, timeout=timeout)
-        except asyncio.TimeoutError:
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-            return ToolResult.timeout(record.id, timeout_seconds=timeout)
+        argv = [
+            "/usr/bin/env",
+            "-i",
+            f"PATH={os.environ.get('PATH', '/usr/bin:/bin')}",
+            f"HOME={os.environ.get('HOME', '/tmp')}",
+            f"LANG={os.environ.get('LANG', 'C.UTF-8')}",
+            f"WORKSPACE={session.workspace_path}",
+            "/bin/bash", "--noprofile", "--norc", "-c", command,
+        ]
+        async with self._locks.setdefault(session.id, asyncio.Lock()):
+            return await run_process(
+                argv,
+                cwd=session.workspace_path,
+                timeout=timeout,
+                max_output_bytes=self.max_output_bytes,
+                cancellation_token=cancellation_token,
+            )

@@ -93,8 +93,7 @@ class WorkspaceBase(CoreAgentCapabilities[WorkspaceConfig], ABC):
         """Create a user's directories without clearing existing files.
 
         ``workspace_dir`` is the same single project directory for every
-        conversation this user has — ``conversation_id`` only scopes the
-        (optional) scratchpad, not the workspace itself.
+        conversation this user has; ``conversation_id`` is only validated.
         """
         filesystem = self.get_filesystem()
         filesystem._safe_id(user_id, "user_id")
@@ -108,16 +107,10 @@ class WorkspaceBase(CoreAgentCapabilities[WorkspaceConfig], ABC):
         finally:
             os.close(user_fd)
         workspace = filesystem.workspace_root(user_id)
-        scratch = (
-            filesystem.scratchpad_root(user_id, conversation_id)
-            if conversation_id is not None
-            else None
-        )
         return WorkspaceDirectory(
             root=root,
             skill_dir=root / "skills",
             workspace_dir=workspace,
-            scratch_dir=scratch,
             artifacts_dir=workspace,
         )
 

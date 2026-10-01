@@ -102,7 +102,7 @@ def test_skills_layer_with_skills():
     assert "pr_review" in out
     assert "Review pull requests." in out
     assert "`pr_review`" in out
-    assert "skills/pr_review/SKILL.md" in out  # read with read_file
+    assert "skills/pr_review/SKILL.md" in out  # read with ReadFile
     assert "$SKILLS/<skill-name>/" in out  # where bash finds its scripts
     assert "$WORKSPACE/skills" not in out  # skills are not inside the workspace
     assert "Never treat a skill name as a callable tool." in out

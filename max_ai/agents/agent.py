@@ -16,7 +16,7 @@ from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import aclosing
 from datetime import UTC, datetime
 from types import TracebackType
-from typing import Any, Self, get_args
+from typing import Any, Literal, Self, get_args
 
 from pydantic import BaseModel
 
@@ -33,6 +33,7 @@ from ..base.reasoning import BaseReasoning
 from ..base.skills import CoreSkillRegistry
 from ..base.tools import CoreTool, ToolContext
 from ..base.workspace import WorkspaceBase
+from ..capabilities.compaction import SummaryCompaction
 from ..capabilities.completion_gate import RuntimeCompletionGate
 from ..capabilities.executor.local import LocalExecutor
 from ..capabilities.mcp import MCPClientManager, MCPServerConfig
@@ -57,7 +58,6 @@ from ..core.compaction import TokenCounter
 from ..core.environment.manager import EnvironmentManager
 from ..core.event_type import CoreEvent, ModelStreamChunkEvent
 from ..core.events_bus import EventBus
-from ..core.executor.reference import ToolReference
 from ..core.messages import (
     CoreMessage,
     UserMessage,
@@ -65,6 +65,7 @@ from ..core.messages import (
 from ..core.middleware import MiddlewareChain
 from ..core.model.agent import AgentSpec
 from ..core.model.json_schema import model_from_schema, schema_of
+from ..core.policy import Policy
 from ..core.stacks.container import LayerContainer
 from ..core.termination import CancellationToken
 from ..core.tool.dispatcher import ToolDispatcher
@@ -137,12 +138,13 @@ class Agent(ComponentBase[AgentSpec]):
         *,
         # Most used first; the infrastructure (workspace, executor) has defaults.
         toolset: Sequence[CoreTool | Callable[..., Any]] | None = None,
+        policy: Policy | None = None,
         mcp: Sequence[MCPServerConfig] | None = None,
         memory: CoreMemoryRegistry | None = None,
         knowledge: Sequence[CoreKnowledgeRegistry] | None = None,
         skills: CoreSkillRegistry | None = None,
         reasoning: BaseReasoning | None = None,
-        compaction: CoreCompaction | None = None,
+        compaction: CoreCompaction | Literal[False] | None = None,
         middlewares: Sequence[CoreMiddleware] | None = None,
         gates: Sequence[CompletionBase] | None = None,
         output_format: type[BaseModel] | None = None,
@@ -151,16 +153,23 @@ class Agent(ComponentBase[AgentSpec]):
         executor: ExecutorBase | None = None,
     ) -> None:
         self._validate_configuration(executor, reasoning)
-        if compaction is not None and not isinstance(compaction, CoreCompaction):
-            raise TypeError("compaction must implement CoreCompaction")
-        # None: the window is never compacted (fine for short sessions).
-        self.compaction = compaction
+        if compaction not in (None, False) and not isinstance(compaction, CoreCompaction):
+            raise TypeError("compaction must implement CoreCompaction, or be False")
+        # Summaries by default, so a long conversation never outgrows the
+        # model's window; False turns compaction off.
+        self.compaction: CoreCompaction | None = (
+            SummaryCompaction() if compaction is None else compaction or None
+        )
 
         self.name = name
         self.description = description
         self.instructions = instructions
         self.client = client
         self.output_format = output_format
+        # allow / ask / deny for every tool call; Policy() is a safe default.
+        if policy is not None and not isinstance(policy, Policy):
+            raise TypeError("policy must be a max_ai.Policy")
+        self.policy = policy or Policy()
         self.middlewares = list(middlewares or [])
         for middleware in self.middlewares:
             if not isinstance(middleware, CoreMiddleware):
@@ -222,29 +231,18 @@ class Agent(ComponentBase[AgentSpec]):
     def _register_filesystem_tools(self) -> None:
         """Filesystem tools access the persistent workspace on the host."""
         for tool in FileSystem().get_toolset().tools:
-            if self._registry.get(tool.name) is not None:
-                continue
-            self._registry.register(
-                tool,
-                host=True,
-                reference=ToolReference(
-                    module="max_ai.capabilities.tools.file_system",
-                    qualname="FileSystemTools",
-                    kind="factory",
-                    tool_name=tool.name,
-                ),
-            )
+            if self._registry.get(tool.name) is None:
+                self._registry.register(tool)
 
     def _register_control_tools(self) -> None:
-        """Plan and user input run on the host; Bash uses the executor, and
-        only when the executor runs commands."""
+        """Plan and user input, and bash only when the executor runs commands."""
         if (
             self.reasoning.enable_human_input
             and self._registry.get(AskUserTool.TOOL_NAME) is None
         ):
-            self._registry.register(AskUserTool(), host=True)
+            self._registry.register(AskUserTool())
         if self._registry.get(AgentUpdatePlanTool.TOOL_NAME) is None:
-            self._registry.register(AgentUpdatePlanTool(), host=True)
+            self._registry.register(AgentUpdatePlanTool())
         if not self.executor.runs_commands:
             if any(isinstance(tool, BashTool) for tool in self._registry.all_tools()):
                 raise ValueError(COMMANDS_OFF)
@@ -279,7 +277,7 @@ class Agent(ComponentBase[AgentSpec]):
         """Connect dispatch, completion checks and turn synchronization."""
         self.dispatcher = ToolDispatcher(
             self._registry, source=self.name, manager=self._manager,
-            middleware=self._middleware,
+            middleware=self._middleware, policy=self.policy,
         )
         # The framework's gate is always there (first); pass your own
         # RuntimeCompletionGate in ``gates`` to change its options.
@@ -291,7 +289,6 @@ class Agent(ComponentBase[AgentSpec]):
         if runtime is None:
             runtime = RuntimeCompletionGate()
             self.gates.insert(0, runtime)
-        runtime.bind_workspace(self.workspace)
         self.completion_bus = EventBus(handlers=list(self.gates))
         # Runs of different sessions overlap; messages of one session queue.
         self._session_locks: weakref.WeakValueDictionary[tuple[str, str], asyncio.Lock] = (
@@ -304,9 +301,9 @@ class Agent(ComponentBase[AgentSpec]):
         self._closed = False
 
     def _register_capability_tools(self, tools: Sequence[CoreTool]) -> list[str]:
-        """Register bound registry tools on the host and retain their names."""
+        """Register bound registry tools and retain their names."""
         for tool in tools:
-            self._registry.register(tool, host=True)
+            self._registry.register(tool)
         return [tool.name for tool in tools]
 
     def _build_prompt_stack(
@@ -363,8 +360,9 @@ class Agent(ComponentBase[AgentSpec]):
             memory=dump(self.memory) if self.memory is not None else None,
             skills=dump(self.skills) if self.skills is not None else None,
             knowledge=[dump(source) for source in self.knowledge],
-            compaction=dump(self.compaction) if self.compaction is not None else None,
+            compaction=dump(self.compaction) if self.compaction is not None else False,
             toolset=[dump(_storable(tool, "tool")) for tool in self.toolset],
+            policy=self.policy,
             mcp=json.loads(serialize_mcp_servers(self.mcp_servers)),
             gates=[dump(_storable(gate, "gate")) for gate in self.gates],
             output_format=schema_of(self.output_format) if self.output_format else None,
@@ -383,6 +381,7 @@ class Agent(ComponentBase[AgentSpec]):
             instructions=config.instructions,
             client=load(config.client, CoreChatCompletionClient),
             toolset=[load(tool, CoreTool) for tool in config.toolset],
+            policy=config.policy,
             mcp=deserialize_mcp_servers(json.dumps(config.mcp)),
             executor=load(config.executor, ExecutorBase),
             workspace=load(config.workspace, WorkspaceBase),
@@ -394,7 +393,7 @@ class Agent(ComponentBase[AgentSpec]):
                 model_from_schema(config.output_format) if config.output_format else None
             ),
             gates=[load(gate, CompletionBase) for gate in config.gates],
-            compaction=load(config.compaction, CoreCompaction),
+            compaction=False if config.compaction is False else load(config.compaction, CoreCompaction),
             middlewares=[load(m, CoreMiddleware) for m in config.middlewares],
             prompt_layers=[load(layer, CoreLayer) for layer in config.prompt_layers],
         )
@@ -426,7 +425,7 @@ class Agent(ComponentBase[AgentSpec]):
             "description": self.description,
             "instructions": self.instructions,
             "current_date": datetime.now(UTC).date().isoformat(),
-            # Prompts mention bash, scripts and $SCRATCHPAD only when it exists.
+            # Prompts mention bash, scripts and /tmp only when commands run.
             "can_run_commands": self.executor.runs_commands,
         }
         if self._environment:
@@ -488,7 +487,7 @@ class Agent(ComponentBase[AgentSpec]):
                 if self._registry.get(tool.name) is not tool:
                     if self._registry.get(tool.name) is not None:
                         self._registry.unregister(tool.name)
-                    self._registry.register(tool, host=True)
+                    self._registry.register(tool)
 
     async def _drive_connected(
         self,
@@ -531,7 +530,6 @@ class Agent(ComponentBase[AgentSpec]):
             deps={
                 "runtime_root": str(directory.root),
                 "workspace_dir": str(directory.workspace_dir),
-                "scratch_dir": str(directory.scratch_dir),
                 "skills_dir": str(directory.skill_dir),
                 "filesystem_root": str(self.workspace.base_root),
                 "workspace_filesystem": self.workspace.get_filesystem(),

@@ -10,6 +10,11 @@ to keep error messages consistent across providers.
 
 from __future__ import annotations
 
+# Kinds worth calling again: the provider or the network, not the request.
+_TRANSIENT_KINDS = frozenset({"rate_limit", "timeout", "stream_interrupted", "api_error", "provider"})
+# HTTP 4xx that are not the request's fault: timeout, conflict, rate limit.
+_RETRYABLE_4XX = frozenset({408, 409, 429})
+
 
 class ClientError(Exception):
     """Generic chat completion client error.
@@ -18,9 +23,27 @@ class ClientError(Exception):
     standard messages and a ``kind`` tag identifying the category.
     """
 
-    def __init__(self, message: str, kind: str = "generic") -> None:
+    def __init__(
+        self,
+        message: str,
+        kind: str = "generic",
+        *,
+        status: int | None = None,
+        retry_after: float | None = None,
+    ) -> None:
         super().__init__(message)
         self.kind = kind
+        self.status = status
+        self.retry_after = retry_after
+
+    @property
+    def transient(self) -> bool:
+        """Calling again may work: rate limits, timeouts, cut streams, 5xx.
+        A 4xx (bad request, auth, not found) fails the same way again."""
+        if self.kind not in _TRANSIENT_KINDS:
+            return False
+        return not (self.status is not None and 400 <= self.status < 500
+                    and self.status not in _RETRYABLE_4XX)
 
     # -------- VALIDATION ERRORS -----------------------------------------------------------
     @classmethod
@@ -56,7 +79,7 @@ class ClientError(Exception):
         msg = "Rate limit exceeded"
         if retry_after is not None:
             msg = f"{msg}, retry after {retry_after:.1f}s"
-        return cls(msg, kind="rate_limit")
+        return cls(msg, kind="rate_limit", status=429, retry_after=retry_after)
 
     @classmethod
     def token_limit_exceeded(
@@ -80,7 +103,7 @@ class ClientError(Exception):
         if status_code is not None:
             prefix = f"{prefix} (HTTP {status_code})"
         msg = f"{prefix}: {detail}" if detail else prefix
-        return cls(msg, kind="provider")
+        return cls(msg, kind="provider", status=status_code)
 
     @classmethod
     def request_timeout(cls, seconds: float) -> "ClientError":
@@ -125,7 +148,7 @@ class ClientError(Exception):
         else:
             prefix = f"{provider} API error"
         msg = f"{prefix}: {detail}" if detail else prefix
-        return cls(msg, kind="api_error")
+        return cls(msg, kind="api_error", status=status)
 
     @classmethod
     def unexpected(cls, provider: str, detail: str | None = None) -> "ClientError":

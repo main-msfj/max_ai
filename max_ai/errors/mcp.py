@@ -27,3 +27,11 @@ class MCPToolExecutionError(MCPToolError):
 
 class MCPToolContentError(MCPToolError):
     """The remote MCP tool returned content this adapter cannot expose."""
+
+
+class MCPConnectionLost(MCPError, ConnectionError):
+    """The connection to the MCP server closed while a request waited.
+
+    The request may or may not have run on the server: only read-only calls
+    are sent again (after reconnecting); others go back to the model.
+    """

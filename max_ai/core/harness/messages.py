@@ -33,13 +33,15 @@ def output_cut_off(limit: int) -> str:
         "off; any tool call in it was incomplete and did not run. Every reply, "
         "including tool arguments, must fit in that limit. Do not retry it the "
         "same way: split the work into smaller steps (several smaller files, or "
-        "write a first part and extend it with edit_file), or answer more briefly."
+        "write a first part and extend it with EditFile), or answer more briefly."
     )
 
 
 def tool_denied(denied: t.Sequence[ToolCallRecord]) -> str:
     """After a denial: explain it, then let the user decide how to go on."""
-    listing = ", ".join(f"{r.tool_name} ({r.approval_reason or 'denied'})" for r in denied)
+    listing = ", ".join(
+        f"{r.tool_name} ({r.approval_reason or 'denied'})" for r in denied
+    )
     return (
         f"The user denied: {listing}. Assess how much this blocks the task. "
         "Explain to the user what happened and why, then call ask_user with "
@@ -49,9 +51,13 @@ def tool_denied(denied: t.Sequence[ToolCallRecord]) -> str:
 
 
 # -------- COMPLETION GATE (the framework's own) --------------------------------------
-EMPTY_ANSWER = "No answer was generated and no tool was called — reply with text or call a tool."
+EMPTY_ANSWER = (
+    "No answer was generated and no tool was called — reply with text or call a tool."
+)
 
-EMPTY_ANSWER_TWICE = "Model failed to produce a response twice in a row; pausing for review."
+EMPTY_ANSWER_TWICE = (
+    "Model failed to produce a response twice in a row; pausing for review."
+)
 
 PLAN_STILL_OPEN = (
     "The plan still has pending or active steps. Keep working on them, or, if "
@@ -64,20 +70,28 @@ def plan_closed_open(progress: str) -> str:
     return f"Turn closed with the plan still open ({progress})"
 
 
-def expected_output_unavailable(path: str, error: Exception) -> str:
-    return f"Expected output {path!r} is unavailable: {error}"
-
-
-def expected_output_missing(path: str) -> str:
-    return f"Expected output {path!r} is not a regular file"
-
-
 def command_failed(failure: str) -> str:
     return f"{failure} — fix it, or tell the user it failed."
 
 
 def closed_with_failure(failure: str) -> str:
     return f"Closed with unresolved failure: {failure}"
+
+
+def left_intermediate_files(paths: list[str]) -> str:
+    return (
+        f"You left intermediate files in the workspace: {_first_paths(paths)}. "
+        "Delete them, or move what the user needs next to the deliverables."
+    )
+
+
+def closed_with_leftovers(paths: list[str]) -> str:
+    return f"Closed leaving intermediate files in the workspace: {_first_paths(paths)}"
+
+
+def _first_paths(paths: list[str], limit: int = 10) -> str:
+    shown = ", ".join(paths[:limit])
+    return shown if len(paths) <= limit else f"{shown} and {len(paths) - limit} more"
 
 
 # -------- LOOP GUARDS --------------------------------------------------------------
@@ -99,7 +113,11 @@ def repeated_calls(listing: str) -> str:
 
 
 def budget_running_out(remaining: int, pct_used: int, can_ask_user: bool) -> str:
-    ask = " Call ask_user to ask them whether to continue," if can_ask_user else " Tell the user"
+    ask = (
+        " Call ask_user to ask them whether to continue,"
+        if can_ask_user
+        else " Tell the user"
+    )
     return (
         f"You have {remaining} reasoning iteration(s) left (~{pct_used}% of this "
         f"turn's budget used).{ask} or give them a summary of what you have so "
@@ -119,7 +137,8 @@ def plan_unfinished(listing: str, can_ask_user: bool) -> str:
         " If you are blocked because you need information or a decision from "
         "the user, do NOT repeat the request in plain text — call ask_user to "
         "ask them right now."
-        if can_ask_user else ""
+        if can_ask_user
+        else ""
     )
     return (
         "Do not stop yet — your plan still has unfinished steps: "

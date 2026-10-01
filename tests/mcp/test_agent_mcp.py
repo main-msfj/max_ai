@@ -68,7 +68,7 @@ async def test_agent_shares_one_mcp_connection_until_close(monkeypatch):
 
     async def fake_drive(*args):
         tool = agent._registry.get("docs_search")
-        observed.append(tool is not None and agent._registry.runs_on_host("docs_search"))
+        observed.append(tool is not None)
         return "finished"
 
     monkeypatch.setattr(agent, "_drive_connected", fake_drive)

@@ -11,17 +11,13 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, Literal
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel
 
 from ..core.termination import CancellationToken
 from .component import ComponentBase
 from .workspace import WorkspaceBase
-
-if TYPE_CHECKING:
-    from ..types.tool_call import ToolCallRecord, ToolResult
-    from .tools import CoreTool, ToolContext
 
 SyncDirection = Literal["to_environment", "to_workspace"]
 
@@ -84,17 +80,6 @@ class ExecutorBase(ComponentBase[BaseModel], ABC):
 
     # -------- RUN CODE -----------------------------------------------------------
     @abstractmethod
-    async def run_tool(
-        self,
-        session: ExecutionSession,
-        tool: CoreTool,
-        record: ToolCallRecord,
-        context: ToolContext,
-        cancellation_token: CancellationToken | None = None,
-    ) -> ToolResult:
-        """Invoke a native CoreTool in this provider; never fall back to host."""
-
-    @abstractmethod
     async def execute(
         self,
         session: ExecutionSession,
@@ -110,18 +95,6 @@ class ExecutorBase(ComponentBase[BaseModel], ABC):
         must stop every process the command started. A failing command is an
         exit code; only infrastructure problems raise.
         """
-
-    @abstractmethod
-    async def execute_argv(
-        self,
-        session: ExecutionSession,
-        argv: list[str],
-        *,
-        stdin: str | None = None,
-        timeout: float = 60,
-        cancellation_token: CancellationToken | None = None,
-    ) -> ExecutionResult:
-        """Execute an argument vector without shell interpolation, with bounded output."""
 
     # -------- SESSION LIFECYCLE -----------------------------------------------------------
     @abstractmethod
@@ -149,10 +122,3 @@ class ExecutorBase(ComponentBase[BaseModel], ABC):
     @abstractmethod
     async def clean(self, session: ExecutionSession) -> None:
         """Idempotently destroy temporary runtime resources, not workspace files."""
-
-    @abstractmethod
-    async def rebuild(self, session: ExecutionSession) -> ExecutionSession:
-        """Recreate the runtime with the same workspace identity, not its image.
-
-        On failure, retain a handle that clean(old_session) can safely clean.
-        """

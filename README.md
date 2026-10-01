@@ -74,7 +74,6 @@ The default behavior is a ReAct-style agent loop:
                                   +------------------------+
                                   | /workspaces/<user_id>/ |
                                   |   workspace/           |
-                                  |   scratchpad/          |
                                   |   skills/              |
                                   +------------------------+
 ```
@@ -107,9 +106,9 @@ The `ReActLoop` is the default reasoning engine. On each iteration it calls the 
 
 The `ToolExecutor` is the tool-call pipeline. It receives `ToolCallRecord` objects from the reasoning loop, resolves tool names, validates parameters against each tool's JSON schema, emits approval events when needed, runs middleware around the execution step, dispatches execution to an executor, and returns both observability events and `ToolMessage` results for the LLM.
 
-The executor controls where side effects happen. `LocalExecutor` runs trusted tools in the same Python process. `DockerExecutor` and `ModalExecutor` run commands in a sandbox and mount the user's directory at `/workspaces/<user_id>`.
+The executor decides where `bash` commands run; every other tool (file tools, your Python tools, MCP) runs in the agent's process. `LocalExecutor` runs commands on this machine, with your approval for each one. `DockerExecutor` and `ModalExecutor` run them in a sandbox, with the user's files copied to `/workspaces/<user_id>`.
 
-The workspace creates per-user runtime directories: local disk (`LocalWorkspace`) or object storage (`AzureBlobWorkspace`, `MinIOWorkspace`). Each run materializes the user's directory, copies the selected skills into it, and gives the file tools and `bash` the same `$WORKSPACE`, `$SCRATCHPAD` and `$SKILLS` paths.
+The workspace creates per-user runtime directories: local disk (`LocalWorkspace`) or object storage (`AzureBlobWorkspace`, `MinIOWorkspace`). Each run materializes the user's directory, copies the selected skills into it, and gives the file tools and `bash` the same `$WORKSPACE` and `$SKILLS` paths. Intermediate files go in `/tmp`, outside the user's files.
 
 ## Runtime Flow
 
@@ -254,6 +253,30 @@ agent = Agent(
 
 `FunctionAsTool` derives a tool name, description, and JSON schema from the Python function signature. Use approval modes for tools that can mutate state, access external systems, spend money, or expose sensitive data.
 
+#### Policy
+
+One `Policy` decides every tool call: deny, then ask, then allow; with no
+matching rule the tool's own `approval_mode` applies. Rules look like Claude
+Code permissions, `Tool` or `Tool(pattern)`, with globs in the name:
+
+```python
+from max_ai.agents import Agent, Policy
+from max_ai.core.policy import DEFAULT_DENY
+
+agent = Agent(..., policy=Policy(
+    allow=["ReadFile", "Bash(npm test:*)", "WriteFile(docs/**)"],
+    ask=["acme_hr_*"],                                   # every tool of an MCP server
+    deny=[*DEFAULT_DENY, "WriteFile(secrets/**)", "DeleteFile"],
+))
+```
+
+`Policy()` is the default: it denies destructive commands (`sudo`, `mkfs`,
+`rm -rf /`...). A new tool needs nothing to be covered by name rules; to match
+rules against an argument, name it: `@tool(policy_subject="url")` makes
+`fetch(https://api.acme.com/*)` work. A denied call tells the model which rule
+blocked it. The CLI's "always allow" adds rules to `RunContext.allowed_rules`,
+saved with the session. The policy is part of the agent's JSON (`AgentSpec`).
+
 ### Skills
 
 Skills are local packages with a `SKILL.md` file and optional resources such as scripts or references.
@@ -303,7 +326,7 @@ Skills require a sandbox executor. If skills are registered with the default loc
 
 `ModalExecutor` (`pip install 'maxai[runtime-modal]'`) runs the same commands in a Modal sandbox and syncs the workspace in and out. Its default network is `"packages"`: the agent can install with pip, uv or npm and nothing else is reachable. Add domains with `allow_list=[...]`, or use `"internet"` / `"none"`.
 
-Both build their image on first use and cache it: max_ai's runtime (Python, uv, Node/npm, git, ripgrep) by default, or your own image or Dockerfile. Yours never needs max_ai; the executor adds it (from `framework`), the agent user and `/workspaces` on top. It only needs Linux, bash, git and python3 with pip and venv.
+Both build their image on first use and cache it: max_ai's runtime (Debian slim with Python 3.12, uv, Node 22/npm, git, ripgrep; about 590 MB) by default, or your own image or Dockerfile. Nothing of max_ai runs inside: the executor adds only the agent user and `/workspaces` on top of yours, which needs bash and GNU coreutils, findutils and tar (any Debian or Ubuntu base). Bake in what the agent would otherwise install every time, system packages (LibreOffice, fonts), or everything when the sandbox has no network.
 
 ```python
 from max_ai.capabilities.executor import DockerExecutor
@@ -320,7 +343,6 @@ Per-user runtime layout on the host:
 ```text
 <root>/<user_id>/
   workspace/          (shared workspace; bash starts here with $WORKSPACE)
-  scratchpad/<session_id>/  (per-session temporary; $SCRATCHPAD)
   skills/             (materializes skills; $SKILLS)
 ```
 

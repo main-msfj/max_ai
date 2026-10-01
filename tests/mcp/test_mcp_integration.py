@@ -17,7 +17,6 @@ from mcp.types import (
 )
 
 from max_ai.base.tools import CoreTool
-from max_ai.config import setting
 from max_ai.capabilities.mcp import (
     HTTPServerConfig,
     MCPClientManager,
@@ -28,7 +27,8 @@ from max_ai.capabilities.mcp import (
     deserialize_mcp_servers,
     serialize_mcp_servers,
 )
-from max_ai.errors.mcp import MCPServerConfigError
+from max_ai.config import setting
+from max_ai.errors.mcp import MCPConnectionLost, MCPServerConfigError
 from max_ai.types.tool_call import ToolCallRecord
 from max_ai.types.tools import ToolApprovalMode
 
@@ -46,6 +46,8 @@ class FakeManager:
         tool_name: str,
         arguments: dict[str, t.Any],
         timeout_seconds: float,
+        *,
+        read_only: bool = False,
     ) -> t.Any:
         self.calls.append((server_id, tool_name, arguments, timeout_seconds))
         return self.tool_result
@@ -306,7 +308,52 @@ async def test_a_cancellation_inside_the_client_is_a_connection_error(monkeypatc
     manager = MCPClientManager()
     manager.add_server(HTTPServerConfig(server_id="web", url="http://localhost:3000/mcp"))
     await manager.connect("web")
-    with pytest.raises(RuntimeError, match="interrupted the request"):
+    with pytest.raises(MCPConnectionLost, match="interrupted the request"):
         await manager.call_tool("web", "search", {}, 5)
+
+    await manager.disconnect_all()
+
+
+async def test_only_read_only_calls_are_sent_again_after_a_drop(monkeypatch):
+    import asyncio
+
+    from max_ai.capabilities.mcp import client_manager as client_manager_module
+    from max_ai.capabilities.mcp.client_manager import MCPClientManager
+    from max_ai.core.retry import RetryPolicy
+
+    calls: list[str] = []
+
+    class DropsOnce:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def list_tools(self, *, cursor=None):
+            return ListToolsResult(tools=[])
+
+        async def list_resources(self, *, cursor=None):
+            return ListResourcesResult(resources=[])
+
+        async def list_resource_templates(self, *, cursor=None):
+            return ListResourceTemplatesResult(resource_templates=[])
+
+        async def call_tool(self, name, arguments, read_timeout_seconds=None):
+            calls.append(name)
+            if len(calls) % 2:
+                raise asyncio.CancelledError  # the stream broke mid-call
+            return CallToolResult(content=[TextContent(type="text", text="done")])
+
+    monkeypatch.setattr(client_manager_module, "create_mcp_client", lambda config: DropsOnce())
+    manager = MCPClientManager(retry=RetryPolicy(base_delay=0))
+    manager.add_server(HTTPServerConfig(server_id="web", url="http://localhost:3000/mcp"))
+    await manager.connect("web")
+
+    result = await manager.call_tool("web", "search", {}, 5, read_only=True)
+    assert result.content[0].text == "done" and calls == ["search", "search"]
+    with pytest.raises(MCPConnectionLost):
+        await manager.call_tool("web", "send_email", {}, 5)
+    assert calls[2:] == ["send_email"]  # it may have run: never sent twice
 
     await manager.disconnect_all()

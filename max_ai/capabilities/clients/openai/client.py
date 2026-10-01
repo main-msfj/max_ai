@@ -122,7 +122,8 @@ kwargs : t.Any
         if output_limit is not None:
             self.generation_options["max_tokens"] = output_limit
 
-        client_kwargs: dict[str, t.Any] = {}
+        # The harness retries (core/retry.py); the SDK's own retries would multiply it.
+        client_kwargs: dict[str, t.Any] = {"max_retries": 0}
         if self.api_key is not None:
             client_kwargs["api_key"] = self.api_key.get_secret_value()
         if base_url is not None:
