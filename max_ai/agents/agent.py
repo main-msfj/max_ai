@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import json
 import logging
 import time
@@ -287,11 +288,16 @@ class Agent(ComponentBase[AgentSpec]):
         for gate in self.gates:
             if not isinstance(gate, CompletionBase):
                 raise TypeError("gates must implement CompletionBase")
-        runtime = next((g for g in self.gates if isinstance(g, RuntimeCompletionGate)), None)
-        if runtime is None:
-            runtime = RuntimeCompletionGate()
-            self.gates.insert(0, runtime)
-        runtime.bind_workspace(self.workspace)
+        index = next(
+            (i for i, g in enumerate(self.gates) if isinstance(g, RuntimeCompletionGate)), None,
+        )
+        if index is None:
+            self.gates.insert(0, RuntimeCompletionGate())
+            index = 0
+        else:
+            # Bind a copy: the caller's gate may be shared by other agents.
+            self.gates[index] = copy.copy(self.gates[index])
+        self.gates[index].bind_workspace(self.workspace)
         self.completion_bus = EventBus(handlers=list(self.gates))
         # Runs of different sessions overlap; messages of one session queue.
         self._session_locks: weakref.WeakValueDictionary[tuple[str, str], asyncio.Lock] = (
