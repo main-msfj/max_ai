@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import typing as t
+import weakref
 from functools import lru_cache
 
 import tiktoken
@@ -47,6 +48,9 @@ class TokenCounter(BaseModel):
     message_overhead_tokens: int = Field(default=5, ge=0)
 
     _encoder: tiktoken.Encoding = PrivateAttr()
+    # Messages are immutable: each one is counted once per counter. Keyed by
+    # id(), dropped when the message is garbage-collected.
+    _counts: dict[int, int] = PrivateAttr(default_factory=dict)
 
     def model_post_init(self, __context: t.Any) -> None:
         self._encoder = _encoding(self.tokenizer_base)
@@ -65,10 +69,22 @@ class TokenCounter(BaseModel):
     def count_message(self, message: CoreMessage) -> int:
         if message.token_count > 0:
             return message.token_count
+        key = id(message)
+        cached = self._counts.get(key)
+        if cached is not None:
+            return cached
+        count = self._count_message(message)
+        self._counts[key] = count
+        weakref.finalize(message, self._counts.pop, key, None)
+        return count
 
+    def _count_message(self, message: CoreMessage) -> int:
         # Tool traffic is counted serialized: arguments and ids weigh too.
+        # Assistant thinking is never sent back to the model, so it is left out.
         if message.role == "tool" or getattr(message, "tool_calls", None):
-            return self.count_serialized(message)
+            return self.count_text(
+                message.model_dump_json(exclude_none=True, exclude={"thinking"})
+            )
 
         if message.is_multimodal():
             return self.count_text(self._message_budget_payload(message))
@@ -90,7 +106,7 @@ class TokenCounter(BaseModel):
         return self.count_text(text)
 
     def _message_budget_payload(self, message: CoreMessage) -> str:
-        data = message.model_dump(exclude_none=True)
+        data = message.model_dump(exclude_none=True, exclude={"thinking"})
 
         content = data.get("content")
         if isinstance(content, list):

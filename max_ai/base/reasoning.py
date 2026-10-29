@@ -589,38 +589,20 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
             }
         )
 
-    def _model_input_messages(self, ctx: RunContext) -> list[CoreMessage]:
+    def _input_messages_with_token_counts(self, ctx: RunContext) -> list[CoreMessage]:
+        """Return model input messages with per-message token counts attached.
+
+        Counts are taken on the transcript's own messages, so the shared
+        counter tokenizes each message once instead of on every model call.
         """
-        Build the conversation messages sent to the model.
-
-        Parameters
-        ----------
-        ctx : RunContext
-            Current run context.
-
-        Returns
-        -------
-        list[CoreMessage]
-            The resulting list.
-        """
-        return self._without_assistant_thinking(self._conversation_messages(ctx))
-
-    def _input_messages_with_token_counts(
-        self, messages: t.Sequence[CoreMessage]
-    ) -> list[CoreMessage]:
-        """Return model input messages with per-message token counts attached."""
-        counter = TokenCounter(
-            tokenizer_base=self.client.config.tokenizer_base,
-        )
-        counted: list["CoreMessage"] = []
-        for message in messages:
-            if message.token_count > 0:
-                counted.append(message)
-                continue
+        counter = self._prompt_counter
+        counted: list[CoreMessage] = []
+        for message in self._conversation_messages(ctx):
+            count = counter.count_message(message)
+            sent = self._without_assistant_thinking([message])[0]
             counted.append(
-                message.model_copy(
-                    update={"token_count": counter.count_message(message)}
-                )
+                sent if sent.token_count > 0
+                else sent.model_copy(update={"token_count": count})
             )
         return counted
 
@@ -660,10 +642,11 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
         )
 
         mw = self._middleware_context(ctx)
+        input_messages = self._input_messages_with_token_counts(ctx)
         request = await self.middleware_chain.model_request(
             mw,
             ModelRequest(
-                messages=self._model_input_messages(ctx),
+                messages=list(input_messages),
                 tools=list(tools_override)
                 if tools_override is not None
                 else self._tools,
@@ -707,9 +690,7 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
         yield ModelCallEvent(
             source=self.name,
             model=model_name,
-            input_messages=self._input_messages_with_token_counts(
-                self._model_input_messages(ctx)
-            ),
+            input_messages=input_messages,
             prompt_tokens=prompts.prompt_tokens,
         )
 
@@ -797,10 +778,11 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
             session_id=ctx.session_id,
         )
         mw = self._middleware_context(ctx)
+        input_messages = self._input_messages_with_token_counts(ctx)
         request = await self.middleware_chain.model_request(
             mw,
             ModelRequest(
-                messages=self._model_input_messages(ctx),
+                messages=list(input_messages),
                 tools=list(tools_override)
                 if tools_override is not None
                 else self._tools,
@@ -855,9 +837,7 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
                 yield ModelCallEvent(
                     source=self.name,
                     model=model_name,
-                    input_messages=self._input_messages_with_token_counts(
-                        self._model_input_messages(ctx)
-                    ),
+                    input_messages=input_messages,
                     prompt_tokens=prompts.prompt_tokens,
                 )
                 async for chunk in _streaming_call():
