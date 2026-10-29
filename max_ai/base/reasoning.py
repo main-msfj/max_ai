@@ -1009,10 +1009,11 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
     ) -> list["ToolCall"]:
         """Convert accumulated chunk fragments into ``ToolCall`` instances.
 
-        Returns the loop's per-message tool calls. Fragments that fail
-        to parse (missing name, malformed JSON arguments) are dropped
-        with a warning rather than aborting the whole turn — the LLM
-        gets the chance to retry on the next iteration.
+        Returns the loop's per-message tool calls. A fragment with no name
+        is dropped with a warning. Malformed JSON arguments are kept as
+        ``{"raw_error_content": ..., "parsing_error": True}``, the same as
+        the non-streaming clients, so the call fails validation and the
+        model sees why instead of the call vanishing.
         """
         from ..core.messages import ToolCall
 
@@ -1031,12 +1032,12 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
                 params: dict[str, t.Any] = json.loads(args_str) if args_str else {}
             except json.JSONDecodeError as e:
                 _log.warning(
-                    "Dropping tool call chunk with malformed arguments",
+                    "Tool call chunk with malformed arguments",
                     call_id=call_id,
                     arguments_preview=args_str[:120],
                     error=str(e),
                 )
-                continue
+                params = {"raw_error_content": args_str, "parsing_error": True}
             tool_calls.append(ToolCall(id=call_id, tool_name=name, parameters=params))
         return tool_calls
 
