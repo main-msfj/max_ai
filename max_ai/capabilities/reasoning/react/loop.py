@@ -360,6 +360,7 @@ class ReactLoop(BaseReasoning):
             if decision.status in (COMPLETED, WAITING):
                 yield self._reasoning_complete(loop_state)
                 return
+            pending_steering = [*(pending_steering or []), self._rejection(decision)]
 
         # Main loop: call the model, run any tool calls, repeat until termination.
         while True:
@@ -486,8 +487,10 @@ class ReactLoop(BaseReasoning):
                 yield self._reasoning_complete(loop_state)
                 return
 
-            # Only "incomplete" left: let the model try again.
+            # Only "incomplete" left: let the model try again, told why for
+            # the next call only (like guard steering, never persisted).
             yield CompletionRejectedEvent(source=self.name, decision=gate_result)
+            pending_steering = [self._rejection(gate_result)]
             continue
 
         # 6. Loop Finished: emit the terminal ReasoningCompleteEvent
@@ -576,10 +579,13 @@ class ReactLoop(BaseReasoning):
             ) or STOP
         elif decision.status == WAITING:
             loop_state.finish_reason = WAITING
-        else:
-            content = "; ".join(decision.reasons) or "Task not yet complete."
-            ctx.messages.append(SystemMessage(source=HARNESS, content=content))
         return decision
+
+    @staticmethod
+    def _rejection(decision: CompletionDecision) -> SystemMessage:
+        """Why the gate rejected the answer, as steering for the next call."""
+        content = "; ".join(decision.reasons) or "Task not yet complete."
+        return SystemMessage(source=HARNESS, content=content)
 
     def _run_guards(
         self, ctx: RunContext, loop_state: ReActLoopState

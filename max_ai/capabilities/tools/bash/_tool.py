@@ -247,17 +247,18 @@ class BashTool(CoreRuntimeTool):
             stdout, stdout_truncated, stdout_chars = self._truncate(stdout)
             stderr, stderr_truncated, stderr_chars = self._truncate(stderr)
 
-            result: dict[str, t.Any] = {
-                "exit_code": proc.returncode,
-                "stdout": stdout,
-                "stderr": stderr,
-                "cwd": str(runtime.cwd),
-                "command": command,
-                "stdout_truncated": stdout_truncated,
-                "stderr_truncated": stderr_truncated,
-                "stdout_original_chars": stdout_chars,
-                "stderr_original_chars": stderr_chars,
-            }
+            # Only what the model does not already know: the command is in its
+            # own tool call and the directory is $WORKSPACE. Empty stderr and
+            # truncation details are left out unless they say something.
+            result: dict[str, t.Any] = {"exit_code": proc.returncode, "stdout": stdout}
+            if stderr:
+                result["stderr"] = stderr
+            if stdout_truncated:
+                result["stdout_truncated"] = True
+                result["stdout_original_chars"] = stdout_chars
+            if stderr_truncated:
+                result["stderr_truncated"] = True
+                result["stderr_original_chars"] = stderr_chars
             if expected_outputs:
                 outputs = []
                 for path in expected_outputs:
