@@ -13,7 +13,6 @@ class LocalWorkspace(WorkspaceBase):
     component_schema = LocalWorkspaceConfig
 
     def _to_config(self) -> LocalWorkspaceConfig:
-        """Build the serializable configuration for ``LocalWorkspace``."""
         return LocalWorkspaceConfig(root=str(self.base_root))
 
     async def download(self, user_id: str, conversation_id: str | None = None) -> None:

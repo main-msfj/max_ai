@@ -52,7 +52,6 @@ class LocalSkillRegistry(CoreSkillRegistry):
         self._source_path: Path = self._resolve_source_path(self.source)
 
     def _to_config(self) -> LocalSkillRegistryConfig:
-        """Build the serializable configuration for ``LocalSkillRegistry``."""
         return LocalSkillRegistryConfig(source=self.source, skills=list(self.skills))
 
     @classmethod

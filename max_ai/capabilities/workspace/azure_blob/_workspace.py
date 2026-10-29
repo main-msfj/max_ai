@@ -41,7 +41,6 @@ class AzureBlobWorkspace(RemoteWorkspace):
         return self.blob_url
 
     def _to_config(self) -> AzureBlobWorkspaceConfig:
-        """Build the serializable configuration for ``AzureBlobWorkspace``."""
         return AzureBlobWorkspaceConfig(blob_url=self.blob_url, api_key_env=self.api_key_env,
                                         cache_dir=self.cache_dir)
 
@@ -71,7 +70,6 @@ class AzureBlobWorkspace(RemoteWorkspace):
         return self._client
 
     async def disconnect(self) -> None:
-        """Release resources held for ``AzureBlobWorkspace``."""
         client, self._client = self._client, None
         if client is not None:
             await client.close()

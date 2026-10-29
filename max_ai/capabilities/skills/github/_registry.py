@@ -65,7 +65,6 @@ class GithubSkillRegistry(CoreSkillBase):
         self._cloned = False
 
     def _to_config(self) -> GithubSkillRegistryConfig:
-        """Build the serializable configuration for ``GithubSkillRegistry``."""
         return GithubSkillRegistryConfig(
             source=self.source, skills=list(self.skills),
             ref=self.ref, path=self.path, token_env=self.token_env,

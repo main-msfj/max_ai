@@ -136,7 +136,6 @@ class DockerExecutor(RemoteExecutor):
             )
 
     def _to_config(self) -> DockerExecutorConfig:
-        """Build the serializable configuration for ``DockerExecutor``."""
         return DockerExecutorConfig(
             image=self.image, dockerfile=self.dockerfile, framework=self.framework,
             network=self.network,

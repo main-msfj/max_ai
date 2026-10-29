@@ -81,7 +81,6 @@ class ModalExecutor(RemoteExecutor):
         self._sessions: dict[str, ExecutionSession] = {}
 
     def _to_config(self) -> ModalExecutorConfig:
-        """Build the serializable configuration for ``ModalExecutor``."""
         if self.image is not None and not isinstance(self.image, str):
             raise TypeError("Modal image must be a registry string to serialize")
         return ModalExecutorConfig(

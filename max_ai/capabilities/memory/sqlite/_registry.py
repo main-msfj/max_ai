@@ -78,7 +78,6 @@ class SQLiteMemoryRegistry(CoreMemoryRegistry):
         return self.base_path / self.db_name
 
     def _to_config(self) -> SQLiteMemoryRegistryConfig:
-        """Build the serializable configuration for ``SQLiteMemoryRegistry``."""
         return SQLiteMemoryRegistryConfig(
             base_path=str(self.base_path), db_name=self.db_name,
             user_id=self.user_id, session_id=self.session_id, tool_mode=self.tool_mode,
@@ -93,9 +92,7 @@ class SQLiteMemoryRegistry(CoreMemoryRegistry):
 
     # -------- CONNECTION -----------------------------------------------------------
     async def connect(self) -> None:
-        """Open required resources for ``SQLiteMemoryRegistry``."""
         def open_db() -> sqlite3.Connection:
-            """Open db for ``SQLiteMemoryRegistry``."""
             self.base_path.mkdir(parents=True, exist_ok=True)
             db = sqlite3.connect(self.path, check_same_thread=False)
             db.execute("PRAGMA journal_mode=WAL")
@@ -106,7 +103,6 @@ class SQLiteMemoryRegistry(CoreMemoryRegistry):
             self._db = await asyncio.to_thread(open_db)
 
     async def disconnect(self) -> None:
-        """Release resources held for ``SQLiteMemoryRegistry``."""
         db, self._db = self._db, None
         if db is not None:
             await asyncio.to_thread(db.close)

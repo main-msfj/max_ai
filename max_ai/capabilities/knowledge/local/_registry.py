@@ -81,7 +81,6 @@ class LocalKnowledgeRegistry(CoreKnowledgeRegistry):
         self.embedding = embedding if embedding is not None else FastEmbedEmbedding()
 
     def _to_config(self) -> LocalKnowledgeRegistryConfig:
-        """Build the serializable configuration for ``LocalKnowledgeRegistry``."""
         return LocalKnowledgeRegistryConfig(
             name=self.name,
             description=self.description,
@@ -116,7 +115,6 @@ class LocalKnowledgeRegistry(CoreKnowledgeRegistry):
         self._knowledge_dir.mkdir(parents=True, exist_ok=True)
 
     async def disconnect(self) -> None:
-        """Release resources held for ``LocalKnowledgeRegistry``."""
         return None
 
     # -------- READ OPERATIONS -----------------------------------------------------------

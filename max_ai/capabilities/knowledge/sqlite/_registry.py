@@ -68,7 +68,6 @@ class SQLiteKnowledgeRegistry(CoreKnowledgeRegistry):
         return self.base_path / self.db_name
 
     def _to_config(self) -> SQLiteKnowledgeRegistryConfig:
-        """Build the serializable configuration for ``SQLiteKnowledgeRegistry``."""
         return SQLiteKnowledgeRegistryConfig(
             name=self.name, description=self.description, base_path=str(self.base_path),
             db_name=self.db_name, tool_mode=self.tool_mode, min_score=self.min_score,
@@ -82,9 +81,7 @@ class SQLiteKnowledgeRegistry(CoreKnowledgeRegistry):
 
     # -------- CONNECTION -----------------------------------------------------------
     async def connect(self) -> None:
-        """Open required resources for ``SQLiteKnowledgeRegistry``."""
         def open_db() -> sqlite3.Connection:
-            """Open db for ``SQLiteKnowledgeRegistry``."""
             self.base_path.mkdir(parents=True, exist_ok=True)
             db = sqlite3.connect(self.path, check_same_thread=False)
             db.execute("PRAGMA journal_mode=WAL")
@@ -95,7 +92,6 @@ class SQLiteKnowledgeRegistry(CoreKnowledgeRegistry):
             self._db = await asyncio.to_thread(open_db)
 
     async def disconnect(self) -> None:
-        """Release resources held for ``SQLiteKnowledgeRegistry``."""
         db, self._db = self._db, None
         if db is not None:
             await asyncio.to_thread(db.close)

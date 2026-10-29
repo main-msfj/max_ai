@@ -47,7 +47,6 @@ class MinIOWorkspace(RemoteWorkspace):
         return f"{self.endpoint_url}/{self.bucket}"
 
     def _to_config(self) -> MinIOWorkspaceConfig:
-        """Build the serializable configuration for ``MinIOWorkspace``."""
         return MinIOWorkspaceConfig(
             endpoint_url=self.endpoint_url, bucket=self.bucket, access_key_env=self.access_key_env,
             secret_key_env=self.secret_key_env, region=self.region, cache_dir=self.cache_dir,

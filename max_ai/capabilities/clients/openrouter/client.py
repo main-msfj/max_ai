@@ -119,7 +119,6 @@ class OpenRouterChatCompletionClient(OpenAIChatCompletionClient):
         return min(sizes) if sizes else 0
 
     def _to_config(self) -> OpenRouterChatCompletionClientConfig:  # type: ignore[override]
-        """Build the serializable configuration for ``OpenRouterChatCompletionClient``."""
         return OpenRouterChatCompletionClientConfig(
             model=self.model,
             api_key_env=self.api_key_env,

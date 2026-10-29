@@ -49,7 +49,6 @@ class SQLiteContextRegistry(CoreLogBookRegistry):
         self._conn: sqlite3.Connection | None = None
 
     def _to_config(self) -> SQLiteContextRegistryConfig:
-        """Build the serializable configuration for ``SQLiteContextRegistry``."""
         return SQLiteContextRegistryConfig(
             user_id=self.user_id,
             session_id=self.session_id,
@@ -73,7 +72,6 @@ class SQLiteContextRegistry(CoreLogBookRegistry):
         return self.base_path / "backend-local" / self.db_name
 
     async def connect(self) -> None:
-        """Open required resources for ``SQLiteContextRegistry``."""
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self.db_path)
         self._conn.row_factory = sqlite3.Row
@@ -114,13 +112,11 @@ class SQLiteContextRegistry(CoreLogBookRegistry):
         self._conn.commit()
 
     async def disconnect(self) -> None:
-        """Release resources held for ``SQLiteContextRegistry``."""
         if self._conn is not None:
             self._conn.close()
             self._conn = None
 
     async def get_current_session_summary(self) -> str | None:
-        """Get current session summary for ``SQLiteContextRegistry``."""
         conn = await self._ensure_db()
         row = conn.execute(
             """

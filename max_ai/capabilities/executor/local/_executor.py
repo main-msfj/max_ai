@@ -28,7 +28,6 @@ class LocalExecutor(ExecutorBase):
         self._locks: dict[str, asyncio.Lock] = {}
 
     def _to_config(self) -> LocalExecutorConfig:
-        """Build the serializable configuration for ``LocalExecutor``."""
         return LocalExecutorConfig(max_output_bytes=self.max_output_bytes)
 
     @classmethod

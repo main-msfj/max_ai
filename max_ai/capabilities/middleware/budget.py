@@ -105,7 +105,6 @@ class BudgetMiddleware(CoreMiddleware):
         self.quota_store = quota_store
 
     def _to_config(self) -> BudgetConfig:
-        """Build the serializable configuration for ``BudgetMiddleware``."""
         store = self.quota_store.serialize().model_dump(exclude_none=True) if self.quota_store else None
         return BudgetConfig(
             max_tokens=self.max_tokens, max_cost_usd=self.max_cost_usd,

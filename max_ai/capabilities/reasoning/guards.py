@@ -65,7 +65,6 @@ class LoopGuard(ComponentBase[GuardConfig]):
     component_schema: t.ClassVar[type[BaseModel]] = GuardConfig
 
     def _to_config(self) -> BaseModel:
-        """Build the serializable configuration for ``LoopGuard``."""
         schema = self.component_schema
         return schema(**{name: getattr(self, name) for name in schema.model_fields})
 

@@ -36,7 +36,6 @@ class MongoDBQuotaStore(CoreQuotaStore):
         self._collection: t.Any = None
 
     def _to_config(self) -> MongoDBQuotaStoreConfig:
-        """Build the serializable configuration for ``MongoDBQuotaStore``."""
         return self.config.model_copy()
 
     @classmethod
@@ -45,7 +44,6 @@ class MongoDBQuotaStore(CoreQuotaStore):
 
     # -------- CONNECTION -----------------------------------------------------------
     async def connect(self) -> None:
-        """Open required resources for ``MongoDBQuotaStore``."""
         async with self._mongo_lock:
             if self._mongo_client is not None:
                 return
@@ -71,7 +69,6 @@ class MongoDBQuotaStore(CoreQuotaStore):
             self._mongo_client, self._collection = client, collection
 
     async def disconnect(self) -> None:
-        """Release resources held for ``MongoDBQuotaStore``."""
         async with self._mongo_lock:
             client, self._mongo_client, self._collection = self._mongo_client, None, None
             if client is not None:
