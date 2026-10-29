@@ -259,6 +259,10 @@ class MCPResourceTool(CoreTool):
             msg = f"MCP error reading resource: {exc}"
             logger_for_call.warning(msg)
             return ToolResult.execution_error(tool_request.id, msg)
+        except MCPToolError as exc:
+            msg = str(exc)
+            logger_for_call.warning(msg)
+            return ToolResult.execution_error(tool_request.id, msg)
         except Exception as exc:
             msg = f"Failed to read MCP resource {uri!r}: {exc!r}"
             logger_for_call.error(msg, exc=exc)

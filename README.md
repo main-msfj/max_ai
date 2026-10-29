@@ -220,10 +220,17 @@ agent = Agent(
 )
 ```
 
-The agent discovers MCP tools when a run starts, prefixes their names with the
-server ID, executes them in the host process, and closes the connections at the
-end of the run. The Max AI client uses MCP 2.x and negotiates with both current
-and earlier protocol versions.
+The agent discovers MCP tools when the first run starts, prefixes their names
+with the server ID, executes them in the host process, and shares the
+connections with every run until `agent.close()`. The Max AI client uses MCP 2.x
+and negotiates with both current and earlier protocol versions.
+
+Servers connect in parallel, each within `connect_timeout_seconds` (30 by
+default). A server that fails or does not answer never blocks the others: the
+run goes on without it, its known tools answer that it is unavailable, and it is
+retried after `retry_after_seconds` (60 by default). Set `required=True` on a
+server the agent cannot work without, so the run fails with a clear error
+instead.
 
 Tools implement `CoreTool` or are regular Python callables wrapped by `FunctionAsTool`. Pass the wrapped tool in `toolset`:
 
