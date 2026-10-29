@@ -46,34 +46,27 @@ class ModalExecutor(RemoteExecutor):
                  max_output_bytes: int = 1 << 20, uid: int = 1000):
         """Initialize ``ModalExecutor``.
 
-Parameters
-----------
-image
-    A registry image (``"python:3.12-slim"``) or a ``modal.Image``.
-dockerfile : str | None
-    Path to your own Dockerfile. With neither ``image`` nor ``dockerfile``,
-    max_ai's runtime Dockerfile is used (Python, uv, Node/npm, git, ripgrep).
-    Your image only needs Linux, bash, git and python3 with pip and venv:
-    the executor adds max_ai, the agent user and /workspaces on top.
-framework : str
-    pip requirement that installs max_ai inside the sandbox.
-packages : list[str] | None
-    Extra pip packages baked into the image (optional: the agent can also
-    install what it needs when the network allows it).
-app_name : str
-    Value supplied for ``app_name``.
-network : str
-    "packages" (default): only package registries (pip, uv, npm) plus
-    ``allow_list``. "internet": every site, or only ``allow_list`` when
-    given. "none": no network.
-allow_list : list[str] | None
-    Extra domains the sandbox may reach; ``*.`` wildcards allowed.
-lifetime : int
-    Value supplied for ``lifetime``.
-max_output_bytes : int
-    Value supplied for ``max_output_bytes``.
-uid : int
-    Value supplied for ``uid``."""
+        Parameters
+        ----------
+        image
+            A registry image (``"python:3.12-slim"``) or a ``modal.Image``.
+        dockerfile : str | None
+            Path to your own Dockerfile. With neither ``image`` nor ``dockerfile``,
+            max_ai's runtime Dockerfile is used (Python, uv, Node/npm, git, ripgrep).
+            Your image only needs Linux, bash, git and python3 with pip and venv:
+            the executor adds max_ai, the agent user and /workspaces on top.
+        framework : str
+            pip requirement that installs max_ai inside the sandbox.
+        packages : list[str] | None
+            Extra pip packages baked into the image (optional: the agent can also
+            install what it needs when the network allows it).
+        network : str
+            "packages" (default): only package registries (pip, uv, npm) plus
+            ``allow_list``. "internet": every site, or only ``allow_list`` when
+            given. "none": no network.
+        allow_list : list[str] | None
+            Extra domains the sandbox may reach; ``*.`` wildcards allowed.
+        """
         self._init_network(network, allow_list)
         if not 1 <= lifetime <= 86400 or max_output_bytes <= 0:
             raise ValueError("Invalid lifetime or output limit")
@@ -137,12 +130,6 @@ uid : int
 
     @classmethod
     def _from_config(cls, config: ModalExecutorConfig) -> "ModalExecutor":
-        """Create an instance from its configuration for ``ModalExecutor``.
-
-Parameters
-----------
-config : ModalExecutorConfig
-    Value supplied for ``config``."""
         return cls(**config.model_dump())
 
     def _as_user(self, *argv: str) -> tuple[str, ...]:
@@ -151,26 +138,10 @@ config : ModalExecutorConfig
         return ("setpriv", f"--reuid={self.uid}", f"--regid={self.uid}", "--clear-groups", "--", *argv)
 
     def _check(self, session):
-        """Perform the internal ``check`` operation for ``ModalExecutor``.
-
-Parameters
-----------
-session
-    Value supplied for ``session``."""
         if self._sessions.get(session.id) is not session:
             raise ValueError("Session does not belong to this executor")
 
     async def connect(self, workspace, user_id, conversation_id):
-        """Open required resources for ``ModalExecutor``.
-
-Parameters
-----------
-workspace
-    Value supplied for ``workspace``.
-user_id
-    Value supplied for ``user_id``.
-conversation_id
-    Value supplied for ``conversation_id``."""
         try:
             import modal
         except ImportError as error:
@@ -208,20 +179,6 @@ conversation_id
             raise
 
     async def _command(self, session, argv, *, stdin=None, timeout=60, limit=None):
-        """Perform the internal ``command`` operation for ``ModalExecutor``.
-
-Parameters
-----------
-session
-    Value supplied for ``session``.
-argv
-    Value supplied for ``argv``.
-stdin
-    Value supplied for ``stdin``.
-timeout
-    Value supplied for ``timeout``.
-limit
-    Value supplied for ``limit``."""
         self._check(session)
         handle = session.handle
         if handle.closed:
@@ -237,7 +194,6 @@ limit
                    "max_output_bytes": limit or self.max_output_bytes}
 
         async def communicate():
-            """Perform the ``communicate`` operation for ``ModalExecutor``."""
             process.stdin.write(json.dumps(payload).encode())
             process.stdin.write_eof()
             await process.stdin.drain.aio()
@@ -253,7 +209,6 @@ limit
             return await asyncio.shield(task)
         except asyncio.CancelledError:
             async def cancel_remote():
-                """Perform the ``cancel remote`` operation for ``ModalExecutor``."""
                 await handle.sandbox.filesystem.write_text.aio(
                     "cancel", f"/tmp/maxai-cancel-{invocation}",
                 )
@@ -272,20 +227,6 @@ limit
                 await asyncio.gather(task, return_exceptions=True)
 
     async def execute_argv(self, session, argv, *, stdin=None, timeout=60, cancellation_token=None):
-        """Run an argument vector for ``ModalExecutor``.
-
-Parameters
-----------
-session
-    Value supplied for ``session``.
-argv
-    Value supplied for ``argv``.
-stdin
-    Value supplied for ``stdin``.
-timeout
-    Value supplied for ``timeout``.
-cancellation_token
-    Value supplied for ``cancellation_token``."""
         self._check(session)
         if cancellation_token is not None and cancellation_token.is_cancelled():
             raise asyncio.CancelledError
@@ -296,32 +237,12 @@ cancellation_token
             return await task
 
     async def execute(self, session, command, *, timeout=60, cancellation_token=None):
-        """Execute the requested operation for ``ModalExecutor``.
-
-Parameters
-----------
-session
-    Value supplied for ``session``.
-command
-    Value supplied for ``command``.
-timeout
-    Value supplied for ``timeout``.
-cancellation_token
-    Value supplied for ``cancellation_token``."""
         if not isinstance(command, str) or not command.strip():
             raise ValueError("Command cannot be empty")
         return await self.execute_argv(session, ["bash", "--noprofile", "--norc", "-c", command],
                                        timeout=timeout, cancellation_token=cancellation_token)
 
     async def sync(self, session, direction):
-        """Perform the ``sync`` operation for ``ModalExecutor``.
-
-Parameters
-----------
-session
-    Value supplied for ``session``.
-direction
-    Value supplied for ``direction``."""
         self._check(session)
         if direction not in {"to_environment", "to_workspace"}:
             raise ValueError("Unknown synchronization direction")
@@ -371,22 +292,10 @@ direction
                         baseline.pop(name, None)
 
     async def disconnect(self, session):
-        """Release resources held for ``ModalExecutor``.
-
-Parameters
-----------
-session
-    Value supplied for ``session``."""
         self._check(session)
         # No detach before clean: Modal invalidates the detached handle.
 
     async def clean(self, session):
-        """Remove temporary resources owned for ``ModalExecutor``.
-
-Parameters
-----------
-session
-    Value supplied for ``session``."""
         self._check(session)
         handle = session.handle
         if not handle.closed:
@@ -395,12 +304,6 @@ session
             handle.closed = True
 
     async def rebuild(self, session):
-        """Recreate the runtime environment for ``ModalExecutor``.
-
-Parameters
-----------
-session
-    Value supplied for ``session``."""
         self._check(session)
         await self.sync(session, "to_workspace")
         await self.clean(session)

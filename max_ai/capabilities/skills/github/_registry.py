@@ -51,20 +51,6 @@ class GithubSkillRegistry(CoreSkillBase):
         self, source: str, skills: list[str], *, ref: str = "main",
         path: str = "", token_env: str | None = None,
     ) -> None:
-        """Initialize ``GithubSkillRegistry``.
-
-Parameters
-----------
-source : str
-    Value supplied for ``source``.
-skills : list[str]
-    Value supplied for ``skills``.
-ref : str
-    Value supplied for ``ref``.
-path : str
-    Value supplied for ``path``.
-token_env : str | None
-    Value supplied for ``token_env``."""
         super().__init__(source=source, skills=skills)
         self.ref = self.require_type(ref, str, "ref")
         if not self.ref.strip():
@@ -87,12 +73,6 @@ token_env : str | None
 
     @classmethod
     def _from_config(cls, config: GithubSkillRegistryConfig) -> "GithubSkillRegistry":
-        """Create an instance from its configuration for ``GithubSkillRegistry``.
-
-Parameters
-----------
-config : GithubSkillRegistryConfig
-    Value supplied for ``config``."""
         return cls(
             source=config.source, skills=config.skills,
             ref=config.ref, path=config.path, token_env=config.token_env,
@@ -114,12 +94,6 @@ config : GithubSkillRegistryConfig
 
     @staticmethod
     def _repo_url(source: str) -> str:
-        """Perform the internal ``repo url`` operation for ``GithubSkillRegistry``.
-
-Parameters
-----------
-source : str
-    Value supplied for ``source``."""
         if source.startswith(("http://", "https://", "git@", "ssh://", "file://")):
             return source
         if "/" not in source or source.count("/") != 1:

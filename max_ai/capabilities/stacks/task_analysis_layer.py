@@ -43,5 +43,4 @@ class TaskAnalysisLayer(Component[StackConfig], CoreLayer):
         )
 
     def _default_template(self) -> str:
-        """Perform the internal ``default template`` operation for ``TaskAnalysisLayer``."""
         return self._load_file(self._DEFAULT_TEMPLATE_PATH / f"{self.name}.j2")

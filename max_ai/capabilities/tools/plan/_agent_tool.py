@@ -25,7 +25,6 @@ class AgentUpdatePlanTool(CoreTool):
     TOOL_NAME: t.ClassVar[str] = "update_plan"
 
     def __init__(self) -> None:
-        """Initialize ``AgentUpdatePlanTool``."""
         super().__init__(
             name=self.TOOL_NAME,
             description=(
@@ -48,7 +47,6 @@ class AgentUpdatePlanTool(CoreTool):
 
     @property
     def parameters(self) -> dict[str, t.Any]:
-        """Perform the ``parameters`` operation for ``AgentUpdatePlanTool``."""
         return {
             "type": "object",
             "properties": {
@@ -104,16 +102,6 @@ class AgentUpdatePlanTool(CoreTool):
         tool_context: ToolContext | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> ToolResult:
-        """Execute the requested operation for ``AgentUpdatePlanTool``.
-
-Parameters
-----------
-tool_request : ToolCallRecord
-    Value supplied for ``tool_request``.
-tool_context : ToolContext | None
-    Value supplied for ``tool_context``.
-cancellation_token : CancellationToken | None
-    Value supplied for ``cancellation_token``."""
         if tool_context is None or "run_context" not in tool_context.deps:
             return ToolResult(
                 tool_call_id=tool_request.id,

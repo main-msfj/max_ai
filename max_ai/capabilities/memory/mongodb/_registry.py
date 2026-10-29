@@ -39,30 +39,6 @@ class MongoDBMemoryRegistry(CoreMemoryRegistry):
         search_limit: int = 20,
         embedding: CoreEmbedding | None = DEFAULT_EMBEDDING,
     ) -> None:
-        """Initialize ``MongoDBMemoryRegistry``.
-
-Parameters
-----------
-user_id : str | None
-    Value supplied for ``user_id``.
-session_id : str | None
-    Value supplied for ``session_id``.
-tool_mode : MemoryToolMode
-    Value supplied for ``tool_mode``.
-database : str
-    Value supplied for ``database``.
-collection : str
-    Value supplied for ``collection``.
-uri_env : str
-    Value supplied for ``uri_env``.
-server_selection_timeout_ms : int
-    Value supplied for ``server_selection_timeout_ms``.
-context_days : int | None
-    Value supplied for ``context_days``.
-search_limit : int
-    Value supplied for ``search_limit``.
-embedding : CoreEmbedding | None
-    Value supplied for ``embedding``."""
         super().__init__(user_id, session_id, tool_mode, context_days=context_days,
                          embedding=embedding)
         self._vector_index = MongoVectorIndex(f"{collection}_vector", ["user_id", "session_id", "model_id"])
@@ -88,12 +64,6 @@ embedding : CoreEmbedding | None
 
     @classmethod
     def _from_config(cls, config: MongoDBMemoryRegistryConfig) -> "MongoDBMemoryRegistry":
-        """Create an instance from its configuration for ``MongoDBMemoryRegistry``.
-
-Parameters
-----------
-config : MongoDBMemoryRegistryConfig
-    Value supplied for ``config``."""
         embedding = CoreEmbedding.deserialize(config.embedding) if config.embedding else None
         return cls(**config.model_dump(exclude={"embedding"}), embedding=embedding)
 
@@ -140,12 +110,6 @@ config : MongoDBMemoryRegistryConfig
                 await client.close()
 
     async def _create_indexes(self, collection: Any) -> None:
-        """Perform the internal ``create indexes`` operation for ``MongoDBMemoryRegistry``.
-
-Parameters
-----------
-collection : Any
-    Value supplied for ``collection``."""
         await collection.create_index(
             [("user_id", 1), ("session_id", 1), ("category", 1)],
             unique=True, name="memory_identity", collation={"locale": "simple"},
@@ -157,11 +121,9 @@ collection : Any
 
     # -------- STORAGE -----------------------------------------------------------
     def _scope(self) -> dict:
-        """Perform the internal ``scope`` operation for ``MongoDBMemoryRegistry``."""
         return {"user_id": self.user_id, "session_id": self.session_id}
 
     async def _read_session(self) -> list[MemoryRecord]:
-        """Perform the internal ``read session`` operation for ``MongoDBMemoryRegistry``."""
         await self._ensure_connected()
         cursor = self._collection.find(
             self._scope(), {"_id": 0, "vector": 0, "model_id": 0}, collation={"locale": "simple"},
@@ -201,12 +163,6 @@ collection : Any
         return result.upserted_id is not None
 
     async def _delete_memory(self, category: str) -> bool:
-        """Perform the internal ``delete memory`` operation for ``MongoDBMemoryRegistry``.
-
-Parameters
-----------
-category : str
-    Value supplied for ``category``."""
         await self._ensure_connected()
         result = await self._collection.delete_one(
             {**self._scope(), "category": category}, collation={"locale": "simple"},
@@ -217,12 +173,6 @@ category : str
     semantic_candidates: int = 500
 
     async def _search_memory(self, text: str) -> list[MemorySearchResult]:
-        """Perform the internal ``search memory`` operation for ``MongoDBMemoryRegistry``.
-
-Parameters
-----------
-text : str
-    Value supplied for ``text``."""
         await self._ensure_connected()
         if self.embedding is not None:
             return await self._search_by_meaning(text)
@@ -275,7 +225,6 @@ text : str
             )
 
     def as_tools(self):
-        """Perform the ``as tools`` operation for ``MongoDBMemoryRegistry``."""
         tools = super().as_tools()
         for tool in tools:
             if tool.name == "search_memory":
@@ -287,12 +236,4 @@ text : str
 
 
 def _text(category: str, memory: str) -> str:
-    """Perform the internal ``text`` operation.
-
-Parameters
-----------
-category : str
-    Value supplied for ``category``.
-memory : str
-    Value supplied for ``memory``."""
     return f"{category}: {memory}"

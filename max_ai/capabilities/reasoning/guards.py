@@ -71,12 +71,6 @@ class LoopGuard(ComponentBase[GuardConfig]):
 
     @classmethod
     def _from_config(cls, config: BaseModel) -> t.Self:
-        """Create an instance from its configuration for ``LoopGuard``.
-
-Parameters
-----------
-config : BaseModel
-    Value supplied for ``config``."""
         return cls(**config.model_dump())
 
     def after_tool_round(
@@ -85,16 +79,6 @@ config : BaseModel
         state: "BaseLoopState",
         guard_ctx: GuardContext,
     ) -> str | None:
-        """Perform the ``after tool round`` operation for ``LoopGuard``.
-
-Parameters
-----------
-ctx : RunContext
-    Value supplied for ``ctx``.
-state : 'BaseLoopState'
-    Value supplied for ``state``.
-guard_ctx : GuardContext
-    Value supplied for ``guard_ctx``."""
         return None
 
     def on_final_answer(
@@ -103,16 +87,6 @@ guard_ctx : GuardContext
         state: "BaseLoopState",
         guard_ctx: GuardContext,
     ) -> str | None:
-        """On final answer for ``LoopGuard``.
-
-Parameters
-----------
-ctx : RunContext
-    Value supplied for ``ctx``.
-state : 'BaseLoopState'
-    Value supplied for ``state``.
-guard_ctx : GuardContext
-    Value supplied for ``guard_ctx``."""
         return None
 
 
@@ -129,12 +103,6 @@ def _last_round_messages(ctx: RunContext) -> list[ToolMessage]:
 
 
 def _last_assistant(ctx: RunContext) -> AssistantMessage | None:
-    """Perform the internal ``last assistant`` operation.
-
-Parameters
-----------
-ctx : RunContext
-    Value supplied for ``ctx``."""
     for msg in reversed(ctx.messages):
         if isinstance(msg, AssistantMessage):
             return msg
@@ -169,16 +137,6 @@ class SchemaRetryGuard(LoopGuard):
 
 
     def after_tool_round(self, ctx, state, guard_ctx):
-        """Perform the ``after tool round`` operation for ``SchemaRetryGuard``.
-
-Parameters
-----------
-ctx
-    Value supplied for ``ctx``.
-state
-    Value supplied for ``state``.
-guard_ctx
-    Value supplied for ``guard_ctx``."""
         failures: list[str] = []
         for msg in _last_round_messages(ctx):
             if msg.success:
@@ -215,28 +173,10 @@ class RepetitionGuard(LoopGuard):
 
 
     def __init__(self, max_repeats: int = 2, result_preview_chars: int = 200) -> None:
-        """Initialize ``RepetitionGuard``.
-
-Parameters
-----------
-max_repeats : int
-    Value supplied for ``max_repeats``.
-result_preview_chars : int
-    Value supplied for ``result_preview_chars``."""
         self.max_repeats = max_repeats
         self.result_preview_chars = result_preview_chars
 
     def after_tool_round(self, ctx, state, guard_ctx):
-        """Perform the ``after tool round`` operation for ``RepetitionGuard``.
-
-Parameters
-----------
-ctx
-    Value supplied for ``ctx``.
-state
-    Value supplied for ``state``.
-guard_ctx
-    Value supplied for ``guard_ctx``."""
         assistant = _last_assistant(ctx)
         if assistant is None or not assistant.tool_calls:
             return None
@@ -281,25 +221,9 @@ class BudgetGuard(LoopGuard):
 
 
     def __init__(self, threshold: float = 0.75) -> None:
-        """Initialize ``BudgetGuard``.
-
-Parameters
-----------
-threshold : float
-    Value supplied for ``threshold``."""
         self.threshold = threshold
 
     def after_tool_round(self, ctx, state, guard_ctx):
-        """Perform the ``after tool round`` operation for ``BudgetGuard``.
-
-Parameters
-----------
-ctx
-    Value supplied for ``ctx``.
-state
-    Value supplied for ``state``.
-guard_ctx
-    Value supplied for ``guard_ctx``."""
         max_iter = guard_ctx.max_loop_iterations
         if max_iter <= 0 or state.guard_state.get("budget_warned"):
             return None
@@ -324,16 +248,6 @@ class NoProgressGuard(LoopGuard):
 
 
     def on_final_answer(self, ctx, state, guard_ctx):
-        """On final answer for ``NoProgressGuard``.
-
-Parameters
-----------
-ctx
-    Value supplied for ``ctx``.
-state
-    Value supplied for ``state``.
-guard_ctx
-    Value supplied for ``guard_ctx``."""
         result = state.last_result
         if result is None:
             return None
@@ -364,25 +278,9 @@ class PlanCompletionGuard(LoopGuard):
 
 
     def __init__(self, max_nudges: int = 3) -> None:
-        """Initialize ``PlanCompletionGuard``.
-
-Parameters
-----------
-max_nudges : int
-    Value supplied for ``max_nudges``."""
         self.max_nudges = max_nudges
 
     def on_final_answer(self, ctx, state, guard_ctx):
-        """On final answer for ``PlanCompletionGuard``.
-
-Parameters
-----------
-ctx
-    Value supplied for ``ctx``.
-state
-    Value supplied for ``state``.
-guard_ctx
-    Value supplied for ``guard_ctx``."""
         plan = ctx.plan if ctx.plan is not None else state.plan_draft
         if plan is None or not plan.has_unfinished_steps():
             return None

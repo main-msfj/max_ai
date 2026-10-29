@@ -48,14 +48,6 @@ class LocalSkillRegistry(CoreSkillRegistry):
     """
 
     def __init__(self, source: str | Path, skills: list[str]) -> None:
-        """Initialize ``LocalSkillRegistry``.
-
-Parameters
-----------
-source : str | Path
-    Value supplied for ``source``.
-skills : list[str]
-    Value supplied for ``skills``."""
         super().__init__(source=source, skills=skills)
         self._source_path: Path = self._resolve_source_path(self.source)
 
@@ -65,12 +57,6 @@ skills : list[str]
 
     @classmethod
     def _from_config(cls, config: LocalSkillRegistryConfig) -> "LocalSkillRegistry":
-        """Create an instance from its configuration for ``LocalSkillRegistry``.
-
-Parameters
-----------
-config : LocalSkillRegistryConfig
-    Value supplied for ``config``."""
         return cls(source=config.source, skills=config.skills)
 
     async def connect(self) -> None:
@@ -83,12 +69,6 @@ config : LocalSkillRegistryConfig
 
     @staticmethod
     def _resolve_source_path(source: str) -> Path:
-        """Perform the internal ``resolve source path`` operation for ``LocalSkillRegistry``.
-
-Parameters
-----------
-source : str
-    Value supplied for ``source``."""
         path = Path(source).expanduser().resolve()
         if not path.exists():
             raise FileNotFoundError(

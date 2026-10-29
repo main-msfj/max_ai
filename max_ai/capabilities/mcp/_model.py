@@ -13,14 +13,6 @@ from ...types.tools import ToolApprovalMode
 TransportProtocol = t.Literal["stdio", "sse", "streamable-http"]
 HTTPTransportProtocol = t.Literal["sse", "streamable-http"]
 def _read_env(server_id: str, name: str) -> str:
-    """Perform the internal ``read env`` operation.
-
-Parameters
-----------
-server_id : str
-    Value supplied for ``server_id``.
-name : str
-    Value supplied for ``name``."""
     value = os.getenv(name)
     if not value:
         raise MCPServerConfigError(f"MCP server {server_id!r} needs env var {name}.")
@@ -45,19 +37,12 @@ class MCPServerConfig(BaseModel):
     @field_validator("server_id")
     @classmethod
     def _server_id_required(cls, value: str) -> str:
-        """Perform the internal ``server id required`` operation for ``MCPServerConfig``.
-
-Parameters
-----------
-value : str
-    Value supplied for ``value``."""
         if not value:
             raise MCPServerConfigError("server_id cannot be empty.")
         return value
 
     @property
     def effective_resource_approval_mode(self) -> ToolApprovalMode:
-        """Perform the ``effective resource approval mode`` operation for ``MCPServerConfig``."""
         return self.resource_approval_mode or self.approval_mode
 
 
@@ -83,12 +68,6 @@ class StdioMCPServerConfig(MCPServerConfig):
     @field_validator("command")
     @classmethod
     def _command_required(cls, value: str) -> str:
-        """Perform the internal ``command required`` operation for ``StdioMCPServerConfig``.
-
-Parameters
-----------
-value : str
-    Value supplied for ``value``."""
         if not value:
             raise MCPServerConfigError("command cannot be empty.")
         return value
@@ -110,12 +89,6 @@ class HTTPServerConfig(MCPServerConfig):
     @field_validator("url")
     @classmethod
     def _url_required(cls, value: str) -> str:
-        """Perform the internal ``url required`` operation for ``HTTPServerConfig``.
-
-Parameters
-----------
-value : str
-    Value supplied for ``value``."""
         if not value:
             raise MCPServerConfigError("url cannot be empty.")
         return value

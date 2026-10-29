@@ -39,20 +39,6 @@ class SQLiteContextRegistry(CoreLogBookRegistry):
         *,
         db_name: str = "context.sqlite3",
     ) -> None:
-        """Initialize ``SQLiteContextRegistry``.
-
-Parameters
-----------
-user_id : str
-    Value supplied for ``user_id``.
-session_id : str
-    Value supplied for ``session_id``.
-base_path : str | Path
-    Value supplied for ``base_path``.
-tool_mode : LogBookToolMode
-    Value supplied for ``tool_mode``.
-db_name : str
-    Value supplied for ``db_name``."""
         super().__init__(
             user_id=user_id,
             session_id=session_id,
@@ -74,12 +60,6 @@ db_name : str
 
     @classmethod
     def _from_config(cls, config: SQLiteContextRegistryConfig) -> "SQLiteContextRegistry":
-        """Create an instance from its configuration for ``SQLiteContextRegistry``.
-
-Parameters
-----------
-config : SQLiteContextRegistryConfig
-    Value supplied for ``config``."""
         return cls(
             user_id=config.user_id,
             session_id=config.session_id,
@@ -90,7 +70,6 @@ config : SQLiteContextRegistryConfig
 
     @property
     def db_path(self) -> Path:
-        """Perform the ``db path`` operation for ``SQLiteContextRegistry``."""
         return self.base_path / "backend-local" / self.db_name
 
     async def connect(self) -> None:
@@ -160,14 +139,6 @@ config : SQLiteContextRegistryConfig
         return summary
 
     async def search(self, query: str, limit: int = 5) -> list[ContextBlock]:
-        """Search SQLiteContextRegistry for matching records.
-
-Parameters
-----------
-query : str
-    Value supplied for ``query``.
-limit : int
-    Value supplied for ``limit``."""
         conn = await self._ensure_db()
         clean_query = self._validate_non_empty("query", query)
         query_vector = get_lightweight_embedding(clean_query)
@@ -238,16 +209,6 @@ limit : int
         observation_type: str = "finding",
         tags: list[str] | None = None,
     ) -> str:
-        """Write observation for ``SQLiteContextRegistry``.
-
-Parameters
-----------
-content : str
-    Value supplied for ``content``.
-observation_type : str
-    Value supplied for ``observation_type``.
-tags : list[str] | None
-    Value supplied for ``tags``."""
         conn = await self._ensure_db()
         record = ObservationRecord(
             session_id=self.session_id,
@@ -279,14 +240,6 @@ tags : list[str] | None
         limit: int = 20,
         tags: list[str] | None = None,
     ) -> list[ObservationRecord]:
-        """Get observations for ``SQLiteContextRegistry``.
-
-Parameters
-----------
-limit : int
-    Value supplied for ``limit``.
-tags : list[str] | None
-    Value supplied for ``tags``."""
         conn = await self._ensure_db()
         rows = conn.execute(
             """
@@ -318,7 +271,6 @@ tags : list[str] | None
         return records
 
     async def _ensure_db(self) -> sqlite3.Connection:
-        """Perform the internal ``ensure db`` operation for ``SQLiteContextRegistry``."""
         await self._ensure_connected()
         if self._conn is None:
             raise RuntimeError("SQLite context is not connected.")
@@ -326,14 +278,6 @@ tags : list[str] | None
 
     @staticmethod
     def _validate_non_empty(field: str, value: str) -> str:
-        """Perform the internal ``validate non empty`` operation for ``SQLiteContextRegistry``.
-
-Parameters
-----------
-field : str
-    Value supplied for ``field``.
-value : str
-    Value supplied for ``value``."""
         if not isinstance(value, str):
             raise TypeError(f"{field} must be str, got {type(value).__name__}")
         clean = value.strip()
@@ -343,14 +287,6 @@ value : str
 
     @staticmethod
     def _row_to_block(row: sqlite3.Row, score: float) -> ContextBlock:
-        """Perform the internal ``row to block`` operation for ``SQLiteContextRegistry``.
-
-Parameters
-----------
-row : sqlite3.Row
-    Value supplied for ``row``.
-score : float
-    Value supplied for ``score``."""
         return ContextBlock(
             session_id=row["session_id"],
             timestamp=datetime.fromisoformat(row["timestamp"]),
@@ -361,14 +297,6 @@ score : float
 
     @staticmethod
     def _cosine_similarity(left: list[float], right: list[float]) -> float:
-        """Perform the internal ``cosine similarity`` operation for ``SQLiteContextRegistry``.
-
-Parameters
-----------
-left : list[float]
-    Value supplied for ``left``.
-right : list[float]
-    Value supplied for ``right``."""
         if not left or not right or len(left) != len(right):
             return 0.0
         dot = sum(a * b for a, b in zip(left, right))
