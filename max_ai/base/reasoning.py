@@ -29,6 +29,7 @@ import asyncio
 import copy
 import json
 import logging
+import random
 import time
 import typing as t
 from abc import ABC, abstractmethod
@@ -71,12 +72,33 @@ logger = logging.getLogger(__name__)
 log = ScopedLogger(logger, scope=["ReasoningLoop"])
 
 
-# Kinds of ClientError that warrant a retry with exponential backoff.
-# Everything else (auth, validation, token_limit, invalid_response, ...)
-# fails immediately.
+# Kinds of ClientError that warrant a retry. Everything else (auth,
+# validation, token_limit, invalid_response, ...) fails immediately.
 _TRANSIENT_KINDS: frozenset[str] = frozenset(
     {"rate_limit", "timeout", "stream_interrupted", "api_error", "provider"}
 )
+# HTTP statuses worth retrying; any other 4xx (403, 404, 422...) never heals.
+_TRANSIENT_STATUSES: frozenset[int] = frozenset({408, 409, 429})
+# Never wait longer than this between attempts, whatever the provider asks.
+_MAX_RETRY_DELAY = 60.0
+
+
+def _retry_delay(error: BaseException, attempt: int) -> float | None:
+    """Seconds to wait before retrying after ``error``, or None to give up.
+
+    The loop is the only layer that retries; clients report what the
+    provider answered (``kind``, ``status``, ``retry_after``). The provider's
+    Retry-After wins (capped); otherwise exponential backoff with jitter, so
+    runs that failed together do not retry together.
+    """
+    if not isinstance(error, ClientError) or error.kind not in _TRANSIENT_KINDS:
+        return None
+    status = error.status
+    if status is not None and status < 500 and status not in _TRANSIENT_STATUSES:
+        return None
+    if error.retry_after is not None:
+        return min(error.retry_after, _MAX_RETRY_DELAY)
+    return min(2.0 ** attempt * random.uniform(0.5, 1.5), _MAX_RETRY_DELAY)
 
 
 # -------- LOOP STATE -----------------------------------------------------------
@@ -691,7 +713,6 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
             prompt_tokens=prompts.prompt_tokens,
         )
 
-        backoff = 1.0
         for attempt in range(self.max_connection_retries + 1):
             try:
                 result = await _single_call()
@@ -702,8 +723,8 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
                 raise
 
             except Exception as e:
-                is_transient = isinstance(e, ClientError) and e.kind in _TRANSIENT_KINDS
-                if not is_transient or attempt >= self.max_connection_retries:
+                delay = _retry_delay(e, attempt)
+                if delay is None or attempt >= self.max_connection_retries:
                     recovered = await self.middleware_chain.model_error(mw, request, e)
                     if recovered is not None:
                         result = recovered
@@ -724,9 +745,9 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
                     max_attempts=self.max_connection_retries + 1,
                     error=str(e),
                     action="retry",
+                    retry_in_seconds=round(delay, 2),
                 )
-                await asyncio.sleep(backoff)
-                backoff *= 2
+                await asyncio.sleep(delay)
 
         result = await self.middleware_chain.model_response(mw, request, result)
         loop_state.record_completion(result)
@@ -824,7 +845,6 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
                 ) is not None:
                     yield chunk
 
-        backoff = 1.0
         for attempt in range(self.max_connection_retries + 1):
             content_chunks: list[str] = []
             thinking_chunks: list[str] = []
@@ -923,8 +943,8 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
                 raise
 
             except Exception as e:
-                is_transient = isinstance(e, ClientError) and e.kind in _TRANSIENT_KINDS
-                if not is_transient or attempt >= self.max_connection_retries:
+                delay = _retry_delay(e, attempt)
+                if delay is None or attempt >= self.max_connection_retries:
                     recovered = await self.middleware_chain.model_error(mw, request, e)
                     if recovered is not None:
                         recovered = await self.middleware_chain.model_response(
@@ -955,9 +975,9 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
                     max_attempts=self.max_connection_retries + 1,
                     error=str(e),
                     action="retry",
+                    retry_in_seconds=round(delay, 2),
                 )
-                await asyncio.sleep(backoff)
-                backoff *= 2
+                await asyncio.sleep(delay)
 
     # -------- STREAM HELPERS -----------------------------------------------------------
     @staticmethod
