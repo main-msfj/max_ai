@@ -69,6 +69,19 @@ def test_every_command_is_allowed_asked_or_denied():
         assert tool.permission_for(command) == "ask", command
 
 
+def test_deny_sees_through_paths_wrappers_and_inline_scripts():
+    tool = BashTool()
+    for command in ("/usr/bin/sudo ls", "env sudo ls", "env -i FOO=1 sudo ls",
+                    "FOO=1 sudo ls", "nohup nice -n 5 sudo ls", "timeout -s KILL 5 sudo ls",
+                    "xargs -I {} sudo rm {}", "command -p su", "eval sudo ls",
+                    'bash -c "sudo rm x"', "sh -lc 'echo hi; sudo reboot'",
+                    "bash -c 'bash -c \"sudo x\"'", "env git push --force origin"):
+        assert tool.permission_for(command) == "deny", command
+    # Allow patterns stay literal: a path-qualified or wrapped command asks.
+    for command in ("/usr/bin/git status", "./git status", "env pwd", "echo sudo", "sudoku"):
+        assert tool.permission_for(command) == "ask", command
+
+
 async def test_denied_commands_never_run(tmp_path):
     root, context = runtime(tmp_path)
     marker = root / "workspace" / "ran"

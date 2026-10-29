@@ -29,9 +29,15 @@ For example, `git status && git push origin main` returns `ask`, and
 
 This first version treats quotes, expansions, redirects, background jobs,
 subshells and control structures conservatively: they require approval even
-when an allow pattern matches. It checks visible deny matches but does not
-interpret dynamically constructed commands or scripts. Patterns do not provide
-filesystem or process isolation.
+when an allow pattern matches. Deny and ask patterns also match through
+command paths (`/usr/bin/sudo`), leading `VAR=value` assignments, wrappers
+(`env`, `command`, `exec`, `nice`, `nohup`, `timeout`, `xargs`, ...) and inline
+scripts (`bash -c "..."`, `sh -lc '...'`, `eval`); allow patterns stay literal,
+so a wrapped or path-qualified command asks. Dynamically constructed commands
+are not interpreted, and an allowed interpreter such as `python:*` can run
+anything. Patterns do not provide filesystem or process isolation: with
+`LocalExecutor` commands run on the host (the agent logs a warning once), so
+use `DockerExecutor` or `ModalExecutor` outside local development.
 
 Denied commands are rejected by tool validation and execution. ToolDispatcher
 uses `permission_for` for each Bash call: allow grants automatic approval, ask

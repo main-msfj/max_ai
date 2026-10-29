@@ -297,7 +297,7 @@ Skills require a sandbox executor. If skills are registered with the default loc
 
 ### Execution
 
-`LocalExecutor` is fast and simple. It runs tool code in the current Python process and is suitable for trusted helpers.
+`LocalExecutor` is fast and simple. It runs tool code in the current Python process and is suitable for trusted helpers. It also runs the model's `bash` commands directly on your machine with no sandbox, so the agent logs a warning when it is used; bash permission patterns are a guard rail, not isolation. Use `DockerExecutor` or `ModalExecutor` outside local development.
 
 `DockerExecutor` runs `bash` in one container per session. The container runs as a non-root user with a read-only root filesystem and all capabilities dropped. It has no network by default (`network="none"`; `"internet"` opens it), CPU, memory and PID limits, and the user's directory bind-mounted at `/workspaces/<user_id>`. Docker cannot filter by domain, so `allow_list` does not apply to it.
 

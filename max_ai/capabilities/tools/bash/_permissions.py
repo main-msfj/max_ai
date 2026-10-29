@@ -10,6 +10,24 @@ from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
 
 BashPermission = Literal["allow", "ask", "deny"]
 
+# Commands that run their arguments as another command. Deny and ask patterns
+# are checked against the wrapped command too, so ``env sudo`` is still sudo.
+_WRAPPERS = {
+    "builtin", "command", "env", "exec", "nice", "nohup", "setsid",
+    "stdbuf", "time", "timeout", "xargs",
+}
+# Wrapper options whose value is the next word (``nice -n 5``, ``env -u VAR``).
+_WRAPPER_VALUE_OPTIONS = {
+    "env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
+    "exec": {"-a"},
+    "nice": {"-n", "--adjustment"},
+    "stdbuf": {"-i", "-o", "-e"},
+    "timeout": {"-k", "--kill-after", "-s", "--signal"},
+    "xargs": {"-a", "-d", "-E", "-I", "-L", "-n", "-P", "-s"},
+}
+_SHELLS = {"bash", "dash", "ksh", "sh", "zsh"}
+_MAX_NESTING = 4
+
 
 class BashPermissions(BaseModel):
     """Patterns match literal command words; a trailing :* permits extra args.
@@ -54,12 +72,15 @@ class BashPermissions(BaseModel):
             return False
         return all(fnmatchcase(word, glob) for word, glob in zip(words, expected))
 
-    def evaluate(self, command: str) -> BashPermission:
+    def evaluate(self, command: str, _depth: int = 0) -> BashPermission:
         """Allow a compound command only when every literal segment is allowed.
 
         Expansions, quoting, redirection, background jobs, subshells and control
         structures fall back to ask even if an allow pattern matches. Visible
-        deny matches are still checked first; dynamic code is not interpreted.
+        deny matches are still checked first, also through command paths
+        (``/usr/bin/sudo``), wrappers (``env sudo``) and inline scripts
+        (``bash -c "sudo ..."``, ``eval``). Dynamic code is not interpreted,
+        so deny patterns are a guard rail, not a sandbox.
         """
         if not isinstance(command, str) or not command.strip() or "\0" in command:
             return "deny"
@@ -90,9 +111,23 @@ class BashPermissions(BaseModel):
             return "ask"
         decisions: list[BashPermission] = []
         for words in segments:
-            if any(self._matches(words, pattern) for pattern in self.deny_patterns):
+            candidates = _unwrap(words)
+            if any(
+                self._matches(candidate, pattern)
+                for candidate in candidates for pattern in self.deny_patterns
+            ) or any(
+                self.evaluate(inner, _depth + 1) == "deny"
+                for inner in _inline_scripts(candidates)
+                if _depth < _MAX_NESTING
+            ):
                 return "deny"
-            if any(self._matches(words, pattern) for pattern in self.ask_patterns):
+            if len(candidates) > 1:
+                # Wrapped or path-qualified commands always need approval.
+                uncertain = True
+            if any(
+                self._matches(candidate, pattern)
+                for candidate in candidates for pattern in self.ask_patterns
+            ):
                 decisions.append("ask")
             elif any(self._matches(words, pattern) for pattern in self.allowed_patterns):
                 decisions.append("allow")
@@ -105,3 +140,53 @@ class BashPermissions(BaseModel):
             }:
                 uncertain = True
         return "ask" if uncertain or "ask" in decisions else "allow"
+
+
+def _unwrap(words: list[str]) -> list[list[str]]:
+    """Return ``words`` plus the command it actually runs, if that differs.
+
+    Strips leading ``VAR=value`` assignments and wrapper commands, and
+    reduces the command word to its basename.
+    """
+    candidates = [words]
+    rest = list(words)
+    for _ in range(len(words)):
+        while rest and "=" in rest[0] and not rest[0].startswith("="):
+            rest = rest[1:]
+        if not rest:
+            break
+        name = rest[0].rsplit("/", 1)[-1]
+        rest = [name, *rest[1:]]
+        if name not in _WRAPPERS:
+            break
+        value_options = _WRAPPER_VALUE_OPTIONS.get(name, set())
+        rest = rest[1:]
+        while rest and rest[0].startswith("-") and rest[0] != "-":
+            option = rest.pop(0)
+            if option == "--":
+                break
+            if option in value_options and rest:
+                rest.pop(0)
+        if name == "timeout" and rest:
+            rest = rest[1:]  # the duration
+    if rest and rest != words:
+        candidates.append(rest)
+    return candidates
+
+
+def _inline_scripts(candidates: list[list[str]]) -> list[str]:
+    """Scripts passed as strings: ``sh -c '...'``, ``bash -lc '...'``, ``eval``."""
+    scripts: list[str] = []
+    for words in candidates:
+        name = words[0].rsplit("/", 1)[-1]
+        if name == "eval" and len(words) > 1:
+            scripts.append(" ".join(words[1:]))
+        elif name in _SHELLS:
+            for index, word in enumerate(words[1:], start=1):
+                if not word.startswith("-"):
+                    break
+                if "c" in word.lstrip("-") and not word.startswith("--"):
+                    if index + 1 < len(words):
+                        scripts.append(words[index + 1])
+                    break
+    return scripts

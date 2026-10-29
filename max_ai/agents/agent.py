@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import time
 import weakref
 from collections.abc import AsyncGenerator, Callable, Sequence
@@ -64,10 +65,28 @@ from ..core.stacks.container import LayerContainer
 from ..core.termination import CancellationToken
 from ..core.tool.dispatcher import ToolDispatcher
 from ..core.tool.registry import ToolRegistry
+from ..loggers.scope import ScopedLogger
 from ..types.agent_response import AgentResponse, FinishReason
 from ..types.completions import ChatCompletionResult, Usage
 from ..types.run_context import RunContext
 from ..types.stacks import PromptCtx
+
+log = ScopedLogger(logging.getLogger(__name__), scope=["Agent"])
+_warned_local_executor = False
+
+
+def _warn_local_executor() -> None:
+    """Once per process: say that bash runs unsandboxed on this machine."""
+    global _warned_local_executor
+    if _warned_local_executor:
+        return
+    _warned_local_executor = True
+    log.warning(
+        "LocalExecutor runs the model's bash commands directly on this machine, "
+        "with no sandbox. Deny patterns are a guard rail, not isolation: an "
+        "allowed interpreter (python, node, ...) can run anything. Use "
+        "DockerExecutor or ModalExecutor outside local development."
+    )
 
 
 def _storable(component: Any, what: str) -> ComponentBase[Any]:
@@ -189,6 +208,8 @@ class Agent(ComponentBase[AgentSpec]):
             else LocalWorkspace(root=setting.root_dir / ".agents")
         )
         self.executor = executor if executor is not None else LocalExecutor()
+        if isinstance(self.executor, LocalExecutor):
+            _warn_local_executor()
         # Known at build time: the prompt tells the model where commands run.
         self._environment = self.executor.describe_environment()
         # Idle sessions close after setting.environment_idle_timeout.
