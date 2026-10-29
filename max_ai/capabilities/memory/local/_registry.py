@@ -67,7 +67,6 @@ class LocalMemoryRegistry(CoreMemoryRegistry):
             )
 
     def _to_config(self) -> LocalMemoryRegistryConfig:
-        """Build the serializable configuration for ``LocalMemoryRegistry``."""
         return LocalMemoryRegistryConfig(
             user_id=self.user_id,
             session_id=self.session_id,
@@ -101,11 +100,9 @@ class LocalMemoryRegistry(CoreMemoryRegistry):
 
     async def connect(self) -> None:
         # Per-user folders are created on first write (see _write_store).
-        """Open required resources for ``LocalMemoryRegistry``."""
         self._memory_dir.mkdir(parents=True, exist_ok=True)
 
     async def disconnect(self) -> None:
-        """Release resources held for ``LocalMemoryRegistry``."""
         return None
 
     # -------- STORE I/O -----------------------------------------------------------

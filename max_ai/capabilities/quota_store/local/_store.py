@@ -27,7 +27,6 @@ class LocalQuotaStore(CoreQuotaStore):
         self._locks: dict[str, asyncio.Lock] = {}
 
     def _to_config(self) -> LocalQuotaStoreConfig:
-        """Build the serializable configuration for ``LocalQuotaStore``."""
         return LocalQuotaStoreConfig(base_path=str(self.base_path), keep_periods=self.keep_periods)
 
     @classmethod

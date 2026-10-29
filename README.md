@@ -300,7 +300,7 @@ Check each skill's license before using it. Some public skill repos mix open-sou
 
 The token is read from the environment when the repo is cloned. It is never serialized or placed on the command line. The host needs `git` installed.
 
-Skills require a sandbox executor. If skills are registered with the default local executor, the agent raises a safety error instead of running untrusted runtime code in-process.
+Skills work with any executor, but their scripts run wherever `bash` runs: with the default `LocalExecutor` that is your machine, with no sandbox (the agent logs a warning). Use `DockerExecutor` or `ModalExecutor` for skills you did not write.
 
 ### Execution
 

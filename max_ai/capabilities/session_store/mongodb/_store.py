@@ -45,7 +45,6 @@ class MongoDBSessionStore(CoreSessionStore):
         self._collection: t.Any = None
 
     def _to_config(self) -> MongoDBSessionStoreConfig:
-        """Build the serializable configuration for ``MongoDBSessionStore``."""
         return self.config.model_copy()
 
     @classmethod
@@ -54,7 +53,6 @@ class MongoDBSessionStore(CoreSessionStore):
 
     # -------- CONNECTION -----------------------------------------------------------
     async def connect(self) -> None:
-        """Open required resources for ``MongoDBSessionStore``."""
         async with self._mongo_lock:
             if self._mongo_client is not None:
                 return
@@ -83,7 +81,6 @@ class MongoDBSessionStore(CoreSessionStore):
             self._mongo_client, self._collection = client, collection
 
     async def disconnect(self) -> None:
-        """Release resources held for ``MongoDBSessionStore``."""
         async with self._mongo_lock:
             client, self._mongo_client, self._collection = self._mongo_client, None, None
             if client is not None:

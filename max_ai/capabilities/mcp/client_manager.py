@@ -201,7 +201,6 @@ class MCPClientManager:
         return failures
 
     def get_tools(self) -> list[CoreTool]:
-        """Get tools for ``MCPClientManager``."""
         return [tool for server in self._servers.values() for tool in server.tools]
 
     async def disconnect(self, server_id: str) -> None:
@@ -218,7 +217,6 @@ class MCPClientManager:
             await worker
 
     async def disconnect_all(self) -> None:
-        """Disconnect all for ``MCPClientManager``."""
         for server_id in reversed(self.server_ids):
             await self.disconnect(server_id)
 

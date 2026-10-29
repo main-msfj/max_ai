@@ -55,7 +55,6 @@ class MongoDBMemoryRegistry(CoreMemoryRegistry):
 
     def _to_config(self) -> MongoDBMemoryRegistryConfig:
         # Scope comes from the instance: a bound copy shares _mongo_config.
-        """Build the serializable configuration for ``MongoDBMemoryRegistry``."""
         embedding = self.embedding.serialize().model_dump(exclude_none=True) if self.embedding else None
         return self._mongo_config.model_copy(
             update={"user_id": self.user_id, "session_id": self.session_id, "embedding": embedding},
@@ -69,7 +68,6 @@ class MongoDBMemoryRegistry(CoreMemoryRegistry):
 
     # -------- CONNECTION -----------------------------------------------------------
     async def connect(self) -> None:
-        """Open required resources for ``MongoDBMemoryRegistry``."""
         async with self._mongo_lock:
             if self._mongo_client is not None:
                 return
@@ -100,7 +98,6 @@ class MongoDBMemoryRegistry(CoreMemoryRegistry):
             self._connected = True
 
     async def disconnect(self) -> None:
-        """Release resources held for ``MongoDBMemoryRegistry``."""
         async with self._mongo_lock:
             client = self._mongo_client
             self._mongo_client = None

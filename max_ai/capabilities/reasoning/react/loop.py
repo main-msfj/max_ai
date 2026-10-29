@@ -165,7 +165,6 @@ class ReactLoop(BaseReasoning):
         self._max_loop_iterations = value
 
     def _to_config(self) -> ReactLoopConfig:
-        """Build the serializable configuration for ``ReactLoop``."""
         return ReactLoopConfig(
             max_loop_iterations=self._max_loop_iterations,
             max_connection_retries=self.max_connection_retries,

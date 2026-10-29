@@ -114,7 +114,6 @@ class OpenAIChatCompletionClient(
         self.client = AsyncOpenAI(**client_kwargs)
 
     def _to_config(self) -> OpenAIChatCompletionClientConfig:
-        """Build the serializable configuration for ``OpenAIChatCompletionClient``."""
         return OpenAIChatCompletionClientConfig(
             model=self.model,
             api_key_env=self.api_key_env,

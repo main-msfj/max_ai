@@ -92,7 +92,6 @@ class RuntimeCompletionGate(CompletionBase):
         self._workspace = workspace
 
     def _to_config(self) -> RuntimeGateConfig:
-        """Build the serializable configuration for ``RuntimeCompletionGate``."""
         return self.config.model_copy()
 
     @classmethod

@@ -27,7 +27,6 @@ class LocalSessionStore(CoreSessionStore):
         self.base_path = Path(base_path)
 
     def _to_config(self) -> LocalSessionStoreConfig:
-        """Build the serializable configuration for ``LocalSessionStore``."""
         return LocalSessionStoreConfig(base_path=str(self.base_path))
 
     @classmethod

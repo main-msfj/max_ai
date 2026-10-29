@@ -83,7 +83,6 @@ class LocalContextRegistry(CoreLogBookRegistry):
         self._observations: list[ObservationRecord] = []
 
     def _to_config(self) -> LocalContextRegistryConfig:
-        """Build the serializable configuration for ``LocalContextRegistry``."""
         return LocalContextRegistryConfig(
             user_id=self.user_id,
             session_id=self.session_id,
@@ -116,7 +115,6 @@ class LocalContextRegistry(CoreLogBookRegistry):
         self._context_dir.mkdir(parents=True, exist_ok=True)
 
     async def disconnect(self) -> None:
-        """Release resources held for ``LocalContextRegistry``."""
         return None
 
     # -------- READ FOR PROMPT INJECTION -----------------------------------------------------------

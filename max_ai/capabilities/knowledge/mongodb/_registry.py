@@ -51,7 +51,6 @@ class MongoDBKnowledgeRegistry(CoreKnowledgeRegistry):
         self._collection: Any = None
 
     def _to_config(self) -> MongoDBKnowledgeRegistryConfig:
-        """Build the serializable configuration for ``MongoDBKnowledgeRegistry``."""
         embedding = self.embedding.serialize().model_dump(exclude_none=True) if self.embedding else None
         return self._mongo_config.model_copy(update={"embedding": embedding}, deep=True)
 
@@ -62,7 +61,6 @@ class MongoDBKnowledgeRegistry(CoreKnowledgeRegistry):
 
     # -------- CONNECTION -----------------------------------------------------------
     async def connect(self) -> None:
-        """Open required resources for ``MongoDBKnowledgeRegistry``."""
         async with self._mongo_lock:
             if self._mongo_client is not None:
                 return
@@ -93,7 +91,6 @@ class MongoDBKnowledgeRegistry(CoreKnowledgeRegistry):
             self._connected = True
 
     async def disconnect(self) -> None:
-        """Release resources held for ``MongoDBKnowledgeRegistry``."""
         async with self._mongo_lock:
             client = self._mongo_client
             self._mongo_client = None
