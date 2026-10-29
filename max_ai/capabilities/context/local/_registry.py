@@ -76,18 +76,6 @@ class LocalContextRegistry(CoreLogBookRegistry):
         base_path: str | Path,
         tool_mode: LogBookToolMode = LogBookToolMode.READ_ONLY,
     ) -> None:
-        """Initialize ``LocalContextRegistry``.
-
-Parameters
-----------
-user_id : str
-    Value supplied for ``user_id``.
-session_id : str
-    Value supplied for ``session_id``.
-base_path : str | Path
-    Value supplied for ``base_path``.
-tool_mode : LogBookToolMode
-    Value supplied for ``tool_mode``."""
         super().__init__(
             user_id=user_id, session_id=session_id, tool_mode=tool_mode
         )
@@ -105,12 +93,6 @@ tool_mode : LogBookToolMode
 
     @classmethod
     def _from_config(cls, config: LocalContextRegistryConfig) -> "LocalContextRegistry":
-        """Create an instance from its configuration for ``LocalContextRegistry``.
-
-Parameters
-----------
-config : LocalContextRegistryConfig
-    Value supplied for ``config``."""
         return cls(
             user_id=config.user_id,
             session_id=config.session_id,
@@ -121,12 +103,10 @@ config : LocalContextRegistryConfig
     # -------- PATH HELPERS -----------------------------------------------------------
     @property
     def _context_dir(self) -> Path:
-        """Perform the internal ``context dir`` operation for ``LocalContextRegistry``."""
         return self.base_path / "context"
 
     @property
     def _user_file(self) -> Path:
-        """Perform the internal ``user file`` operation for ``LocalContextRegistry``."""
         return self._context_dir / f"{self.user_id}.json"
 
     # -------- LIFECYCLE -----------------------------------------------------------
@@ -198,16 +178,6 @@ config : LocalContextRegistryConfig
         observation_type: str = "finding",
         tags: list[str] | None = None,
     ) -> str:
-        """Write observation for ``LocalContextRegistry``.
-
-Parameters
-----------
-content : str
-    Value supplied for ``content``.
-observation_type : str
-    Value supplied for ``observation_type``.
-tags : list[str] | None
-    Value supplied for ``tags``."""
         record = ObservationRecord(
             session_id=self.session_id,
             content=content,
@@ -222,14 +192,6 @@ tags : list[str] | None
         limit: int = 20,
         tags: list[str] | None = None,
     ) -> list[ObservationRecord]:
-        """Get observations for ``LocalContextRegistry``.
-
-Parameters
-----------
-limit : int
-    Value supplied for ``limit``.
-tags : list[str] | None
-    Value supplied for ``tags``."""
         records = [r for r in self._observations if r.session_id == self.session_id or True]
         if tags:
             tag_set = set(tags)

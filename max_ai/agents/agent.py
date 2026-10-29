@@ -1,14 +1,12 @@
-"""Agent runtime built around a tool registry, dispatcher and execution provider.
-
-Parallel copy of base/agent.py for testing the new stack in isolation.
-base/agent.py is left untouched.
-"""
+"""Agent runtime built around a tool registry, dispatcher and execution provider."""
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import json
+import logging
 import time
 import weakref
 from collections.abc import AsyncGenerator, Callable, Sequence
@@ -68,10 +66,28 @@ from ..core.stacks.container import LayerContainer
 from ..core.termination import CancellationToken
 from ..core.tool.dispatcher import ToolDispatcher
 from ..core.tool.registry import ToolRegistry
+from ..loggers.scope import ScopedLogger
 from ..types.agent_response import AgentResponse, FinishReason
 from ..types.completions import ChatCompletionResult, Usage
 from ..types.run_context import RunContext
 from ..types.stacks import PromptCtx
+
+log = ScopedLogger(logging.getLogger(__name__), scope=["Agent"])
+_warned_local_executor = False
+
+
+def _warn_local_executor() -> None:
+    """Once per process: say that bash runs unsandboxed on this machine."""
+    global _warned_local_executor
+    if _warned_local_executor:
+        return
+    _warned_local_executor = True
+    log.warning(
+        "LocalExecutor runs the model's bash commands directly on this machine, "
+        "with no sandbox. Deny patterns are a guard rail, not isolation: an "
+        "allowed interpreter (python, node, ...) can run anything. Use "
+        "DockerExecutor or ModalExecutor outside local development."
+    )
 
 
 def _storable(component: Any, what: str) -> ComponentBase[Any]:
@@ -193,6 +209,8 @@ class Agent(ComponentBase[AgentSpec]):
             else LocalWorkspace(root=setting.root_dir / ".agents")
         )
         self.executor = executor if executor is not None else LocalExecutor()
+        if isinstance(self.executor, LocalExecutor):
+            _warn_local_executor()
         # Known at build time: the prompt tells the model where commands run.
         self._environment = self.executor.describe_environment()
         # Idle sessions close after setting.environment_idle_timeout.
@@ -270,11 +288,16 @@ class Agent(ComponentBase[AgentSpec]):
         for gate in self.gates:
             if not isinstance(gate, CompletionBase):
                 raise TypeError("gates must implement CompletionBase")
-        runtime = next((g for g in self.gates if isinstance(g, RuntimeCompletionGate)), None)
-        if runtime is None:
-            runtime = RuntimeCompletionGate()
-            self.gates.insert(0, runtime)
-        runtime.bind_workspace(self.workspace)
+        index = next(
+            (i for i, g in enumerate(self.gates) if isinstance(g, RuntimeCompletionGate)), None,
+        )
+        if index is None:
+            self.gates.insert(0, RuntimeCompletionGate())
+            index = 0
+        else:
+            # Bind a copy: the caller's gate may be shared by other agents.
+            self.gates[index] = copy.copy(self.gates[index])
+        self.gates[index].bind_workspace(self.workspace)
         self.completion_bus = EventBus(handlers=list(self.gates))
         # Runs of different sessions overlap; messages of one session queue.
         self._session_locks: weakref.WeakValueDictionary[tuple[str, str], asyncio.Lock] = (

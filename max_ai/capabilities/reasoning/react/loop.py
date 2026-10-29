@@ -156,17 +156,10 @@ class ReactLoop(BaseReasoning):
 
     @property
     def max_loop_iterations(self) -> int:
-        """Perform the ``max loop iterations`` operation for ``ReactLoop``."""
         return self._max_loop_iterations or setting.max_loop_iterations
 
     @max_loop_iterations.setter
     def max_loop_iterations(self, value: int | None) -> None:
-        """Perform the ``max loop iterations`` operation for ``ReactLoop``.
-
-Parameters
-----------
-value : int | None
-    Value supplied for ``value``."""
         if value is not None and value < 1:
             raise ValueError("max_loop_iterations must be positive")
         self._max_loop_iterations = value
@@ -184,12 +177,6 @@ value : int | None
 
     @classmethod
     def _from_config(cls, config: ReactLoopConfig) -> "ReactLoop":
-        """Create an instance from its configuration for ``ReactLoop``.
-
-Parameters
-----------
-config : ReactLoopConfig
-    Value supplied for ``config``."""
         guards = None
         if config.guards is not None:
             guards = [LoopGuard.deserialize(guard) for guard in config.guards]
@@ -205,8 +192,8 @@ config : ReactLoopConfig
         """Create and register a ``ToolCallRecord`` for each tool call.
 
         Adding to ``ctx.tool_state`` raises if a record with the same id
-        already exists — the LLM should never reuse ids in one turn, así
-        que una colisión es un bug real que vale la pena que reviente.
+        already exists — the LLM should never reuse ids in one turn, so a
+        collision is a real bug and should fail loudly.
         """
         records: list[ToolCallRecord] = []
         for tc in tool_calls:
@@ -571,16 +558,6 @@ config : ReactLoopConfig
         loop_state: ReActLoopState,
         cancellation_token: CancellationToken | None,
     ) -> CompletionDecision:
-        """Perform the internal ``check completion`` operation for ``ReactLoop``.
-
-Parameters
-----------
-ctx : RunContext
-    Value supplied for ``ctx``.
-loop_state : ReActLoopState
-    Value supplied for ``loop_state``.
-cancellation_token : CancellationToken | None
-    Value supplied for ``cancellation_token``."""
         blocked = runtime_status(
             ctx,
             cancelled=bool(cancellation_token and cancellation_token.is_cancelled()),
@@ -629,12 +606,6 @@ cancellation_token : CancellationToken | None
 
     @staticmethod
     def _denied_records(records: list[ToolCallRecord]) -> list[ToolCallRecord]:
-        """Perform the internal ``denied records`` operation for ``ReactLoop``.
-
-Parameters
-----------
-records : list[ToolCallRecord]
-    Value supplied for ``records``."""
         return [
             r
             for r in records

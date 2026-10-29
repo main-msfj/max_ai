@@ -29,21 +29,13 @@ class MCPClientManager:
     """Own MCP clients in dedicated tasks so SDK calls share their lifecycle."""
 
     def __init__(self) -> None:
-        """Initialize ``MCPClientManager``."""
         self._servers: dict[str, _ManagedServer] = {}
 
     @property
     def server_ids(self) -> list[str]:
-        """Perform the ``server ids`` operation for ``MCPClientManager``."""
         return list(self._servers)
 
     def add_server(self, config: MCPServerConfig) -> None:
-        """Add server for ``MCPClientManager``.
-
-Parameters
-----------
-config : MCPServerConfig
-    Value supplied for ``config``."""
         if not isinstance(config, MCPServerConfig) or type(config) is MCPServerConfig:
             raise TypeError("Use StdioMCPServerConfig or HTTPServerConfig")
         if config.server_id in self._servers:
@@ -53,12 +45,6 @@ config : MCPServerConfig
         self._servers[config.server_id] = _ManagedServer(config=config)
 
     async def connect(self, server_id: str) -> None:
-        """Open required resources for ``MCPClientManager``.
-
-Parameters
-----------
-server_id : str
-    Value supplied for ``server_id``."""
         server = self._get_server(server_id)
         if server.worker is not None:
             if not server.worker.done():
@@ -73,14 +59,6 @@ server_id : str
             raise
 
     async def _serve(self, server: _ManagedServer, ready: asyncio.Future) -> None:
-        """Perform the internal ``serve`` operation for ``MCPClientManager``.
-
-Parameters
-----------
-server : _ManagedServer
-    Value supplied for ``server``.
-ready : asyncio.Future
-    Value supplied for ``ready``."""
         try:
             async with create_mcp_client(server.config) as client:
                 ready.set_result(await self._discover_server_tools(server.config, client))
@@ -158,12 +136,6 @@ ready : asyncio.Future
         return [tool for server in self._servers.values() for tool in server.tools]
 
     async def disconnect(self, server_id: str) -> None:
-        """Release resources held for ``MCPClientManager``.
-
-Parameters
-----------
-server_id : str
-    Value supplied for ``server_id``."""
         server = self._get_server(server_id)
         worker = server.worker
         server.worker = None
@@ -181,42 +153,12 @@ server_id : str
         self, server_id: str, tool_name: str,
         arguments: dict[str, t.Any], timeout_seconds: float,
     ) -> t.Any:
-        """Call tool for ``MCPClientManager``.
-
-Parameters
-----------
-server_id : str
-    Value supplied for ``server_id``.
-tool_name : str
-    Value supplied for ``tool_name``.
-arguments : dict[str, t.Any]
-    Value supplied for ``arguments``.
-timeout_seconds : float
-    Value supplied for ``timeout_seconds``."""
         return await self._request(server_id, "call_tool", tool_name, arguments, timeout_seconds)
 
     async def read_resource(self, server_id: str, uri: str) -> t.Any:
-        """Read resource for ``MCPClientManager``.
-
-Parameters
-----------
-server_id : str
-    Value supplied for ``server_id``.
-uri : str
-    Value supplied for ``uri``."""
         return await self._request(server_id, "read_resource", uri)
 
     async def _request(self, server_id: str, method: str, *args: t.Any) -> t.Any:
-        """Perform the internal ``request`` operation for ``MCPClientManager``.
-
-Parameters
-----------
-server_id : str
-    Value supplied for ``server_id``.
-method : str
-    Value supplied for ``method``.
-args : t.Any
-    Value supplied for ``args``."""
         server = self._get_server(server_id)
         if server.worker is None:
             await self.connect(server_id)
@@ -228,12 +170,6 @@ args : t.Any
         return await future
 
     def _get_server(self, server_id: str) -> _ManagedServer:
-        """Perform the internal ``get server`` operation for ``MCPClientManager``.
-
-Parameters
-----------
-server_id : str
-    Value supplied for ``server_id``."""
         try:
             return self._servers[server_id]
         except KeyError as exc:
@@ -242,14 +178,6 @@ server_id : str
     async def _discover_server_tools(
         self, config: MCPServerConfig, client: Client,
     ) -> list[CoreTool]:
-        """Perform the internal ``discover server tools`` operation for ``MCPClientManager``.
-
-Parameters
-----------
-config : MCPServerConfig
-    Value supplied for ``config``.
-client : Client
-    Value supplied for ``client``."""
         discovered: list[CoreTool] = []
         for tool_def in await self._list_all_tools(client):
             discovered.append(MCPTool(
@@ -285,14 +213,6 @@ client : Client
 
     @staticmethod
     def _approval_mode_for_tool(config: MCPServerConfig, tool_def: t.Any) -> ToolApprovalMode:
-        """Perform the internal ``approval mode for tool`` operation for ``MCPClientManager``.
-
-Parameters
-----------
-config : MCPServerConfig
-    Value supplied for ``config``.
-tool_def : t.Any
-    Value supplied for ``tool_def``."""
         explicit = config.tool_approval_modes.get(tool_def.name)
         if explicit is not None:
             return explicit
@@ -311,12 +231,6 @@ tool_def : t.Any
 
     @staticmethod
     async def _list_all_tools(client: Client) -> list[t.Any]:
-        """Perform the internal ``list all tools`` operation for ``MCPClientManager``.
-
-Parameters
-----------
-client : Client
-    Value supplied for ``client``."""
         tools: list[t.Any] = []
         cursor: str | None = None
         while True:
@@ -328,12 +242,6 @@ client : Client
 
     @staticmethod
     async def _list_resources(client: Client) -> tuple[list[t.Any], list[t.Any]]:
-        """Perform the internal ``list resources`` operation for ``MCPClientManager``.
-
-Parameters
-----------
-client : Client
-    Value supplied for ``client``."""
         resources: list[t.Any] = []
         templates: list[t.Any] = []
         try:

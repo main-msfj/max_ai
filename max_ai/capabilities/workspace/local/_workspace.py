@@ -17,25 +17,9 @@ class LocalWorkspace(WorkspaceBase):
         return LocalWorkspaceConfig(root=str(self.base_root))
 
     async def download(self, user_id: str, conversation_id: str | None = None) -> None:
-        """Perform the ``download`` operation for ``LocalWorkspace``.
-
-Parameters
-----------
-user_id : str
-    Value supplied for ``user_id``.
-conversation_id : str | None
-    Value supplied for ``conversation_id``."""
         return None
 
     async def upload(self, user_id: str, conversation_id: str | None = None) -> None:
-        """Perform the ``upload`` operation for ``LocalWorkspace``.
-
-Parameters
-----------
-user_id : str
-    Value supplied for ``user_id``.
-conversation_id : str | None
-    Value supplied for ``conversation_id``."""
         return None
 
 

@@ -54,30 +54,6 @@ class MCPTool(CoreTool):
         max_retries: int = 3,
         read_only: bool = False,
     ) -> None:
-        """Initialize ``MCPTool``.
-
-Parameters
-----------
-mcp_tool_name : str
-    Value supplied for ``mcp_tool_name``.
-mcp_tool_description : str
-    Value supplied for ``mcp_tool_description``.
-mcp_tool_schema : dict[str, t.Any]
-    Value supplied for ``mcp_tool_schema``.
-client_manager : 'MCPClientManager'
-    Value supplied for ``client_manager``.
-server_id : str
-    Value supplied for ``server_id``.
-version : str
-    Value supplied for ``version``.
-approval_mode : ToolApprovalMode | str
-    Value supplied for ``approval_mode``.
-timeout_seconds : float
-    Value supplied for ``timeout_seconds``.
-max_retries : int
-    Value supplied for ``max_retries``.
-read_only : bool
-    Value supplied for ``read_only``."""
         self.mcp_tool_name = mcp_tool_name
         self.client_manager = client_manager
         self.server_id = server_id
@@ -94,7 +70,6 @@ read_only : bool
 
     @property
     def parameters(self) -> dict[str, t.Any]:
-        """Perform the ``parameters`` operation for ``MCPTool``."""
         return self._parameter_schema
 
     async def execute(
@@ -103,16 +78,6 @@ read_only : bool
         tool_context: ToolContext | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> ToolResult:
-        """Execute the requested operation for ``MCPTool``.
-
-Parameters
-----------
-tool_request : ToolCallRecord
-    Value supplied for ``tool_request``.
-tool_context : ToolContext | None
-    Value supplied for ``tool_context``.
-cancellation_token : CancellationToken | None
-    Value supplied for ``cancellation_token``."""
         if cancellation_token and cancellation_token.is_cancelled():
             return ToolResult.cancelled_before_start(tool_request.id)
 
@@ -172,12 +137,6 @@ cancellation_token : CancellationToken | None
             return ToolResult.execution_error(tool_request.id, msg)
 
     def _extract_tool_result(self, result: CallToolResult) -> t.Any:
-        """Perform the internal ``extract tool result`` operation for ``MCPTool``.
-
-Parameters
-----------
-result : CallToolResult
-    Value supplied for ``result``."""
         if result.structured_content is not None:
             return result.structured_content
 
@@ -218,22 +177,6 @@ class MCPResourceTool(CoreTool):
         approval_mode: ToolApprovalMode | str = ToolApprovalMode.ASK_APPROVED,
         timeout_seconds: float = 240.0,
     ) -> None:
-        """Initialize ``MCPResourceTool``.
-
-Parameters
-----------
-client_manager : 'MCPClientManager'
-    Value supplied for ``client_manager``.
-server_id : str
-    Value supplied for ``server_id``.
-available_resources : list[t.Any] | None
-    Value supplied for ``available_resources``.
-resource_templates : list[t.Any] | None
-    Value supplied for ``resource_templates``.
-approval_mode : ToolApprovalMode | str
-    Value supplied for ``approval_mode``.
-timeout_seconds : float
-    Value supplied for ``timeout_seconds``."""
         self.client_manager = client_manager
         self.server_id = server_id
         self.available_resources = list(available_resources or [])
@@ -259,7 +202,6 @@ timeout_seconds : float
 
     @property
     def parameters(self) -> dict[str, t.Any]:
-        """Perform the ``parameters`` operation for ``MCPResourceTool``."""
         return self._parameter_schema
 
     async def execute(
@@ -268,16 +210,6 @@ timeout_seconds : float
         tool_context: ToolContext | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> ToolResult:
-        """Execute the requested operation for ``MCPResourceTool``.
-
-Parameters
-----------
-tool_request : ToolCallRecord
-    Value supplied for ``tool_request``.
-tool_context : ToolContext | None
-    Value supplied for ``tool_context``.
-cancellation_token : CancellationToken | None
-    Value supplied for ``cancellation_token``."""
         if cancellation_token and cancellation_token.is_cancelled():
             return ToolResult.cancelled_before_start(tool_request.id)
 
@@ -333,7 +265,6 @@ cancellation_token : CancellationToken | None
             return ToolResult.execution_error(tool_request.id, msg)
 
     def _build_description(self) -> str:
-        """Perform the internal ``build description`` operation for ``MCPResourceTool``."""
         parts = [f"Read a resource from the '{self.server_id}' MCP server by URI."]
         if self.available_resources:
             lines = []

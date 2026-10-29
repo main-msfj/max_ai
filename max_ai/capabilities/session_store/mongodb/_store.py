@@ -35,18 +35,6 @@ class MongoDBSessionStore(CoreSessionStore):
         uri_env: str = "MONGODB_URI",
         server_selection_timeout_ms: int = 5000,
     ) -> None:
-        """Initialize ``MongoDBSessionStore``.
-
-Parameters
-----------
-database : str
-    Value supplied for ``database``.
-collection : str
-    Value supplied for ``collection``.
-uri_env : str
-    Value supplied for ``uri_env``.
-server_selection_timeout_ms : int
-    Value supplied for ``server_selection_timeout_ms``."""
         super().__init__()
         self.config = MongoDBSessionStoreConfig(
             database=database, collection=collection, uri_env=uri_env,
@@ -62,12 +50,6 @@ server_selection_timeout_ms : int
 
     @classmethod
     def _from_config(cls, config: MongoDBSessionStoreConfig) -> MongoDBSessionStore:
-        """Create an instance from its configuration for ``MongoDBSessionStore``.
-
-Parameters
-----------
-config : MongoDBSessionStoreConfig
-    Value supplied for ``config``."""
         return cls(**config.model_dump())
 
     # -------- CONNECTION -----------------------------------------------------------
@@ -109,28 +91,12 @@ config : MongoDBSessionStoreConfig
 
     # -------- BACKEND HOOKS -----------------------------------------------------------
     async def _load(self, user_id: str, session_id: str) -> RunContext | None:
-        """Perform the internal ``load`` operation for ``MongoDBSessionStore``.
-
-Parameters
-----------
-user_id : str
-    Value supplied for ``user_id``.
-session_id : str
-    Value supplied for ``session_id``."""
         doc = await self._collection.find_one(
             {"user_id": user_id, "session_id": session_id}, {"_id": 0, "context": 1},
         )
         return None if doc is None else RunContext.model_validate_json(doc["context"])
 
     async def _save(self, ctx: RunContext, info: SessionInfo) -> None:
-        """Perform the internal ``save`` operation for ``MongoDBSessionStore``.
-
-Parameters
-----------
-ctx : RunContext
-    Value supplied for ``ctx``.
-info : SessionInfo
-    Value supplied for ``info``."""
         await self._collection.replace_one(
             {"user_id": info.user_id, "session_id": info.session_id},
             {**info.model_dump(), "context": ctx.model_dump_json()},
@@ -138,23 +104,9 @@ info : SessionInfo
         )
 
     async def _list(self, user_id: str) -> t.Iterable[SessionInfo]:
-        """Perform the internal ``list`` operation for ``MongoDBSessionStore``.
-
-Parameters
-----------
-user_id : str
-    Value supplied for ``user_id``."""
         cursor = self._collection.find({"user_id": user_id}, _INFO_FIELDS)
         return [SessionInfo.model_validate(doc) async for doc in cursor]
 
     async def _delete(self, user_id: str, session_id: str) -> bool:
-        """Perform the internal ``delete`` operation for ``MongoDBSessionStore``.
-
-Parameters
-----------
-user_id : str
-    Value supplied for ``user_id``.
-session_id : str
-    Value supplied for ``session_id``."""
         result = await self._collection.delete_one({"user_id": user_id, "session_id": session_id})
         return result.deleted_count > 0

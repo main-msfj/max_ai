@@ -71,20 +71,6 @@ class LocalKnowledgeRegistry(CoreKnowledgeRegistry):
         tool_mode: KnowledgeToolMode = KnowledgeToolMode.FULL,
         embedding: CoreEmbedding | None = None,
     ) -> None:
-        """Initialize ``LocalKnowledgeRegistry``.
-
-Parameters
-----------
-name : str
-    Value supplied for ``name``.
-description : str
-    Value supplied for ``description``.
-base_path : str | Path
-    Value supplied for ``base_path``.
-tool_mode : KnowledgeToolMode
-    Value supplied for ``tool_mode``.
-embedding : CoreEmbedding | None
-    Value supplied for ``embedding``."""
         super().__init__(
             name=name, description=description, tool_mode=tool_mode
         )
@@ -106,12 +92,6 @@ embedding : CoreEmbedding | None
 
     @classmethod
     def _from_config(cls, config: LocalKnowledgeRegistryConfig) -> "LocalKnowledgeRegistry":
-        """Create an instance from its configuration for ``LocalKnowledgeRegistry``.
-
-Parameters
-----------
-config : LocalKnowledgeRegistryConfig
-    Value supplied for ``config``."""
         return cls(
             name=config.name,
             description=config.description,
@@ -123,12 +103,10 @@ config : LocalKnowledgeRegistryConfig
     # -------- PATH HELPERS -----------------------------------------------------------
     @property
     def _knowledge_dir(self) -> Path:
-        """Perform the internal ``knowledge dir`` operation for ``LocalKnowledgeRegistry``."""
         return self.base_path / "knowledge"
 
     @property
     def _source_file(self) -> Path:
-        """Perform the internal ``source file`` operation for ``LocalKnowledgeRegistry``."""
         return self._knowledge_dir / f"{self.name}.json"
 
     # -------- LIFECYCLE -----------------------------------------------------------

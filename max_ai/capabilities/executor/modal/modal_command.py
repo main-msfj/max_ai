@@ -28,7 +28,6 @@ async def main():
     token = CancellationToken()
 
     async def watch():
-        """Perform the ``watch`` operation."""
         while not marker.exists():
             await asyncio.sleep(0.1)
         token.cancel()

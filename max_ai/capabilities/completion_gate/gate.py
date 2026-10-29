@@ -17,12 +17,6 @@ _RAN_AND_FAILED = {FailureReason.EXECUTION_ERROR, FailureReason.TIMEOUT}
 
 
 def _last_assistant(ctx: RunContext) -> AssistantMessage | None:
-    """Perform the internal ``last assistant`` operation.
-
-Parameters
-----------
-ctx : RunContext
-    Value supplied for ``ctx``."""
     for msg in reversed(ctx.messages):
         if isinstance(msg, AssistantMessage):
             return msg
@@ -30,12 +24,6 @@ ctx : RunContext
 
 
 def _exit_code(record: ToolCallRecord) -> int | None:
-    """Perform the internal ``exit code`` operation.
-
-Parameters
-----------
-record : ToolCallRecord
-    Value supplied for ``record``."""
     result = record.result
     if result is not None and result.success and isinstance(result.result, dict):
         return result.result.get("exit_code")
@@ -43,12 +31,6 @@ record : ToolCallRecord
 
 
 def _bash_failed(record: ToolCallRecord) -> bool:
-    """Perform the internal ``bash failed`` operation.
-
-Parameters
-----------
-record : ToolCallRecord
-    Value supplied for ``record``."""
     result = record.result
     if record.tool_name != "bash" or result is None:
         return False
@@ -59,24 +41,12 @@ record : ToolCallRecord
 
 
 def _plan_progress(ctx: RunContext) -> str:
-    """Perform the internal ``plan progress`` operation.
-
-Parameters
-----------
-ctx : RunContext
-    Value supplied for ``ctx``."""
     steps = ctx.plan.steps if ctx.plan is not None else []
     done = sum(step.status in ("done", "failed") for step in steps)
     return f"{done}/{len(steps)} steps closed"
 
 
 def _describe_failure(record: ToolCallRecord) -> str:
-    """Perform the internal ``describe failure`` operation.
-
-Parameters
-----------
-record : ToolCallRecord
-    Value supplied for ``record``."""
     command = str(record.parameters.get("command", ""))[:80]
     result = record.result
     if result is not None and result.success:
@@ -113,26 +83,12 @@ class RuntimeCompletionGate(CompletionBase):
     def __init__(
         self, config: RuntimeGateConfig | None = None, *, workspace: WorkspaceBase | None = None,
     ) -> None:
-        """Initialize ``RuntimeCompletionGate``.
-
-Parameters
-----------
-config : RuntimeGateConfig | None
-    Value supplied for ``config``.
-workspace : WorkspaceBase | None
-    Value supplied for ``workspace``."""
         super().__init__()
         self.config = config or RuntimeGateConfig()
         # A runtime dependency, not config: the Agent injects its workspace.
         self._workspace = workspace
 
     def bind_workspace(self, workspace: WorkspaceBase) -> None:
-        """Bind workspace for ``RuntimeCompletionGate``.
-
-Parameters
-----------
-workspace : WorkspaceBase
-    Value supplied for ``workspace``."""
         self._workspace = workspace
 
     def _to_config(self) -> RuntimeGateConfig:
@@ -141,21 +97,9 @@ workspace : WorkspaceBase
 
     @classmethod
     def _from_config(cls, config: RuntimeGateConfig) -> "RuntimeCompletionGate":
-        """Create an instance from its configuration for ``RuntimeCompletionGate``.
-
-Parameters
-----------
-config : RuntimeGateConfig
-    Value supplied for ``config``."""
         return cls(config)
 
     def on_final_response(self, ctx: RunContext) -> CompletionDecision:
-        """On final response for ``RuntimeCompletionGate``.
-
-Parameters
-----------
-ctx : RunContext
-    Value supplied for ``ctx``."""
         if not self.config.enabled:
             return CompletionDecision(status="completed")
         # An empty final answer (no text, no tool calls) is never a valid
@@ -242,14 +186,6 @@ ctx : RunContext
     def _unresolved_failures(
         self, ctx: RunContext, records: list[ToolCallRecord]
     ) -> list[ToolCallRecord]:
-        """Perform the internal ``unresolved failures`` operation for ``RuntimeCompletionGate``.
-
-Parameters
-----------
-ctx : RunContext
-    Value supplied for ``ctx``.
-records : list[ToolCallRecord]
-    Value supplied for ``records``."""
         succeeded = {
             r.parameters.get("command")
             for r in records

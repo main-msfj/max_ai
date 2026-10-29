@@ -138,12 +138,6 @@ class OpenRouterChatCompletionClient(OpenAIChatCompletionClient):
         cls,
         config: OpenRouterChatCompletionClientConfig,
     ) -> "OpenRouterChatCompletionClient":
-        """Create an instance from its configuration for ``OpenRouterChatCompletionClient``.
-
-Parameters
-----------
-config : OpenRouterChatCompletionClientConfig
-    Value supplied for ``config``."""
         model_config = ModelConfig(**config.config) if config.config else None
         return cls(
             model=config.model,
@@ -159,21 +153,9 @@ config : OpenRouterChatCompletionClientConfig
         )
 
     def _extract_thinking(self, message_or_delta: t.Any) -> str | None:
-        """Perform the internal ``extract thinking`` operation for ``OpenRouterChatCompletionClient``.
-
-Parameters
-----------
-message_or_delta : t.Any
-    Value supplied for ``message_or_delta``."""
         return self._get(message_or_delta, "reasoning", None) or None
 
     def _build_request(self, **kwargs: t.Any) -> dict[str, t.Any]:
-        """Perform the internal ``build request`` operation for ``OpenRouterChatCompletionClient``.
-
-Parameters
-----------
-kwargs : t.Any
-    Value supplied for ``kwargs``."""
         request = super()._build_request(**kwargs)
         body = dict(request.pop("extra_body", None) or {})
         if self.fallback_models:
@@ -192,16 +174,6 @@ kwargs : t.Any
         output_format: t.Type[BaseModel] | None,
         duration_ms: int,
     ) -> ChatCompletionResult:
-        """Perform the internal ``parse response`` operation for ``OpenRouterChatCompletionClient``.
-
-Parameters
-----------
-response : t.Any
-    Value supplied for ``response``.
-output_format : t.Type[BaseModel] | None
-    Value supplied for ``output_format``.
-duration_ms : int
-    Value supplied for ``duration_ms``."""
         self._raise_body_error(response)
         return super()._parse_response(response, output_format, duration_ms)
 
@@ -211,18 +183,7 @@ duration_ms : int
         output_format: t.Type[BaseModel] | None,
         start_time: float,
     ) -> t.AsyncGenerator[ChatCompletionChunk, None]:
-        """Perform the internal ``iter chunks`` operation for ``OpenRouterChatCompletionClient``.
-
-Parameters
-----------
-raw_stream : t.AsyncIterator[t.Any]
-    Value supplied for ``raw_stream``.
-output_format : t.Type[BaseModel] | None
-    Value supplied for ``output_format``.
-start_time : float
-    Value supplied for ``start_time``."""
         async def checked() -> t.AsyncIterator[t.Any]:
-            """Perform the ``checked`` operation for ``OpenRouterChatCompletionClient``."""
             async for chunk in raw_stream:
                 self._raise_body_error(chunk)
                 yield chunk

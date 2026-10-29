@@ -17,18 +17,6 @@ def tool(
     approval_mode: str | ToolApprovalMode = ToolApprovalMode.AUTO_APPROVED,
     read_only: bool = False,
 ) -> t.Callable[[t.Callable[..., t.Any]], FunctionAsTool]:
-    """Perform the ``tool`` operation.
-
-Parameters
-----------
-name : str | None
-    Value supplied for ``name``.
-description : str | None
-    Value supplied for ``description``.
-approval_mode : str | ToolApprovalMode
-    Value supplied for ``approval_mode``.
-read_only : bool
-    Value supplied for ``read_only``."""
     ...
 
 
@@ -41,20 +29,6 @@ def tool(
     approval_mode: str | ToolApprovalMode = ToolApprovalMode.AUTO_APPROVED,
     read_only: bool = False,
 ) -> FunctionAsTool:
-    """Perform the ``tool`` operation.
-
-Parameters
-----------
-func : t.Callable[..., t.Any]
-    Value supplied for ``func``.
-name : str | None
-    Value supplied for ``name``.
-description : str | None
-    Value supplied for ``description``.
-approval_mode : str | ToolApprovalMode
-    Value supplied for ``approval_mode``.
-read_only : bool
-    Value supplied for ``read_only``."""
     ...
 
 
@@ -87,12 +61,6 @@ def tool(
     """
 
     def decorator(fn: t.Callable[..., t.Any]) -> FunctionAsTool:
-        """Perform the ``decorator`` operation.
-
-Parameters
-----------
-fn : t.Callable[..., t.Any]
-    Value supplied for ``fn``."""
         return FunctionAsTool(
             func=fn,
             name=name,
