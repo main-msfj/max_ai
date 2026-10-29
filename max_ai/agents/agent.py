@@ -1,8 +1,4 @@
-"""Agent runtime built around a tool registry, dispatcher and execution provider.
-
-Parallel copy of base/agent.py for testing the new stack in isolation.
-base/agent.py is left untouched.
-"""
+"""Agent runtime built around a tool registry, dispatcher and execution provider."""
 
 from __future__ import annotations
 

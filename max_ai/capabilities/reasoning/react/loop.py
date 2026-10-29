@@ -192,8 +192,8 @@ class ReactLoop(BaseReasoning):
         """Create and register a ``ToolCallRecord`` for each tool call.
 
         Adding to ``ctx.tool_state`` raises if a record with the same id
-        already exists — the LLM should never reuse ids in one turn, así
-        que una colisión es un bug real que vale la pena que reviente.
+        already exists — the LLM should never reuse ids in one turn, so a
+        collision is a real bug and should fail loudly.
         """
         records: list[ToolCallRecord] = []
         for tc in tool_calls:
