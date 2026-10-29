@@ -27,3 +27,7 @@ class MCPToolExecutionError(MCPToolError):
 
 class MCPToolContentError(MCPToolError):
     """The remote MCP tool returned content this adapter cannot expose."""
+
+
+class MCPServerUnavailableError(MCPToolError):
+    """An MCP server could not be reached; its tools fail until it is back."""

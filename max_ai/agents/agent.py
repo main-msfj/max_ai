@@ -483,11 +483,16 @@ class Agent(ComponentBase[AgentSpec]):
 
     async def _ensure_mcp(self) -> None:
         """Connect MCP servers once and share them with every run; a dropped
-        connection reconnects on the next run. Closed by ``close()``."""
+        connection reconnects on the next run. Closed by ``close()``.
+
+        An unavailable server is logged and skipped (its known tools answer
+        that it is unavailable) unless its config says ``required``."""
         if not self.mcp_servers:
             return
         async with self._mcp_lock:
-            await self._mcp_manager.connect_all()
+            unavailable = await self._mcp_manager.connect_all()
+            for server_id, error in unavailable.items():
+                log.warning("MCP server unavailable", server_id=server_id, error=str(error))
             for tool in self._mcp_manager.get_tools():
                 if self._registry.get(tool.name) is not tool:
                     if self._registry.get(tool.name) is not None:

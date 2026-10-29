@@ -109,6 +109,8 @@ class OpenAIChatCompletionClient(
             client_kwargs["organization"] = organization
         if project is not None:
             client_kwargs["project"] = project
+        # The reasoning loop owns retries; the SDK's own would multiply them.
+        client_kwargs["max_retries"] = 0
         self.client = AsyncOpenAI(**client_kwargs)
 
     def _to_config(self) -> OpenAIChatCompletionClientConfig:
@@ -535,6 +537,21 @@ class OpenAIChatCompletionClient(
             return obj.get(key, default)
         return getattr(obj, key, default)
 
+    @staticmethod
+    def _retry_after(response: t.Any) -> float | None:
+        """Seconds from ``retry-after-ms`` / ``retry-after`` (seconds only)."""
+        headers = getattr(response, "headers", None)
+        if headers is None:
+            return None
+        for name, scale in (("retry-after-ms", 1000.0), ("retry-after", 1.0)):
+            try:
+                seconds = float(headers.get(name)) / scale
+            except (TypeError, ValueError):
+                continue
+            if seconds >= 0:
+                return seconds
+        return None
+
     @classmethod
     def _map_openai_error(cls, exc: Exception) -> ClientError:
         if isinstance(exc, ClientError):
@@ -542,14 +559,9 @@ class OpenAIChatCompletionClient(
         if isinstance(exc, AuthenticationError):
             return ClientError.authentication_failed(str(exc))
         if isinstance(exc, RateLimitError):
-            retry_after = None
-            response = getattr(exc, "response", None)
-            if response is not None:
-                try:
-                    retry_after = float(response.headers.get("retry-after"))
-                except Exception:
-                    retry_after = None
-            return ClientError.rate_limit_exceeded(retry_after)
+            return ClientError.rate_limit_exceeded(
+                cls._retry_after(getattr(exc, "response", None))
+            )
         if isinstance(exc, APITimeoutError):
             return ClientError.request_timeout(0)
         if isinstance(exc, BadRequestError):

@@ -33,6 +33,14 @@ class MCPServerConfig(BaseModel):
     resource_approval_mode: ToolApprovalMode | None = None
     tool_approval_modes: dict[str, ToolApprovalMode] = Field(default_factory=dict)
     timeout_seconds: float = Field(default=240.0, gt=0)
+    # Connecting (handshake + tool discovery) may take at most this long.
+    connect_timeout_seconds: float = Field(default=30.0, gt=0)
+    # After a failed connection, runs skip this server for this long
+    # instead of each paying connect_timeout_seconds again.
+    retry_after_seconds: float = Field(default=60.0, ge=0)
+    # Required: a run fails if this server is unavailable. Otherwise the run
+    # goes on and the server's tools answer that it is unavailable.
+    required: bool = False
 
     @field_validator("server_id")
     @classmethod

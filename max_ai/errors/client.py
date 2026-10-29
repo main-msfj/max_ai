@@ -1,8 +1,9 @@
 """Errors raised by chat completion clients.
 
 A single ``ClientError`` exception covers all client-side failure
-modes. The ``kind`` attribute identifies the specific category for
-callers that need to react differently (e.g. retry on rate limit).
+modes. The ``kind`` attribute identifies the specific category, and
+``status`` / ``retry_after`` carry what the provider answered, so the
+reasoning loop (the only layer that retries) can decide what to do.
 
 Use the factory classmethods rather than ``ClientError(...)`` directly
 to keep error messages consistent across providers.
@@ -18,9 +19,20 @@ class ClientError(Exception):
     standard messages and a ``kind`` tag identifying the category.
     """
 
-    def __init__(self, message: str, kind: str = "generic") -> None:
+    def __init__(
+        self,
+        message: str,
+        kind: str = "generic",
+        *,
+        status: int | None = None,
+        retry_after: float | None = None,
+    ) -> None:
         super().__init__(message)
         self.kind = kind
+        # HTTP status of the provider's answer, when there was one.
+        self.status = status
+        # Seconds the provider asked to wait before retrying (Retry-After).
+        self.retry_after = retry_after
 
     # -------- VALIDATION ERRORS -----------------------------------------------------------
     @classmethod
@@ -56,7 +68,7 @@ class ClientError(Exception):
         msg = "Rate limit exceeded"
         if retry_after is not None:
             msg = f"{msg}, retry after {retry_after:.1f}s"
-        return cls(msg, kind="rate_limit")
+        return cls(msg, kind="rate_limit", status=429, retry_after=retry_after)
 
     @classmethod
     def token_limit_exceeded(
@@ -80,7 +92,7 @@ class ClientError(Exception):
         if status_code is not None:
             prefix = f"{prefix} (HTTP {status_code})"
         msg = f"{prefix}: {detail}" if detail else prefix
-        return cls(msg, kind="provider")
+        return cls(msg, kind="provider", status=status_code)
 
     @classmethod
     def request_timeout(cls, seconds: float) -> "ClientError":
@@ -125,7 +137,7 @@ class ClientError(Exception):
         else:
             prefix = f"{provider} API error"
         msg = f"{prefix}: {detail}" if detail else prefix
-        return cls(msg, kind="api_error")
+        return cls(msg, kind="api_error", status=status)
 
     @classmethod
     def unexpected(cls, provider: str, detail: str | None = None) -> "ClientError":

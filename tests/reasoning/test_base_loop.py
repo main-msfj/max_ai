@@ -5,7 +5,7 @@ These tests don't run a full reasoning loop — they isolate:
   - State accumulation (record_usage, record_completion, retries).
   - Tool-call chunk merging across streamed fragments.
   - Tool-call assembly from accumulated fragments (drop on missing
-    name / malformed JSON arguments).
+    name, mark malformed JSON arguments with parsing_error).
 
 Loop-level behavior (iterations, tool dispatch, approval pauses) lives
 in test_react_loop.py.
@@ -217,7 +217,9 @@ def test_build_tool_calls_drops_missing_name(silent_log):
     assert calls == []
 
 
-def test_build_tool_calls_drops_malformed_json(silent_log):
+def test_build_tool_calls_marks_malformed_json(silent_log):
+    """Same shape as the non-streaming clients: the call fails validation
+    and the model sees why, instead of the call vanishing."""
     accumulated = {
         "call_1": {
             "id": "call_1",
@@ -225,11 +227,15 @@ def test_build_tool_calls_drops_malformed_json(silent_log):
         },
     }
     calls = BaseReasoning._build_tool_calls_from_chunks(accumulated, silent_log)
-    assert calls == []
+    assert len(calls) == 1
+    assert calls[0].tool_name == "do_thing"
+    assert calls[0].parameters == {
+        "raw_error_content": "not-valid-json{", "parsing_error": True,
+    }
 
 
-def test_build_tool_calls_partial_drop(silent_log):
-    """Good calls survive even when bad ones are dropped."""
+def test_build_tool_calls_partial_malformed(silent_log):
+    """Good calls are untouched when another one is malformed."""
     accumulated = {
         "call_good": {
             "id": "call_good",
@@ -241,8 +247,9 @@ def test_build_tool_calls_partial_drop(silent_log):
         },
     }
     calls = BaseReasoning._build_tool_calls_from_chunks(accumulated, silent_log)
-    assert len(calls) == 1
-    assert calls[0].tool_name == "ok"
+    by_name = {c.tool_name: c for c in calls}
+    assert by_name["ok"].parameters == {}
+    assert by_name["broken"].parameters["parsing_error"] is True
 
 
 def test_build_tool_calls_multiple(silent_log):
