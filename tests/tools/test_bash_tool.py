@@ -35,9 +35,20 @@ async def test_commands_run_in_the_workspace_with_its_env(tmp_path):
                        'pwd && printf ok > out.txt && echo "$WORKSPACE|$SCRATCHPAD"')
     assert result.success and result.result["exit_code"] == 0
     workspace = (root / "workspace").resolve()
-    assert result.result["cwd"] == str(workspace)
+    assert result.result["stdout"].splitlines()[0] == str(workspace)  # pwd
     assert (workspace / "out.txt").read_text() == "ok"
     assert f"{workspace}|{(root / 'scratchpad' / 's1').resolve()}" in result.result["stdout"]
+
+
+async def test_the_result_carries_only_what_the_model_needs(tmp_path):
+    _, context = runtime(tmp_path)
+    quiet = await run(BashTool(), context, "echo hi")
+    assert quiet.result == {"exit_code": 0, "stdout": "hi\n"}
+
+    loud = await run(BashTool(max_output_chars=10), context, "seq 1 100")
+    assert loud.result["stdout_truncated"] is True
+    assert loud.result["stdout_original_chars"] == len("".join(f"{i}\n" for i in range(1, 101)))
+    assert "stderr" not in loud.result and "stderr_truncated" not in loud.result
 
 
 async def test_a_failing_command_is_a_result_with_its_exit_code(tmp_path):
