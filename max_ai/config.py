@@ -40,8 +40,10 @@ class Settings(BaseSettings):
     # Read-only tool calls of one model reply that may run at once (MAX_PARALLEL_TOOLS).
     max_parallel_tools: int = Field(default=8, ge=1)
     # Characters of one tool result the model sees (MAX_TOOL_RESULT_CHARS);
-    # longer results are cut in the middle. Bash already cuts at 20,000.
+    # longer results are cut in the middle. Bash already cuts at 20,000 bytes.
     max_tool_result_chars: int = Field(default=30_000, ge=1_000)
+    # Max seconds one bash command may run (TOOL_TIMEOUT_SECONDS).
+    tool_timeout_seconds: float = Field(default=360, gt=0)
 
     # Context compaction budgets. Environment overrides use the uppercase
     # field names, e.g. COMPACTION_PROMPT_BUDGET_TOKENS=6000.

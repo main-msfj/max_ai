@@ -12,6 +12,8 @@ from collections.abc import Sequence
 from ...base.executor import ExecutionResult
 from ..termination import CancellationToken
 
+_GRACE_SECONDS = 3
+
 
 async def run_process(
     argv: Sequence[str], *, cwd: str | None = None,
@@ -34,9 +36,12 @@ async def run_process(
         start_new_session=(os.name == "posix"),
     )
 
-    async def capture(stream):
-        data = bytearray()
-        truncated = False
+    # Shared buffers: a timed-out command still returns what it printed.
+    out, err = bytearray(), bytearray()
+    truncated = False
+
+    async def capture(stream, data):
+        nonlocal truncated
         while True:
             chunk = await stream.read(8192)
             if not chunk:
@@ -45,7 +50,6 @@ async def run_process(
             if remaining > 0:
                 data.extend(chunk[:remaining])
             truncated |= len(chunk) > max(remaining, 0)
-        return data.decode("utf-8", errors="replace"), truncated
 
     async def feed():
         if stdin is None:
@@ -63,7 +67,8 @@ async def run_process(
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
-    readers = [asyncio.create_task(capture(process.stdout)), asyncio.create_task(capture(process.stderr))]
+    readers = [asyncio.create_task(capture(process.stdout, out)),
+               asyncio.create_task(capture(process.stderr, err))]
     feeder = asyncio.create_task(feed())
     cancelled = False
 
@@ -90,13 +95,13 @@ async def run_process(
             async with asyncio.timeout(timeout):
                 await process.wait()
                 await feeder
-                stdout, stderr = await asyncio.gather(*readers)
+                await asyncio.gather(*readers)
         except TimeoutError:
-            _terminate(process)
-            await process.wait()
+            await _stop(process)
             await asyncio.gather(feeder, return_exceptions=True)
-            await asyncio.gather(*readers, return_exceptions=True)
-            return ExecutionResult("", "Command timed out", None, timed_out=True)
+            # A daemon that left the group may hold the pipe: don't wait for it.
+            await asyncio.wait(readers, timeout=_GRACE_SECONDS)
+            return ExecutionResult(_text(out), _text(err), None, timed_out=True, truncated=truncated)
         except asyncio.CancelledError:
             _terminate(process)
             await process.wait()
@@ -104,8 +109,7 @@ async def run_process(
             raise
         if cancelled:
             raise asyncio.CancelledError
-        return ExecutionResult(stdout[0], stderr[0], process.returncode,
-                               truncated=stdout[1] or stderr[1])
+        return ExecutionResult(_text(out), _text(err), process.returncode, truncated=truncated)
     except BaseException:
         _terminate(process)
         if process.returncode is None:
@@ -117,6 +121,27 @@ async def run_process(
             if not task.done():
                 task.cancel()
         await asyncio.gather(feeder, *readers, return_exceptions=True)
+
+
+def _text(data: bytearray) -> str:
+    return data.decode("utf-8", errors="replace")
+
+
+async def _stop(process: asyncio.subprocess.Process) -> None:
+    """TERM the group first so its traps run (bash's wrapper prints the output
+    so far); KILL whatever is left after the grace period."""
+    try:
+        if os.name == "posix":
+            os.killpg(process.pid, signal.SIGTERM)
+        else:
+            process.terminate()
+    except ProcessLookupError:
+        return
+    try:
+        await asyncio.wait_for(process.wait(), _GRACE_SECONDS)
+    except TimeoutError:
+        _terminate(process)
+        await process.wait()
 
 
 def _terminate(process: asyncio.subprocess.Process) -> None:

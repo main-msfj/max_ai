@@ -62,6 +62,11 @@ class ExecutorBase(ComponentBase[BaseModel], ABC):
     # the user approves every command.
     isolated: ClassVar[bool] = False
 
+    @property
+    def runs_commands(self) -> bool:
+        """Whether the Agent gives the model the bash tool."""
+        return True
+
     async def prepare(self) -> None:
         """Slow one-time setup (building an image), run by the Agent before
         any tool so it never counts against a tool's timeout."""

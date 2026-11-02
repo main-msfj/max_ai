@@ -6,6 +6,7 @@ import pytest
 
 from max_ai.agents.agent import Agent
 from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
+from max_ai.capabilities.executor.local import LocalExecutor
 from max_ai.capabilities.tools.bash import BashTool
 from max_ai.capabilities.tools.file_system import FileSystemTools
 from max_ai.capabilities.workspace.local import LocalWorkspace
@@ -135,7 +136,8 @@ async def test_the_agent_never_runs_a_denied_command(tmp_path):
     marker = tmp_path / "ran"
     agent = Agent(name="t", description="d", instructions="i",
                   client=BashOnceClient(f"pwd && env sudo touch {marker}"),
-                  workspace=LocalWorkspace(root=tmp_path / "ws"))
+                  workspace=LocalWorkspace(root=tmp_path / "ws"),
+                  executor=LocalExecutor(allow_commands=True))
     ctx = RunContext(user_id="u", session_id="s")
     async with agent:
         response = await agent.run("go", run_context=ctx)

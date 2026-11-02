@@ -107,7 +107,7 @@ The `ReActLoop` is the default reasoning engine. On each iteration it calls the 
 
 The `ToolExecutor` is the tool-call pipeline. It receives `ToolCallRecord` objects from the reasoning loop, resolves tool names, validates parameters against each tool's JSON schema, emits approval events when needed, runs middleware around the execution step, dispatches execution to an executor, and returns both observability events and `ToolMessage` results for the LLM.
 
-The executor controls where side effects happen. `LocalExecutor` runs trusted tools in the same Python process. `DockerExecutor` and `ModalExecutor` run commands in a sandbox and mount the user's directory at `/workspaces/<user_id>`.
+The executor controls where bash runs; every other tool runs in the agent's process. The default `LocalExecutor()` runs no commands, so the agent has no bash; `LocalExecutor(allow_commands=True)` runs them on this machine with approval for each one. `DockerExecutor` and `ModalExecutor` run them in a sandbox with the user's directory at `/workspaces/<user_id>`.
 
 The workspace creates per-user runtime directories: local disk (`LocalWorkspace`) or object storage (`AzureBlobWorkspace`, `MinIOWorkspace`). Each run materializes the user's directory, copies the selected skills into it, and gives the file tools and `bash` the same `$WORKSPACE`, `$SCRATCHPAD` and `$SKILLS` paths.
 
@@ -300,7 +300,7 @@ Check each skill's license before using it. Some public skill repos mix open-sou
 
 The token is read from the environment when the repo is cloned. It is never serialized or placed on the command line. The host needs `git` installed.
 
-Skills work with any executor, but their scripts run wherever `bash` runs: with the default `LocalExecutor` that is your machine, with no sandbox (the agent logs a warning). Use `DockerExecutor` or `ModalExecutor` for skills you did not write.
+Skills run their scripts with `bash`, so they need an executor that runs commands: `DockerExecutor` or `ModalExecutor`, or `LocalExecutor(allow_commands=True)` to run them on your machine, approving each command. With the default `LocalExecutor()` the agent has no bash: skills are read and followed with the file tools only (the agent logs a warning).
 
 ### Execution
 

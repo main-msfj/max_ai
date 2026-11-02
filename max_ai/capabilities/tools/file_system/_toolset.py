@@ -274,9 +274,6 @@ class FileSystemTools:
             return "workspace"
         if parts[0] == "skills":
             return "/".join(parts)
-        if parts[0] == "scratchpad":
-            UserFileSystem._safe_session_id(context.session_id)
-            return "/".join(("scratchpad", context.session_id, *parts[1:]))
         return "/".join(("workspace", *parts))
 
     @staticmethod
@@ -286,21 +283,15 @@ class FileSystemTools:
 
     @staticmethod
     def _write_target(context: ToolContext, path: str) -> str:
-        """Resolve a WriteFile path to its full location."""
+        """Resolve a WriteFile path to its full location (always in the workspace)."""
         parts = FileSystemTools._as_given(context, UserFileSystem._visible_parts(path))
-        if parts and parts[0] == "scratchpad":
-            UserFileSystem._safe_session_id(context.session_id)
-            return "/".join(("scratchpad", context.session_id, *parts[1:]))
         return "/".join(("workspace", *parts))
 
     @staticmethod
     def _as_given(context: ToolContext, parts: tuple[str, ...]) -> tuple[str, ...]:
-        """Accept paths exactly as the tools return them: ``workspace/x`` is
-        ``x`` and ``scratchpad/<this session>/x`` is ``scratchpad/x``."""
+        """Accept paths exactly as the tools return them: ``workspace/x`` is ``x``."""
         if parts and parts[0] == "workspace":
             return parts[1:]
-        if parts[:2] == ("scratchpad", context.session_id):
-            return ("scratchpad", *parts[2:])
         return parts
 
     # -------- READS -----------------------------------------------------------
