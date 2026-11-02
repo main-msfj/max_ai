@@ -59,6 +59,20 @@ class ToolDispatcher:
             previous_read_only = read_only
         return batches
 
+    @staticmethod
+    def _capped(text: str) -> str:
+        """``text`` cut in the middle past ``max_tool_result_chars``: the model
+        keeps the start and the end, and is told how much is missing."""
+        limit = setting.max_tool_result_chars
+        if len(text) <= limit:
+            return text
+        half = limit // 2
+        cut = len(text) - 2 * half
+        return (
+            f"{text[:half]}\n\n[... {cut:,} of {len(text):,} characters cut: "
+            f"the tool returned more than fits ...]\n\n{text[-half:]}"
+        )
+
     async def dispatch_many(self, records, context, cancellation_token=None):
         """Stream tool events and transcript results, preserving call order.
         Read-only calls next to each other run concurrently."""
@@ -98,9 +112,11 @@ class ToolDispatcher:
                             queue.put_nowait(ToolMessage(
                                 source=record.tool_name, tool_call_id=record.id,
                                 tool_name=record.tool_name, success=result.success,
-                                error=result.error,
-                                content=json.dumps(result.result, ensure_ascii=False, default=str)
-                                if result.success else result.error or "Tool failed",
+                                error=self._capped(result.error) if result.error else None,
+                                content=self._capped(
+                                    json.dumps(result.result, ensure_ascii=False, default=str)
+                                    if result.success else result.error or "Tool failed"
+                                ),
                             ))
             finally:
                 queue.put_nowait(sentinel)
