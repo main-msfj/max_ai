@@ -425,7 +425,9 @@ class Agent(ComponentBase[AgentSpec]):
         await self.memory._ensure_connected()
         return self.memory.bind(ctx.user_id, ctx.session_id or ctx.run_id)
 
-    async def _prompt_variables(self, ctx: RunContext) -> dict[str, Any]:
+    async def _prompt_variables(
+        self, ctx: RunContext, memory: CoreMemoryRegistry | None = None
+    ) -> dict[str, Any]:
         """Collect current data without making the templates access registries."""
         variables: dict[str, Any] = {
             "name": self.name,
@@ -439,15 +441,18 @@ class Agent(ComponentBase[AgentSpec]):
             variables["loaded_skills"] = self._skill_blocks
         if self.knowledge:
             variables["retrieval_tools"] = self._knowledge_tools
-        memory = await self._memory_for(ctx)
+        if memory is None:
+            memory = await self._memory_for(ctx)
         if memory is not None:
             variables["persistent_memories"] = await memory.get_context()
             variables["memory_tools"] = self._memory_tools
         return variables
 
-    async def _prompts(self, ctx: RunContext) -> PromptCtx:
+    async def _prompts(
+        self, ctx: RunContext, memory: CoreMemoryRegistry | None = None
+    ) -> PromptCtx:
         """Render a fresh snapshot for each run/resume in stack order."""
-        variables = await self._prompt_variables(ctx)
+        variables = await self._prompt_variables(ctx, memory)
         prompts = PromptCtx(
             stack=self._stack,
             variables=variables,
@@ -549,6 +554,8 @@ class Agent(ComponentBase[AgentSpec]):
                 "run_context": ctx,
             },
         )
+        # One bound copy per run: the prompt and the loop share it.
+        memory = await self._memory_for(ctx)
         reasoning = self.reasoning.bind(
             name=self.name,
             client=self.client,
@@ -559,7 +566,7 @@ class Agent(ComponentBase[AgentSpec]):
             compaction=self.compaction,
             # Custom clients may not declare a window: 0 = unknown.
             max_context_tokens=getattr(self.client.config, "max_context_window", 0) or 0,
-            memory=await self._memory_for(ctx),
+            memory=memory,
         )
         stopped: StopRun | None = None
         try:
@@ -567,7 +574,7 @@ class Agent(ComponentBase[AgentSpec]):
             async with aclosing(
                 reasoning.execute_reasoning_loop(
                     ctx=ctx,
-                    prompts=await self._prompts(ctx),
+                    prompts=await self._prompts(ctx, memory),
                     loop_state=loop_state,
                     stream_tokens=stream_tokens,
                     cancellation_token=cancellation_token,
