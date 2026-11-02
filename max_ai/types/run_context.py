@@ -30,6 +30,13 @@ class RunContext(BaseModel):
     runtime_state: RuntimeState = Field(default_factory=RuntimeState)
     plan: AgentPlan | None = Field(default=None)
     compaction: CompactionState = Field(default_factory=CompactionState)
+    allowed_rules: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Policy rules the user allowed during this session (\"always "
+            "allow\"), e.g. bash(npm:*) or write_file. Added to the agent's allow list."
+        ),
+    )
     completion_state: dict[str, dict[str, JsonValue]] = Field(
         default_factory=dict,
         description=(

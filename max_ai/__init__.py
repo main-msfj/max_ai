@@ -25,6 +25,7 @@ __all__ = [
     "OllamaChatCompletionClient",
     "OpenAIChatCompletionClient",
     "OpenRouterChatCompletionClient",
+    "Policy",
     "RunContext",
     "ToolApprovalMode",
     "tool",
@@ -43,6 +44,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "OpenRouterChatCompletionClient": (
         "max_ai.capabilities.clients.openrouter", "OpenRouterChatCompletionClient",
     ),
+    "Policy": ("max_ai.core.policy", "Policy"),
     "RunContext": ("max_ai.types.run_context", "RunContext"),
     "ToolApprovalMode": ("max_ai.types.tools", "ToolApprovalMode"),
     "tool": ("max_ai.capabilities.tools.decorator", "tool"),
@@ -55,6 +57,7 @@ if t.TYPE_CHECKING:  # static analyzers see the real symbols
     from .capabilities.clients.openrouter import OpenRouterChatCompletionClient
     from .capabilities.tools.decorator import tool
     from .capabilities.tools.function_as_tool import FunctionAsTool
+    from .core.policy import Policy
     from .types.agent_response import AgentResponse
     from .types.run_context import RunContext
     from .types.tools import ToolApprovalMode

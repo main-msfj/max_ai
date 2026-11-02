@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel
 
@@ -58,6 +58,9 @@ class ExecutorBase(ComponentBase[BaseModel], ABC):
     """
 
     component_type = "executor"
+    # Commands run away from the host (a container, a VM). When they don't,
+    # the user approves every command.
+    isolated: ClassVar[bool] = False
 
     async def prepare(self) -> None:
         """Slow one-time setup (building an image), run by the Agent before

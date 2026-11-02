@@ -42,6 +42,7 @@ from ..core.event_type import (
 from ..core.ids import short_id
 from ..core.messages import HARNESS_SOURCE
 from ..core.model.session import SessionInfo
+from ..core.policy import Policy
 from ..core.termination.cancellation import CancellationToken
 from ..types.agent_response import AgentResponse
 from ..types.run_context import RunContext
@@ -157,7 +158,6 @@ class MaxAIApp(App[None]):
         # The CLI is a host: it loads, runs and saves; the agent keeps nothing.
         self.store = store
         # Tools answered "always allow": approved without asking until the CLI closes.
-        self._always_allowed: set[str] = set()
         self.user_id = user_id or (initial_context.user_id if initial_context else "user")
         self._resume_id = session_id if initial_context is None else None
         self.context: RunContext = initial_context or self._new_context(session_id)
@@ -890,34 +890,43 @@ class MaxAIApp(App[None]):
         if ctx is None:
             raise RuntimeError("Cannot resume without a run context")
         self.context = ctx
+        policy = getattr(self.agent, "policy", None) or Policy()
         for record in response.pending_approvals:
-            tool = record.tool_name
-            if tool in self._always_allowed:
-                ctx.tool_state.apply_approval(record.id, approved=True)
-                await self._write_system(f"{tool}: approved (always allowed)", style="#4ade80")
-                continue
+            name = record.tool_name
+            tool = next((x for x in getattr(self.agent, "tools", []) if x.name == name), None)
+            # "Always allow" earlier in this batch may already cover this call.
+            if tool is not None and ctx.allowed_rules:
+                decision = Policy(allow=[], ask=[], deny=[]).decide(
+                    tool, record.parameters, isolated=False, extra_allow=ctx.allowed_rules)
+                if decision.verdict == "allow" and decision.rule in ctx.allowed_rules:
+                    ctx.tool_state.apply_approval(record.id, approved=True)
+                    await self._write_system(f"{name}: approved ({decision.rule})", style="#4ade80")
+                    continue
+            rules = policy.rules_for(tool, record.parameters) if tool is not None else []
+            options = ["Yes, allow once"]
+            if rules:
+                options.append(f"Yes, always allow {', '.join(rules)}")
+            options.append("No, deny")
+            labeled = [f"{n}. {option}" for n, option in enumerate(options, start=1)]
             details = self._format_parameters(record.parameters)
-            always = f"yes, always allow {tool}".lower()
             while True:
-                answer = await self._request(
-                    "", ["1. Yes, allow once", f"2. Yes, always allow {tool}", "3. No, deny"],
-                    prompt_card=f"Allow {tool}?\n\n{details}",
-                )
-                choice = answer.strip().lower()
-                if choice in {"yes, allow once", "allow once", "yes", "y", "1"}:
+                answer = (await self._request(
+                    "", labeled, prompt_card=f"Allow {name}?\n\n{details}",
+                )).strip().lower()
+                if answer in {options[0].lower(), "allow once", "yes", "y", "1"}:
                     approved, label = True, "approved once"
                     break
-                if choice in {always, "always", "a", "2"}:
-                    self._always_allowed.add(tool)
-                    approved, label = True, "always allowed until the CLI closes"
+                if rules and answer in {options[1].lower(), "always", "a", "2"}:
+                    ctx.allowed_rules.extend(r for r in rules if r not in ctx.allowed_rules)
+                    approved, label = True, f"always allowed in this conversation: {', '.join(rules)}"
                     break
-                if choice in {"no, deny", "deny", "no", "n", "3"}:
+                if answer in {options[-1].lower(), "deny", "no", "n", str(len(options))}:
                     approved, label = False, "denied"
                     break
-                await self._write_system("Answer 1 (yes), 2 (always) or 3 (no).")
+                await self._write_system(f"Answer a number from 1 to {len(options)}.")
             ctx.tool_state.apply_approval(record.id, approved=approved)
             await self._write_system(
-                f"{tool}: {label}", style="#4ade80" if approved else "#f87171",
+                f"{name}: {label}", style="#4ade80" if approved else "#f87171",
             )
         questions = [q for record in response.pending_questions for q in self._questions(record)]
         if questions:

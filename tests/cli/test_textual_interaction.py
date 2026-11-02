@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 from textual.widgets import Static, TextArea
 
+from max_ai.capabilities.tools.bash import BashTool
 from max_ai.cli.app import MaxAIApp
 from max_ai.cli.events import event_line
 from max_ai.core.event_type import BashFinishedEvent, FileReadEvent, ModelResponseEvent
@@ -56,31 +57,32 @@ async def test_approval_enter_while_busy(tmp_path, answer):
 
 
 @pytest.mark.asyncio
-async def test_always_allow_stops_asking_for_that_tool(tmp_path):
+async def test_always_allow_covers_that_command_not_the_whole_tool(tmp_path):
     app = make_app(tmp_path)
+    app.agent.tools = [BashTool()]
+    ctx = RunContext()
 
-    def pending(record_id, tool):
-        ctx = RunContext()
-        record = ToolCallRecord(id=record_id, tool_name=tool, parameters={})
+    def pending(record_id, command):
+        record = ToolCallRecord(id=record_id, tool_name="bash", parameters={"command": command})
         ctx.tool_state.add(record)
         return record, AgentResponse(source="test", context=ctx, usage=Usage(),
                                      finish_reason="approval_needed")
 
     async with app.run_test() as pilot:
         app._busy = True
-        first, response = pending("a", "bash")
+        first, response = pending("a", "npm test")
         worker = asyncio.create_task(app._resolve_requests(response))
         await pilot.pause()
         app.query_one(TextArea).text = "2"
         await pilot.press("enter")
         await asyncio.wait_for(worker, 2)
-        assert not first.is_pending_approval and app._always_allowed == {"bash"}
+        assert not first.is_pending_approval and ctx.allowed_rules == ["bash(npm:*)"]
 
-        # The next bash call is approved without a prompt; other tools still ask.
-        second, response = pending("b", "bash")
+        # Another npm command is approved without a prompt; other commands still ask.
+        second, response = pending("b", "npm run build")
         await asyncio.wait_for(app._resolve_requests(response), 2)
         assert not second.is_pending_approval
-        other, response = pending("c", "write_file")
+        other, response = pending("c", "rm notes.txt")
         worker = asyncio.create_task(app._resolve_requests(response))
         await pilot.pause()
         assert not worker.done() and other.is_pending_approval

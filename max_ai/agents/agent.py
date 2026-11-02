@@ -62,6 +62,7 @@ from ..core.messages import (
 from ..core.middleware import MiddlewareChain
 from ..core.model.agent import AgentSpec
 from ..core.model.json_schema import model_from_schema, schema_of
+from ..core.policy import Policy
 from ..core.stacks.container import LayerContainer
 from ..core.termination import CancellationToken
 from ..core.tool.dispatcher import ToolDispatcher
@@ -145,6 +146,7 @@ class Agent(ComponentBase[AgentSpec]):
         *,
         # Most used first; the infrastructure (workspace, executor) has defaults.
         toolset: Sequence[CoreTool | Callable[..., Any]] | None = None,
+        policy: Policy | None = None,
         mcp: Sequence[MCPServerConfig] | None = None,
         memory: CoreMemoryRegistry | None = None,
         knowledge: Sequence[CoreKnowledgeRegistry] | None = None,
@@ -169,6 +171,10 @@ class Agent(ComponentBase[AgentSpec]):
         self.instructions = instructions
         self.client = client
         self.output_format = output_format
+        # allow / ask / deny for every tool call; Policy() is a safe default.
+        if policy is not None and not isinstance(policy, Policy):
+            raise TypeError("policy must be a max_ai.Policy")
+        self.policy = policy or Policy()
         self.middlewares = list(middlewares or [])
         for middleware in self.middlewares:
             if not isinstance(middleware, CoreMiddleware):
@@ -282,7 +288,7 @@ class Agent(ComponentBase[AgentSpec]):
         """Connect dispatch, completion checks and turn synchronization."""
         self.dispatcher = ToolDispatcher(
             self._registry, source=self.name, manager=self._manager,
-            middleware=self._middleware,
+            middleware=self._middleware, policy=self.policy,
         )
         # The framework's gate is always there (first); pass your own
         # RuntimeCompletionGate in ``gates`` to change its options.
@@ -373,6 +379,7 @@ class Agent(ComponentBase[AgentSpec]):
             knowledge=[dump(source) for source in self.knowledge],
             compaction=dump(self.compaction) if self.compaction is not None else None,
             toolset=[dump(_storable(tool, "tool")) for tool in self.toolset],
+            policy=self.policy,
             mcp=json.loads(serialize_mcp_servers(self.mcp_servers)),
             gates=[dump(_storable(gate, "gate")) for gate in self.gates],
             output_format=schema_of(self.output_format) if self.output_format else None,
@@ -391,6 +398,7 @@ class Agent(ComponentBase[AgentSpec]):
             instructions=config.instructions,
             client=load(config.client, CoreChatCompletionClient),
             toolset=[load(tool, CoreTool) for tool in config.toolset],
+            policy=config.policy,
             mcp=deserialize_mcp_servers(json.dumps(config.mcp)),
             executor=load(config.executor, ExecutorBase),
             workspace=load(config.workspace, WorkspaceBase),

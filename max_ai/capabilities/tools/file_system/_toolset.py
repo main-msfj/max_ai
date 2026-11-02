@@ -56,6 +56,7 @@ class FileSystemTools:
             description="List a folder in your workspace. Use paths relative to the workspace.",
             approval_mode=ToolApprovalMode.AUTO_APPROVED,
             read_only=True,
+            policy_subject="path",
         )
         def list_directory(
             context: ToolContext, path: str = "", limit: int = 200
@@ -134,6 +135,7 @@ class FileSystemTools:
             description="Read a file from your workspace.",
             approval_mode=ToolApprovalMode.AUTO_APPROVED,
             read_only=True,
+            policy_subject="file_name",
         )
         def read_file(
             context: ToolContext,
@@ -161,6 +163,7 @@ class FileSystemTools:
             name="write_file",
             description="Create a UTF-8 text file in your workspace.",
             approval_mode=ToolApprovalMode.ASK_APPROVED,
+            policy_subject="file_name",
         )
         def write_file(
             context: ToolContext, file_name: str, content: str
@@ -191,6 +194,7 @@ class FileSystemTools:
                 "the SHA-256 returned by read_file."
             ),
             approval_mode=ToolApprovalMode.ASK_APPROVED,
+            policy_subject="file_name",
         )
         def edit_file(
             context: ToolContext,
@@ -225,6 +229,7 @@ class FileSystemTools:
             name="create_directory",
             description="Create a directory in your workspace.",
             approval_mode=ToolApprovalMode.AUTO_APPROVED,
+            policy_subject="path",
         )
         def create_directory(context: ToolContext, path: str) -> dict[str, Any]:
             filesystem = self._filesystem(context)
@@ -247,6 +252,7 @@ class FileSystemTools:
             description="Inspect a file or directory in your workspace.",
             approval_mode=ToolApprovalMode.AUTO_APPROVED,
             read_only=True,
+            policy_subject="file_name",
         )
         def file_info(
             context: ToolContext, file_name: str
@@ -273,6 +279,7 @@ class FileSystemTools:
                 "returned by read_file."
             ),
             approval_mode=ToolApprovalMode.ASK_APPROVED,
+            policy_subject="file_name",
         )
         def delete_file(
             context: ToolContext,

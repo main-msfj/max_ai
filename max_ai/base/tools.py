@@ -5,6 +5,7 @@ Defines base classes and interfaces that enable agents
 to execute external actions (e.g., APIs, file I/O, services).
 """
 
+import fnmatch
 import typing as t
 from abc import ABC, abstractmethod
 
@@ -87,6 +88,7 @@ class CoreTool(ComponentBase[BaseModel], ABC):
         timeout_seconds: float = 300,
         max_retries: int = 3,
         read_only: bool = False,
+        policy_subject: str | None = None,
     ):
         """
         Initialize the run-scoped context supplied to a tool.
@@ -107,6 +109,8 @@ class CoreTool(ComponentBase[BaseModel], ABC):
             Value used to configure the tool or its run-scoped context.
         read_only : bool, default=False
             Value used to configure the tool or its run-scoped context.
+        policy_subject : str | None, default=None
+            Parameter that Policy rules like ``Tool(pattern)`` match against.
         """
         self.name = name
         self.version = version
@@ -116,6 +120,7 @@ class CoreTool(ComponentBase[BaseModel], ABC):
         self.max_retries = max_retries
         # No side effects: may run at the same time as other read-only calls.
         self.read_only = read_only
+        self.policy_subject = policy_subject
 
         # Lazily-built schema validator
         self._schema_validator: Draft202012Validator | None = None
@@ -125,6 +130,26 @@ class CoreTool(ComponentBase[BaseModel], ABC):
     def parameters(self) -> dict[str, t.Any]:
         """JSON schema for tool inputs."""
         ...
+
+    # -------- POLICY -----------------------------------------------------------
+    # Runs commands on the executor: without a sandbox, the Policy always asks.
+    runs_commands: t.ClassVar[bool] = False
+
+    def permission_subjects(self, parameters: dict[str, t.Any]) -> tuple[list[str], bool]:
+        """What ``Tool(pattern)`` rules match against, and whether that is all
+        of the call. By default, the ``policy_subject`` parameter if set."""
+        if self.policy_subject is None:
+            return [], True
+        value = parameters.get(self.policy_subject)
+        if not isinstance(value, str):
+            return [], False
+        # Rules name workspace paths as the user sees them (secrets/**), however
+        # the model wrote them (./secrets/key, workspace/secrets/key).
+        return [value.strip().removeprefix("./").removeprefix("workspace/")], True
+
+    def matches(self, pattern: str, subject: str) -> bool:
+        """``subject`` matches a rule's pattern: a glob, where ``**`` is any depth."""
+        return fnmatch.fnmatchcase(subject, pattern.replace("**/", "*").replace("/**", "/*"))
 
     def docker_ref(self) -> DockerToolRef:
         """

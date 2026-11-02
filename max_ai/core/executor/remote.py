@@ -32,6 +32,7 @@ class RemoteExecutor(ExecutorBase):
     and only accepts ``"internet"`` and ``"none"``.
     """
 
+    isolated = True
     supports_allow_list = True
     network: str = "none"
     allow_list: list[str] = []

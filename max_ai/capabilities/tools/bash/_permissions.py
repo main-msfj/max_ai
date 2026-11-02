@@ -1,14 +1,10 @@
-"""Declarative command permissions, separate from approval and execution."""
+"""How the Policy reads a bash command: its segments, and whether a rule
+pattern matches one. Rules themselves live in ``core.policy.Policy``."""
 
 from __future__ import annotations
 
 import shlex
 from fnmatch import fnmatchcase
-from typing import Literal
-
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
-
-BashPermission = Literal["allow", "ask", "deny"]
 
 # Commands that run their arguments as another command. Deny and ask patterns
 # are checked against the wrapped command too, so ``env sudo`` is still sudo.
@@ -29,117 +25,75 @@ _SHELLS = {"bash", "dash", "ksh", "sh", "zsh"}
 _MAX_NESTING = 4
 
 
-class BashPermissions(BaseModel):
-    """Patterns match literal command words; a trailing :* permits extra args.
+_KEYWORDS = {
+    "if", "then", "else", "elif", "fi", "for", "while", "until",
+    "do", "done", "case", "esac", "function", "!", "time", "coproc",
+}
 
-    Each supplied list replaces its defaults; [] disables that category.
-    Unknown commands and unsupported shell syntax require approval. This is
-    a conservative permission classifier, not a shell parser or a sandbox.
+
+def split_command(command: str, _depth: int = 0) -> tuple[list[str], bool]:
+    """The simple commands in ``command`` (``ls && rm x`` → ``["ls", "rm x"]``)
+    and whether they are all of it.
+
+    Each command also yields what it really runs: ``/usr/bin/sudo x``,
+    ``env sudo x`` and ``FOO=1 sudo x`` add ``sudo x``; ``bash -c '...'`` and
+    ``eval ...`` add the commands inside. Those, expansions, quoting,
+    redirection, background jobs, subshells and control structures make it
+    uncertain: deny and ask rules still see every command, but nothing is
+    allowed without asking.
     """
+    if not isinstance(command, str) or not command.strip() or "\0" in command:
+        return [], False
+    certain = not any(c in command for c in "$`\\\"'(){}<>*?[]#\r")
+    lexer = shlex.shlex(command.replace("\n", ";"), posix=True, punctuation_chars=";&|()<>")
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return [command.strip()], False
+    segments: list[list[str]] = []
+    words: list[str] = []
+    for token in tokens:
+        if token and all(c in ";&|()<>" for c in token):
+            if not words or token not in {";", "&&", "||", "|"}:
+                certain = False
+            if words:
+                segments.append(words)
+                words = []
+        else:
+            words.append(token)
+    if words:
+        segments.append(words)
+    else:
+        certain = False
+    subjects: list[str] = []
+    for words in segments:
+        # Shell keywords and assignments are not ordinary commands.
+        if "=" in words[0] or words[0] in _KEYWORDS:
+            certain = False
+        candidates = _unwrap(words)
+        scripts = _inline_scripts(candidates)
+        if len(candidates) > 1 or scripts:
+            certain = False
+        subjects.extend(shlex.join(candidate) for candidate in candidates)
+        for script in scripts if _depth < _MAX_NESTING else []:
+            subjects.extend(split_command(script, _depth + 1)[0])
+    return list(dict.fromkeys(subjects)), certain and bool(segments)
 
-    model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
-    allowed_patterns: list[StrictStr] = Field(
-        default_factory=lambda: ["pwd", "git status"], strict=True,
-    )
-    ask_patterns: list[StrictStr] = Field(
-        default_factory=lambda: ["git push:*"], strict=True,
-    )
-    deny_patterns: list[StrictStr] = Field(
-        default_factory=lambda: [
-            "sudo:*", "su:*", "doas:*", "shutdown:*", "reboot:*",
-            "halt:*", "poweroff:*", "mkfs:*", "mount:*", "umount:*",
-            "rm -rf /*", "git push --force:*",
-        ], strict=True,
-    )
-
-    @field_validator("allowed_patterns", "ask_patterns", "deny_patterns")
-    @classmethod
-    def validate_patterns(cls, patterns: list[str]) -> list[str]:
-        for pattern in patterns:
-            if not pattern.strip() or any(c in pattern for c in "\0\n\r"):
-                raise ValueError("Patterns must be non-empty single-line strings")
-            words = shlex.split(pattern.removesuffix(":*"))
-            if not words:
-                raise ValueError("Patterns must name a command")
-        return list(patterns)
-
-    @staticmethod
-    def _matches(words: list[str], pattern: str) -> bool:
+def command_matches(command: str, pattern: str) -> bool:
+    """``command`` (one segment) matches ``pattern`` word by word; a trailing
+    ``:*`` allows more arguments (``git push:*``)."""
+    try:
+        words = shlex.split(command)
         prefix = pattern.endswith(":*")
         expected = shlex.split(pattern[:-2] if prefix else pattern)
-        if len(words) < len(expected) or (not prefix and len(words) != len(expected)):
-            return False
-        return all(fnmatchcase(word, glob) for word, glob in zip(words, expected))
-
-    def evaluate(self, command: str, _depth: int = 0) -> BashPermission:
-        """Allow a compound command only when every literal segment is allowed.
-
-        Expansions, quoting, redirection, background jobs, subshells and control
-        structures fall back to ask even if an allow pattern matches. Visible
-        deny matches are still checked first, also through command paths
-        (``/usr/bin/sudo``), wrappers (``env sudo``) and inline scripts
-        (``bash -c "sudo ..."``, ``eval``). Dynamic code is not interpreted,
-        so deny patterns are a guard rail, not a sandbox.
-        """
-        if not isinstance(command, str) or not command.strip() or "\0" in command:
-            return "deny"
-        uncertain = any(c in command for c in "$`\\\"'(){}<>*?[]#\r")
-        lexer = shlex.shlex(command.replace("\n", ";"), posix=True, punctuation_chars=";&|()<>")
-        lexer.whitespace_split = True
-        lexer.commenters = ""
-        try:
-            tokens = list(lexer)
-        except ValueError:
-            return "ask"
-        segments: list[list[str]] = []
-        words: list[str] = []
-        for token in tokens:
-            if token and all(c in ";&|()<>" for c in token):
-                if not words or token not in {";", "&&", "||", "|"}:
-                    uncertain = True
-                if words:
-                    segments.append(words)
-                    words = []
-            else:
-                words.append(token)
-        if words:
-            segments.append(words)
-        else:
-            uncertain = True
-        if not segments:
-            return "ask"
-        decisions: list[BashPermission] = []
-        for words in segments:
-            candidates = _unwrap(words)
-            if any(
-                self._matches(candidate, pattern)
-                for candidate in candidates for pattern in self.deny_patterns
-            ) or any(
-                self.evaluate(inner, _depth + 1) == "deny"
-                for inner in _inline_scripts(candidates)
-                if _depth < _MAX_NESTING
-            ):
-                return "deny"
-            if len(candidates) > 1:
-                # Wrapped or path-qualified commands always need approval.
-                uncertain = True
-            if any(
-                self._matches(candidate, pattern)
-                for candidate in candidates for pattern in self.ask_patterns
-            ):
-                decisions.append("ask")
-            elif any(self._matches(words, pattern) for pattern in self.allowed_patterns):
-                decisions.append("allow")
-            else:
-                decisions.append("ask")
-            # Shell keywords/assignments are not ordinary executable commands.
-            if "=" in words[0] or words[0] in {
-                "if", "then", "else", "elif", "fi", "for", "while", "until",
-                "do", "done", "case", "esac", "function", "!", "time", "coproc",
-            }:
-                uncertain = True
-        return "ask" if uncertain or "ask" in decisions else "allow"
+    except ValueError:
+        return False
+    if not expected or len(words) < len(expected) or (not prefix and len(words) != len(expected)):
+        return False
+    return all(fnmatchcase(word, glob) for word, glob in zip(words, expected))
 
 
 def _unwrap(words: list[str]) -> list[list[str]]:
