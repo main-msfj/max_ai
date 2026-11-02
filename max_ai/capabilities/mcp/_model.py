@@ -32,7 +32,6 @@ class MCPServerConfig(BaseModel):
     approval_mode: ToolApprovalMode = ToolApprovalMode.ASK_APPROVED
     resource_approval_mode: ToolApprovalMode | None = None
     tool_approval_modes: dict[str, ToolApprovalMode] = Field(default_factory=dict)
-    timeout_seconds: float = Field(default=240.0, gt=0)
     # Connecting (handshake + tool discovery) may take at most this long.
     connect_timeout_seconds: float = Field(default=30.0, gt=0)
     # After a failed connection, runs skip this server for this long
