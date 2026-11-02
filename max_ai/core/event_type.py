@@ -396,7 +396,7 @@ class FileWrittenEvent(ToolEvent):
 
     EVENT_TYPE = "file_written"
     tool_call_id: str
-    operation: t.Literal["write_file", "edit_file"]
+    operation: t.Literal["WriteFile", "EditFile"]
     path: str
     root_dir: str
     content_hash: str
@@ -407,18 +407,11 @@ class FilesSearchedEvent(ToolEvent):
 
     EVENT_TYPE = "files_searched"
     tool_call_id: str
-    operation: t.Literal["find_files", "search_text"]
+    operation: t.Literal["FindFiles", "SearchFile"]
     path: str
     root_dir: str
     match_count: int
     truncated: bool = False
-
-
-class DirectoryCreatedEvent(ToolEvent):
-    EVENT_TYPE = "directory_created"
-    tool_call_id: str
-    path: str
-    root_dir: str
 
 
 class FileDeletedEvent(ToolEvent):
@@ -427,14 +420,6 @@ class FileDeletedEvent(ToolEvent):
     path: str
     root_dir: str
     content_hash: str
-
-
-class FileInfoEvent(ToolEvent):
-    EVENT_TYPE = "file_info"
-    tool_call_id: str
-    path: str
-    root_dir: str
-    file_type: t.Literal["file", "directory"]
 
 
 class ToolCallEvent(ToolEvent):
@@ -605,9 +590,7 @@ AgentEvents = Annotated[
         DirectoryListedEvent,
         FileWrittenEvent,
         FilesSearchedEvent,
-        DirectoryCreatedEvent,
         FileDeletedEvent,
-        FileInfoEvent,
         CompactionEvent,
         MemoryUpdateEvent,
         MemoryRetrievalEvent,

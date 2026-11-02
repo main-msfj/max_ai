@@ -33,8 +33,8 @@ def test_the_default_policy(tools):
     assert verdict(policy, bash, command="git status") == ("allow", "Bash(git status)")
     assert verdict(policy, bash, command="git push origin main") == ("ask", "Bash(git push:*)")
     assert verdict(policy, bash, command="python make.py") == ("ask", None)  # bash's default
-    assert verdict(policy, tools["read_file"], file_name="a.md") == ("allow", None)
-    assert verdict(policy, tools["write_file"], file_name="a.md", content="x") == ("ask", None)
+    assert verdict(policy, tools["ReadFile"], file_path="a.md") == ("allow", None)
+    assert verdict(policy, tools["WriteFile"], file_path="a.md", content="x") == ("ask", None)
 
 
 def test_deny_sees_through_paths_wrappers_and_inline_scripts(tools):
@@ -55,17 +55,17 @@ def test_deny_sees_through_paths_wrappers_and_inline_scripts(tools):
 
 def test_rules_by_name_glob_and_path(tools):
     policy = Policy(
-        allow=["write_file(docs/**)", "Bash(cat:*)"],
+        allow=["WriteFile(docs/**)", "Bash(cat:*)"],
         ask=["READ*"],
-        deny=[*DEFAULT_DENY, "write_file(secrets/**)", "delete_file"],
+        deny=[*DEFAULT_DENY, "WriteFile(secrets/**)", "DeleteFile"],
     )
-    write = tools["write_file"]
-    assert verdict(policy, write, file_name="docs/a.md", content="x") == ("allow", "write_file(docs/**)")
+    write = tools["WriteFile"]
+    assert verdict(policy, write, file_path="docs/a.md", content="x") == ("allow", "WriteFile(docs/**)")
     # The path is matched as the user writes it, whatever form the model sent.
-    assert verdict(policy, write, file_name="workspace/secrets/k.txt", content="x")[0] == "deny"
-    assert verdict(policy, write, file_name="./secrets/k.txt", content="x")[0] == "deny"
-    assert verdict(policy, tools["delete_file"], file_name="a.md") == ("deny", "delete_file")
-    assert verdict(policy, tools["read_file"], file_name="a.md") == ("ask", "READ*")  # case-insensitive glob
+    assert verdict(policy, write, file_path="workspace/secrets/k.txt", content="x")[0] == "deny"
+    assert verdict(policy, write, file_path="./secrets/k.txt", content="x")[0] == "deny"
+    assert verdict(policy, tools["DeleteFile"], file_path="a.md") == ("deny", "DeleteFile")
+    assert verdict(policy, tools["ReadFile"], file_path="a.md") == ("ask", "READ*")  # case-insensitive glob
     # Every command in the line must be allowed, and bash must see all of it.
     assert verdict(policy, tools["bash"], command="cat a.txt")[0] == "allow"
     assert verdict(policy, tools["bash"], command="cat a.txt && rm a.txt")[0] == "ask"
@@ -90,7 +90,7 @@ def test_always_allow_rules_for_a_call(tools):
     policy = Policy()
     assert policy.rules_for(tools["bash"], {"command": "npm i && npm test"}) == ["bash(npm:*)"]
     assert policy.rules_for(tools["bash"], {"command": "cat $(ls)"}) == []  # can't be allowed again
-    assert policy.rules_for(tools["write_file"], {"file_name": "a.md", "content": "x"}) == ["write_file"]
+    assert policy.rules_for(tools["WriteFile"], {"file_path": "a.md", "content": "x"}) == ["WriteFile"]
 
 
 def test_a_new_tool_needs_nothing_and_can_name_its_subject():
@@ -148,7 +148,7 @@ async def test_the_agent_never_runs_a_denied_command(tmp_path):
 
 def test_the_policy_is_saved_with_the_agent(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    policy = Policy(allow=["Bash(npm test)"], deny=[*DEFAULT_DENY, "delete_file"])
+    policy = Policy(allow=["Bash(npm test)"], deny=[*DEFAULT_DENY, "DeleteFile"])
     agent = Agent(name="t", description="d", instructions="i",
                   client=OpenAIChatCompletionClient(model="m", api_key="sk-test"),
                   workspace=LocalWorkspace(root=tmp_path), policy=policy)

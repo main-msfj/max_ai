@@ -77,18 +77,16 @@ class RemoteExecutor(ExecutorBase):
             BashFailedEvent,
             BashFinishedEvent,
             BashStartedEvent,
-            DirectoryCreatedEvent,
             DirectoryListedEvent,
             FileDeletedEvent,
-            FileInfoEvent,
             FileReadEvent,
             FilesSearchedEvent,
             FileWrittenEvent,
         )
         event_types = {event.EVENT_TYPE: event for event in (
             BashStartedEvent, BashFinishedEvent, BashFailedEvent, BashCancelledEvent,
-            DirectoryCreatedEvent, DirectoryListedEvent, FileDeletedEvent,
-            FileInfoEvent, FileReadEvent, FileWrittenEvent, FilesSearchedEvent,
+            DirectoryListedEvent, FileDeletedEvent,
+            FileReadEvent, FileWrittenEvent, FilesSearchedEvent,
         )}
         for raw in events if isinstance(events, list) else ():
             if not isinstance(raw, dict) or raw.get("event_type") not in event_types:
