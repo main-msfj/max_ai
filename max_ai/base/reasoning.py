@@ -46,7 +46,15 @@ from ..core.event_type import (
     ModelStreamChunkEvent,
 )
 from ..core.events_bus import EventBus
-from ..core.messages import AssistantMessage, CoreMessage
+from ..core.harness import messages as harness
+from ..core.messages import (
+    HARNESS_SOURCE,
+    AssistantMessage,
+    CoreMessage,
+    SystemMessage,
+    ToolMessage,
+    UserMessage,
+)
 from ..core.middleware.chain import MiddlewareChain
 from ..core.termination import CancellationToken
 from ..errors.client import ClientError
@@ -55,6 +63,7 @@ from ..types.chat_history import ChatHistory
 from ..types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
 from ..types.run_context import RunContext
 from ..types.stacks import PromptCtx
+from ..types.tool_call import ToolCallRecord, ToolResult
 from .clients import CoreChatCompletionClient
 from .completion_gate import CompletionDecision
 from .component import ComponentBase
@@ -535,13 +544,66 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
         """
         from contextlib import aclosing
 
-        async with aclosing(
-            self.dispatcher.dispatch_many(
-                records, self._tool_context, cancellation_token
-            )
-        ) as stream:
-            async for item in stream:
-                yield item
+        try:
+            async with aclosing(
+                self.dispatcher.dispatch_many(
+                    records, self._tool_context, cancellation_token
+                )
+            ) as stream:
+                async for item in stream:
+                    yield item
+        except BaseException:
+            # Cancelled or failed mid-round: answer every call anyway, or the
+            # next request carries a call with no result and is rejected.
+            self._answer_unanswered(ctx, records)
+            raise
+
+    async def _answer_at_limit(
+        self,
+        ctx: RunContext,
+        prompts: PromptCtx,
+        loop_state: BaseLoopState,
+        stream_tokens: bool,
+        cancellation_token: CancellationToken | None,
+        **kwargs: t.Any,
+    ) -> t.AsyncGenerator[CoreEvent, None]:
+        """One last call without tools, so the turn ends with a reply on
+        what was done and what is missing. No text: the next turn is told."""
+        call = self._call_llm_stream if stream_tokens else self._call_llm
+        loop_state.last_result = None
+        async for event in call(
+            ctx=ctx,
+            prompts=prompts,
+            loop_state=loop_state,
+            cancellation_token=cancellation_token,
+            transient_messages=[
+                SystemMessage(source=HARNESS_SOURCE, content=harness.ANSWER_AT_ITERATION_LIMIT)
+            ],
+            tools_override=[],
+            **kwargs,
+        ):
+            yield event
+        result = loop_state.last_result
+        if result is not None and result.message.text().strip():
+            # No tools were offered; drop any call a provider sends anyway.
+            ctx.messages.append(result.message.model_copy(update={"tool_calls": []}))
+            return
+        ctx.messages.append(UserMessage(source=HARNESS_SOURCE, content=harness.MAX_ITERATIONS_REACHED))
+
+    @staticmethod
+    def _answer_unanswered(ctx: RunContext, records: t.Iterable[ToolCallRecord]) -> None:
+        """Give each of ``records`` the ToolMessage it lacks. A call that never
+        started is closed as cancelled, so it does not run on the next turn."""
+        from ..core.tool.dispatcher import ToolDispatcher
+
+        answered = {m.tool_call_id for m in ctx.messages if isinstance(m, ToolMessage)}
+        for record in records:
+            if record.id in answered:
+                continue
+            if not record.is_consumed and not record.is_executing:
+                record.force_consume(ToolResult.cancelled_before_start(record.id))
+            if record.result is not None:
+                ctx.messages.append(ToolDispatcher.tool_message(record, record.result))
 
     @staticmethod
     def _conversation_messages(ctx: RunContext) -> list[CoreMessage]:
