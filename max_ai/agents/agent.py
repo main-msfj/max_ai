@@ -52,7 +52,7 @@ from ..capabilities.workspace.local import LocalWorkspace
 from ..config import setting
 from ..core.compaction import TokenCounter
 from ..core.environment.manager import EnvironmentManager
-from ..core.event_type import CoreEvent, ModelStreamChunkEvent
+from ..core.event_type import CoreEvent, ModelStreamChunkEvent, ModelStreamResetEvent
 from ..core.events_bus import EventBus
 from ..core.executor.reference import ToolReference
 from ..core.messages import (
@@ -73,6 +73,8 @@ from ..types.run_context import RunContext
 from ..types.stacks import PromptCtx
 
 log = ScopedLogger(logging.getLogger(__name__), scope=["Agent"])
+# run_stream hands out plain text it can't take back; this marks the retry.
+STREAM_RESTARTED = "\n\n[connection lost; the answer starts again below]\n\n"
 _warned_local_executor = False
 
 
@@ -719,6 +721,8 @@ class Agent(ComponentBase[AgentSpec]):
             async for item in stream:
                 if isinstance(item, ModelStreamChunkEvent) and item.chunk:
                     yield item.chunk
+                elif isinstance(item, ModelStreamResetEvent):
+                    yield STREAM_RESTARTED
 
     async def resume(self, run_context: RunContext, **kwargs: Any) -> AgentResponse:
         """Continue after callers apply approvals or answers to tool records."""

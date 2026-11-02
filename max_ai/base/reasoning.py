@@ -44,6 +44,7 @@ from ..core.event_type import (
     ModelCallEvent,
     ModelResponseEvent,
     ModelStreamChunkEvent,
+    ModelStreamResetEvent,
 )
 from ..core.events_bus import EventBus
 from ..core.harness import messages as harness
@@ -1019,6 +1020,12 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
                     action="retry",
                     retry_in_seconds=round(delay, 2),
                 )
+                if content_chunks or thinking_chunks:
+                    # Consumers already showed part of this answer; the retry
+                    # streams it again from the start.
+                    yield ModelStreamResetEvent(
+                        source=self.name, attempt=attempt + 2, reason=str(e)
+                    )
                 await asyncio.sleep(delay)
 
     # -------- STREAM HELPERS -----------------------------------------------------------
