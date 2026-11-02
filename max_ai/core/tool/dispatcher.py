@@ -31,8 +31,9 @@ if TYPE_CHECKING:
 class ToolDispatcher:
     """Resolve, validate, request approval and invoke a tool adapter.
 
-    Explicit host tools run in-process. Other tools run through the manager's
-    executor and conversation session, without a host fallback.
+    Every tool runs in this process. Only bash needs the environment: it gets
+    the manager's executor and the conversation's session, and only its
+    script reaches the sandbox.
     Approval is supplied by trusted application code via record.approve/reject.
     Pending approval returns None and leaves the record resumable.
     """
@@ -47,6 +48,10 @@ class ToolDispatcher:
         self.middleware = middleware
         self.policy = policy or Policy()
         self._active: set[str] = set()
+
+    def _runs_commands(self, name: str) -> bool:
+        tool = self.registry.get(name)
+        return tool is not None and tool.runs_commands
 
     def _batches(self, records: list[ToolCallRecord]) -> list[list[ToolCallRecord]]:
         """Consecutive read-only calls form one batch that runs at once; any
@@ -106,7 +111,7 @@ class ToolDispatcher:
                 return await self.dispatch(record, call_context, cancellation_token, session)
 
         async def run_batch(batch):
-            sandboxed = {r.id for r in batch if not self.registry.runs_on_host(r.tool_name)}
+            sandboxed = {r.id for r in batch if self._runs_commands(r.tool_name)}
             if len(batch) == 1 or not sandboxed or self.manager is None:
                 return await asyncio.gather(*(run(record) for record in batch))
             # Read-only calls share one execution lease: nothing to sync between them.
@@ -286,18 +291,14 @@ class ToolDispatcher:
             return finish(ToolResult.execution_error(
                 record.id, "Current permissions require manual approval; submit a new tool call",
             ))
-        if (tool.runs_commands or not self.registry.runs_on_host(tool.name)) and self.manager is None:
+        if tool.runs_commands and self.manager is None:
             return finish(ToolResult.execution_error(
-                record.id, "A runtime tool requires an EnvironmentManager",
+                record.id, f"{tool.name} requires an EnvironmentManager",
             ))
 
         # Per-call dependencies must not leak into concurrent calls or resumes.
         deps = dict(context.deps)
         deps["tool_call_id"] = record.id
-        deps.pop("tool_reference", None)
-        reference = self.registry.reference(tool.name)
-        if reference is not None:
-            deps["tool_reference"] = reference
         call_context = ToolContext(
             context.run_id, session_id=context.session_id, user_id=context.user_id,
             retry_count=context.retry_count, deps=deps, emit_event=context.emit_event,
@@ -309,21 +310,13 @@ class ToolDispatcher:
             return await tool.execute(record, call_context, cancellation_token)
 
         async def invoke():
-            if tool.runs_commands:
-                if shared_session is not None:
-                    return await run_in(shared_session)
-                async with self.manager.acquire(context.user_id, context.session_id) as session:
-                    return await run_in(session)
-            if self.registry.runs_on_host(tool.name):
+            # Every tool runs in this process; only bash needs the environment.
+            if not tool.runs_commands:
                 return await tool.execute(record, call_context, cancellation_token)
             if shared_session is not None:
-                return await self.manager.executor.run_tool(
-                    shared_session, tool, record, call_context, cancellation_token,
-                )
+                return await run_in(shared_session)
             async with self.manager.acquire(context.user_id, context.session_id) as session:
-                return await self.manager.executor.run_tool(
-                    session, tool, record, call_context, cancellation_token,
-                )
+                return await run_in(session)
 
         # Middleware sees only approved calls about to run; it may answer
         # in the tool's place (e.g. a budget that blocks it).
@@ -342,11 +335,14 @@ class ToolDispatcher:
             )
             if cancellation_token is not None:
                 cancellation_token.link_future(task)
-            result = await asyncio.wait_for(task, timeout=tool.timeout_seconds)
+            # Tools stop themselves at tool_timeout_seconds (bash inside the
+            # sandbox); this is only the net for one that never returns.
+            limit = setting.tool_timeout_seconds + 30
+            result = await asyncio.wait_for(task, timeout=limit)
             if not isinstance(result, ToolResult) or result.tool_call_id != record.id:
                 result = ToolResult.execution_error(record.id, "Invalid tool result")
         except asyncio.TimeoutError:
-            result = ToolResult.timeout(record.id, tool.timeout_seconds)
+            result = ToolResult.timeout(record.id, setting.tool_timeout_seconds)
         except asyncio.CancelledError:
             finish(ToolResult.cancelled_during_execution(record.id))
             raise

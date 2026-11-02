@@ -66,7 +66,6 @@
       "description": "Runs commands in a local Docker container.",
       "label": "DockerExecutor",
       "config": {
-        "framework": "maxai @ git+https://github.com/main-msfj/max_ai@main",
         "network": "internet",
         "max_output_bytes": 1048576
       }

@@ -110,9 +110,6 @@ class BashTool(CoreRuntimeTool):
             name=name,
             description=description or c.DESCRIPTION,
             approval_mode=approval_mode,
-            # The command stops itself at tool_timeout_seconds; this is the
-            # dispatcher's net for an executor that never returns.
-            timeout_seconds=setting.tool_timeout_seconds + 30,
         )
         self.max_output_bytes = max_output_bytes
         # Working directory per (user, conversation), kept by the harness.

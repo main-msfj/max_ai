@@ -306,11 +306,13 @@ Skills run their scripts with `bash`, so they need an executor that runs command
 
 `LocalExecutor` is fast and simple. It runs tool code in the current Python process and is suitable for trusted helpers. It also runs the model's `bash` commands directly on your machine with no sandbox, so the agent logs a warning when it is used; bash permission patterns are a guard rail, not isolation. Use `DockerExecutor` or `ModalExecutor` outside local development.
 
-`DockerExecutor` runs `bash` in one container per session. The container runs as a non-root user with a read-only root filesystem and all capabilities dropped. It has no network by default (`network="none"`; `"internet"` opens it), CPU, memory and PID limits, and the user's directory bind-mounted at `/workspaces/<user_id>`. Docker cannot filter by domain, so `allow_list` does not apply to it.
+`DockerExecutor` runs `bash` in one container per session. The container runs as a non-root user with a read-only root filesystem and all capabilities dropped. It has no network by default (`network="none"`; `"internet"` opens it), CPU, memory and PID limits, and the user's files copied to `/workspaces/<user_id>` in a container volume; no host path is shared. Docker cannot filter by domain, so `allow_list` does not apply to it.
 
-`ModalExecutor` (`pip install 'maxai[runtime-modal]'`) runs the same commands in a Modal sandbox and syncs the workspace in and out. Its default network is `"packages"`: the agent can install with pip, uv or npm and nothing else is reachable. Add domains with `allow_list=[...]`, or use `"internet"` / `"none"`.
+`ModalExecutor` (`pip install 'maxai[runtime-modal]'`) runs the same commands in a Modal sandbox. Its default network is `"packages"`: the agent can install with pip, uv or npm and nothing else is reachable. Add domains with `allow_list=[...]`, or use `"internet"` / `"none"`.
 
-Both build their image on first use and cache it: max_ai's runtime (Python, uv, Node/npm, git, ripgrep) by default, or your own image or Dockerfile. Yours never needs max_ai; the executor adds it (from `framework`), the agent user and `/workspaces` on top. It only needs Linux, bash, git and python3 with pip and venv.
+Both build their image on first use and cache it: max_ai's runtime (Debian slim with Python 3.12, uv, Node 22/npm, git, ripgrep) by default, or your own image or Dockerfile. Nothing of max_ai runs inside: the executor adds only the agent user and `/workspaces` on top of yours, which needs bash and GNU coreutils, findutils and tar (any Debian or Ubuntu base).
+
+Both sync the same way, with bash and tar around each lease: `workspace/` goes in and comes back, `skills/` only goes in. Only files whose sha256 changed move, and a file changed on both sides since the last sync stops it with a conflict error. `node_modules`, `.venv`, `venv`, `__pycache__` and `.cache` stay on the side that built them; `.git` is synced. A container or sandbox that dies is reported as lost: the session is dropped and the next call starts a new one. Every tool call stops after `TOOL_TIMEOUT_SECONDS` (360 by default).
 
 ```python
 from max_ai.capabilities.executor import DockerExecutor
@@ -327,7 +329,6 @@ Per-user runtime layout on the host:
 ```text
 <root>/<user_id>/
   workspace/          (shared workspace; bash starts here with $WORKSPACE)
-  scratchpad/<session_id>/  (per-session temporary; $SCRATCHPAD)
   skills/             (materializes skills; $SKILLS)
 ```
 

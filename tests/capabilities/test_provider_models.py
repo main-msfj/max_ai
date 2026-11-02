@@ -100,19 +100,19 @@ def test_modal_image_choices():
 
     ours = ModalExecutor()
     assert "pip, uv or npm" in ours.describe_environment()
-    assert "Node.js/npm" in ours.describe_environment()
+    assert "Node.js 22/npm" in ours.describe_environment()
     custom = ModalExecutor(image="python:3.12-slim")
     assert "with pip before running it" in custom.describe_environment()
     assert "Node.js" not in custom.describe_environment()
     with pytest.raises(ValueError, match="image or dockerfile"):
         ModalExecutor(image="python:3.12-slim", dockerfile="Dockerfile")
 
-    pinned = ModalExecutor(dockerfile="my.Dockerfile", framework="maxai==0.1.0")
+    pinned = ModalExecutor(dockerfile="my.Dockerfile")
     restored = ModalExecutor.deserialize(pinned.serialize())
-    assert (restored.dockerfile, restored.framework) == ("my.Dockerfile", "maxai==0.1.0")
+    assert restored.dockerfile == "my.Dockerfile"
 
 
-async def test_docker_builds_its_image_once_and_adds_max_ai_to_yours(monkeypatch, tmp_path):
+async def test_docker_builds_its_image_once_and_adds_the_agent_to_yours(monkeypatch, tmp_path):
     from types import SimpleNamespace
 
     from max_ai.capabilities.executor.docker import _executor as docker
@@ -128,24 +128,24 @@ async def test_docker_builds_its_image_once_and_adds_max_ai_to_yours(monkeypatch
 
     monkeypatch.setattr(docker, "run_process", fake_run)
 
-    theirs = docker.DockerExecutor(image="python:3.12-slim", framework="maxai==0.1.0")
+    theirs = docker.DockerExecutor(image="python:3.12-slim")
     tag = await theirs._ensure_image()
     layer = next(stdin for argv, stdin in calls if argv[:2] == ["docker", "build"])
     assert layer.startswith("FROM python:3.12-slim\n")
-    assert '/opt/maxai/bin/pip install --no-cache-dir "maxai==0.1.0"' in layer
+    assert "maxai" not in layer  # nothing of max_ai goes inside
     assert "chown 1000:1000 /workspaces" in layer
 
     # Same recipe: no rebuild, neither in this executor nor in a new one.
     calls.clear()
     assert await theirs._ensure_image() == tag and calls == []
-    assert await docker.DockerExecutor(image="python:3.12-slim", framework="maxai==0.1.0")._ensure_image() == tag
+    assert await docker.DockerExecutor(image="python:3.12-slim")._ensure_image() == tag
     assert not any(argv[:2] == ["docker", "build"] for argv, _ in calls)
 
-    # Default: max_ai's runtime Dockerfile, max_ai from `framework`.
+    # Default: max_ai's runtime Dockerfile, sent as the build's stdin.
     calls.clear()
     await docker.DockerExecutor()._ensure_image()
     argv, stdin = next((a, s) for a, s in calls if a[:2] == ["docker", "build"])
-    assert f"MAXAI={docker.DEFAULT_FRAMEWORK}" in argv and "ARG MAXAI=" in stdin
+    assert argv[-1] == "-" and "FROM python:3.12-slim-bookworm" in stdin and "maxai @" not in stdin
 
     # A Dockerfile is built with its folder as context, then gets the layer.
     (tmp_path / "Dockerfile").write_text("FROM debian:bookworm-slim\n")
@@ -167,5 +167,5 @@ async def test_docker_build_failure_says_what_the_image_needs(monkeypatch):
         return SimpleNamespace(exit_code=1, stderr="python3: not found")
 
     monkeypatch.setattr(docker, "run_process", fake_run)
-    with pytest.raises(RuntimeError, match="needs Linux, bash, git and python3"):
+    with pytest.raises(RuntimeError, match="needs bash and GNU coreutils"):
         await docker.DockerExecutor(image="alpine")._ensure_image()

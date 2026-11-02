@@ -54,7 +54,6 @@ from ..core.compaction import TokenCounter
 from ..core.environment.manager import EnvironmentManager
 from ..core.event_type import CoreEvent, ModelRetryEvent, ModelStreamChunkEvent
 from ..core.events_bus import EventBus
-from ..core.executor.reference import ToolReference
 from ..core.messages import (
     CoreMessage,
     UserMessage,
@@ -227,18 +226,8 @@ class Agent(ComponentBase[AgentSpec]):
     def _register_filesystem_tools(self) -> None:
         """Filesystem tools access the persistent workspace on the host."""
         for tool in FileSystem().get_toolset().tools:
-            if self._registry.get(tool.name) is not None:
-                continue
-            self._registry.register(
-                tool,
-                host=True,
-                reference=ToolReference(
-                    module="max_ai.capabilities.tools.file_system",
-                    qualname="FileSystemTools",
-                    kind="factory",
-                    tool_name=tool.name,
-                ),
-            )
+            if self._registry.get(tool.name) is None:
+                self._registry.register(tool)
 
     def _register_control_tools(self) -> None:
         """Plan and user input run on the host; Bash uses the executor."""
@@ -246,9 +235,9 @@ class Agent(ComponentBase[AgentSpec]):
             self.reasoning.enable_human_input
             and self._registry.get(AskUserTool.TOOL_NAME) is None
         ):
-            self._registry.register(AskUserTool(), host=True)
+            self._registry.register(AskUserTool())
         if self._registry.get(AgentUpdatePlanTool.TOOL_NAME) is None:
-            self._registry.register(AgentUpdatePlanTool(), host=True)
+            self._registry.register(AgentUpdatePlanTool())
         if not self.executor.runs_commands:
             if any(tool.runs_commands for tool in self._registry.all_tools()):
                 raise ValueError(COMMANDS_OFF)
@@ -315,7 +304,7 @@ class Agent(ComponentBase[AgentSpec]):
     def _register_capability_tools(self, tools: Sequence[CoreTool]) -> list[str]:
         """Register bound registry tools on the host and retain their names."""
         for tool in tools:
-            self._registry.register(tool, host=True)
+            self._registry.register(tool)
         return [tool.name for tool in tools]
 
     def _build_prompt_stack(
@@ -508,7 +497,7 @@ class Agent(ComponentBase[AgentSpec]):
                 if self._registry.get(tool.name) is not tool:
                     if self._registry.get(tool.name) is not None:
                         self._registry.unregister(tool.name)
-                    self._registry.register(tool, host=True)
+                    self._registry.register(tool)
 
     async def _drive_connected(
         self,
