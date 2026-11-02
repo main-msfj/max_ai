@@ -372,7 +372,7 @@ The event stream exposes model calls, streamed chunks, reasoning iterations, too
 
 ### Completion Gates
 
-Gates accept or reject the model's proposed final response before the turn ends. The framework's `RuntimeCompletionGate` is always added; pass `RuntimeCompletionGate(RuntimeGateConfig(plan_must_close=False))` in `gates=[...]` to change its options. Custom gates subclass `CompletionBase` and implement `on_final_response(ctx) -> CompletionDecision`.
+Gates accept or reject the model's proposed final response before the turn ends. The framework's `RuntimeCompletionGate` is always added; pass `RuntimeCompletionGate(RuntimeGateConfig(plan_must_close=False))` in `gates=[...]` to change its options. It nudges the model once (then only notes it) when the plan is still open, a bash command failed and wasn't fixed, or the turn left files in a `tmp/`, `temp/` or `scratch/` folder; it never deletes them. Custom gates subclass `CompletionBase` and implement `on_final_response(ctx) -> CompletionDecision`.
 
 ### Sessions
 

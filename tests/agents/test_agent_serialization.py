@@ -157,26 +157,14 @@ def test_developer_gates_are_stored_by_provider(tmp_path):
         full_agent(tmp_path, gates=[NotStorableGate()]).serialize()
 
 
-def test_the_framework_gate_is_always_there_and_gets_the_workspace(tmp_path):
+def test_the_framework_gate_is_always_there(tmp_path):
     workspace = LocalWorkspace(root=tmp_path)
     default = Agent(name="a", description="d", instructions="i",
                     client=OpenAIChatCompletionClient(model="gpt-4o-mini"), workspace=workspace)
     assert [type(g) for g in default.gates] == [RuntimeCompletionGate]
-    assert default.gates[0]._workspace is workspace
 
-    mine = RuntimeCompletionGate(RuntimeGateConfig(check_bash_outputs=False))
+    mine = RuntimeCompletionGate(RuntimeGateConfig(nudge_leftover_files=False))
     custom = Agent(name="a", description="d", instructions="i", workspace=workspace,
                    client=OpenAIChatCompletionClient(model="gpt-4o-mini"), gates=[ApprovedByFinance(), mine])
-    # Yours is used (not a second one), in your order, with your config.
-    assert isinstance(custom.gates[1], RuntimeCompletionGate)
-    assert custom.gates[1].config.check_bash_outputs is False
+    assert custom.gates[1] is mine  # yours is used (not a second one), in your order
     assert sum(isinstance(g, RuntimeCompletionGate) for g in custom.gates) == 1
-    assert custom.gates[1]._workspace is workspace
-
-    # The agent binds a copy, so one gate can be shared across agents.
-    other_workspace = LocalWorkspace(root=tmp_path / "other")
-    other = Agent(name="b", description="d", instructions="i", workspace=other_workspace,
-                  client=OpenAIChatCompletionClient(model="gpt-4o-mini"), gates=[mine])
-    assert mine._workspace is None
-    assert custom.gates[1]._workspace is workspace
-    assert other.gates[0]._workspace is other_workspace

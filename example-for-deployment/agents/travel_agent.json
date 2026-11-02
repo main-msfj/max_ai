@@ -122,12 +122,12 @@
         "component_type": "completion",
         "version": 1,
         "component_version": 1,
-        "description": "Check plan closure, declared deliverables and unacknowledged failures.",
+        "description": "Check plan closure, unacknowledged failures and leftover files.",
         "label": "RuntimeCompletionGate",
         "config": {
           "enabled": true,
           "plan_must_close": true,
-          "check_bash_outputs": true,
+          "nudge_leftover_files": true,
           "nudge_bash_failures": true
         }
       }

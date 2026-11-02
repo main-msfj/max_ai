@@ -39,7 +39,7 @@ def output_cut_off(limit: int) -> str:
         "off; any tool call in it was incomplete and did not run. Every reply, "
         "including tool arguments, must fit in that limit. Do not retry it the "
         "same way: split the work into smaller steps (several smaller files, or "
-        "write a first part and extend it with edit_file), or answer more briefly."
+        "write a first part and extend it with EditFile), or answer more briefly."
     )
 
 
@@ -70,20 +70,28 @@ def plan_closed_open(progress: str) -> str:
     return f"Turn closed with the plan still open ({progress})"
 
 
-def expected_output_unavailable(path: str, error: Exception) -> str:
-    return f"Expected output {path!r} is unavailable: {error}"
-
-
-def expected_output_missing(path: str) -> str:
-    return f"Expected output {path!r} is not a regular file"
-
-
 def command_failed(failure: str) -> str:
     return f"{failure} — fix it, or tell the user it failed."
 
 
 def closed_with_failure(failure: str) -> str:
     return f"Closed with unresolved failure: {failure}"
+
+
+def left_intermediate_files(paths: list[str]) -> str:
+    return (
+        f"You left intermediate files in the workspace: {_first_paths(paths)}. "
+        "Delete them, or move what the user needs next to the deliverables."
+    )
+
+
+def closed_with_leftovers(paths: list[str]) -> str:
+    return f"Closed leaving intermediate files in the workspace: {_first_paths(paths)}"
+
+
+def _first_paths(paths: list[str], limit: int = 10) -> str:
+    shown = ", ".join(paths[:limit])
+    return shown if len(paths) <= limit else f"{shown} and {len(paths) - limit} more"
 
 
 # -------- LOOP GUARDS --------------------------------------------------------------
