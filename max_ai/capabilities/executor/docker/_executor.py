@@ -5,13 +5,20 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from dataclasses import dataclass, field
+import time
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from uuid import uuid4
 
 from ....base.executor import ExecutionSession
 from ....core.executor.process import run_process
-from ....core.executor.remote import DEFAULT_FRAMEWORK, FRAMEWORK_PYTHON, RemoteExecutor
+from ....core.executor.remote import (
+    DEFAULT_FRAMEWORK,
+    FRAMEWORK_PYTHON,
+    RemoteExecutor,
+    supervised,
+)
+from ....core.ids import short_id
 from ..modal.sync import apply_snapshot, snapshot
 from ._model import DockerExecutorConfig
 
@@ -220,8 +227,15 @@ class DockerExecutor(RemoteExecutor):
     async def execute(self, session, command, *, timeout=60, cancellation_token=None):
         if not isinstance(command, str) or not command.strip():
             raise ValueError("command cannot be empty")
-        return await self.execute_argv(session, ["bash", "--noprofile", "--norc", "-c", command],
-                                       timeout=timeout, cancellation_token=cancellation_token)
+        # GNU timeout stops the command's group inside the container, so the
+        # wrapper still prints; the outer bound only catches a hung container.
+        start = time.monotonic()
+        result = await self.execute_argv(session, supervised(command, timeout, short_id()),
+                                         timeout=timeout + 30, cancellation_token=cancellation_token)
+        timed_out = result.timed_out or (
+            result.exit_code != 0 and time.monotonic() - start >= timeout
+        )
+        return replace(result, timed_out=timed_out)
 
     async def sync(self, session, direction):
         """Copy the workspace into the container ("to_environment") or back

@@ -286,7 +286,7 @@ class ToolDispatcher:
             return finish(ToolResult.execution_error(
                 record.id, "Current permissions require manual approval; submit a new tool call",
             ))
-        if not self.registry.runs_on_host(tool.name) and self.manager is None:
+        if (tool.runs_commands or not self.registry.runs_on_host(tool.name)) and self.manager is None:
             return finish(ToolResult.execution_error(
                 record.id, "A runtime tool requires an EnvironmentManager",
             ))
@@ -303,7 +303,17 @@ class ToolDispatcher:
             retry_count=context.retry_count, deps=deps, emit_event=context.emit_event,
         )
 
+        async def run_in(session: "ExecutionSession"):
+            # bash runs here; only its script reaches the environment.
+            call_context.deps.update(executor=self.manager.executor, execution_session=session)
+            return await tool.execute(record, call_context, cancellation_token)
+
         async def invoke():
+            if tool.runs_commands:
+                if shared_session is not None:
+                    return await run_in(shared_session)
+                async with self.manager.acquire(context.user_id, context.session_id) as session:
+                    return await run_in(session)
             if self.registry.runs_on_host(tool.name):
                 return await tool.execute(record, call_context, cancellation_token)
             if shared_session is not None:

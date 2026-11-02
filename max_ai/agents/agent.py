@@ -76,21 +76,12 @@ from ..types.stacks import PromptCtx
 log = ScopedLogger(logging.getLogger(__name__), scope=["Agent"])
 # run_stream hands out plain text it can't take back; this marks the retry.
 STREAM_RESTARTED = "\n\n[connection lost; the answer starts again below]\n\n"
-_warned_local_executor = False
-
-
-def _warn_local_executor() -> None:
-    """Once per process: say that bash runs unsandboxed on this machine."""
-    global _warned_local_executor
-    if _warned_local_executor:
-        return
-    _warned_local_executor = True
-    log.warning(
-        "LocalExecutor runs the model's bash commands directly on this machine, "
-        "with no sandbox. Deny patterns are a guard rail, not isolation: an "
-        "allowed interpreter (python, node, ...) can run anything. Use "
-        "DockerExecutor or ModalExecutor outside local development."
-    )
+COMMANDS_OFF = (
+    "Commands are off: the agent runs on this machine (LocalExecutor), so it has "
+    "no bash tool and skills cannot run scripts. Use DockerExecutor or "
+    "ModalExecutor, or LocalExecutor(allow_commands=True) to run commands here "
+    "with your approval for each one."
+)
 
 
 def _storable(component: Any, what: str) -> ComponentBase[Any]:
@@ -217,8 +208,6 @@ class Agent(ComponentBase[AgentSpec]):
             else LocalWorkspace(root=setting.root_dir / ".agents")
         )
         self.executor = executor if executor is not None else LocalExecutor()
-        if isinstance(self.executor, LocalExecutor):
-            _warn_local_executor()
         # Known at build time: the prompt tells the model where commands run.
         self._environment = self.executor.describe_environment()
         # Idle sessions close after setting.environment_idle_timeout.
@@ -260,6 +249,10 @@ class Agent(ComponentBase[AgentSpec]):
             self._registry.register(AskUserTool(), host=True)
         if self._registry.get(AgentUpdatePlanTool.TOOL_NAME) is None:
             self._registry.register(AgentUpdatePlanTool(), host=True)
+        if not self.executor.runs_commands:
+            if any(tool.runs_commands for tool in self._registry.all_tools()):
+                raise ValueError(COMMANDS_OFF)
+            return
         if self._registry.get("bash") is None:
             self._registry.register(BashTool())
 
@@ -271,6 +264,8 @@ class Agent(ComponentBase[AgentSpec]):
     ) -> None:
         """Keep optional registries and register only their exposed tools."""
         self.skills = skills
+        if skills is not None and not self.executor.runs_commands:
+            log.warning(COMMANDS_OFF)
         self.memory = memory
         self.knowledge = tuple(knowledge or ())
         self._skill_blocks = []
@@ -444,6 +439,7 @@ class Agent(ComponentBase[AgentSpec]):
             "description": self.description,
             "instructions": self.instructions,
             "current_date": datetime.now(UTC).date().isoformat(),
+            "can_run_commands": self.executor.runs_commands,
         }
         if self._environment:
             variables["execution_environment"] = self._environment
@@ -555,7 +551,6 @@ class Agent(ComponentBase[AgentSpec]):
             deps={
                 "runtime_root": str(directory.root),
                 "workspace_dir": str(directory.workspace_dir),
-                "scratch_dir": str(directory.scratch_dir),
                 "skills_dir": str(directory.skill_dir),
                 "filesystem_root": str(self.workspace.base_root),
                 "workspace_filesystem": self.workspace.get_filesystem(),

@@ -1,11 +1,26 @@
 """Common native-tool invocation for Docker and Modal."""
 
 import json
+import math
 from datetime import datetime
 
 from ...base.executor import ExecutorBase
 from ...types.tool_call import ToolResult
 from .reference import reference_for
+
+
+def supervised(script: str, timeout: float, run_id: str) -> list[str]:
+    """argv that runs ``script`` in a sandbox, bounded by ``timeout``.
+
+    GNU timeout gives the command its own process group and kills the whole
+    group; its PID goes to /tmp, to stop it from another exec.
+    """
+    return [
+        "bash", "--noprofile", "--norc", "-c",
+        'echo $$ > "/tmp/maxai-$1.pid"; exec timeout -k 5 "$2" bash --noprofile --norc -c "$3"',
+        "maxai", run_id, str(math.ceil(timeout)), script,
+    ]
+
 
 # Where pip, uv and npm download packages from.
 PACKAGE_REGISTRIES: tuple[str, ...] = (

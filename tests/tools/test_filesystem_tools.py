@@ -1,5 +1,5 @@
-"""Filesystem tools: one workspace per user, a scratchpad per session, and no
-way out of either (traversal, symlinks, other users)."""
+"""Filesystem tools: one workspace per user, and no way out of it
+(traversal, symlinks, other users)."""
 
 from __future__ import annotations
 
@@ -60,14 +60,6 @@ async def test_sessions_share_the_user_workspace_and_users_never_meet(root):
     assert refused(other)
     found = await invoke(tools, "FindFiles", context("u2", "s1"), pattern="a.txt")
     assert found.success and found.result["files"] == []
-
-
-async def test_scratchpad_belongs_to_its_session(root):
-    tools = FileSystemTools(root)
-    written = await invoke(tools, "WriteFile", context("u1", "s1"), file_path="scratchpad/n.txt", content="tmp")
-    assert written.success and written.result["path"] == "scratchpad/s1/n.txt"
-    assert (await invoke(tools, "ReadFile", context("u1", "s1"), file_path="scratchpad/n.txt")).success
-    assert refused(await invoke(tools, "ReadFile", context("u1", "s2"), file_path="scratchpad/n.txt"))
 
 
 async def test_paths_returned_by_the_tools_can_be_passed_back(root):
@@ -148,15 +140,10 @@ def test_ids_must_be_single_safe_segments(root):
         UserFileSystem._safe_session_id("session/other")
 
 
-async def test_reserved_names_are_not_session_ids(root):
-    filesystem = UserFileSystem(root)
-    tools = FileSystemTools(filesystem)
+def test_reserved_names_are_not_session_ids():
     for reserved in ("tools", "skills", "artifacts"):
         with pytest.raises(ValueError, match="reserved"):
-            filesystem.scratchpad_root("user-1", reserved)
-        write = await invoke(tools, "WriteFile", context("user-1", reserved),
-                             file_path="scratchpad/note.txt", content="x")
-        assert refused(write)
+            UserFileSystem._safe_session_id(reserved)
 
 
 async def test_internal_temporary_files_are_invisible(root):

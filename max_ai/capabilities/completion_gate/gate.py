@@ -51,12 +51,12 @@ def _describe_failure(record: ToolCallRecord) -> str:
     result = record.result
     if result is not None and result.success:
         detail = f"exit {_exit_code(record)}"
-        stderr = str((result.result or {}).get("stderr", "")).strip()
+        # The error is usually at the end of the output.
+        error = str((result.result or {}).get("output", "")).strip()[-200:]
     else:
         detail = result.failure_reason.value if result and result.failure_reason else "error"
-        stderr = str(result.error or "") if result else ""
-    stderr = stderr[:200]
-    return f"`{command}` failed ({detail})" + (f": {stderr}" if stderr else "")
+        error = str(result.error or "")[:200] if result else ""
+    return f"`{command}` failed ({detail})" + (f": {error}" if error else "")
 
 
 class RuntimeCompletionGate(CompletionBase):

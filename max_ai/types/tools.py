@@ -1,18 +1,10 @@
 import typing as t
 from enum import Enum
-from pathlib import Path
 
 from pydantic import BaseModel, Field
 
 
 # -------- TOOLS BASE MODEL -----------------------------------------------------------
-class RuntimeDirs(t.NamedTuple):
-    root: Path
-    skills: Path
-    scratch: Path
-    cwd: Path
-
-
 class ToolApprovalMode(str, Enum):
     """Tool approval requirements"""
 

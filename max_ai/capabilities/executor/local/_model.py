@@ -8,3 +8,4 @@ from pydantic import BaseModel
 class LocalExecutorConfig(BaseModel):
     """Configuration options for ``LocalExecutor``."""
     max_output_bytes: int = 1 << 20
+    allow_commands: bool = False

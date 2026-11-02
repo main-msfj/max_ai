@@ -68,3 +68,6 @@ class SkillsLayer(Component[StackConfig], CoreLayer):
 
     def _required_variables(self) -> set[str]:
         return {"loaded_skills"}
+
+    def _optional_variables(self) -> set[str]:
+        return {"can_run_commands"}

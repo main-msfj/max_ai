@@ -1,60 +1,99 @@
-"""Shell tool with runtime paths; the agent's Policy decides which commands run."""
+"""The bash tool: the model sends only a command string.
+
+The harness wraps it in a script (paths, working directory, output capture)
+and the executor runs that script with ``bash -c`` wherever it lives: on the
+host, in Docker or in Modal. Nothing of max_ai runs inside the environment.
+"""
 
 from __future__ import annotations
 
-import asyncio
-import hashlib
-import logging
-import os
-import re
+import shlex
 import typing as t
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from ....base.tools import CoreRuntimeTool, ToolContext
 from ....config import setting
+from ....core.ids import short_id
 from ....core.termination import CancellationToken
-from ....loggers.scope import ScopedLogger
 from ....types.tool_call import ToolCallRecord, ToolResult
-from ....types.tools import (
-    CoreToolParameters,
-    DockerToolRef,
-    RuntimeDirs,
-    ToolApprovalMode,
-)
+from ....types.tools import CoreToolParameters, ToolApprovalMode
+from . import constant as c
 from ._permissions import command_matches, split_command
 
-logger = logging.getLogger(__name__)
-log = ScopedLogger(logger, scope=["BashTool"])
+if t.TYPE_CHECKING:
+    from ....base.executor import ExecutionSession, ExecutorBase
 
-_VALID_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
-# Strict form: exactly `read_skill <name>` with no extra arguments.
-_READ_SKILL_RE = re.compile(r"^\s*read_skill\s+([A-Za-z0-9_-]+)\s*$")
-# Loose detector: the command *intends* to be a read_skill invocation,
-# even if it's malformed (extra args, quotes, chaining). Used to give a
-# helpful error instead of letting the shell fail with "command not found".
-_READ_SKILL_PREFIX_RE = re.compile(r"^\s*read_skill\b")
-# Best-effort nudge, not a real shell parser — catches the common case of
-# a literal /tmp path, not every way a command could reference it.
-_TMP_PATH_RE = re.compile(r"(?<![\w./])/tmp\b")
+# The script around every command; build_script() puts the values above it.
+_WRAPPER = Path(__file__).with_name("wrapper.sh").read_text()
+
+
+def build_script(
+    command: str,
+    *,
+    cwd: str,
+    workspace: str,
+    skills: str,
+    log: str,
+    max_bytes: int,
+) -> str:
+    """The script the executor runs for one ``command``: ``wrapper.sh`` with
+    its values assigned on top, each one shell-quoted.
+
+    It starts in ``cwd``, runs the command (stdin closed, stdout and stderr
+    into ``log``), then prints the output, cut in the middle past
+    ``max_bytes``, the workspace files the command changed, and the final
+    working directory.
+    """
+    values = {
+        "WORKSPACE": workspace,
+        "SKILLS": skills,
+        "__maxai_cwd": cwd,
+        "__maxai_log": log,
+        "__maxai_max_bytes": str(max_bytes),
+        "__maxai_command": command,
+    }
+    return "".join(f"{name}={shlex.quote(value)}\n" for name, value in values.items()) + _WRAPPER
+
+
+def changed_files(listing: str) -> dict[str, list[str]]:
+    """Created, modified and deleted workspace files from ``comm -3`` output.
+
+    ``comm`` prints entries only in the before snapshot as they are and entries
+    only in the after one behind a tab; a path on both sides changed size or
+    mtime. Empty groups are left out.
+    """
+    before: set[str] = set()
+    after: set[str] = set()
+    for line in listing.splitlines():
+        side, entry = (after, line[1:]) if line.startswith("\t") else (before, line)
+        path = entry.rsplit("\t", 2)[0]  # size and mtime are the last two fields
+        if path:
+            side.add(path)
+    groups = {
+        "created": sorted(after - before),
+        "modified": sorted(after & before),
+        "deleted": sorted(before - after),
+    }
+    return {name: _first(paths) for name, paths in groups.items() if paths}
+
+
+def _first(paths: list[str]) -> list[str]:
+    """``paths`` up to ``MAX_LISTED``, with a count of the rest."""
+    if len(paths) <= c.MAX_LISTED:
+        return paths
+    return [*paths[: c.MAX_LISTED], f"... and {len(paths) - c.MAX_LISTED} more"]
 
 
 class BashTool(CoreRuntimeTool):
-    """Execute shell commands from the configured runtime directory.
+    """Run shell commands in the agent's execution environment.
 
-    Paths are resolved from ToolContext dependencies and runtime configuration.
-    The tool does not assume a fixed mount path or provide process isolation.
+    The working directory persists between calls of a conversation;
+    environment variables do not (every call is a fresh shell). Every call
+    stops after ``TOOL_TIMEOUT_SECONDS``.
 
-    The agent's Policy decides allow, ask or deny for each command in the
-    line (``Bash(git push:*)``); the dispatcher applies it.
+    Whether a command runs is the agent's Policy: rules like ``Bash(git push:*)``
+    match each command in the line (see ``permission_subjects``).
     """
-
-    _DESCRIPTION = (
-        "Run a shell command from the configured runtime directory. "
-        "Use relative paths or paths supplied in the task context. "
-        "Commands are subject to the agent's policy and approval. "
-        "Declare expected_outputs when producing deliverable files, not temporary files. "
-        "Returns the exit code, stdout, stderr and evidence for declared outputs."
-    )
 
     runs_commands = True
 
@@ -62,17 +101,22 @@ class BashTool(CoreRuntimeTool):
         self,
         name: str = "bash",
         description: str | None = None,
-        timeout_seconds: float = 360,
-        max_output_chars: int = 20000,
+        max_output_bytes: int = c.MAX_OUTPUT_BYTES,
         approval_mode: ToolApprovalMode | str = ToolApprovalMode.ASK_APPROVED,
     ) -> None:
+        if max_output_bytes < 2:
+            raise ValueError("max_output_bytes must be at least 2")
         super().__init__(
             name=name,
-            description=description or self._DESCRIPTION,
+            description=description or c.DESCRIPTION,
             approval_mode=approval_mode,
-            timeout_seconds=timeout_seconds,
+            # The command stops itself at tool_timeout_seconds; this is the
+            # dispatcher's net for an executor that never returns.
+            timeout_seconds=setting.tool_timeout_seconds + 30,
         )
-        self.max_output_chars = max_output_chars
+        self.max_output_bytes = max_output_bytes
+        # Working directory per (user, conversation), kept by the harness.
+        self._cwd: dict[tuple[str, str], str] = {}
 
     def permission_subjects(self, parameters: dict[str, t.Any]) -> tuple[list[str], bool]:
         """Each command in the line (``ls && rm x`` → ``ls``, ``rm x``), and
@@ -90,36 +134,12 @@ class BashTool(CoreRuntimeTool):
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": (
-                        "Shell command to execute from the configured runtime directory. "
-                        "The policy checks every command in a compound command; "
-                        "complex shell syntax may require approval."
-                    ),
-                },
-                "timeout_seconds": {
-                    "type": ["integer", "null"],
-                    "description": "Optional timeout for this command in seconds.",
-                    "minimum": 1,
+                    "minLength": 1,
+                    "description": c.COMMAND_DESCRIPTION,
                 },
                 "description": {
                     "type": "string",
-                    "description": (
-                        "Clear, concise description of what this command does, in plain "
-                        "language, so a human deciding whether to approve it understands "
-                        "the intent without reading the raw command."
-                    ),
-                },
-                "expected_outputs": {
-                    "type": "array",
-                    "items": {"type": "string", "minLength": 1},
-                    "uniqueItems": True,
-                    "description": (
-                        "Deliverable file paths this command should produce. Literal paths "
-                        "relative to $WORKSPACE, even if the command uses cd. No absolute "
-                        "paths, parent traversal, globs or variable expansion. Omit for "
-                        "commands that do not produce deliverables. Existing unchanged "
-                        "files are reported as unchanged, not as newly created."
-                    ),
+                    "description": c.INTENT_DESCRIPTION,
                 },
             },
             "required": ["command", "description"],
@@ -127,41 +147,14 @@ class BashTool(CoreRuntimeTool):
         }
 
     def validate_parameters(self, tool_request: ToolCallRecord) -> CoreToolParameters:
+        """Schema and a non-blank command."""
         validation = super().validate_parameters(tool_request)
         if not validation.is_tool_valid:
             return validation
-
         command = t.cast(str, tool_request.parameters["command"])
-        for path in tool_request.parameters.get("expected_outputs", []):
-            if (
-                not path.strip() or Path(path).is_absolute()
-                or ".." in Path(path).parts or not Path(path).parts
-                or any(char in path for char in "\x00$*?[]")
-            ):
-                return CoreToolParameters(
-                    is_tool_valid=False,
-                    msg_error="expected_outputs must contain literal workspace-relative file paths.",
-                )
         if not command.strip():
-            return CoreToolParameters(
-                is_tool_valid=False,
-                msg_error="command cannot be empty.",
-            )
+            return CoreToolParameters(is_tool_valid=False, msg_error=c.EMPTY_COMMAND)
         return validation
-
-    def docker_ref(self) -> DockerToolRef:
-        return DockerToolRef(
-            kind="class",
-            module="max_ai.tools.bash",
-            qualname=type(self).__qualname__,
-            config={
-                "name": self.name,
-                "description": self.description,
-                "timeout_seconds": self.timeout_seconds,
-                "max_output_chars": self.max_output_chars,
-                "approval_mode": self.approval_mode,
-            },
-        )
 
     async def execute(
         self,
@@ -169,244 +162,64 @@ class BashTool(CoreRuntimeTool):
         tool_context: ToolContext | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> ToolResult:
+        """Build the script, run it in the executor, return exit code and output.
+
+        The dispatcher puts the executor and the conversation's session in
+        ``tool_context.deps``.
+        """
+        deps = tool_context.deps if tool_context is not None else {}
+        executor: ExecutorBase | None = deps.get("executor")
+        session: ExecutionSession | None = deps.get("execution_session")
+        if executor is None or session is None:
+            return ToolResult.execution_error(tool_request.id, c.NO_ENVIRONMENT)
         validation = self.validate_parameters(tool_request)
         if not validation.is_tool_valid:
-            msg_error = validation.msg_error or "Invalid bash parameters."
-            log.info(msg_error)
-            return ToolResult.invalid_parameters(tool_request.id, msg_error)
-
-        if tool_context is None:
-            msg_error = "bash requires ToolContext with user_id."
-            log.error(msg_error)
-            return ToolResult.execution_error(tool_request.id, msg_error)
-
-        command = t.cast(str, tool_request.parameters["command"])
-        timeout = tool_request.parameters.get("timeout_seconds") or self.timeout_seconds
-        if timeout <= 0:
-            msg_error = "timeout_seconds must be greater than zero."
-            log.info(msg_error)
-            return ToolResult.invalid_parameters(tool_request.id, msg_error)
-
-        try:
-            runtime = self._runtime_dirs(tool_context)
-            runtime.root.mkdir(parents=True, exist_ok=True)
-            runtime.skills.mkdir(parents=True, exist_ok=True)
-            runtime.scratch.mkdir(parents=True, exist_ok=True)
-            runtime.cwd.mkdir(parents=True, exist_ok=True)
-
-            command, expand_error = self._expand_internal_command(command, runtime)
-            if expand_error is not None:
-                # Malformed read_skill invocation or unknown skill name.
-                # Returning the catalog/usage keeps the model anchored to
-                # real skills instead of guessing paths.
-                log.info(expand_error)
-                return ToolResult.invalid_parameters(tool_request.id, expand_error)
-
-            env = os.environ.copy()
-            env["WORKSPACE"] = str(runtime.cwd)
-            env["SCRATCHPAD"] = str(runtime.scratch)
-            env["SKILLS"] = str(runtime.skills)
-            expected_outputs = tool_request.parameters.get("expected_outputs", [])
-            before = {
-                path: self._output_snapshot(runtime.cwd, path)
-                for path in expected_outputs
-            }
-
-            proc = await asyncio.create_subprocess_shell(
-                command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=runtime.cwd,
-                env=env,
+            return ToolResult.invalid_parameters(
+                tool_request.id, validation.msg_error or c.INVALID_PARAMETERS
             )
 
-            task = asyncio.create_task(proc.communicate())
-            if cancellation_token is not None:
-                cancellation_token.link_future(task)
-            stdout_b, stderr_b = await asyncio.wait_for(task, timeout=float(timeout))
+        root = PurePosixPath(session.workspace_path)
+        workspace = root / "workspace"
+        key = (session.user_id, session.conversation_id)
+        timeout = setting.tool_timeout_seconds
+        script = build_script(
+            tool_request.parameters["command"],
+            cwd=self._cwd.get(key, str(workspace)),
+            workspace=str(workspace),
+            skills=str(root / "skills"),
+            log=str(PurePosixPath(c.LOG_DIR) / session.conversation_id / f"{short_id()}.log"),
+            max_bytes=self.max_output_bytes,
+        )
+        result = await executor.execute(
+            session, script, timeout=timeout, cancellation_token=cancellation_token
+        )
 
-            stdout = stdout_b.decode(errors="replace")
-            stderr = stderr_b.decode(errors="replace")
-            stdout, stdout_truncated, stdout_chars = self._truncate(stdout)
-            stderr, stderr_truncated, stderr_chars = self._truncate(stderr)
-
-            # Only what the model does not already know: the command is in its
-            # own tool call and the directory is $WORKSPACE. Empty stderr and
-            # truncation details are left out unless they say something.
-            result: dict[str, t.Any] = {"exit_code": proc.returncode, "stdout": stdout}
-            if stderr:
-                result["stderr"] = stderr
-            if stdout_truncated:
-                result["stdout_truncated"] = True
-                result["stdout_original_chars"] = stdout_chars
-            if stderr_truncated:
-                result["stderr_truncated"] = True
-                result["stderr_original_chars"] = stderr_chars
-            if expected_outputs:
-                outputs = []
-                for path in expected_outputs:
-                    snapshot = self._output_snapshot(runtime.cwd, path)
-                    if snapshot["exists"]:
-                        previous = before[path]
-                        snapshot["change"] = (
-                            "created" if not previous["exists"] else
-                            "unchanged" if previous.get("sha256") == snapshot["sha256"]
-                            else "modified"
-                        )
-                    else:
-                        snapshot["change"] = "unavailable"
-                    outputs.append({"path": path, **snapshot})
-                result["expected_outputs"] = outputs
-            if _TMP_PATH_RE.search(command):
-                result["note"] = (
-                    "This command references /tmp, which is outside your "
-                    "workspace — nothing there is tracked by your file tools "
-                    "or cleaned up automatically. Use $SCRATCHPAD instead for "
-                    "throwaway files; it's a regular folder inside your workspace."
-                )
-            return ToolResult.success_result(
-                tool_request.id, result, metadata={"name": self.name, "tool_kind": "bash"},
-            )
-
-        except asyncio.TimeoutError:
-            if "proc" in locals() and proc.returncode is None:
-                proc.kill()
-                await proc.communicate()
-            return ToolResult.timeout(tool_request.id, timeout_seconds=float(timeout))
-
-        except asyncio.CancelledError:
-            if "proc" in locals() and proc.returncode is None:
-                proc.kill()
-                await proc.communicate()
-            return ToolResult.cancelled_during_execution(tool_request.id)
-
-        except Exception as e:
-            return ToolResult.execution_error(tool_request.id, str(e))
-
-    @staticmethod
-    def _output_snapshot(workspace: Path, path: str) -> dict[str, t.Any]:
-        """Read evidence from the runtime filesystem, never from shell output."""
-        target = workspace
-        try:
-            for part in Path(path).parts:
-                target = target / part
-                if target.is_symlink():
-                    raise ValueError("Output paths must not contain symlinks")
-            target.resolve().relative_to(workspace.resolve())
-            if not target.is_file():
-                return {"exists": False, "error": "Missing or not a regular file"}
-            with target.open("rb") as stream:
-                digest = hashlib.file_digest(stream, "sha256").hexdigest()
-                size = os.fstat(stream.fileno()).st_size
-            return {"exists": True, "size_bytes": size, "sha256": digest}
-        except (OSError, ValueError) as error:
-            return {"exists": False, "error": str(error)}
-
-    def _truncate(self, value: str) -> tuple[str, bool, int]:
-        """Truncate to max_output_chars, reporting the original length.
-
-        Returns ``(text, was_truncated, original_chars)``. Surfacing the
-        original size lets the model know how much it did NOT see, so it
-        doesn't reason over a partial output as if it were complete.
-        """
-        original = len(value)
-        if original <= self.max_output_chars:
-            return value, False, original
-        keep = max(self.max_output_chars, 0)
-        return value[:keep] + "\n[output truncated]", True, original
-
-    @staticmethod
-    def _expand_internal_command(
-        command: str, runtime: RuntimeDirs
-    ) -> tuple[str, str | None]:
-        """Expand ``read_skill <name>`` into a cat of that skill's SKILL.md.
-
-        Returns ``(command_to_run, error_message)``:
-
-        - Not a read_skill invocation → ``(command, None)`` unchanged.
-        - Looks like read_skill but malformed (extra args, quotes,
-          chaining) → ``(command, usage_error)``.
-        - Valid form but the skill isn't materialized → ``(command,
-          not_found_error)`` listing the available skills.
-        - Valid and present → ``(cat_command, None)``.
-
-        The error branches exist so the model gets an actionable message
-        and stays anchored to the real skill catalog, instead of a raw
-        "command not found" or an invented path.
-        """
-        if not _READ_SKILL_PREFIX_RE.match(command):
-            return command, None
-
-        match = _READ_SKILL_RE.match(command)
-        if match is None:
-            return command, (
-                "read_skill takes exactly one skill name and no extra arguments. "
-                "Usage: read_skill <skill-name>. To run scripts or chain commands, "
-                "issue them as a separate bash call after loading the skill."
-            )
-
-        skill_name = match.group(1)
-        skill_file = runtime.skills / skill_name / "SKILL.md"
-        if not skill_file.is_file():
-            available = (
-                sorted(p.name for p in runtime.skills.iterdir() if p.is_dir())
-                if runtime.skills.is_dir()
-                else []
-            )
-            return command, (
-                f"Skill {skill_name!r} not found. "
-                f"Available skills: {available or 'none'}. "
-                "Use one of the available skill names exactly as listed; "
-                "do not invent skill names or paths."
-            )
-
-        return f"cat {skill_file.as_posix()!r}", None
-
-    @classmethod
-    def _runtime_dirs(cls, tool_context: ToolContext) -> RuntimeDirs:
-        deps = tool_context.deps or {}
-        root = cls._path_from_deps_or_env(deps, "runtime_root", "RUNTIME_DIR")
-        skills = cls._path_from_deps_or_env(deps, "skills_dir", "SKILLS_DIR")
-        scratch = cls._path_from_deps_or_env(deps, "scratch_dir", "SCRATCHPAD")
-        cwd = cls._path_from_deps_or_env(deps, "workspace_dir", "WORKSPACE_DIR")
-
-        if root is None:
-            # Fallback layout matches the workspace registry (no `tmp`
-            # segment): <root_dir>/<user_id>.
-            user_id = cls._safe_user_id(tool_context.user_id)
-            root = setting.root_dir / user_id
-        if skills is None:
-            skills = root / "skills"
-        if scratch is None:
-            scratch = root / "scratchpad"
-        # Commands start in the user's workspace, not the flat user root —
-        # matches where write_file/read_file put things.
-        if cwd is None:
-            cwd = root
-
-        root = root.expanduser().resolve()
-        skills = skills.expanduser().resolve()
-        scratch = scratch.expanduser().resolve()
-        cwd = cwd.expanduser().resolve()
-        for child in (skills, scratch, cwd):
-            child.relative_to(root)
-        return RuntimeDirs(root=root, skills=skills, scratch=scratch, cwd=cwd)
-
-    @staticmethod
-    def _path_from_deps_or_env(
-        deps: dict[str, t.Any],
-        dep_key: str,
-        env_key: str,
-    ) -> Path | None:
-        value = deps.get(dep_key) or os.environ.get(env_key)
-        if value is None:
-            return None
-        if not isinstance(value, (str, Path)):
-            raise TypeError(f"{dep_key} must be a string or Path.")
-        return Path(value)
-
-    @staticmethod
-    def _safe_user_id(user_id: str) -> str:
-        if not isinstance(user_id, str) or not _VALID_NAME_RE.match(user_id):
-            raise ValueError("Invalid user_id  Allowed characters")
-        return user_id
+        output, mark, cwd = result.stdout.rpartition(c.CWD_MARK)
+        if not mark:  # stopped before the trap printed: keep what came out
+            output, cwd = result.stdout, ""
+        before_files, mark, listing = output.rpartition(c.FILES_MARK)
+        if mark:
+            output = before_files
+        if result.stderr.strip():
+            output = f"{output}\n{result.stderr}" if output else result.stderr
+        output = output.rstrip("\n")
+        exit_code = result.exit_code
+        if result.timed_out and exit_code is None:
+            exit_code = 124  # killed from outside: report it like `timeout` does
+        data: dict[str, t.Any] = {"exit_code": exit_code, "output": output}
+        if files := changed_files(listing if mark else ""):
+            data["files"] = files
+        # Like Claude Code: the shell may wander, but the next command
+        # starts back in the workspace unless it ended somewhere allowed.
+        here = PurePosixPath(cwd)
+        in_tmp = here.is_relative_to("/tmp") and not here.is_relative_to(root)
+        if cwd and (in_tmp or here.is_relative_to(workspace) or here.is_relative_to(root / "skills")):
+            self._cwd[key] = cwd
+        elif cwd:
+            self._cwd.pop(key, None)
+            data["note"] = c.LEFT_WORKSPACE.format(cwd=cwd)
+        if result.timed_out:
+            data["note"] = c.TIMED_OUT.format(timeout=timeout)
+        return ToolResult.success_result(
+            tool_request.id, data, metadata={"name": self.name, "tool_kind": "bash"}
+        )

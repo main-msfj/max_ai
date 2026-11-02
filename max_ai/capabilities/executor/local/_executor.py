@@ -14,25 +14,46 @@ from ._model import LocalExecutorConfig
 
 
 class LocalExecutor(ExecutorBase):
-    """LocalExecutor provides the Localexecution implementation."""
+    """Runs on the host, in the user's workspace. No isolation.
+
+    Commands are off by default: the Agent gets no bash tool. With
+    ``allow_commands=True`` bash runs on this machine and the user approves
+    every command.
+    """
+
     component_provider_override = "max_ai.capabilities.executor.local.LocalExecutor"
     component_schema = LocalExecutorConfig
 
-    def __init__(self, *, max_output_bytes: int = 1 << 20) -> None:
+    def __init__(self, *, allow_commands: bool = False, max_output_bytes: int = 1 << 20) -> None:
         super().__init__()
         if max_output_bytes <= 0:
             raise ValueError("max_output_bytes must be positive")
+        self.allow_commands = allow_commands
         self.max_output_bytes = max_output_bytes
         self._sessions: dict[str, ExecutionSession] = {}
         self._closed: dict[str, ExecutionSession] = {}
         self._locks: dict[str, asyncio.Lock] = {}
 
+    @property
+    def runs_commands(self) -> bool:
+        return self.allow_commands
+
+    def describe_environment(self) -> str | None:
+        if not self.allow_commands:
+            return None
+        return (
+            "Commands run on the user's own machine, not in a sandbox, and the "
+            "user approves each one; prefer the file tools when they are enough."
+        )
+
     def _to_config(self) -> LocalExecutorConfig:
-        return LocalExecutorConfig(max_output_bytes=self.max_output_bytes)
+        return LocalExecutorConfig(
+            allow_commands=self.allow_commands, max_output_bytes=self.max_output_bytes
+        )
 
     @classmethod
     def _from_config(cls, config: LocalExecutorConfig) -> "LocalExecutor":
-        return cls(max_output_bytes=config.max_output_bytes)
+        return cls(allow_commands=config.allow_commands, max_output_bytes=config.max_output_bytes)
 
     def _check(self, session: ExecutionSession) -> None:
         if self._sessions.get(session.id) is not session:
@@ -89,13 +110,16 @@ class LocalExecutor(ExecutorBase):
     async def execute(self, session, command, *, timeout=60, cancellation_token=None):
         if not isinstance(command, str) or not command.strip():
             raise ValueError("command cannot be empty")
-        # Clear shell startup variables (notably BASH_ENV) inherited from the host.
+        # A clean environment: the host's PATH, HOME and locale so its tools
+        # work, but none of its secrets (API keys) and no BASH_ENV.
         return await self.execute_argv(
             session,
             [
                 "/usr/bin/env",
                 "-i",
-                "PATH=/usr/bin:/bin",
+                f"PATH={os.environ.get('PATH', '/usr/bin:/bin')}",
+                f"HOME={os.environ.get('HOME', '/tmp')}",
+                f"LANG={os.environ.get('LANG', 'C.UTF-8')}",
                 f"WORKSPACE={session.workspace_path}",
                 "/bin/bash",
                 "--noprofile",

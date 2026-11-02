@@ -17,14 +17,13 @@ from pathlib import Path
 from typing import Any
 
 _ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
-_RESERVED_ROOT_DIRS = {"tools", "skills", "artifacts", "scratchpad", "workspace"}
+_RESERVED_ROOT_DIRS = {"tools", "skills", "artifacts", "workspace"}
 # Hidden from root listings (ListDirectory/FindFiles at the user root).
 # workspace stays visible so FindFiles/SearchFile keep descending into it.
 _HIDDEN_ROOT_DIRS = _RESERVED_ROOT_DIRS - {"skills", "workspace"}
-# Blocked from explicit path resolution too. scratchpad/workspace are
-# hidden-or-visible but still reachable by name (like skills); tools/artifacts
-# stay fully off-limits.
-_BLOCKED_PATH_ROOTS = _RESERVED_ROOT_DIRS - {"skills", "scratchpad", "workspace"}
+# Blocked from explicit path resolution too. skills/workspace stay
+# reachable by name; tools/artifacts are fully off-limits.
+_BLOCKED_PATH_ROOTS = _RESERVED_ROOT_DIRS - {"skills", "workspace"}
 _INTERNAL_TEMP_PREFIX = ".maxai-"
 _MAX_PATH_BYTES = 4096
 _MAX_SEGMENT_BYTES = 255
@@ -94,22 +93,6 @@ class UserFileSystem:
         finally:
             os.close(user_fd)
         return self.root / user / "workspace"
-
-    def scratchpad_root(self, user_id: str, session_id: str) -> Path:
-        """Validate and securely materialize one conversation's scratchpad."""
-        user = self._safe_id(user_id, "user_id")
-        session = self._safe_session_id(session_id)
-        user_fd = self._open_user_fd(user, create=True)
-        try:
-            scratchpad_fd = self._open_dir_at(user_fd, "scratchpad", create=True)
-            try:
-                conversation_fd = self._open_dir_at(scratchpad_fd, session, create=True)
-                os.close(conversation_fd)
-            finally:
-                os.close(scratchpad_fd)
-        finally:
-            os.close(user_fd)
-        return self.root / user / "scratchpad" / session
 
     def list_files(
         self, user_id: str, path: str = "", limit: int = 200
@@ -359,7 +342,7 @@ class UserFileSystem:
         self, user_id: str, path: str, content: str, expected: Stamp | None = None
     ) -> dict[str, Any]:
         """Create a text file, or replace it when ``expected`` matches."""
-        parts = self._write_parts(path)
+        parts = self._workspace_file_parts(path)
         if Path(parts[-1]).suffix.lower() in _BINARY_SUFFIXES:
             # Text written into e.g. .xlsx is a broken file, not a spreadsheet.
             raise ValueError(
