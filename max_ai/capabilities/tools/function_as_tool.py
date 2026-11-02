@@ -68,7 +68,8 @@ class FunctionAsTool(CoreTool):
         )
 
         self.signature = inspect.signature(func)
-        self.type_hints = t.get_type_hints(func)
+        # include_extras keeps Annotated[..., Field(description=...)] for the schema.
+        self.type_hints = t.get_type_hints(func, include_extras=True)
 
         # ToolContext detection: must be the FIRST parameter if used.
         # ``ToolContext | None`` also works outside a run (None is passed).

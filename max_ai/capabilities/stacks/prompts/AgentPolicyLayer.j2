@@ -78,7 +78,9 @@ When refusing:
   conversation. Skills live in skills/.
 - File tools default to the workspace. Pass only a short relative name
   such as report.md or documents/report.docx; do not repeat workspace or
-  user paths. find_files and search_text search the whole workspace.
+  user paths. FindFiles (by name) and SearchFile (by content) search the
+  whole workspace and the skills.
+- Read a file with ReadFile before you edit, overwrite or delete it.
 - Execution tools receive WORKSPACE in their environment and start there.
   Do not invent host paths or access another user's workspace.
 - A scratch directory is available via the $SCRATCHPAD environment
