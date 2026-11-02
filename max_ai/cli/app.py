@@ -33,8 +33,8 @@ from ..core.event_type import (
     ErrorEvent,
     ModelCallEvent,
     ModelResponseEvent,
+    ModelRetryEvent,
     ModelStreamChunkEvent,
-    ModelStreamResetEvent,
     PlanningEvent,
     ToolCallEvent,
     ToolCallResponseEvent,
@@ -732,9 +732,13 @@ class MaxAIApp(App[None]):
         if isinstance(event, PlanningEvent):
             await self._render_plan(event)
             return
-        if isinstance(event, ModelStreamResetEvent):
-            await self._discard_partial()
-            await self._write_system(f"Connection lost; answering again (attempt {event.attempt}).")
+        if isinstance(event, ModelRetryEvent):
+            if event.discard_partial:
+                await self._discard_partial()
+            await self._write_system(
+                f"Model call failed ({event.reason}); retrying in {event.delay:.0f}s "
+                f"(attempt {event.attempt + 1} of {event.max_attempts})."
+            )
             return
         if isinstance(event, ModelCallEvent):
             self._prompt_tokens = event.prompt_tokens or self._prompt_tokens

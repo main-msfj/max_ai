@@ -204,13 +204,19 @@ class ModelResponseEvent(ModelEvent):
     usage: Usage | None = Field(default=None, description="Token usage statistics")
 
 
-class ModelStreamResetEvent(ModelEvent):
-    """The stream broke and the call starts over: drop the text and
-    thinking already streamed for this call."""
+class ModelRetryEvent(ModelEvent):
+    """A model call failed for a passing reason; the harness calls again
+    after ``delay`` seconds."""
 
-    EVENT_TYPE = "model_stream_reset"
-    attempt: int = Field(..., description="The attempt about to start (2 or more)")
-    reason: str = Field(..., description="Why the previous attempt stopped")
+    EVENT_TYPE = "model_retry"
+    attempt: int = Field(..., description="The try that failed, from 1")
+    max_attempts: int = Field(..., description="Tries allowed in total")
+    delay: float = Field(..., description="Seconds before the next try")
+    reason: str = Field(..., description="Why it failed, e.g. rate_limit")
+    discard_partial: bool = Field(
+        default=False,
+        description="Part of the answer was already streamed: drop it, the retry streams it again",
+    )
 
 
 class ModelStreamChunkEvent(ModelEvent):
@@ -578,7 +584,7 @@ AgentEvents = Annotated[
         CompletionRejectedEvent,
         ModelCallEvent,
         ModelResponseEvent,
-        ModelStreamResetEvent,
+        ModelRetryEvent,
         ModelStreamChunkEvent,
         ReasoningIterationEvent,
         ReasoningCompleteEvent,

@@ -52,7 +52,7 @@ from ..capabilities.workspace.local import LocalWorkspace
 from ..config import setting
 from ..core.compaction import TokenCounter
 from ..core.environment.manager import EnvironmentManager
-from ..core.event_type import CoreEvent, ModelStreamChunkEvent, ModelStreamResetEvent
+from ..core.event_type import CoreEvent, ModelRetryEvent, ModelStreamChunkEvent
 from ..core.events_bus import EventBus
 from ..core.executor.reference import ToolReference
 from ..core.messages import (
@@ -721,7 +721,7 @@ class Agent(ComponentBase[AgentSpec]):
             async for item in stream:
                 if isinstance(item, ModelStreamChunkEvent) and item.chunk:
                     yield item.chunk
-                elif isinstance(item, ModelStreamResetEvent):
+                elif isinstance(item, ModelRetryEvent) and item.discard_partial:
                     yield STREAM_RESTARTED
 
     async def resume(self, run_context: RunContext, **kwargs: Any) -> AgentResponse:
