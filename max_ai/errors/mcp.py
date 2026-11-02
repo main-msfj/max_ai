@@ -31,3 +31,11 @@ class MCPToolContentError(MCPToolError):
 
 class MCPServerUnavailableError(MCPToolError):
     """An MCP server could not be reached; its tools fail until it is back."""
+
+
+class MCPConnectionLost(MCPError, ConnectionError):
+    """The connection to the MCP server closed while a request waited.
+
+    The request may or may not have run on the server: only read-only calls
+    are sent again (after reconnecting); others go back to the model.
+    """

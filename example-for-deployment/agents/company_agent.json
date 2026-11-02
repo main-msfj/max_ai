@@ -154,7 +154,6 @@
         "approval_mode": "ask_for_approval",
         "resource_approval_mode": null,
         "tool_approval_modes": {},
-        "timeout_seconds": 240.0,
         "url": "http://127.0.0.1:8765/mcp",
         "headers": {},
         "headers_env": {},

@@ -7,10 +7,14 @@ import time
 import typing as t
 from dataclasses import dataclass, field
 
+import httpx
 from mcp import Client, MCPError
 
 from ...base.tools import CoreTool
+from ...config import setting
+from ...core.retry import RetryPolicy, retrying
 from ...errors.mcp import (
+    MCPConnectionLost,
     MCPServerNotFoundError,
     MCPServerRegistrationError,
     MCPServerUnavailableError,
@@ -36,11 +40,25 @@ class _ManagedServer:
     error: str | None = None
 
 
-class MCPClientManager:
-    """Own MCP clients in dedicated tasks so SDK calls share their lifecycle."""
+def _unreachable(error: BaseException) -> bool:
+    """The server couldn't be reached (network, process, timeout): worth
+    trying again. anyio wraps these in exception groups."""
+    if isinstance(error, BaseExceptionGroup):
+        return any(_unreachable(inner) for inner in error.exceptions)
+    return isinstance(error, (OSError, TimeoutError, httpx.TransportError))
 
-    def __init__(self) -> None:
+
+class MCPClientManager:
+    """Own MCP clients in dedicated tasks so SDK calls share their lifecycle.
+
+    ``retry`` covers connecting (network errors, within
+    ``connect_timeout_seconds``) and sending read-only calls again when the
+    connection drops.
+    """
+
+    def __init__(self, retry: RetryPolicy | None = None) -> None:
         self._servers: dict[str, _ManagedServer] = {}
+        self.retry = retry or RetryPolicy()
 
     @property
     def server_ids(self) -> list[str]:
@@ -58,10 +76,10 @@ class MCPClientManager:
     async def connect(self, server_id: str) -> None:
         """Open the connection unless it is up; raise if the server is unavailable.
 
-        The attempt is bounded by ``connect_timeout_seconds`` and shared by
-        concurrent callers. After a failure the server is not retried for
-        ``retry_after_seconds``; its last known tools stay registered and
-        answer that it is unavailable.
+        The attempt (network errors are retried) is bounded by
+        ``connect_timeout_seconds`` and shared by concurrent callers. After a
+        failure the server is not retried for ``retry_after_seconds``; its
+        last known tools stay registered and answer that it is unavailable.
         """
         server = self._get_server(server_id)
         if server.worker is not None and not server.worker.done():
@@ -86,15 +104,23 @@ class MCPClientManager:
 
     async def _open(self, server: _ManagedServer) -> None:
         server.worker = None  # a dead connection is replaced
-        ready = asyncio.get_running_loop().create_future()
-        worker = asyncio.create_task(self._serve(server, ready))
+
+        async def attempt() -> tuple[asyncio.Task[None], list[CoreTool]]:
+            ready = asyncio.get_running_loop().create_future()
+            worker = asyncio.create_task(self._serve(server, ready))
+            try:
+                return worker, await ready
+            except BaseException:
+                worker.cancel()
+                await asyncio.gather(worker, return_exceptions=True)
+                raise
+
         timeout = server.config.connect_timeout_seconds
         try:
-            tools = await asyncio.wait_for(asyncio.shield(ready), timeout)
+            worker, tools = await asyncio.wait_for(
+                retrying(attempt, policy=self.retry, transient=_unreachable), timeout,
+            )
         except BaseException as exc:
-            ready.cancel()  # nobody reads it any more
-            worker.cancel()
-            await asyncio.gather(worker, return_exceptions=True)
             if not isinstance(exc, Exception):
                 raise  # cancelled: not the server's fault
             server.failed_at = time.monotonic()
@@ -139,15 +165,16 @@ class MCPClientManager:
                         result = await getattr(client, method)(*args)
                         if not future.done():
                             future.set_result(result)
-                    except asyncio.CancelledError as exc:
+                    except asyncio.CancelledError:
                         if asyncio.current_task().cancelling():
+                            # The connection is closing: the caller wasn't cancelled.
                             if not future.done():
-                                future.set_exception(exc)
+                                future.set_exception(MCPConnectionLost("MCP connection closed"))
                             raise
                         # Cancelled inside the client (the transport failed), not by us.
                         if not future.done():
-                            future.set_exception(RuntimeError(
-                                "The MCP server connection interrupted the request; try again."))
+                            future.set_exception(MCPConnectionLost(
+                                "The MCP server connection interrupted the request."))
                     except BaseException as exc:
                         if not future.done():
                             future.set_exception(exc)
@@ -177,7 +204,7 @@ class MCPClientManager:
                 if request is not None:
                     future = request[2]
                     if not future.done():
-                        future.set_exception(RuntimeError("MCP connection closed"))
+                        future.set_exception(MCPConnectionLost("MCP connection closed"))
 
     async def connect_all(self) -> dict[str, MCPServerUnavailableError]:
         """Connect every server in parallel; one failing never touches the others.
@@ -223,27 +250,40 @@ class MCPClientManager:
     async def call_tool(
         self, server_id: str, tool_name: str,
         arguments: dict[str, t.Any], timeout_seconds: float,
+        *, read_only: bool = False,
     ) -> t.Any:
-        return await self._request(server_id, "call_tool", tool_name, arguments, timeout_seconds)
+        return await self._request(
+            server_id, "call_tool", tool_name, arguments, timeout_seconds, again=read_only,
+        )
 
     async def read_resource(self, server_id: str, uri: str) -> t.Any:
-        timeout = self._get_server(server_id).config.timeout_seconds
+        timeout = setting.tool_timeout_seconds
         try:
             return await asyncio.wait_for(
-                self._request(server_id, "read_resource", uri), timeout,
+                self._request(server_id, "read_resource", uri, again=True), timeout,
             )
         except TimeoutError as exc:
             raise MCPToolError(
                 f"MCP server {server_id!r} did not return {uri!r} within {timeout:g}s."
             ) from exc
 
-    async def _request(self, server_id: str, method: str, *args: t.Any) -> t.Any:
+    async def _request(
+        self, server_id: str, method: str, *args: t.Any, again: bool = False,
+    ) -> t.Any:
         server = self._get_server(server_id)
-        if server.worker is None or server.worker.done():
-            await self.connect(server_id)  # reconnects a dropped connection
-        future = asyncio.get_running_loop().create_future()
-        await server.requests.put((method, args, future))
-        return await future
+
+        async def send() -> t.Any:
+            if server.worker is None or server.worker.done():
+                await self.connect(server_id)  # reconnects a dropped connection
+            future = asyncio.get_running_loop().create_future()
+            await server.requests.put((method, args, future))
+            return await future
+
+        # Lost mid-request, it may have run: only read-only calls go again.
+        policy = self.retry if again else RetryPolicy(attempts=1)
+        return await retrying(
+            send, policy=policy, transient=lambda error: isinstance(error, MCPConnectionLost),
+        )
 
     def _get_server(self, server_id: str) -> _ManagedServer:
         try:
@@ -263,7 +303,6 @@ class MCPClientManager:
                 client_manager=self,
                 server_id=config.server_id,
                 approval_mode=self._approval_mode_for_tool(config, tool_def),
-                timeout_seconds=config.timeout_seconds,
                 read_only=self._is_read_only(tool_def),
             ))
         resources, templates = await self._list_resources(client)
@@ -274,7 +313,6 @@ class MCPClientManager:
                 available_resources=resources,
                 resource_templates=templates,
                 approval_mode=config.effective_resource_approval_mode,
-                timeout_seconds=config.timeout_seconds,
             ))
         return discovered
 

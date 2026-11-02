@@ -232,6 +232,12 @@ retried after `retry_after_seconds` (60 by default). Set `required=True` on a
 server the agent cannot work without, so the run fails with a clear error
 instead.
 
+Network errors while connecting are retried with backoff inside that 30 s.
+Calls stop after `TOOL_TIMEOUT_SECONDS`, like every tool. If the connection
+drops during a call, read-only tools and resource reads reconnect and run
+again; any other tool returns an error saying it may or may not have run, and
+is never sent twice.
+
 Tools implement `CoreTool` or are regular Python callables wrapped by `FunctionAsTool`. Pass the wrapped tool in `toolset`:
 
 ```python

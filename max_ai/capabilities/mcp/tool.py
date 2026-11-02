@@ -12,8 +12,10 @@ from mcp import MCPError
 from mcp.types import CallToolResult, ImageContent, TextContent
 
 from ...base.tools import CoreTool, ToolContext
+from ...config import setting
 from ...core.termination import CancellationToken
 from ...errors.mcp import (
+    MCPConnectionLost,
     MCPToolContentError,
     MCPToolError,
     MCPToolExecutionError,
@@ -50,7 +52,6 @@ class MCPTool(CoreTool):
         server_id: str,
         version: str = "1.0.0",
         approval_mode: ToolApprovalMode | str = ToolApprovalMode.ASK_APPROVED,
-        timeout_seconds: float = 240.0,
         read_only: bool = False,
     ) -> None:
         self.mcp_tool_name = mcp_tool_name
@@ -64,8 +65,6 @@ class MCPTool(CoreTool):
             approval_mode=approval_mode,
             read_only=read_only,
         )
-        # The server's own call timeout (MCPServerConfig.timeout_seconds).
-        self.timeout_seconds = timeout_seconds
 
     @property
     def parameters(self) -> dict[str, t.Any]:
@@ -97,7 +96,8 @@ class MCPTool(CoreTool):
                 self.server_id,
                 self.mcp_tool_name,
                 tool_request.parameters,
-                self.timeout_seconds,
+                setting.tool_timeout_seconds,
+                read_only=self.read_only,
             )
 
             if result.is_error:
@@ -122,6 +122,11 @@ class MCPTool(CoreTool):
 
         except (asyncio.CancelledError, FuturesCancelledError):
             return ToolResult.cancelled_during_execution(tool_request.id)
+        except MCPConnectionLost as exc:
+            msg = (f"{exc} The connection to {self.server_id} dropped during the call: it may "
+                   "or may not have run. Check before calling it again.")
+            logger_for_call.warning(msg)
+            return ToolResult.execution_error(tool_request.id, msg)
         except MCPError as exc:
             msg = f"MCP error: {exc}"
             logger_for_call.warning(msg)
@@ -174,7 +179,6 @@ class MCPResourceTool(CoreTool):
         available_resources: list[t.Any] | None = None,
         resource_templates: list[t.Any] | None = None,
         approval_mode: ToolApprovalMode | str = ToolApprovalMode.ASK_APPROVED,
-        timeout_seconds: float = 240.0,
     ) -> None:
         self.client_manager = client_manager
         self.server_id = server_id
@@ -186,7 +190,6 @@ class MCPResourceTool(CoreTool):
             approval_mode=approval_mode,
             read_only=True,  # reading a resource changes nothing
         )
-        self.timeout_seconds = timeout_seconds
         self._parameter_schema: dict[str, t.Any] = {
             "type": "object",
             "properties": {

@@ -10,6 +10,7 @@ from mcp import Client
 from mcp.server import MCPServer
 
 from max_ai.capabilities.mcp import MCPClientManager, StdioMCPServerConfig
+from max_ai.core.retry import RetryPolicy
 from max_ai.errors.mcp import MCPServerUnavailableError
 from max_ai.types.tool_call import ToolCallRecord
 from max_ai.types.tools import ToolApprovalMode
@@ -47,7 +48,7 @@ def manager_with(monkeypatch, clients, **config):
         return clients[server_config.server_id]()
 
     monkeypatch.setattr(module, "create_mcp_client", create)
-    manager = MCPClientManager()
+    manager = MCPClientManager(retry=RetryPolicy(base_delay=0))
     for server_id in clients:
         manager.add_server(StdioMCPServerConfig(
             server_id=server_id, command="unused",
@@ -104,10 +105,31 @@ async def test_a_failed_server_is_not_retried_until_retry_after(monkeypatch):
     )
     for _ in range(3):
         assert list(await manager.connect_all()) == ["down"]
-    assert attempts["down"] == 1
+    # One connect tries a few times (network error); then nothing for 60 s.
+    assert attempts["down"] == manager.retry.attempts
     manager._servers["down"].failed_at -= 61
     await manager.connect_all()
-    assert attempts["down"] == 2
+    assert attempts["down"] == 2 * manager.retry.attempts
+
+
+async def test_a_network_error_is_retried_within_one_connect(monkeypatch):
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        return refuses() if len(calls) == 1 else Client(echo_server("flaky"))
+
+    @contextlib.asynccontextmanager
+    async def broken():
+        raise ValueError("bad handshake")  # not a network error: no retry
+        yield
+
+    manager, attempts = manager_with(monkeypatch, {"flaky": flaky, "broken": broken})
+    try:
+        assert list(await manager.connect_all()) == ["broken"]
+        assert attempts == {"flaky": 2, "broken": 1}
+    finally:
+        await manager.disconnect_all()
 
 
 async def test_a_required_server_fails_the_run(monkeypatch):
