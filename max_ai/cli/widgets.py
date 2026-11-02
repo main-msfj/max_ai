@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from rich.text import Text
+from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.containers import VerticalScroll
 from textual.message import Message
-from textual.widgets import OptionList, TextArea
+from textual.widgets import OptionList, Static, TextArea
 from textual.widgets.option_list import Option
+
+from .theme import DIM, ELEMENT, MUTED, PANEL, PRIMARY, TEXT
 
 
 class PromptEditor(TextArea):
@@ -83,12 +87,12 @@ class CommandMenu(OptionList):
 
     can_focus = False
 
-    DEFAULT_CSS = """
-    CommandMenu {
+    DEFAULT_CSS = f"""
+    CommandMenu {{
         height: auto; max-height: 10; display: none; border: none;
-        background: #111113; padding: 0 1; scrollbar-size: 1 1;
-    }
-    CommandMenu > .option-list--option-highlighted { background: #27272a; }
+        background: {PANEL}; padding: 0 1; scrollbar-size: 1 1;
+    }}
+    CommandMenu > .option-list--option-highlighted {{ background: {ELEMENT}; }}
     """
 
     def __init__(self, **kwargs) -> None:
@@ -104,9 +108,9 @@ class CommandMenu(OptionList):
             label = Text()
             label.append(f"{cmd:<{width}}", style=f"bold {accent}")
             if kind != "command":
-                label.append(f"[{kind}] ", style="#71717a")
+                label.append(f"[{kind}] ", style=DIM)
             first = desc.strip().splitlines()[0] if desc.strip() else ""
-            label.append(first if len(first) <= 64 else first[:63] + "…", style="#a1a1aa")
+            label.append(first if len(first) <= 64 else first[:63] + "…", style=MUTED)
             self.add_option(Option(label))
         self.highlighted = 0
         self.display = True
@@ -126,3 +130,42 @@ class CommandMenu(OptionList):
         if not self.entries or self.highlighted is None:
             return None
         return self.entries[self.highlighted]
+
+
+class InfoPanel(VerticalScroll):
+    """A /command's output in a small panel above the composer; the chat
+    stays in view. esc or a click on it closes it."""
+
+    can_focus = False
+
+    DEFAULT_CSS = f"""
+    InfoPanel {{
+        display: none; height: auto; max-height: 45vh; margin: 1 0 0 0; padding: 0 1;
+        background: {PANEL}; border: round {PRIMARY}; scrollbar-size: 1 1;
+        border-title-color: {TEXT}; border-title-style: bold; border-subtitle-color: {DIM};
+    }}
+    """
+
+    def compose(self) -> ComposeResult:
+        yield Static(id="info-body")
+
+    def show(self, title: str, body: Text) -> None:
+        self.border_title = title
+        self.border_subtitle = "esc or click to close"
+        self.query_one("#info-body", Static).update(body)
+        self.display = True
+        self.scroll_home(animate=False)
+
+    def hide(self) -> None:
+        self.display = False
+
+    @property
+    def title_text(self) -> str:
+        return str(self.border_title or "")
+
+    @property
+    def body(self) -> str:
+        return str(self.query_one("#info-body", Static).render())
+
+    def on_click(self) -> None:
+        self.hide()
