@@ -20,6 +20,12 @@ MAX_ITERATIONS_REACHED = (
     "starting anything new."
 )
 
+ANSWER_AT_ITERATION_LIMIT = (
+    "You reached the step limit for this turn and cannot call tools now. "
+    "Answer the user: what you did, what is still missing, and what they "
+    "can ask next to continue."
+)
+
 FORMAT_FINAL_ANSWER = (
     "Your answer above was accepted. Return it now in the required JSON "
     "format: same content, nothing new, nothing left out."

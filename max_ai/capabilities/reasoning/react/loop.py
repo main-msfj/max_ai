@@ -370,8 +370,10 @@ class ReactLoop(BaseReasoning):
             if loop_state.iteration >= self.max_loop_iterations:
                 loop_state.finish_reason = MAX_ITERATIONS
                 _log.warning("Max iterations reached", iteration=loop_state.iteration)
-                msg = UserMessage(source=HARNESS, content=harness.MAX_ITERATIONS_REACHED)
-                ctx.messages.append(msg)
+                async for event in self._answer_at_limit(
+                    ctx, prompts, loop_state, stream_tokens, cancellation_token, **kwargs
+                ):
+                    yield event
                 break
 
             # Keep plan/summary current in the prompt, then compact if the
@@ -553,6 +555,38 @@ class ReactLoop(BaseReasoning):
         ctx.messages[index] = ctx.messages[index].model_copy(
             update={"structured_output": shape, "structured_output_type": type_ref(type(shape))}
         )
+
+    async def _answer_at_limit(
+        self,
+        ctx: RunContext,
+        prompts: PromptCtx,
+        loop_state: ReActLoopState,
+        stream_tokens: bool,
+        cancellation_token: CancellationToken | None,
+        **kwargs: t.Any,
+    ) -> t.AsyncGenerator[CoreEvent, None]:
+        """One last call without tools, so the turn ends with a reply on
+        what was done and what is missing. No text: the next turn is told."""
+        call = self._call_llm_stream if stream_tokens else self._call_llm
+        loop_state.last_result = None
+        async for event in call(
+            ctx=ctx,
+            prompts=prompts,
+            loop_state=loop_state,
+            cancellation_token=cancellation_token,
+            transient_messages=[
+                SystemMessage(source=HARNESS, content=harness.ANSWER_AT_ITERATION_LIMIT)
+            ],
+            tools_override=[],
+            **kwargs,
+        ):
+            yield event
+        result = loop_state.last_result
+        if result is not None and result.message.text().strip():
+            # No tools were offered; drop any call a provider sends anyway.
+            ctx.messages.append(result.message.model_copy(update={"tool_calls": []}))
+            return
+        ctx.messages.append(UserMessage(source=HARNESS, content=harness.MAX_ITERATIONS_REACHED))
 
     async def _check_completion(
         self,
