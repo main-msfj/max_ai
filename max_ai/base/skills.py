@@ -4,6 +4,7 @@ Contracts for skill registries.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -56,6 +57,7 @@ class CoreSkillBase(CoreAgentCapabilities[BaseModel], ABC):
         self.skills: list[str] = self._validate_skill_names(skills)
         self._skill_blocks: list[SkillBlock] = []
         self._prepared: bool = False
+        self._prepared_lock: asyncio.Lock = asyncio.Lock()
 
         self._cache_root: Path = self._resolve_cache_root()
         self._registry_cache_dir: Path = self._cache_root / self._registry_key()
@@ -74,22 +76,20 @@ class CoreSkillBase(CoreAgentCapabilities[BaseModel], ABC):
         """
         if self._prepared:
             return
-
-        self._registry_cache_dir.mkdir(parents=True, exist_ok=True)
-
-        blocks: list[SkillBlock] = []
-        for skill_name in self.skills:
-            target_dir = self._registry_cache_dir / skill_name
-
-            if target_dir.exists():
-                shutil.rmtree(target_dir)
-
-            await self._download_skill(skill_name, target_dir)
-            self._validate_skill_dir(skill_name, target_dir)
-            blocks.append(self._read_skill_block(skill_name, target_dir))
-
-        self._skill_blocks = blocks
-        self._prepared = True
+        async with self._prepared_lock:
+            if self._prepared:  # another run prepared it while we waited for the lock
+                return
+            self._registry_cache_dir.mkdir(parents=True, exist_ok=True)
+            blocks: list[SkillBlock] = []
+            for skill_name in self.skills:
+                target_dir = self._registry_cache_dir / skill_name
+                if target_dir.exists():
+                    shutil.rmtree(target_dir)
+                await self._download_skill(skill_name, target_dir)
+                self._validate_skill_dir(skill_name, target_dir)
+                blocks.append(self._read_skill_block(skill_name, target_dir))
+            self._skill_blocks = blocks
+            self._prepared = True
 
     async def get_skills(self) -> list[SkillBlock]:
         """Return selected skill metadata.
@@ -153,7 +153,9 @@ class CoreSkillBase(CoreAgentCapabilities[BaseModel], ABC):
             The resulting mapping.
         """
         return {
-            path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+            path.relative_to(root).as_posix(): hashlib.sha256(
+                path.read_bytes()
+            ).hexdigest()
             for path in root.rglob("*")
             if path.is_file() and path.name != _SKILL_MANIFEST
         }

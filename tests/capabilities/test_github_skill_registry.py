@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 from pathlib import Path
 
@@ -125,3 +126,23 @@ def test_short_form_expands_against_github(source, expected):
 def test_rejects_a_source_that_is_neither_a_url_nor_org_repo():
     with pytest.raises(ValueError, match="org/repo"):
         GithubSkillRegistry._repo_url("not-a-repo-reference")
+
+
+async def test_concurrent_first_runs_prepare_once(tmp_path):
+    # Two runs on a fresh agent: both used to copy into the same cache
+    # folder after the clone, and the second failed with FileExistsError.
+    repo = make_repo(tmp_path)
+    registry = GithubSkillRegistry(source=f"file://{repo}", skills=["greet"])
+    downloads = []
+    download = registry._download_skill
+
+    async def counted(skill_name, target_dir):
+        downloads.append(skill_name)
+        await download(skill_name, target_dir)
+
+    registry._download_skill = counted
+    async with registry:
+        first, second = await asyncio.gather(registry.get_skills(), registry.get_skills())
+
+    assert [b.name for b in first] == [b.name for b in second] == ["greet"]
+    assert downloads == ["greet"]
