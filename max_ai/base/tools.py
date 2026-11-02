@@ -13,12 +13,10 @@ from jsonschema import Draft202012Validator
 from pydantic import BaseModel
 
 from ..core.termination import CancellationToken
-from ..errors.tools import DockerToolReferenceError
 from ..types.tool_call import ToolCallRecord, ToolResult
 from ..types.tools import (
     CoreToolDefinition,
     CoreToolParameters,
-    DockerToolRef,
     ToolApprovalMode,
 )
 from .component import ComponentBase
@@ -85,8 +83,6 @@ class CoreTool(ComponentBase[BaseModel], ABC):
         description: str,
         version: str = "1.0.0",
         approval_mode: ToolApprovalMode | str = ToolApprovalMode.ASK_APPROVED,
-        timeout_seconds: float = 300,
-        max_retries: int = 3,
         read_only: bool = False,
         policy_subject: str | None = None,
     ):
@@ -103,10 +99,6 @@ class CoreTool(ComponentBase[BaseModel], ABC):
             Version number of the saved configuration.
         approval_mode : ToolApprovalMode | str, default=ToolApprovalMode.ASK_APPROVED
             Value used to configure the tool or its run-scoped context.
-        timeout_seconds : float, default=300
-            Value used to configure the tool or its run-scoped context.
-        max_retries : int, default=3
-            Value used to configure the tool or its run-scoped context.
         read_only : bool, default=False
             Value used to configure the tool or its run-scoped context.
         policy_subject : str | None, default=None
@@ -116,8 +108,6 @@ class CoreTool(ComponentBase[BaseModel], ABC):
         self.version = version
         self.description = description
         self.approval_mode = approval_mode
-        self.timeout_seconds = timeout_seconds
-        self.max_retries = max_retries
         # No side effects: may run at the same time as other read-only calls.
         self.read_only = read_only
         self.policy_subject = policy_subject
@@ -150,20 +140,6 @@ class CoreTool(ComponentBase[BaseModel], ABC):
     def matches(self, pattern: str, subject: str) -> bool:
         """``subject`` matches a rule's pattern: a glob, where ``**`` is any depth."""
         return fnmatch.fnmatchcase(subject, pattern.replace("**/", "*").replace("/**", "/*"))
-
-    def docker_ref(self) -> DockerToolRef:
-        """
-        Return the container reference for a tool that supports isolation.
-
-        Returns
-        -------
-        DockerToolRef
-            The Docker reference for this tool.
-        """
-        raise DockerToolReferenceError(
-            self.name,
-            "it does not provide a DockerToolRef",
-        )
 
 
     # -------- ABSTRACT -----------------------------------------------------------

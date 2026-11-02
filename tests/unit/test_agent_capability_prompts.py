@@ -97,7 +97,7 @@ async def test_memory_tools_execute_and_snapshot_refreshes(tmp_path):
         assert (await memory.get_context())[0].memory == "First line\nSecond line"
         await agent.run("recall", run_context=ctx)
         assert "First line\nSecond line" in client.prompts[-1].rendered_layers[MemoryLayer]
-        assert agent._registry.runs_on_host("create_or_update")
+        assert agent._registry.get("create_or_update") is not None
         # The user's other sessions see it too; other users never do.
         await agent.run("other session", run_context=RunContext(user_id="u", session_id="other"))
         assert "First line" in client.prompts[-1].rendered_layers[MemoryLayer]
@@ -155,7 +155,7 @@ async def test_skills_and_knowledge(tmp_path, monkeypatch):
         assert "Write reports" in prompt.rendered_layers[SkillsLayer]
         assert "Full instructions." not in prompt.rendered_layers[SkillsLayer]
         assert "search_docs" in prompt.rendered_layers[KnowledgeLayer]
-        assert agent._registry.runs_on_host("search_docs")
+        assert agent._registry.get("search_docs") is not None
         directory = agent.workspace.materialize("u", "s")
         assert (directory.skill_dir / "writing" / "SKILL.md").is_file()
         assert len(client.prompts) == 2

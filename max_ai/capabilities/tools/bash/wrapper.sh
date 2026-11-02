@@ -11,9 +11,12 @@ exec 3>&1 4>&2
 mkdir -p "$WORKSPACE" "${__maxai_log%/*}"
 cd "$__maxai_cwd" 2>/dev/null || cd "$WORKSPACE"
 
-# One line per workspace file: path, size, mtime. .git is skipped.
+# One line per workspace file: path, size, mtime. .git and the folders the
+# sync skips (SKIPPED_DIRS in core/executor/sync.py) are left out.
 __maxai_snapshot() {
-    find "$WORKSPACE" -name .git -prune -o -type f -printf '%P\t%s\t%T@\n' 2>/dev/null |
+    find "$WORKSPACE" -type d \( -name .git -o -name node_modules -o -name .venv \
+        -o -name venv -o -name __pycache__ -o -name .cache \) -prune \
+        -o -type f -printf '%P\t%s\t%T@\n' 2>/dev/null |
         LC_ALL=C sort
 }
 

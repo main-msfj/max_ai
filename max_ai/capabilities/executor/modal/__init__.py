@@ -1,11 +1,7 @@
 """Modal Sandbox executor, available through max_ai.capabilities.executor.modal.
 
-Lazy (PEP 562): ``sync.py`` and ``modal_command.py`` are invoked inside the
-sandbox as ``python -m max_ai.capabilities.executor.modal.sync`` /
-``...modal_command`` — that always imports this package's __init__ first.
-If it eagerly imported ``_executor`` (which imports ``.sync``), running
-``sync.py`` as __main__ would double-import it, producing a
-'found in sys.modules ... prior to execution' RuntimeWarning.
+Lazy (PEP 562): ``ModalExecutor`` is imported on first use, so importing
+this package never needs the optional Modal SDK.
 """
 
 import typing as t

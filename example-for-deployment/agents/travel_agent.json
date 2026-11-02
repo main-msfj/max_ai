@@ -73,7 +73,6 @@
       "description": "ModalExecutor provides the Modalexecution implementation.",
       "label": "ModalExecutor",
       "config": {
-        "framework": "maxai @ git+https://github.com/main-msfj/max_ai@main",
         "packages": [],
         "app_name": "maxai-runtime",
         "network": "packages",

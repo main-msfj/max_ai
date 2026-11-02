@@ -27,6 +27,7 @@ class ExecutionResult:
     """
     Describe the result of running a command in an execution session.
     """
+
     stdout: str
     stderr: str
     exit_code: int | None
@@ -79,17 +80,6 @@ class ExecutorBase(ComponentBase[BaseModel], ABC):
 
     # -------- RUN CODE -----------------------------------------------------------
     @abstractmethod
-    async def run_tool(
-        self,
-        session: ExecutionSession,
-        tool,
-        record,
-        context,
-        cancellation_token: CancellationToken | None = None,
-    ):
-        """Invoke a native CoreTool in this provider; never fall back to host."""
-
-    @abstractmethod
     async def execute(
         self,
         session: ExecutionSession,
@@ -98,23 +88,13 @@ class ExecutorBase(ComponentBase[BaseModel], ABC):
         timeout: float = 60,
         cancellation_token: CancellationToken | None = None,
     ) -> ExecutionResult:
-        """Run Bash; timeout/cancellation must terminate its owned processes.
+        """Run ``command`` with bash and return its output and exit code.
 
-        Return command failures as exit codes. Raise infrastructure errors.
-        Cancellation propagates CancelledError after process cleanup.
+        This is the only way a command reaches the environment: the harness
+        builds the script, the provider only runs it. Timeout and cancellation
+        must stop every process the command started. A failing command is an
+        exit code; only infrastructure problems raise.
         """
-
-    @abstractmethod
-    async def execute_argv(
-        self,
-        session: ExecutionSession,
-        argv: list[str],
-        *,
-        stdin: str | None = None,
-        timeout: float = 60,
-        cancellation_token: CancellationToken | None = None,
-    ) -> ExecutionResult:
-        """Execute an argument vector without shell interpolation, with bounded output."""
 
     # -------- SESSION LIFECYCLE -----------------------------------------------------------
     @abstractmethod
@@ -142,10 +122,3 @@ class ExecutorBase(ComponentBase[BaseModel], ABC):
     @abstractmethod
     async def clean(self, session: ExecutionSession) -> None:
         """Idempotently destroy temporary runtime resources, not workspace files."""
-
-    @abstractmethod
-    async def rebuild(self, session: ExecutionSession) -> ExecutionSession:
-        """Recreate the runtime with the same workspace identity, not its image.
-
-        On failure, retain a handle that clean(old_session) can safely clean.
-        """

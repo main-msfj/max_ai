@@ -1,13 +1,14 @@
 """Shared sync logic for workspaces whose files live in object storage.
 
-Tools always work on a local copy (``<cache>/<user>/workspace``). The Agent
-calls ``download`` when a run starts and ``upload`` when it ends, so a new
-process (a serverless invocation, another server) sees the user's files.
+Tools always work on a local copy: ``.agents/<store>-<id>/<user>/workspace``
+in the project, unless ``cache_dir`` says otherwise. The Agent calls
+``download`` when a run starts and ``upload`` when it ends, so a new process
+(a serverless invocation, another server) sees the user's files.
 
 Only differences move: a manifest remembers each file's SHA-256 as of the
-last sync, and objects carry that hash as metadata. Scratchpads and skills
-stay local (throwaway / materialized per run). Two processes writing the
-same file at once: the last upload wins.
+last sync, and objects carry that hash as metadata. Skills stay local
+(materialized per run). Two processes writing the same file at once: the
+last upload wins.
 """
 
 from __future__ import annotations
@@ -15,12 +16,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import tempfile
 import typing as t
 from abc import abstractmethod
 from pathlib import Path
 
 from ...base.workspace import WorkspaceBase
+from ...config import setting
 
 _MANIFEST = ".maxai-sync.json"
 
@@ -36,13 +37,15 @@ class RemoteWorkspace(WorkspaceBase):
 
     def __init__(self, cache_dir: str | Path | None = None) -> None:
         self.cache_dir = str(cache_dir) if cache_dir is not None else None
-        root = cache_dir or Path(tempfile.gettempdir()) / "maxai-workspaces" / self._cache_name()
+        # Next to LocalWorkspace's folders, so you can open the files.
+        root = cache_dir or setting.root_dir / ".agents" / self._cache_name()
         super().__init__(root)
         self._locks: dict[str, asyncio.Lock] = {}
 
     def _cache_name(self) -> str:
-        """Stable local folder per remote location."""
-        return hashlib.sha256(self._location().encode()).hexdigest()[:16]
+        """Stable local folder per remote location, e.g. ``minio-6695424e``."""
+        store = type(self).__name__.removesuffix("Workspace").lower()
+        return f"{store}-{hashlib.sha256(self._location().encode()).hexdigest()[:8]}"
 
     # -------- BACKEND HOOKS -----------------------------------------------------------
     @abstractmethod
