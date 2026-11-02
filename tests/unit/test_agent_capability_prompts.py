@@ -106,6 +106,23 @@ async def test_memory_tools_execute_and_snapshot_refreshes(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_a_run_binds_memory_once(tmp_path, monkeypatch):
+    # The prompt and the loop share one bound copy of the user's memory.
+    bound = []
+    bind = LocalMemoryRegistry.bind
+
+    def counted(self, user_id, session_id):
+        bound.append((user_id, session_id))
+        return bind(self, user_id, session_id)
+
+    monkeypatch.setattr(LocalMemoryRegistry, "bind", counted)
+    memory = LocalMemoryRegistry("u", "s", tmp_path)
+    async with make_agent(tmp_path, RecordingClient(), memory=memory) as agent:
+        await agent.run("hello", run_context=RunContext(user_id="u", session_id="s"))
+    assert bound == [("u", "s")]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("mode,count", [(MemoryToolMode.NONE, 0),
     (MemoryToolMode.READ_ONLY, 3), (MemoryToolMode.FULL, 5)])
 async def test_memory_modes(tmp_path, mode, count):

@@ -42,7 +42,6 @@ from ....core.messages import (
     SystemMessage,
     ToolCall,
     ToolMessage,
-    UserMessage,
 )
 from ....core.primitives import FailureReason
 from ....core.runtime import runtime_status
@@ -370,8 +369,10 @@ class ReactLoop(BaseReasoning):
             if loop_state.iteration >= self.max_loop_iterations:
                 loop_state.finish_reason = MAX_ITERATIONS
                 _log.warning("Max iterations reached", iteration=loop_state.iteration)
-                msg = UserMessage(source=HARNESS, content=harness.MAX_ITERATIONS_REACHED)
-                ctx.messages.append(msg)
+                async for event in self._answer_at_limit(
+                    ctx, prompts, loop_state, stream_tokens, cancellation_token, **kwargs
+                ):
+                    yield event
                 break
 
             # Keep plan/summary current in the prompt, then compact if the

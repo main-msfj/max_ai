@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     environment_idle_timeout: float = Field(default=300, ge=0)
     # Read-only tool calls of one model reply that may run at once (MAX_PARALLEL_TOOLS).
     max_parallel_tools: int = Field(default=8, ge=1)
+    # Characters of one tool result the model sees (MAX_TOOL_RESULT_CHARS);
+    # longer results are cut in the middle. Bash already cuts at 20,000.
+    max_tool_result_chars: int = Field(default=30_000, ge=1_000)
 
     # Context compaction budgets. Environment overrides use the uppercase
     # field names, e.g. COMPACTION_PROMPT_BUDGET_TOKENS=6000.

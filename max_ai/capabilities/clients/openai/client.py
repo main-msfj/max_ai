@@ -21,6 +21,7 @@ from pydantic import BaseModel, SecretStr
 
 from ....base.clients import CoreChatCompletionClient
 from ....base.component import Component
+from ....core.ids import short_id
 from ....core.messages import (
     AssistantMessage,
     AudioPart,
@@ -453,7 +454,7 @@ class OpenAIChatCompletionClient(
             name = state.get("name")
             if not name:
                 continue
-            call_id = state.get("id") or f"openai_tool_call_{index}"
+            call_id = state.get("id") or short_id()
             arguments = "".join(state.get("arguments") or [])
             yield ChatCompletionChunk(
                 content="",

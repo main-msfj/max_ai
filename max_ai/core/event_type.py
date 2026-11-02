@@ -204,6 +204,15 @@ class ModelResponseEvent(ModelEvent):
     usage: Usage | None = Field(default=None, description="Token usage statistics")
 
 
+class ModelStreamResetEvent(ModelEvent):
+    """The stream broke and the call starts over: drop the text and
+    thinking already streamed for this call."""
+
+    EVENT_TYPE = "model_stream_reset"
+    attempt: int = Field(..., description="The attempt about to start (2 or more)")
+    reason: str = Field(..., description="Why the previous attempt stopped")
+
+
 class ModelStreamChunkEvent(ModelEvent):
     """Event emitted for each streaming chunk from LLM."""
 
@@ -569,6 +578,7 @@ AgentEvents = Annotated[
         CompletionRejectedEvent,
         ModelCallEvent,
         ModelResponseEvent,
+        ModelStreamResetEvent,
         ModelStreamChunkEvent,
         ReasoningIterationEvent,
         ReasoningCompleteEvent,
