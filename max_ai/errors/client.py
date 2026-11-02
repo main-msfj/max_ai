@@ -2,14 +2,20 @@
 
 A single ``ClientError`` exception covers all client-side failure
 modes. The ``kind`` attribute identifies the specific category, and
-``status`` / ``retry_after`` carry what the provider answered, so the
-reasoning loop (the only layer that retries) can decide what to do.
+``status`` / ``retry_after`` carry what the provider answered, and
+``transient`` says whether calling again may work; the reasoning loop is
+the only layer that retries.
 
 Use the factory classmethods rather than ``ClientError(...)`` directly
 to keep error messages consistent across providers.
 """
 
 from __future__ import annotations
+
+# Kinds worth calling again: the provider or the network, not the request.
+_TRANSIENT_KINDS = frozenset({"rate_limit", "timeout", "stream_interrupted", "api_error", "provider"})
+# HTTP 4xx that are not the request's fault: timeout, conflict, rate limit.
+_RETRYABLE_4XX = frozenset({408, 409, 429})
 
 
 class ClientError(Exception):
@@ -33,6 +39,15 @@ class ClientError(Exception):
         self.status = status
         # Seconds the provider asked to wait before retrying (Retry-After).
         self.retry_after = retry_after
+
+    @property
+    def transient(self) -> bool:
+        """Calling again may work: rate limits, timeouts, cut streams, 5xx.
+        A 4xx (bad request, auth, not found) fails the same way again."""
+        if self.kind not in _TRANSIENT_KINDS:
+            return False
+        return not (self.status is not None and 400 <= self.status < 500
+                    and self.status not in _RETRYABLE_4XX)
 
     # -------- VALIDATION ERRORS -----------------------------------------------------------
     @classmethod

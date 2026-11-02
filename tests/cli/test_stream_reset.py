@@ -6,14 +6,14 @@ import pytest
 
 from max_ai.cli.app import MaxAIApp
 from max_ai.cli.blocks import AssistantBlock, NoteLine
+from max_ai.core.retry import RetryPolicy
 from tests.cli.test_sessions import idle, say, texts
 from tests.reasoning.test_stream_retry import FlakyStream, make_agent
 
 
 @pytest.fixture(autouse=True)
 def no_wait(monkeypatch):
-    from max_ai.base import reasoning
-    monkeypatch.setattr(reasoning, "_retry_delay", lambda error, attempt: 0.0)
+    monkeypatch.setattr(RetryPolicy, "delay", lambda self, attempt, retry_after=None: 0.0)
 
 
 async def test_the_partial_answer_is_replaced_by_the_retry(tmp_path):
@@ -24,4 +24,4 @@ async def test_the_partial_answer_is_replaced_by_the_retry(tmp_path):
             await idle(app, pilot)
             assert texts(app, AssistantBlock) == ["Hola, el resultado es 42."]
             notes = [str(n.render()) for n in app.query(NoteLine)]
-            assert any("answering again (attempt 2)" in n for n in notes)
+            assert any("retrying in 0s (attempt 2 of 4)" in n for n in notes)

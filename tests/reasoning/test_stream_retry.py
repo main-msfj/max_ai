@@ -5,9 +5,9 @@ from types import SimpleNamespace
 import pytest
 
 from max_ai.agents.agent import STREAM_RESTARTED, Agent
-from max_ai.base import reasoning
 from max_ai.capabilities.workspace.local import LocalWorkspace
-from max_ai.core.event_type import ModelStreamChunkEvent, ModelStreamResetEvent
+from max_ai.core.event_type import ModelRetryEvent, ModelStreamChunkEvent
+from max_ai.core.retry import RetryPolicy
 from max_ai.errors.client import ClientError
 from max_ai.types.completions import ChatCompletionChunk, Usage
 from max_ai.types.run_context import RunContext
@@ -40,7 +40,7 @@ class FlakyStream:
 
 @pytest.fixture(autouse=True)
 def no_wait(monkeypatch):
-    monkeypatch.setattr(reasoning, "_retry_delay", lambda error, attempt: 0.0)
+    monkeypatch.setattr(RetryPolicy, "delay", lambda self, attempt, retry_after=None: 0.0)
 
 
 def make_agent(tmp_path, client):
@@ -61,8 +61,9 @@ async def test_a_broken_stream_is_reset_before_the_retry(tmp_path):
 
     shown = []
     for event in events:
-        if isinstance(event, ModelStreamResetEvent):
-            assert event.attempt == 2 and "connection reset" in event.reason
+        if isinstance(event, ModelRetryEvent):
+            assert event.attempt == 1 and event.reason == "stream_interrupted"
+            assert event.discard_partial
             shown.clear()
         elif isinstance(event, ModelStreamChunkEvent):
             shown.append(event.chunk)
@@ -70,10 +71,11 @@ async def test_a_broken_stream_is_reset_before_the_retry(tmp_path):
     assert ctx.messages[-1].text() == "Hola, el resultado es 42."
 
 
-async def test_no_reset_when_nothing_was_streamed(tmp_path):
+async def test_nothing_to_discard_when_nothing_was_streamed(tmp_path):
     events, ctx = await stream_events(tmp_path, FlakyStream(sent=0))
 
-    assert not any(isinstance(e, ModelStreamResetEvent) for e in events)
+    [retry] = [e for e in events if isinstance(e, ModelRetryEvent)]
+    assert not retry.discard_partial
     assert ctx.messages[-1].text() == "Hola, el resultado es 42."
 
 

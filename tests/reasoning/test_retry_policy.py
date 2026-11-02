@@ -1,10 +1,10 @@
-"""The reasoning loop alone decides retries, from what the client reports."""
+"""ClientError.transient decides what is retried; RetryPolicy decides how long to wait."""
 
 import httpx
 import pytest
 
-from max_ai.base.reasoning import _MAX_RETRY_DELAY, _retry_delay
 from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
+from max_ai.core.retry import RetryPolicy, retry_after
 from max_ai.errors.client import ClientError
 
 
@@ -20,7 +20,7 @@ from max_ai.errors.client import ClientError
     ClientError.provider_error("x", status_code=502),
 ])
 def test_transient_errors_are_retried(error):
-    assert _retry_delay(error, 0) is not None
+    assert error.transient
 
 
 @pytest.mark.parametrize("error", [
@@ -32,18 +32,18 @@ def test_transient_errors_are_retried(error):
     ValueError("not a client error"),
 ])
 def test_permanent_errors_fail_at_once(error):
-    assert _retry_delay(error, 0) is None
+    assert not getattr(error, "transient", False)
 
 
 def test_the_providers_retry_after_wins_but_is_capped():
-    assert _retry_delay(ClientError.rate_limit_exceeded(retry_after=20), 0) == 20
-    assert _retry_delay(ClientError.rate_limit_exceeded(retry_after=999), 0) == _MAX_RETRY_DELAY
+    policy = RetryPolicy()
+    assert policy.delay(0, retry_after(ClientError.rate_limit_exceeded(retry_after=20))) == 20
+    assert policy.delay(0, retry_after(ClientError.rate_limit_exceeded(retry_after=999))) == 60
 
 
 def test_backoff_grows_with_jitter():
-    error = ClientError.request_timeout(5)
-    delays = {_retry_delay(error, 2) for _ in range(20)}
-    assert all(2.0 <= d <= 6.0 for d in delays)  # 4s * [0.5, 1.5]
+    delays = {RetryPolicy().delay(2) for _ in range(20)}
+    assert all(0.0 <= d <= 4.0 for d in delays)  # full jitter up to 1s * 2**2
     assert len(delays) > 1
 
 
@@ -67,4 +67,4 @@ def test_openai_errors_carry_status_and_retry_after():
     ))
     error = OpenAIChatCompletionClient._map_openai_error(missing)
     assert (error.kind, error.status) == ("api_error", 404)
-    assert _retry_delay(error, 0) is None
+    assert not error.transient
