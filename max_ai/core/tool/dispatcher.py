@@ -18,6 +18,7 @@ from ..event_type import (
     UserInputRequestEvent,
 )
 from ..messages import ToolMessage
+from ..policy import Policy
 from ..termination import CancellationToken
 from .registry import ToolRegistry
 
@@ -38,11 +39,13 @@ class ToolDispatcher:
 
     def __init__(self, registry: ToolRegistry, *, source: str = "tool_dispatcher",
                  manager: "EnvironmentManager | None" = None,
-                 middleware: "MiddlewareChain | None" = None):
+                 middleware: "MiddlewareChain | None" = None,
+                 policy: Policy | None = None):
         self.registry = registry
         self.source = source
         self.manager = manager
         self.middleware = middleware
+        self.policy = policy or Policy()
         self._active: set[str] = set()
 
     def _batches(self, records: list[ToolCallRecord]) -> list[list[ToolCallRecord]]:
@@ -242,22 +245,20 @@ class ToolDispatcher:
             return None
         if record.is_awaiting_input:
             raise ValueError("User input must be resolved before dispatch")
-        try:
-            approval_mode = ToolApprovalMode(tool.approval_mode)
-            from ...capabilities.tools.bash import BashTool
-
-            if isinstance(tool, BashTool):
-                permission = tool.permission_for(record.parameters["command"])
-                if permission == "deny":
-                    return finish(ToolResult.approval_denied(record.id, "Command denied by Bash permissions"))
-                approval_mode = (
-                    ToolApprovalMode.AUTO_APPROVED if permission == "allow"
-                    else ToolApprovalMode.ASK_APPROVED
-                )
-        except ValueError:
-            return finish(
-                ToolResult.execution_error(record.id, "Unknown approval mode")
-            )
+        # One decision for every tool: the agent's Policy plus the rules the
+        # user allowed during this session.
+        run_ctx = context.deps.get("run_context")
+        decision = self.policy.decide(
+            tool, record.parameters,
+            isolated=self.manager is not None and self.manager.executor.isolated,
+            extra_allow=getattr(run_ctx, "allowed_rules", ()),
+        )
+        if decision.verdict == "deny":
+            return finish(ToolResult.approval_denied(record.id, f"Denied by policy: {decision.rule}"))
+        approval_mode = (
+            ToolApprovalMode.AUTO_APPROVED if decision.verdict == "allow"
+            else ToolApprovalMode.ASK_APPROVED
+        )
         if record.is_pending_approval:
             if approval_mode == ToolApprovalMode.ASK_APPROVED:
                 emit(

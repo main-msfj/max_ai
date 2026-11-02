@@ -38,6 +38,7 @@ class FunctionAsTool(CoreTool):
         timeout_seconds: float = 300,
         max_retries: int = 3,
         read_only: bool = False,
+        policy_subject: str | None = None,
     ):
         """Create a tool from a Python function.
 
@@ -51,6 +52,8 @@ class FunctionAsTool(CoreTool):
             max_retries: Consumed by the executor on ToolRetry.
             read_only: The function has no side effects, so the agent may run
                 it at the same time as other read-only calls.
+            policy_subject: Parameter that Policy rules like ``name(pattern)``
+                match, e.g. ``url`` for ``fetch(https://acme.com/*)``.
         """
         self.func = func
         super().__init__(
@@ -61,6 +64,7 @@ class FunctionAsTool(CoreTool):
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
             read_only=read_only,
+            policy_subject=policy_subject,
         )
 
         self.signature = inspect.signature(func)

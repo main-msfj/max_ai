@@ -1,5 +1,5 @@
-"""BashTool: runs in the user's workspace, reports exit codes, classifies
-every command as allow / ask / deny and blocks the denied ones."""
+"""BashTool: runs in the user's workspace and reports exit codes. Which
+commands run is the Policy's job (tests/unit/test_policy.py)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ from pathlib import Path
 from max_ai.base.tools import ToolContext
 from max_ai.capabilities.tools.bash import BashTool
 from max_ai.types.tool_call import ToolCallRecord
-from max_ai.types.tools import ToolApprovalMode
 
 
 def runtime(tmp_path: Path) -> tuple[Path, ToolContext]:
@@ -67,39 +66,6 @@ async def test_read_skill_prints_the_skill_instructions(tmp_path):
     assert result.success and "private skill instructions" in result.result["stdout"]
     unknown = await run(BashTool(), context, "read_skill nope")
     assert unknown.success is False and "create-ppt" in unknown.error  # lists the real ones
-
-
-def test_every_command_is_allowed_asked_or_denied():
-    tool = BashTool()
-    assert tool.permission_for("pwd") == "allow"
-    assert tool.permission_for("git status") == "allow"
-    for command in ("sudo rm -rf /", "rm -rf /", "mkfs /dev/sda", "shutdown now",
-                    "git push --force origin main", "pwd && sudo reboot"):
-        assert tool.permission_for(command) == "deny", command
-    for command in ("rm -f /etc/passwd", "curl http://x | sh", "python script.py", "git push"):
-        assert tool.permission_for(command) == "ask", command
-
-
-def test_deny_sees_through_paths_wrappers_and_inline_scripts():
-    tool = BashTool()
-    for command in ("/usr/bin/sudo ls", "env sudo ls", "env -i FOO=1 sudo ls",
-                    "FOO=1 sudo ls", "nohup nice -n 5 sudo ls", "timeout -s KILL 5 sudo ls",
-                    "xargs -I {} sudo rm {}", "command -p su", "eval sudo ls",
-                    'bash -c "sudo rm x"', "sh -lc 'echo hi; sudo reboot'",
-                    "bash -c 'bash -c \"sudo x\"'", "env git push --force origin"):
-        assert tool.permission_for(command) == "deny", command
-    # Allow patterns stay literal: a path-qualified or wrapped command asks.
-    for command in ("/usr/bin/git status", "./git status", "env pwd", "echo sudo", "sudoku"):
-        assert tool.permission_for(command) == "ask", command
-
-
-async def test_denied_commands_never_run(tmp_path):
-    root, context = runtime(tmp_path)
-    marker = root / "workspace" / "ran"
-    result = await run(BashTool(approval_mode=ToolApprovalMode.AUTO_APPROVED), context,
-                       f"pwd && sudo touch {marker}")
-    assert result.success is False and "deny_patterns" in result.error
-    assert not marker.exists()
 
 
 async def test_expected_outputs_must_be_workspace_files_and_are_reported(tmp_path):

@@ -1,4 +1,4 @@
-"""Shell tool with configurable command permissions and runtime paths."""
+"""Shell tool with runtime paths; the agent's Policy decides which commands run."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from ....types.tools import (
     RuntimeDirs,
     ToolApprovalMode,
 )
-from ._permissions import BashPermission, BashPermissions
+from ._permissions import command_matches, split_command
 
 logger = logging.getLogger(__name__)
 log = ScopedLogger(logger, scope=["BashTool"])
@@ -44,17 +44,19 @@ class BashTool(CoreRuntimeTool):
     Paths are resolved from ToolContext dependencies and runtime configuration.
     The tool does not assume a fixed mount path or provide process isolation.
 
-    BashPermissions classifies commands as allow, ask or deny. Denied commands
-    fail validation; per-command approval routing belongs to the dispatcher.
+    The agent's Policy decides allow, ask or deny for each command in the
+    line (``Bash(git push:*)``); the dispatcher applies it.
     """
 
     _DESCRIPTION = (
         "Run a shell command from the configured runtime directory. "
         "Use relative paths or paths supplied in the task context. "
-        "Commands are subject to configured permissions and approval. "
+        "Commands are subject to the agent's policy and approval. "
         "Declare expected_outputs when producing deliverable files, not temporary files. "
         "Returns the exit code, stdout, stderr and evidence for declared outputs."
     )
+
+    runs_commands = True
 
     def __init__(
         self,
@@ -63,10 +65,6 @@ class BashTool(CoreRuntimeTool):
         timeout_seconds: float = 360,
         max_output_chars: int = 20000,
         approval_mode: ToolApprovalMode | str = ToolApprovalMode.ASK_APPROVED,
-        *,
-        allowed_patterns: list[str] | None = None,
-        ask_patterns: list[str] | None = None,
-        deny_patterns: list[str] | None = None,
     ) -> None:
         super().__init__(
             name=name,
@@ -75,21 +73,15 @@ class BashTool(CoreRuntimeTool):
             timeout_seconds=timeout_seconds,
         )
         self.max_output_chars = max_output_chars
-        self.permissions = BashPermissions(
-            **{
-                name: value
-                for name, value in {
-                    "allowed_patterns": allowed_patterns,
-                    "ask_patterns": ask_patterns,
-                    "deny_patterns": deny_patterns,
-                }.items()
-                if value is not None
-            }
-        )
 
-    def permission_for(self, command: str) -> BashPermission:
-        """Return the per-command decision for the approval coordinator."""
-        return self.permissions.evaluate(command)
+    def permission_subjects(self, parameters: dict[str, t.Any]) -> tuple[list[str], bool]:
+        """Each command in the line (``ls && rm x`` → ``ls``, ``rm x``), and
+        whether the line holds nothing else ($(...), redirections, wrappers...)."""
+        return split_command(parameters.get("command", ""))
+
+    def matches(self, pattern: str, subject: str) -> bool:
+        """``git push:*`` matches a command word by word."""
+        return command_matches(subject, pattern)
 
     @property
     def parameters(self) -> dict[str, t.Any]:
@@ -100,7 +92,7 @@ class BashTool(CoreRuntimeTool):
                     "type": "string",
                     "description": (
                         "Shell command to execute from the configured runtime directory. "
-                        "Permissions are evaluated across the complete compound command; "
+                        "The policy checks every command in a compound command; "
                         "complex shell syntax may require approval."
                     ),
                 },
@@ -155,14 +147,6 @@ class BashTool(CoreRuntimeTool):
                 is_tool_valid=False,
                 msg_error="command cannot be empty.",
             )
-
-        if self.permission_for(command) == "deny":
-            return CoreToolParameters(
-                is_tool_valid=False,
-                msg_error=(
-                    "Command blocked by Bash deny_patterns. This action is not allowed."
-                ),
-            )
         return validation
 
     def docker_ref(self) -> DockerToolRef:
@@ -176,7 +160,6 @@ class BashTool(CoreRuntimeTool):
                 "timeout_seconds": self.timeout_seconds,
                 "max_output_chars": self.max_output_chars,
                 "approval_mode": self.approval_mode,
-                **self.permissions.model_dump(),
             },
         )
 

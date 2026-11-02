@@ -1,49 +1,42 @@
 # Bash permissions
 
 ```python
-from max_ai.tools.bash import BashTool
+from max_ai.agents import Agent, Policy
+from max_ai.core.policy import DEFAULT_DENY
 
-bash = BashTool(
-    allowed_patterns=["git status", "npm test:*"],
-    ask_patterns=["git push:*"],
-    deny_patterns=["rm -rf /*", "git push --force:*"],
-)
+agent = Agent(..., policy=Policy(
+    allow=["Bash(git status)", "Bash(npm test:*)"],
+    ask=["Bash(git push:*)"],
+    deny=[*DEFAULT_DENY, "Bash(curl:*)"],
+))
 ```
 
-The three lists are validated by the Pydantic `BashPermissions` model.
-Omitting a list uses its defaults; passing a list replaces that category;
-passing `[]` clears it. Defaults allow `pwd` and `git status`, ask for
-`git push:*`, and deny selected destructive/system commands. Unmatched commands
-always return `ask`.
+The Agent registers a default `BashTool`. Which commands run is the agent's
+`Policy` (see `max_ai/core/policy.py`), the same one every tool goes through:
+deny, then ask, then allow; with no rule, bash asks.
 
-Patterns match words, with shell-style globs within each word. A trailing `:*`
-matches the preceding command with zero or more additional arguments.
-Thus `git status` is exact, while `git status:*` accepts arguments.
-Patterns describe individual commands, not shell pipelines or scripts.
+- `Bash(pattern)` rules match each command in the line. Patterns match words,
+  with shell globs inside each word. A trailing `:*` allows extra arguments:
+  `git status` is exact, `git status:*` is not.
+- Every part of `&&`, `||`, `;`, newlines and pipes is checked: one denied
+  part denies the line, and all must be allowed to run without asking.
+- Deny and ask rules also see what a command really runs: through command
+  paths (`/usr/bin/sudo`), leading `VAR=value` assignments, wrappers (`env`,
+  `command`, `exec`, `nice`, `nohup`, `timeout`, `xargs`, ...) and inline
+  scripts (`bash -c "..."`, `sh -lc '...'`, `eval`).
+- Quotes, expansions, redirects, subshells, control structures, wrappers and
+  path-qualified commands always ask, even when an allow rule matches.
+- Defaults allow `pwd` and `git status`, ask for `git push:*`, and deny
+  destructive or system commands (`sudo`, `mkfs`, `rm -rf /*`, ...).
+- Without a sandbox (`LocalExecutor`) the agent's allow rules still ask; only
+  the user's own "always allow" in the session runs a command unasked. The
+  CLI's "always allow" adds `Bash(<first word>:*)` for each command in the
+  line, and nothing when the line can't be read safely.
 
-`bash.permission_for(command)` returns `deny`, `ask`, or `allow`, in that
-priority order. Every part of `&&`, `||`, `;`, newline-separated commands and
-pipes is evaluated. All parts must return `allow` to allow the whole command.
-For example, `git status && git push origin main` returns `ask`, and
-`git status && git push --force origin main` returns `deny` with the lists above.
-
-This first version treats quotes, expansions, redirects, background jobs,
-subshells and control structures conservatively: they require approval even
-when an allow pattern matches. Deny and ask patterns also match through
-command paths (`/usr/bin/sudo`), leading `VAR=value` assignments, wrappers
-(`env`, `command`, `exec`, `nice`, `nohup`, `timeout`, `xargs`, ...) and inline
-scripts (`bash -c "..."`, `sh -lc '...'`, `eval`); allow patterns stay literal,
-so a wrapped or path-qualified command asks. Dynamically constructed commands
-are not interpreted, and an allowed interpreter such as `python:*` can run
-anything. Patterns do not provide filesystem or process isolation: with
-`LocalExecutor` commands run on the host (the agent logs a warning once), so
-use `DockerExecutor` or `ModalExecutor` outside local development.
-
-Denied commands are rejected by tool validation and execution. ToolDispatcher
-uses `permission_for` for each Bash call: allow grants automatic approval, ask
-emits an approval request and leaves the call pending, and deny blocks execution.
-Other tools retain their tool-wide approval mode. Calling Bash.execute directly
-does not perform the dispatcher's approval workflow.
+Dynamically built commands are not interpreted, and an allowed interpreter
+such as `Bash(python:*)` can run anything: rules are a guard rail, not a
+sandbox. Use `DockerExecutor` or `ModalExecutor` outside local development.
+Calling `BashTool.execute` directly skips the dispatcher and its Policy.
 
 ## Execution
 
