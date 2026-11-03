@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from ....core.model.llm import ModelConfig
+
 OpenAIReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
 
 
@@ -18,4 +20,4 @@ class OpenAIChatCompletionClientConfig(BaseModel):
     organization: str | None = None
     project: str | None = None
     options: dict[str, t.Any] = Field(default_factory=dict)
-    config: dict[str, t.Any] = Field(default_factory=dict)
+    config: ModelConfig | None = None

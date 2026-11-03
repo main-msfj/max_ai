@@ -392,7 +392,21 @@ Read-only tool calls of one model reply run at the same time (`FunctionAsTool(fn
 
 ### Serialization
 
-`row = agent.serialize().model_dump_json()`, `Agent.deserialize(row)`. Stored configs hold no secrets (clients store `api_key_env`, the env var name). Python-function tools can't be serialized—expose them through MCP. Third-party components need `from max_ai.base import allow_providers; allow_providers("my_pkg.")`.
+An agent (or any component) is plain data. `agent.to_yaml()` / `agent.to_json()` write it compactly: each component keeps its `provider` and only the settings that differ from the defaults, so the file reads like one written by hand. `Agent.from_yaml(Path("agent.yaml"))` or `Agent.from_yaml(text)` rebuilds it (same for JSON).
+
+```yaml
+provider: maxai.agents.Agent
+config:
+  name: helper
+  description: Answers questions.
+  instructions: |
+    Be brief. Cite your sources.
+  client:
+    provider: maxai.llm.OpenRouterChatCompletionClient
+    config: {model: nvidia/nemotron-3.5-lightning:free}
+```
+
+Anything left out takes its default when loaded, so a later default change reaches stored agents. `to_yaml(full=True)` (or `agent.serialize().model_dump_json()`, `Agent.deserialize(row)`) keeps every setting instead. See `example-for-deployment/agents/`. Stored configs hold no secrets (clients store `api_key_env`, the env var name). Python-function tools can't be serialized—expose them through MCP. Third-party components need `from max_ai.base import allow_providers; allow_providers("my_pkg.")`.
 
 ## Installation
 

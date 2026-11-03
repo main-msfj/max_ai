@@ -4,6 +4,8 @@ import typing as t
 
 from pydantic import BaseModel, Field
 
+from ....core.model.llm import ModelConfig
+
 
 class OpenRouterChatCompletionClientConfig(BaseModel):
     """Configuration for OpenRouterChatCompletionClient serialization."""
@@ -18,4 +20,4 @@ class OpenRouterChatCompletionClientConfig(BaseModel):
     app_name: str | None = None
     app_url: str | None = None
     options: dict[str, t.Any] = Field(default_factory=dict)
-    config: dict[str, t.Any] = Field(default_factory=dict)
+    config: ModelConfig | None = None

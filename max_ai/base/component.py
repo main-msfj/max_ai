@@ -6,11 +6,16 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 import os
+import types
 import typing as t
 import warnings
+from pathlib import Path
 
-from pydantic import BaseModel
+import yaml
+from pydantic import BaseModel, Field
+from pydantic_core import to_jsonable_python
 
 ComponentType = t.Union[
     t.Literal[
@@ -56,7 +61,7 @@ class ComponentModel(BaseModel):
     label: str | None = None
     """UI label for display."""
 
-    config: dict[str, t.Any]
+    config: dict[str, t.Any] = Field(default_factory=dict)
     """Configuration payload for instantiation."""
 
 
@@ -264,23 +269,7 @@ class ComponentBase(t.Generic[ConfigT]):
         else:
             loaded_model = data
 
-        provider = KNOWN_PROVIDERS.get(
-            loaded_model.provider,
-            loaded_model.provider,
-        )
-
-        parts = provider.rsplit(".", maxsplit=1)
-        if len(parts) != 2:
-            raise ValueError(f"Invalid provider path: {provider!r}")
-        _check_allowed(provider)
-
-        module_path, class_name = parts
-        module = importlib.import_module(module_path)
-        component_class = getattr(module, class_name)
-
-        if not is_component_class(component_class):
-            raise TypeError(f"Invalid component class: {component_class!r}")
-
+        component_class = _component_class(loaded_model.provider)
         loaded_version = (
             loaded_model.component_version
             or loaded_model.version
@@ -308,6 +297,32 @@ class ComponentBase(t.Generic[ConfigT]):
             raise TypeError(f"Expected {cls.__name__}, got {type(instance).__name__}")
 
         return instance
+
+    # -------- JSON / YAML ------------------------------------------------------------
+    def to_dict(self, *, full: bool = False) -> dict[str, t.Any]:
+        """This component as plain data. Compact by default: each component
+        keeps its ``provider`` and the settings that differ from the
+        defaults. ``full=True`` keeps everything, frozen against later
+        default changes (what ``serialize()`` stores)."""
+        data = self.serialize().model_dump(mode="json", exclude_none=True)
+        return data if full else _compact(data)
+
+    def to_json(self, *, full: bool = False, indent: int | None = 2) -> str:
+        return json.dumps(self.to_dict(full=full), indent=indent, ensure_ascii=False)
+
+    def to_yaml(self, *, full: bool = False) -> str:
+        return yaml.dump(self.to_dict(full=full), Dumper=_YamlDumper,
+                         sort_keys=False, allow_unicode=True)
+
+    @classmethod
+    def from_json(cls, source: str | os.PathLike[str]) -> t.Self:
+        """Rebuild from JSON text, or from a file when given a path."""
+        return cls.deserialize(_read(source))
+
+    @classmethod
+    def from_yaml(cls, source: str | os.PathLike[str]) -> t.Self:
+        """Rebuild from YAML text, or from a file when given a path."""
+        return cls.deserialize(yaml.safe_load(_read(source)))
 
     @staticmethod
     def require_type(value: t.Any, expected: type[ExpectedT], field: str) -> ExpectedT:
@@ -414,6 +429,95 @@ class Component(t.Generic[ConfigT]):
                 ),
                 stacklevel=2,
             )
+
+
+def _component_class(provider: str) -> type[ComponentBase[t.Any]]:
+    """The allowed component class a ``provider`` names."""
+    path = KNOWN_PROVIDERS.get(provider, provider)
+    parts = path.rsplit(".", maxsplit=1)
+    if len(parts) != 2:
+        raise ValueError(f"Invalid provider path: {path!r}")
+    _check_allowed(path)
+    component_class = getattr(importlib.import_module(parts[0]), parts[1])
+    if not is_component_class(component_class):
+        raise TypeError(f"Invalid component class: {component_class!r}")
+    return component_class
+
+
+_METADATA = {"component_type", "version", "component_version", "description", "label"}
+
+
+def _compact(node: t.Any, annotation: t.Any = None) -> t.Any:
+    """``node`` without component metadata and without settings at their
+    default, so a stored agent reads like one written by hand.
+    ``annotation`` is the field type ``node`` was dumped from."""
+    if isinstance(node, list):
+        return [_compact(item, _item_type(annotation)) for item in node]
+    if not isinstance(node, dict):
+        return node
+    if isinstance(node.get("provider"), str) and set(node) <= {"provider", "config", *_METADATA}:
+        schema = _component_class(node["provider"]).component_schema
+        config = _compact(node.get("config", {}), schema)
+        return {"provider": node["provider"], **({"config": config} if config else {})}
+    schema = _model_for(annotation, node)
+    fields = schema.model_fields if schema is not None else {}
+    kept: dict[str, t.Any] = {}
+    for key, value in node.items():
+        field = fields.get(key)
+        if field is not None and not field.is_required():
+            default = field.get_default(call_default_factory=True)
+            if value == to_jsonable_python(default, exclude_none=True):
+                continue
+        kept[key] = _compact(value, field.annotation if field is not None else None)
+    return kept
+
+
+def _unwrap(annotation: t.Any) -> t.Any:
+    return t.get_args(annotation)[0] if t.get_origin(annotation) is t.Annotated else annotation
+
+
+def _item_type(annotation: t.Any) -> t.Any:
+    """``X`` for ``list[X]`` (or ``list[X] | None``), else ``None``."""
+    for candidate in _members(annotation):
+        if t.get_origin(candidate) in (list, tuple) and t.get_args(candidate):
+            return t.get_args(candidate)[0]
+    return None
+
+
+def _members(annotation: t.Any) -> tuple[t.Any, ...]:
+    annotation = _unwrap(annotation)
+    if t.get_origin(annotation) in (t.Union, types.UnionType):
+        return tuple(_unwrap(a) for a in t.get_args(annotation))
+    return (annotation,)
+
+
+def _model_for(annotation: t.Any, value: dict[str, t.Any]) -> type[BaseModel] | None:
+    """The pydantic model ``value`` was dumped from: for a union, the one
+    whose fields cover its keys and whose required fields it has."""
+    models = [m for m in _members(annotation) if isinstance(m, type) and issubclass(m, BaseModel)]
+    if len(models) == 1:
+        return models[0]
+    for model in models:
+        required = {k for k, f in model.model_fields.items() if f.is_required()}
+        if required <= set(value) <= set(model.model_fields):
+            return model
+    return None
+
+
+def _read(source: str | os.PathLike[str]) -> str:
+    return Path(source).read_text() if isinstance(source, os.PathLike) else source
+
+
+class _YamlDumper(yaml.SafeDumper):
+    """Multi-line strings (instructions) as ``|`` blocks."""
+
+
+def _str_presenter(dumper: yaml.SafeDumper, value: str) -> yaml.Node:
+    style = "|" if "\n" in value else None
+    return dumper.represent_scalar("tag:yaml.org,2002:str", value, style=style)
+
+
+_YamlDumper.add_representer(str, _str_presenter)
 
 
 def is_component_class(value: t.Any) -> t.TypeGuard[type[ComponentBase[t.Any]]]:

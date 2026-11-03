@@ -128,7 +128,7 @@ class OpenAIChatCompletionClient(
             organization=self.organization,
             project=self.project,
             options=self.generation_options,
-            config=self.config.model_dump(exclude_none=True),
+            config=self.config.model_copy(),
         )
 
     @classmethod
@@ -136,14 +136,13 @@ class OpenAIChatCompletionClient(
         cls,
         config: OpenAIChatCompletionClientConfig,
     ) -> "OpenAIChatCompletionClient":
-        model_config = ModelConfig(**config.config) if config.config else None
         return cls(
             model=config.model,
             api_key_env=config.api_key_env,
             base_url=config.base_url,
             organization=config.organization,
             project=config.project,
-            config=model_config,
+            config=config.config,
             **config.options,
         )
 

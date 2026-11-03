@@ -129,7 +129,7 @@ class OpenRouterChatCompletionClient(OpenAIChatCompletionClient):
             app_name=self.app_name,
             app_url=self.app_url,
             options=self.generation_options,
-            config=self.config.model_dump(exclude_none=True),
+            config=self.config.model_copy(),
         )
 
     @classmethod
@@ -137,7 +137,6 @@ class OpenRouterChatCompletionClient(OpenAIChatCompletionClient):
         cls,
         config: OpenRouterChatCompletionClientConfig,
     ) -> "OpenRouterChatCompletionClient":
-        model_config = ModelConfig(**config.config) if config.config else None
         return cls(
             model=config.model,
             api_key_env=config.api_key_env,
@@ -147,7 +146,7 @@ class OpenRouterChatCompletionClient(OpenAIChatCompletionClient):
             provider=config.provider,
             app_name=config.app_name,
             app_url=config.app_url,
-            config=model_config,
+            config=config.config,
             **config.options,
         )
 
