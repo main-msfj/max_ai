@@ -26,13 +26,27 @@ class RetryPolicy(BaseModel):
     base_delay: float = Field(default=1.0, ge=0, description="First wait, in seconds.")
     # Rate limits often ask for 30-60 s; a lower cap retries too early.
     max_delay: float = Field(default=60.0, ge=0, description="Longest wait, in seconds.")
+    rate_limit_delay: float = Field(
+        default=5.0, ge=0, description="First wait after a rate limit that names no wait.",
+    )
 
-    def delay(self, attempt: int, retry_after: float | None = None) -> float:
+    def delay(
+        self, attempt: int, retry_after: float | None = None, *, rate_limited: bool = False,
+    ) -> float:
         """Seconds to wait after failed try ``attempt`` (0 is the first): what
-        the provider asked for, else exponential with full jitter."""
+        the provider asked for, else exponential with full jitter. A rate
+        limit waits at least half of its step: a quota needs time to free up."""
         if retry_after is not None and retry_after >= 0:
             return min(retry_after, self.max_delay)
+        if rate_limited:
+            step = min(self.max_delay, self.rate_limit_delay * 2**attempt)
+            return random.uniform(step / 2, step)
         return random.uniform(0, min(self.max_delay, self.base_delay * 2**attempt))
+
+
+def rate_limited(error: BaseException) -> bool:
+    """The error is a rate limit (HTTP 429)."""
+    return getattr(error, "kind", None) == "rate_limit" or getattr(error, "status", None) == 429
 
 
 def retry_after(error: BaseException) -> float | None:
@@ -62,7 +76,7 @@ async def retrying(
         except Exception as error:
             if attempt + 1 >= policy.attempts or not transient(error):
                 raise
-            wait = policy.delay(attempt, retry_after(error))
+            wait = policy.delay(attempt, retry_after(error), rate_limited=rate_limited(error))
             if on_retry is not None:
                 on_retry(attempt + 1, error, wait)
             await asyncio.sleep(wait)
