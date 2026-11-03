@@ -291,6 +291,9 @@ class Agent(ComponentBase[AgentSpec]):
         self._idle.set()
         self._mcp_lock = asyncio.Lock()
         self._closed = False
+        # Duck-typed clients (test fakes) may not count their users.
+        if hasattr(self.client, "attach"):
+            self.client.attach()
 
     def _register_capability_tools(self, tools: Sequence[CoreTool]) -> list[str]:
         """Register bound registry tools on the host and retain their names."""
@@ -747,12 +750,16 @@ class Agent(ComponentBase[AgentSpec]):
 
     async def close(self) -> None:
         """Refuse new runs, wait for the active ones, then release MCP
-        connections and execution sessions."""
+        connections, execution sessions and the model client (when no other
+        agent uses it)."""
+        first = not self._closed
         self._closed = True
         await self._idle.wait()
         await self._mcp_manager.disconnect_all()
         await self._manager.close()
         await self.workspace.disconnect()
+        if first and hasattr(self.client, "detach"):
+            await self.client.detach()
 
     async def __aenter__(self) -> Self:
         return self

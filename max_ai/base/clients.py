@@ -127,6 +127,24 @@ class CoreChatCompletionClient(ComponentBase[BaseModel], ABC):
             return None
         return key if isinstance(key, SecretStr) else SecretStr(key)
 
+    # -------- LIFECYCLE -----------------------------------------------------------
+    # Agents using this client; agents can share one.
+    _users: int = 0
+
+    def attach(self) -> None:
+        """An agent starts using this client."""
+        self._users += 1
+
+    async def detach(self) -> None:
+        """An agent is done with this client; the last one closes it."""
+        self._users = max(0, self._users - 1)
+        if self._users == 0:
+            await self.aclose()
+
+    async def aclose(self) -> None:
+        """Close open connections. The client stays usable: a later call
+        opens new ones. Clients that keep a connection pool override it."""
+
     # -------- PUBLIC ENTRY POINT -----------------------------------------------------------
     async def run(
         self,
