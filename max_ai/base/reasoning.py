@@ -49,6 +49,7 @@ from ..core.events_bus import EventBus
 from ..core.harness import messages as harness
 from ..core.messages import (
     HARNESS_SOURCE,
+    HARNESS_TAG,
     AssistantMessage,
     CoreMessage,
     SystemMessage,
@@ -560,7 +561,9 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
             # No tools were offered; drop any call a provider sends anyway.
             ctx.messages.append(result.message.model_copy(update={"tool_calls": []}))
             return
-        ctx.messages.append(UserMessage(source=HARNESS_SOURCE, content=harness.MAX_ITERATIONS_REACHED))
+        ctx.messages.append(UserMessage(
+            source=HARNESS_SOURCE, content=f"{HARNESS_TAG} {harness.MAX_ITERATIONS_REACHED}",
+        ))
 
     @staticmethod
     def _answer_unanswered(ctx: RunContext, records: t.Iterable[ToolCallRecord]) -> None:
@@ -608,10 +611,14 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
         ``transient_messages`` are appended for THIS call only — they are
         never written to ``ctx.messages``, so per-iteration steering
         (plan nudges, guard hints) doesn't pollute the durable transcript.
+        They go as one ``[harness]`` user message: a system message late in
+        the conversation can derail some models (seen live with Gemma).
         """
         messages = self._without_assistant_thinking(ctx.messages)
         if transient_messages:
-            messages = [*messages, *transient_messages]
+            text = "\n\n".join(m.text() for m in transient_messages if m.text().strip())
+            steering = UserMessage(source=HARNESS_SOURCE, content=f"{HARNESS_TAG} {text}")
+            messages = [*messages, steering]
         return ctx.model_copy(
             update={
                 "message_history": ChatHistory(

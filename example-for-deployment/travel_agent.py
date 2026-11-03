@@ -20,8 +20,8 @@ from max_ai.types.tools import ToolApprovalMode
 
 # Free OpenRouter models, with fallbacks when one is busy.
 _client: dict[str, t.Any] = {
-    "model": "nvidia/nemotron-3-super-120b-a12b:free",
-    "fallback_models": ["qwen/qwen3.8-27b:free", "google/gemma-4-31b-it:free"],
+    "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "fallback_models": ["nvidia/nemotron-3.5-lightning:free", "google/gemma-4-31b-it:free"],
     "reasoning": {"effort": "low"},
     "app_name": "travel_agent",
 }
