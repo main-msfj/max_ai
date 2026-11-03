@@ -468,6 +468,13 @@ class MaxAIApp(App[None]):
             prompt.text = selected[0] + (f" {typed[1]}" if len(typed) > 1 else "")
             self._close_menu()
         if self._busy and not waiting:
+            value = prompt.text.strip()
+            # Only a model turn takes messages; commands wait for it to end.
+            if self._cancel is None or not value or value.startswith(("/", "!")):
+                return
+            prompt.text = ""
+            await self._write_user(value)
+            self._ensure_context().inbox.append(self._expand_file_mentions(value))
             return
         value = prompt.text.strip()
         prompt.text = ""
@@ -1160,26 +1167,11 @@ class MaxAIApp(App[None]):
         snapshot = ctx.model_copy(deep=True)
         self._cancel = CancellationToken()
         try:
-            response = await self._consume(
-                self.agent.run_stream_events(
-                    task=task,
-                    run_context=ctx,
-                    cancellation_token=self._cancel,
-                    stream_tokens=True,
-                )
-            )
-            while response is not None and (response.needs_approval or response.needs_input):
-                await self._resolve_requests(response)
-                response = await self._consume(
-                    self.agent.resume_stream_events(
-                        run_context=response.context,
-                        cancellation_token=self._cancel,
-                        stream_tokens=True,
-                    )
-                )
-            if response is not None:
-                self.context = response.context
-                await self._write_turn_summary(response)
+            # Messages sent after the loop's last look become the next task.
+            while task:
+                await self._turn(task)
+                inbox, self.context.inbox = self.context.inbox, []
+                task = "\n\n".join(inbox)
         except asyncio.CancelledError:
             if self._cancel is None or not self._cancel.is_cancelled():
                 raise
@@ -1204,6 +1196,29 @@ class MaxAIApp(App[None]):
             self._request_future = None
             self._refresh_status()
             self.query_one("#prompt", TextArea).focus()
+
+    async def _turn(self, task: str) -> None:
+        """One task, through any approvals and questions it asks for."""
+        response = await self._consume(
+            self.agent.run_stream_events(
+                task=task,
+                run_context=self._ensure_context(),
+                cancellation_token=self._cancel,
+                stream_tokens=True,
+            )
+        )
+        while response is not None and (response.needs_approval or response.needs_input):
+            await self._resolve_requests(response)
+            response = await self._consume(
+                self.agent.resume_stream_events(
+                    run_context=response.context,
+                    cancellation_token=self._cancel,
+                    stream_tokens=True,
+                )
+            )
+        if response is not None:
+            self.context = response.context
+            await self._write_turn_summary(response)
 
     @work(exclusive=True, group="shell")
     async def _run_shell(self, command: str) -> None:

@@ -42,6 +42,7 @@ from ....core.messages import (
     SystemMessage,
     ToolCall,
     ToolMessage,
+    UserMessage,
 )
 from ....core.primitives import FailureReason
 from ....core.runtime import runtime_status
@@ -76,6 +77,12 @@ def _without_broken_calls(message: AssistantMessage) -> AssistantMessage:
     if len(calls) == len(message.tool_calls):
         return message
     return message.model_copy(update={"tool_calls": calls})
+
+
+def _take_inbox(ctx: RunContext) -> None:
+    """Move messages the user sent during the turn into the conversation."""
+    while ctx.inbox:
+        ctx.messages.append(UserMessage(source=ctx.user_id, content=ctx.inbox.pop(0)))
 
 
 def _with_unique_call_ids(message: AssistantMessage, taken: set[str]) -> AssistantMessage:
@@ -389,6 +396,7 @@ class ReactLoop(BaseReasoning):
                     yield event
                 break
 
+            _take_inbox(ctx)
             # Keep plan/summary current in the prompt, then compact if the
             # strategy asks for it; both run before every model call.
             self._refresh_session_state(ctx, prompts)
@@ -479,6 +487,10 @@ class ReactLoop(BaseReasoning):
                     loop_state.finish_reason = "unknown"
                     continue
                 pending_steering = self._run_guards(ctx, loop_state)
+                continue
+
+            # The user wrote while the model answered: answer that too.
+            if ctx.inbox:
                 continue
 
             # 5. If not tool calls, the loop is done. The CompletionGate is triggered.

@@ -13,6 +13,9 @@ stack of widgets, not a text log, so every piece of a turn stays live:
 - **Status line** while working: `◈ Thinking… (12s · ↓ 340 tokens · esc to
   interrupt)`. `esc` cancels the turn and rolls the conversation back to
   before it (side effects that already ran are not undone).
+- **Send while it works**: `enter` during a turn adds your message to it; the
+  model reads it on its next call (after the running tool, or right after the
+  answer it was writing). `/commands` and `!shell` wait for the turn to end.
 - **Plan** (`update_plan`) is a fold-able box: it folds to
   `◇ Plan 2/5 · current step`; consecutive updates refresh the same box.
 - **Questions** (`ask_user`): every pending question shows in ONE form —
