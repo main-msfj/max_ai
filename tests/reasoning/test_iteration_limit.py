@@ -71,4 +71,4 @@ async def test_no_answer_leaves_the_note_for_the_next_turn(tmp_path):
     assert response.finish_reason == "max_iterations"
     last = ctx.messages[-1]
     assert isinstance(last, UserMessage)
-    assert last.text() == harness.MAX_ITERATIONS_REACHED
+    assert last.text() == f"[harness] {harness.MAX_ITERATIONS_REACHED}"

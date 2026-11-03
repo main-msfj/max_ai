@@ -40,6 +40,8 @@ if t.TYPE_CHECKING:
 # Source of messages the harness itself writes (gate rejections, limits),
 # as opposed to the user or the model.
 HARNESS_SOURCE = "harness"
+# Starts every message the harness sends as a user turn (the prompt explains it).
+HARNESS_TAG = "[harness]"
 
 
 # -------- CONTENT PARTS -----------------------------------------------------------

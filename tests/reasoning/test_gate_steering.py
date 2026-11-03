@@ -5,7 +5,12 @@ from types import SimpleNamespace
 from max_ai.agents.agent import Agent
 from max_ai.base.completion_gate import CompletionBase, CompletionDecision
 from max_ai.capabilities.workspace.local import LocalWorkspace
-from max_ai.core.messages import HARNESS_SOURCE, AssistantMessage, SystemMessage
+from max_ai.core.messages import (
+    HARNESS_SOURCE,
+    AssistantMessage,
+    SystemMessage,
+    UserMessage,
+)
 from max_ai.types.completions import ChatCompletionResult, Usage
 from max_ai.types.run_context import RunContext
 
@@ -40,8 +45,10 @@ class RejectsOnce(CompletionBase):
 
 
 def harness_notes(messages):
+    # Steering goes as a tagged user message, never a late system one.
+    assert not [m for m in messages if isinstance(m, SystemMessage)]
     return [m.text() for m in messages
-            if isinstance(m, SystemMessage) and m.source == HARNESS_SOURCE]
+            if isinstance(m, UserMessage) and m.source == HARNESS_SOURCE]
 
 
 async def test_a_rejection_reaches_the_next_call_but_not_the_transcript(tmp_path):
@@ -54,8 +61,18 @@ async def test_a_rejection_reaches_the_next_call_but_not_the_transcript(tmp_path
 
     assert len(client.seen) == 2
     assert harness_notes(client.seen[0]) == []
-    assert harness_notes(client.seen[1]) == ["Check the totals first."]
+    assert harness_notes(client.seen[1]) == ["[harness] Check the totals first."]
     assert harness_notes(ctx.messages) == []
     assert [m.text() for m in ctx.messages if isinstance(m, AssistantMessage)] == [
         "answer 1", "answer 2",
     ]
+
+
+def test_several_notes_go_as_one_tagged_user_message():
+    from max_ai.capabilities.reasoning.react import ReactLoop
+
+    ctx = RunContext(messages=[UserMessage(source="user", content="hi")])
+    notes = [SystemMessage(source=HARNESS_SOURCE, content=text) for text in ("plan open", "fix it")]
+    sent = ReactLoop()._model_context(ctx, notes).messages
+    assert [m.text() for m in sent] == ["hi", "[harness] plan open\n\nfix it"]
+    assert isinstance(sent[-1], UserMessage) and len(ctx.messages) == 1
