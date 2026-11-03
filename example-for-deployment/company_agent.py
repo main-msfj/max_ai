@@ -95,9 +95,9 @@ async def main() -> None:
         if tracing:
             tracing.shutdown()
 
-    # The whole agent as JSON, with no secrets: any server can rebuild it.
-    saved = Path(__file__).parent / "agents" / "company_agent.json"
-    saved.write_text(agent.serialize().model_dump_json(indent=2))
+    # The whole agent as YAML, with no secrets: Agent.from_yaml(path) rebuilds it.
+    saved = Path(__file__).parent / "agents" / "company_agent.yaml"
+    saved.write_text(agent.to_yaml())
 
 
 if __name__ == "__main__":

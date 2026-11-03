@@ -32,7 +32,7 @@ from ..base.workspace import WorkspaceBase
 from ..capabilities.completion_gate import RuntimeCompletionGate
 from ..capabilities.executor.local import LocalExecutor
 from ..capabilities.mcp import MCPClientManager, MCPServerConfig
-from ..capabilities.mcp._model import deserialize_mcp_servers, serialize_mcp_servers
+from ..capabilities.mcp._model import serialize_mcp_servers
 from ..capabilities.reasoning.react import ReactLoop
 from ..capabilities.stacks import (
     KnowledgeLayer,
@@ -377,7 +377,7 @@ class Agent(ComponentBase[AgentSpec]):
             client=load(config.client, CoreChatCompletionClient),
             toolset=[load(tool, CoreTool) for tool in config.toolset],
             policy=config.policy,
-            mcp=deserialize_mcp_servers(json.dumps(config.mcp)),
+            mcp=list(config.mcp),
             executor=load(config.executor, ExecutorBase),
             workspace=load(config.workspace, WorkspaceBase),
             skills=load(config.skills, CoreSkillRegistry),

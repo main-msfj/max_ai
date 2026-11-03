@@ -1,0 +1,55 @@
+provider: maxai.agents.Agent
+config:
+  name: AcmeAssistant
+  description: Acme AI's company assistant.
+  instructions: You help Acme AI employees with company policies, vacation and parking.
+  client:
+    provider: maxai.llm.OpenAIChatCompletionClient
+    config:
+      model: gpt-5.6-luna
+      options:
+        reasoning_effort: none
+      config: {}
+  reasoning:
+    provider: maxai.reasoning.ReactLoop
+  workspace:
+    provider: max_ai.capabilities.workspace.minio.MinIOWorkspace
+    config:
+      endpoint_url: http://minio:9000
+      bucket: workspaces
+  executor:
+    provider: max_ai.capabilities.executor.docker.DockerExecutor
+    config:
+      network: internet
+  memory:
+    provider: max_ai.capabilities.memory.mongodb.MongoDBMemoryRegistry
+    config:
+      embedding:
+        provider: max_ai.core.embeddings.FastEmbedEmbedding
+  skills:
+    provider: max_ai.capabilities.skills.github.GithubSkillRegistry
+    config:
+      source: trailofbits/skills-curated
+      skills:
+      - openai-doc
+      path: plugins/openai-doc/skills
+  knowledge:
+  - provider: max_ai.capabilities.knowledge.mongodb.MongoDBKnowledgeRegistry
+    config:
+      name: hr_policies
+      description: 'Acme AI HR policies: vacation, parking, sick leave, remote work,
+        parental leave, expenses and public holidays.'
+      embedding:
+        provider: max_ai.core.embeddings.FastEmbedEmbedding
+  mcp:
+  - server_id: acme_hr
+    url: http://127.0.0.1:8765/mcp
+    token_env: ACME_MCP_TOKEN
+  gates:
+  - provider: maxai.completion.RuntimeCompletionGate
+  middlewares:
+  - provider: max_ai.capabilities.middleware.BudgetMiddleware
+    config:
+      max_tokens: 200000
+      max_tool_calls: 30
+  - provider: max_ai.capabilities.middleware.TracingMiddleware

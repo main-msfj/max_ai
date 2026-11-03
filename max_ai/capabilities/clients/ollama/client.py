@@ -149,7 +149,7 @@ class OllamaChatCompletionClient(
             think=self.think,
             keep_alive=self.keep_alive,
             options=self.generation_options,
-            config=self.config.model_dump(exclude_none=True),
+            config=self.config.model_copy(),
         )
 
     @classmethod
@@ -157,12 +157,11 @@ class OllamaChatCompletionClient(
         cls, config: OllamaChatCompletionClientConfig
     ) -> "OllamaChatCompletionClient":
         """Rebuild a client instance from a config payload."""
-        model_config = ModelConfig(**config.config) if config.config else None
         return cls(
             model=config.model,
             host=config.host,
             api_key_env=config.api_key_env,
-            config=model_config,
+            config=config.config,
             think=config.think,
             keep_alive=config.keep_alive,
             **config.options,

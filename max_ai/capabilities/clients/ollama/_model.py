@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from ....core.model.llm import ModelConfig
+
 OllamaThinkingEffort = Literal["low", "medium", "high"]
 OllamaThink = bool | OllamaThinkingEffort
 
@@ -19,4 +21,4 @@ class OllamaChatCompletionClientConfig(BaseModel):
     think: OllamaThink | None = None
     keep_alive: str | int | None = None
     options: dict[str, t.Any] = Field(default_factory=dict)
-    config: dict[str, t.Any] = Field(default_factory=dict)
+    config: ModelConfig | None = None

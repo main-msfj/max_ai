@@ -4,6 +4,7 @@ import typing as t
 
 from pydantic import BaseModel, Field
 
+from ...capabilities.mcp._model import HTTPServerConfig, StdioMCPServerConfig
 from ..policy import Policy
 
 
@@ -31,7 +32,7 @@ class AgentSpec(BaseModel):
     policy: Policy = Field(
         default_factory=Policy, description="allow / ask / deny rules for every tool call.",
     )
-    mcp: list[dict[str, t.Any]] = Field(default_factory=list)
+    mcp: list[StdioMCPServerConfig | HTTPServerConfig] = Field(default_factory=list)
     gates: list[dict[str, t.Any]] = Field(
         default_factory=list, description="Completion gates: the framework's and your own.",
     )

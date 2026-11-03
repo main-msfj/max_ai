@@ -1,0 +1,43 @@
+provider: maxai.agents.Agent
+config:
+  name: TravelPlanner
+  description: Researches trips on the web and delivers the plan as an Excel workbook.
+  instructions: You help users plan trips.
+  client:
+    provider: maxai.llm.OpenRouterChatCompletionClient
+    config:
+      model: nvidia/nemotron-3-ultra-550b-a55b:free
+      base_url: https://openrouter.ai/api/v1
+      fallback_models:
+      - nvidia/nemotron-3.5-lightning:free
+      - google/gemma-4-31b-it:free
+      reasoning:
+        effort: low
+      app_name: travel_agent
+      config: {}
+  reasoning:
+    provider: maxai.reasoning.ReactLoop
+  workspace:
+    provider: max_ai.capabilities.workspace.minio.MinIOWorkspace
+    config:
+      endpoint_url: http://minio:9000
+      bucket: workspaces
+  executor:
+    provider: max_ai.capabilities.executor.modal.ModalExecutor
+  skills:
+    provider: max_ai.capabilities.skills.github.GithubSkillRegistry
+    config:
+      source: trailofbits/skills-curated
+      skills:
+      - openai-spreadsheet
+      path: plugins/openai-spreadsheet/skills
+  mcp:
+  - server_id: exa
+    approval_mode: auto_approval
+    url: https://mcp.exa.ai/mcp
+    headers_env:
+      x-api-key: EXA_API_KEY
+  gates:
+  - provider: maxai.completion.RuntimeCompletionGate
+  middlewares:
+  - provider: max_ai.capabilities.middleware.TracingMiddleware
