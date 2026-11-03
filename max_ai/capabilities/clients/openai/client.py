@@ -15,6 +15,7 @@ from openai import (
     AsyncOpenAI,
     AuthenticationError,
     BadRequestError,
+    DefaultAsyncHttpxClient,
     RateLimitError,
 )
 from pydantic import BaseModel, SecretStr
@@ -113,6 +114,11 @@ class OpenAIChatCompletionClient(
         # The reasoning loop owns retries; the SDK's own would multiply them.
         client_kwargs["max_retries"] = 0
         self.client = AsyncOpenAI(**client_kwargs)
+
+    async def aclose(self) -> None:
+        await self.client.close()
+        # Same options on a fresh pool, which connects only when used.
+        self.client = self.client.copy(http_client=DefaultAsyncHttpxClient())
 
     def _to_config(self) -> OpenAIChatCompletionClientConfig:
         return OpenAIChatCompletionClientConfig(

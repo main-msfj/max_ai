@@ -120,7 +120,13 @@ class OllamaChatCompletionClient(
         if self.api_key is not None:
             headers = {"Authorization": f"Bearer {self.api_key.get_secret_value()}"}
 
+        self._headers = headers
         self.client: AsyncClient = AsyncClient(host=self.host, headers=headers)
+
+    async def aclose(self) -> None:
+        # ollama's AsyncClient has no close(); its httpx pool is ``_client``.
+        await self.client._client.aclose()
+        self.client = AsyncClient(host=self.host, headers=self._headers)
 
     @staticmethod
     def _validate_think(value: t.Any) -> OllamaThink | None:
