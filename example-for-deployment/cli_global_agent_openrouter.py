@@ -43,8 +43,8 @@ from max_ai.types.tools import ToolApprovalMode
 
 # All support tool calling; check https://openrouter.ai/models?q=free for
 # the current list — free models come and go.
-MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
-FALLBACK_MODELS = ["qwen/qwen3.8-27b:free", "google/gemma-4-31b-it:free"]
+MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
+FALLBACK_MODELS = ["nvidia/nemotron-3.5-lightning:free", "google/gemma-4-31b-it:free"]
 
 
 async def main() -> None:

@@ -17,11 +17,11 @@
       "description": "OpenRouter implementation on top of ``OpenAIChatCompletionClient``.",
       "label": "OpenRouterChatCompletionClient",
       "config": {
-        "model": "nvidia/nemotron-3-super-120b-a12b:free",
+        "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
         "api_key_env": "OPENROUTER_API_KEY",
         "base_url": "https://openrouter.ai/api/v1",
         "fallback_models": [
-          "qwen/qwen3.8-27b:free",
+          "nvidia/nemotron-3.5-lightning:free",
           "google/gemma-4-31b-it:free"
         ],
         "reasoning": {

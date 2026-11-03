@@ -61,7 +61,7 @@ class OpenRouterChatCompletionClient(OpenAIChatCompletionClient):
     ) -> None:
         """
         Args:
-            model: OpenRouter model id, e.g. ``"qwen/qwen3.8-27b:free"``.
+            model: OpenRouter model id, e.g. ``"nvidia/nemotron-3.5-lightning:free"``.
             api_key: Defaults to ``$OPENROUTER_API_KEY`` (or ``api_key_env``).
                 Never falls back to ``OPENAI_API_KEY`` — that key must not
                 reach OpenRouter.
