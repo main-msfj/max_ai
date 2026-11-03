@@ -51,3 +51,11 @@ class RunContext(BaseModel):
             "reset when a new task starts, preserved across pause/resume."
         ),
     )
+    inbox: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Messages the user sent while a turn runs. The loop adds them to "
+            "the conversation before its next model call; any left when the "
+            "turn ends are the caller's to send as the next task."
+        ),
+    )

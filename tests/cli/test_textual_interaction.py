@@ -44,6 +44,37 @@ async def test_enter_submits_and_busy_draft_is_preserved(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_enter_during_a_model_turn_sends_to_the_inbox(tmp_path):
+    app = make_app(tmp_path)
+    async with app.run_test() as pilot:
+        app._busy, app._cancel = True, object()
+        prompt = app.query_one(TextArea)
+        prompt.text = "also this"
+        await pilot.press("enter")
+        assert app.context.inbox == ["also this"] and prompt.text == ""
+        prompt.text = "/help"
+        await pilot.press("enter")
+        assert app.context.inbox == ["also this"] and prompt.text == "/help"
+
+
+@pytest.mark.asyncio
+async def test_messages_left_in_the_inbox_start_the_next_turn(tmp_path):
+    app = make_app(tmp_path)
+    tasks = []
+
+    async def turn(task):
+        tasks.append(task)
+        if len(tasks) == 1:
+            app.context.inbox += ["one", "two"]
+
+    app._turn = turn
+    async with app.run_test():
+        await app._run_turn("first").wait()
+    assert tasks == ["first", "one\n\ntwo"]
+    assert app.context.inbox == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("answer", ["yes", "no"])
 async def test_approval_enter_while_busy(tmp_path, answer):
     app = make_app(tmp_path)
