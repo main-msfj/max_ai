@@ -78,6 +78,21 @@ def _without_broken_calls(message: AssistantMessage) -> AssistantMessage:
     return message.model_copy(update={"tool_calls": calls})
 
 
+def _with_unique_call_ids(message: AssistantMessage, taken: set[str]) -> AssistantMessage:
+    """Rename tool call ids already used in the run or repeated in the
+    message: some providers derive them from the tool name (``call_get_weather``)."""
+    calls, changed = [], False
+    for call in message.tool_calls:
+        new_id, n = call.id, 1
+        while new_id in taken:
+            n += 1
+            new_id = f"{call.id}_{n}"
+        taken.add(new_id)
+        changed = changed or new_id != call.id
+        calls.append(call.model_copy(update={"id": new_id}) if new_id != call.id else call)
+    return message.model_copy(update={"tool_calls": calls}) if changed else message
+
+
 NO_LLM_RESULT = "no_result"
 COMPLETED = "completed"
 WAITING = "waiting"
@@ -189,9 +204,8 @@ class ReactLoop(BaseReasoning):
     ) -> list[ToolCallRecord]:
         """Create and register a ``ToolCallRecord`` for each tool call.
 
-        Adding to ``ctx.tool_state`` raises if a record with the same id
-        already exists — the LLM should never reuse ids in one turn, so a
-        collision is a real bug and should fail loudly.
+        Ids are unique by then (see ``_with_unique_call_ids``), so a
+        collision in ``ctx.tool_state`` is a real bug and fails loudly.
         """
         records: list[ToolCallRecord] = []
         for tc in tool_calls:
@@ -443,6 +457,7 @@ class ReactLoop(BaseReasoning):
                     )]
                     continue
             cut_offs = 0
+            assistant_msg = _with_unique_call_ids(assistant_msg, set(ctx.tool_state.records))
             ctx.messages.append(assistant_msg)
 
             # 4. Check if the LLM produced any tool calls. If so, register them and execute them.
