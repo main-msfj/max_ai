@@ -40,7 +40,7 @@ class FlakyStream:
 
 @pytest.fixture(autouse=True)
 def no_wait(monkeypatch):
-    monkeypatch.setattr(RetryPolicy, "delay", lambda self, attempt, retry_after=None: 0.0)
+    monkeypatch.setattr(RetryPolicy, "delay", lambda self, attempt, retry_after=None, **_: 0.0)
 
 
 def make_agent(tmp_path, client):

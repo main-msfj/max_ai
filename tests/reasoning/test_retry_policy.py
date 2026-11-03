@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
-from max_ai.core.retry import RetryPolicy, retry_after
+from max_ai.core.retry import RetryPolicy, rate_limited, retry_after
 from max_ai.errors.client import ClientError
 
 
@@ -39,6 +39,17 @@ def test_the_providers_retry_after_wins_but_is_capped():
     policy = RetryPolicy()
     assert policy.delay(0, retry_after(ClientError.rate_limit_exceeded(retry_after=20))) == 20
     assert policy.delay(0, retry_after(ClientError.rate_limit_exceeded(retry_after=999))) == 60
+
+
+def test_a_rate_limit_without_retry_after_waits_for_the_quota():
+    policy = RetryPolicy()
+    error = ClientError.rate_limit_exceeded()
+    assert rate_limited(error) and not rate_limited(ClientError.request_timeout(5))
+    for attempt, (low, high) in enumerate([(2.5, 5), (5, 10), (10, 20)]):
+        waits = [policy.delay(attempt, retry_after(error), rate_limited=True) for _ in range(50)]
+        assert all(low <= w <= high for w in waits)
+    assert policy.delay(9, rate_limited=True) <= 60  # still capped
+    assert policy.delay(0, 3, rate_limited=True) == 3  # the provider's wait wins
 
 
 def test_backoff_grows_with_jitter():

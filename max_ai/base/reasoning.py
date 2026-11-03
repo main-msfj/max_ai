@@ -56,7 +56,7 @@ from ..core.messages import (
     UserMessage,
 )
 from ..core.middleware.chain import MiddlewareChain
-from ..core.retry import RetryPolicy, retry_after
+from ..core.retry import RetryPolicy, rate_limited, retry_after
 from ..core.termination import CancellationToken
 from ..errors.client import ClientError
 from ..loggers import ScopedLogger
@@ -918,7 +918,9 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
                         is_recoverable=False,
                     )
                     raise
-                wait = policy.delay(number - 1, retry_after(error))
+                wait = policy.delay(
+                    number - 1, retry_after(error), rate_limited=rate_limited(error),
+                )
                 _log.warning(
                     "Transient LLM error", attempt=number, max_attempts=policy.attempts,
                     error=str(error), action="retry", delay=round(wait, 2),
