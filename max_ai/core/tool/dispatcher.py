@@ -3,7 +3,7 @@
 import asyncio
 import json
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterable
 
 from ...base.middleware import MiddlewareContext, ToolRequest
 from ...base.tools import ToolContext
@@ -18,7 +18,7 @@ from ..event_type import (
     UserInputRequestEvent,
 )
 from ..harness import messages as harness
-from ..messages import ToolMessage
+from ..messages import HARNESS_SOURCE, HARNESS_TAG, ToolMessage, UserMessage
 from ..policy import Policy
 from ..termination import CancellationToken
 from .registry import ToolRegistry
@@ -91,6 +91,34 @@ class ToolDispatcher:
             result = ToolResult.tool_failure(record.id, harness.QUESTION_NOT_ANSWERED)
             record.force_consume(result)
             ctx.messages.append(cls.tool_message(record, result))
+
+    @classmethod
+    def answer_unanswered(cls, ctx: "RunContext", records: Iterable[ToolCallRecord]) -> None:
+        """Give each of ``records`` the ToolMessage it lacks. A call that never
+        started is closed as cancelled, so it does not run on the next turn."""
+        answered = {m.tool_call_id for m in ctx.messages if isinstance(m, ToolMessage)}
+        for record in records:
+            if record.id in answered:
+                continue
+            if not record.is_consumed and not record.is_executing:
+                record.force_consume(record.result or ToolResult.cancelled_before_start(record.id))
+            if record.result is not None:
+                ctx.messages.append(cls.tool_message(record, record.result))
+
+    @classmethod
+    def close_interrupted(cls, ctx: "RunContext") -> None:
+        """Keep an interrupted turn usable: every open call gets its answer,
+        and the model is told the turn was cut short."""
+        cls.close_unanswered(ctx)
+        state = ctx.tool_state
+        open_calls = [r for r in state.records.values() if not r.is_consumed]
+        for record in open_calls:
+            if record.is_executing:
+                state.fail_stale(record.id, "Interrupted by the user")
+        cls.answer_unanswered(ctx, open_calls)
+        ctx.messages.append(UserMessage(
+            source=HARNESS_SOURCE, content=f"{HARNESS_TAG} {harness.TURN_INTERRUPTED}",
+        ))
 
     @classmethod
     def tool_message(cls, record: ToolCallRecord, result: ToolResult) -> ToolMessage:

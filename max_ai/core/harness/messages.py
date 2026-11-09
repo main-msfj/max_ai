@@ -60,6 +60,12 @@ QUESTION_NOT_ANSWERED = (
 )
 
 
+TURN_INTERRUPTED = (
+    "The user interrupted this turn. Anything not reported above did not "
+    "finish; wait for what they say next."
+)
+
+
 # -------- COMPLETION GATE (the framework's own) --------------------------------------
 EMPTY_ANSWER = "No answer was generated and no tool was called — reply with text or call a tool."
 

@@ -16,6 +16,8 @@ from max_ai.core.event_type import (
     ModelResponseEvent,
     ModelRetryEvent,
 )
+from max_ai.core.harness import messages as harness
+from max_ai.core.messages import AssistantMessage, ToolCall, UserMessage
 from max_ai.types.agent_response import AgentResponse
 from max_ai.types.completions import Usage
 from max_ai.types.run_context import RunContext
@@ -341,6 +343,36 @@ async def test_multi_select_with_nothing_marked_is_not_answered(tmp_path):
         await _press(pilot, "right", "enter")
         await asyncio.wait_for(worker, 2)
     assert "did not answer" in record.result.result["answers"]["Files?"]
+
+
+@pytest.mark.asyncio
+async def test_esc_keeps_what_the_turn_already_did(tmp_path):
+    app = make_app(tmp_path)
+    started = asyncio.Event()
+
+    async def turn(task):
+        ctx = app._ensure_context()
+        ctx.messages.append(UserMessage(source="u", content=task))
+        ctx.messages.append(AssistantMessage(source="a", content="", tool_calls=[
+            ToolCall(id="p", tool_name="pay", parameters={})]))
+        ctx.tool_state.add(ToolCallRecord(id="p", tool_name="pay", parameters={}))
+        started.set()
+        forever = asyncio.ensure_future(asyncio.Event().wait())
+        app._cancel.link_future(forever)
+        await forever
+
+    app._turn = turn
+    async with app.run_test() as pilot:
+        app._run_turn("hola")
+        await asyncio.wait_for(started.wait(), 2)
+        await pilot.press("escape")
+        while app._busy:
+            await pilot.pause(0.01)
+        messages = app.context.messages
+    assert [m.role for m in messages] == ["user", "assistant", "tool", "user"]
+    assert messages[0].content == "hola" and messages[2].success is False
+    assert messages[3].content.endswith(harness.TURN_INTERRUPTED)
+    assert app.context.tool_state.records["p"].is_consumed
 
 
 @pytest.mark.asyncio

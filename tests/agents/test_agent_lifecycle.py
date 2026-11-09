@@ -17,6 +17,7 @@ from max_ai.core.harness import messages as harness
 from max_ai.core.messages import AssistantMessage, ToolCall, ToolMessage, UserMessage
 from max_ai.core.model.llm import ModelConfig
 from max_ai.core.termination import CancellationToken
+from max_ai.core.tool.dispatcher import ToolDispatcher
 from max_ai.types.agent_response import AgentResponse
 from max_ai.types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
 from max_ai.types.run_context import RunContext
@@ -232,6 +233,16 @@ async def test_an_open_approval_still_blocks_a_new_message(tmp_path):
         await a.run("paga", run_context=ctx)
         with pytest.raises(ValueError, match="Resolve pending tool calls"):
             await a.run("otra cosa", run_context=ctx)
+
+
+async def test_a_new_message_works_after_an_interrupted_approval(tmp_path):
+    ctx = RunContext(user_id="u")
+    async with agent(tmp_path, ScriptedLLM(pay_calls(10), say("ok"))) as a:
+        await a.run("paga", run_context=ctx)
+        ToolDispatcher.close_interrupted(ctx)
+        done = await a.run("mejor no", run_context=ctx)
+    assert done.finish_reason == "stop" and PAID == []
+    assert [m.role for m in done.context.messages] == ["user", "assistant", "tool", "user", "user", "assistant"]
 
 
 async def test_a_policy_can_deny_asking_without_looping(tmp_path):

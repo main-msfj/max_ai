@@ -53,7 +53,6 @@ from ..core.messages import (
     AssistantMessage,
     CoreMessage,
     SystemMessage,
-    ToolMessage,
     UserMessage,
 )
 from ..core.middleware.chain import MiddlewareChain
@@ -65,7 +64,6 @@ from ..types.chat_history import ChatHistory
 from ..types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
 from ..types.run_context import RunContext
 from ..types.stacks import PromptCtx
-from ..types.tool_call import ToolCallRecord, ToolResult
 from .clients import CoreChatCompletionClient
 from .completion_gate import CompletionDecision
 from .component import ComponentBase
@@ -528,7 +526,7 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
         except BaseException:
             # Cancelled or failed mid-round: answer every call anyway, or the
             # next request carries a call with no result and is rejected.
-            self._answer_unanswered(ctx, records)
+            self.dispatcher.answer_unanswered(ctx, records)
             raise
 
     async def _answer_at_limit(
@@ -564,21 +562,6 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
         ctx.messages.append(UserMessage(
             source=HARNESS_SOURCE, content=f"{HARNESS_TAG} {harness.MAX_ITERATIONS_REACHED}",
         ))
-
-    @staticmethod
-    def _answer_unanswered(ctx: RunContext, records: t.Iterable[ToolCallRecord]) -> None:
-        """Give each of ``records`` the ToolMessage it lacks. A call that never
-        started is closed as cancelled, so it does not run on the next turn."""
-        from ..core.tool.dispatcher import ToolDispatcher
-
-        answered = {m.tool_call_id for m in ctx.messages if isinstance(m, ToolMessage)}
-        for record in records:
-            if record.id in answered:
-                continue
-            if not record.is_consumed and not record.is_executing:
-                record.force_consume(ToolResult.cancelled_before_start(record.id))
-            if record.result is not None:
-                ctx.messages.append(ToolDispatcher.tool_message(record, record.result))
 
     @staticmethod
     def _conversation_messages(ctx: RunContext) -> list[CoreMessage]:

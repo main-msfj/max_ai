@@ -45,6 +45,7 @@ from ..core.messages import HARNESS_SOURCE
 from ..core.model.session import SessionInfo
 from ..core.policy import Policy
 from ..core.termination.cancellation import CancellationToken
+from ..core.tool.dispatcher import ToolDispatcher
 from ..types.agent_response import AgentResponse
 from ..types.run_context import RunContext
 from ..types.tool_call import ToolResult
@@ -453,8 +454,8 @@ class MaxAIApp(App[None]):
             return
         if not self._busy or self._cancel is None:
             return
-        # Also while paused on a question/approval: the turn is cancelled
-        # and rolled back like any other interrupt.
+        # Also while paused on a question/approval: the turn stops and
+        # what it already did stays, like any other interrupt.
         self._cancel.cancel()
         if self._request_future is not None and not self._request_future.done():
             self._request_future.cancel()
@@ -1158,9 +1159,7 @@ class MaxAIApp(App[None]):
     @work(exclusive=True, group="agent")
     async def _run_turn(self, task: str) -> None:
         self._busy = True
-        ctx = self._ensure_context()
-        # Interrupt discards the turn: roll the conversation back to here.
-        snapshot = ctx.model_copy(deep=True)
+        self._ensure_context()
         self._cancel = CancellationToken()
         try:
             # Messages sent after the loop's last look become the next task.
@@ -1171,14 +1170,13 @@ class MaxAIApp(App[None]):
         except asyncio.CancelledError:
             if self._cancel is None or not self._cancel.is_cancelled():
                 raise
-            self.context = snapshot
+            ToolDispatcher.close_interrupted(self.context)
             await self._finish_assistant()
             for block in self._tools.values():
                 block.complete(None)
             self._tools.clear()
             await self._write_system(
-                "Interrupted · turn discarded from the conversation "
-                "(side effects that already ran are not undone).",
+                "Interrupted · what ran so far stays in the conversation.",
                 style=WARNING,
             )
         except Exception as error:

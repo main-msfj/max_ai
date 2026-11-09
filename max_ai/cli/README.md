@@ -11,8 +11,8 @@ stack of widgets, not a text log, so every piece of a turn stays live:
   it; a diamond spinner shows while running, then turns green/red when done.
   Click to expand the output.
 - **Status line** while working: `◈ Thinking… (12s · ↓ 340 tokens · esc to
-  interrupt)`. `esc` cancels the turn and rolls the conversation back to
-  before it (side effects that already ran are not undone).
+  interrupt)`. `esc` stops the turn; what it already did stays in the
+  conversation, and the model is told it was interrupted.
 - **Send while it works**: `enter` during a turn adds your message to it; the
   model reads it on its next call (after the running tool, or right after the
   answer it was writing). `/commands` and `!shell` wait for the turn to end.
