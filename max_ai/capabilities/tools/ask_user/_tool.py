@@ -1,105 +1,50 @@
 """
 Human-in-the-loop: the native ask-the-user tool.
 
-The tool is a *declaration*, not an implementation: the framework's
-``ToolDispatcher`` intercepts calls to it and never invokes ``execute()``.
-A fresh call becomes a ``ToolCallRecord`` in ``INPUT_NEEDED`` (carrying
-the question and options) plus a ``UserInputRequestEvent``; the turn
-ends with ``finish_reason="input_needed"``. The consumer answers via
-``ctx.tool_state.apply_user_answer(tool_call_id, answer)`` and resumes —
-the executor then completes the call from the stored answer.
-
-Because the pause is record state (like approvals), a pending question
-serializes with the ``RunContext`` and survives process death.
+A tool like any other, except that a person produces its result. The
+dispatcher pauses the turn; the consumer answers with
+``ctx.tool_state.provide_result(record.id, AskUserTool.answer(record, answers))``
+and resumes. The pause is record state: it survives process death.
 """
 
 import typing as t
 
 from ....base.tools import CoreTool, CoreToolParameters, ToolContext
+from ....core.harness import messages as harness
 from ....core.termination.cancellation import CancellationToken
 from ....types.tool_call import ToolCallRecord, ToolResult
 from ....types.tools import ToolApprovalMode
-
-_OPTION_SCHEMA = {
-    "type": "array",
-    "minItems": 2,
-    "maxItems": 4,
-    "items": {
-        "type": "object",
-        "properties": {
-            "label": {
-                "type": "string",
-                "description": "Short choice label (1-5 words).",
-            },
-            "description": {
-                "type": "string",
-                "description": "What this choice means or its trade-off.",
-            },
-        },
-        "required": ["label", "description"],
-        "additionalProperties": False,
-    },
-    "description": (
-        "2-4 choices, each a short label plus its trade-off. The user can "
-        "always type their own answer instead, so never add an 'Other' "
-        "choice. Omit for a purely free-text question."
-    ),
-}
-
-
-def _display_options(raw: t.Any) -> list[str] | None:
-    """Options as the "label — description" strings records carry."""
-    if not isinstance(raw, list):
-        return None
-    shown: list[str] = []
-    for option in raw:
-        if isinstance(option, str) and option.strip():
-            shown.append(option.strip())
-        elif isinstance(option, dict):
-            label = option.get("label")
-            if isinstance(label, str) and label.strip():
-                text = label.strip()
-                description = option.get("description")
-                if isinstance(description, str) and description.strip():
-                    text = f"{text} — {description.strip()}"
-                shown.append(text)
-    return shown or None
-
-
-def pending_questions(parameters: dict[str, t.Any]) -> list[dict[str, t.Any]]:
-    """Normalize an ask_user call into ``[{question, header, options}]``.
-
-    Accepts the current ``questions`` list and the legacy single
-    ``question``/``options`` form (records persisted before the change).
-    """
-    raw = parameters.get("questions")
-    if not isinstance(raw, list):
-        raw = [{"question": parameters.get("question"), "options": parameters.get("options")}]
-    questions: list[dict[str, t.Any]] = []
-    for item in raw:
-        if not isinstance(item, dict):
-            continue
-        text = str(item.get("question") or "").strip()
-        if not text:
-            continue
-        header = item.get("header")
-        questions.append({
-            "question": text,
-            "header": header.strip() if isinstance(header, str) and header.strip() else None,
-            "options": _display_options(item.get("options")),
-        })
-    return questions
 
 
 class AskUserTool(CoreTool):
     """Native framework tool — pause the run to ask the user questions."""
 
-    TOOL_NAME: t.ClassVar[str] = "ask_user"
-    # The tool's name before the rename. The executor still intercepts
-    # records persisted under this name so paused runs resume cleanly.
-    LEGACY_TOOL_NAMES: t.ClassVar[frozenset[str]] = frozenset(
-        {"structure_human_in_loop"}
-    )
+    TOOL_NAME: t.ClassVar[str] = "AskUser"
+    waits_for_user = True
+    _OPTION_SCHEMA: t.ClassVar[dict[str, t.Any]] = {
+        "type": "array",
+        "minItems": 2,
+        "maxItems": 4,
+        "items": {
+            "type": "object",
+            "properties": {
+                "label": {
+                    "type": "string",
+                    "description": "Short choice label (1-5 words).",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "What this choice means or its trade-off.",
+                },
+            },
+            "required": ["label"],
+        },
+        "description": (
+            "2-4 choices, each a short label plus its trade-off. The user can "
+            "always type their own answer instead, so never add an 'Other' "
+            "choice. Omit for a purely free-text question."
+        ),
+    }
 
     def __init__(self) -> None:
         super().__init__(
@@ -117,6 +62,14 @@ class AskUserTool(CoreTool):
             ),
             approval_mode=ToolApprovalMode.AUTO_APPROVED,
         )
+
+    @staticmethod
+    def answer(record: ToolCallRecord, answers: dict[str, str | list[str]]) -> ToolResult:
+        """A person's answers, as this call's result: one per question."""
+        return ToolResult.success_result(record.id, {"answers": {
+            q["question"]: answers.get(q["question"], harness.QUESTION_NOT_ANSWERED)
+            for q in record.parameters["questions"]
+        }})
 
     @property
     def parameters(self) -> dict[str, t.Any]:
@@ -142,26 +95,49 @@ class AskUserTool(CoreTool):
                                     "e.g. 'Name', 'Format', 'Detail'."
                                 ),
                             },
-                            "options": _OPTION_SCHEMA,
+                            "options": self._OPTION_SCHEMA,
+                            "multi_select": {
+                                "type": "boolean",
+                                "description": (
+                                    "True when several options can apply together, "
+                                    "e.g. 'Which files should I delete?'. Leave it "
+                                    "out when only one can be right, e.g. 'Which "
+                                    "database should we use?'."
+                                ),
+                            },
                         },
-                        "required": ["question", "header"],
-                        "additionalProperties": False,
+                        "required": ["question"],
                     },
                 },
             },
             "required": ["questions"],
         }
 
+    @staticmethod
+    def _empty_or_repeated(kind: str, texts: list[str]) -> str | None:
+        """Why ``texts`` can't be used, or None. Spaces and case don't count."""
+        cleaned = [text.strip().casefold() for text in texts]
+        if not all(cleaned):
+            return f"Every {kind} needs text: one of them is empty."
+        # Answers are keyed by question and given by label: repeats are ambiguous.
+        if len(set(cleaned)) < len(cleaned):
+            return f"Two {kind}s are the same: each one must be different."
+        return None
+
     def validate_parameters(self, tool_request: ToolCallRecord) -> CoreToolParameters:
-        # Records persisted with the legacy single-question shape are
-        # rewritten to the current one so they still validate on resume.
-        params = tool_request.parameters
-        if "questions" not in params and "question" in params:
-            legacy: dict[str, t.Any] = {"question": params["question"], "header": "Question"}
-            if params.get("options"):
-                legacy["options"] = params["options"]
-            tool_request.parameters = {"questions": [legacy]}
-        return super().validate_parameters(tool_request)
+        # The schema runs first, so these fields exist here. On top of it:
+        # no empty or repeated questions, nor options within a question.
+        checked = super().validate_parameters(tool_request)
+        if not checked.is_tool_valid:
+            return checked
+        questions = tool_request.parameters["questions"]
+        error = self._empty_or_repeated("question", [q["question"] for q in questions])
+        for question in questions:
+            labels = [option["label"] for option in question.get("options") or []]
+            error = error or self._empty_or_repeated("option", labels)
+        if error:
+            return CoreToolParameters(is_tool_valid=False, msg_error=error)
+        return checked
 
     async def execute(
         self,
@@ -169,19 +145,9 @@ class AskUserTool(CoreTool):
         tool_context: ToolContext | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> ToolResult:
-        """Fallback for custom executors that bypass the framework's
-        short-circuit: complete from a stored answer if one exists,
-        otherwise report that the question is still pending. Never blocks.
-        """
-        if tool_request.user_answers is not None:
-            return ToolResult.success_result(tool_request.id, {"answers": tool_request.user_answers})
-        if tool_request.user_answer is not None:
-            return ToolResult.success_result(tool_request.id, tool_request.user_answer)
-        return ToolResult.tool_failure(
-            tool_request.id,
-            error=(
-                "User input is pending. This tool is resolved by the framework "
-                "executor via ToolState.apply_user_answer(); it cannot be "
-                "executed directly without an answer."
-            ),
+        """Never reached: a person produces this tool's result."""
+        return ToolResult.execution_error(
+            tool_request.id, f"{self.TOOL_NAME} is answered by a person"
         )
+
+

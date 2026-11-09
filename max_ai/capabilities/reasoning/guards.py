@@ -36,6 +36,7 @@ from ...core.harness import messages as harness
 from ...core.messages import AssistantMessage, ToolMessage
 from ...core.primitives import FailureReason
 from ...types.run_context import RunContext
+from ..tools.ask_user import AskUserTool
 
 if t.TYPE_CHECKING:
     from ...base.reasoning import BaseLoopState
@@ -231,7 +232,13 @@ class BudgetGuard(LoopGuard):
         state.guard_state["budget_warned"] = True
         remaining = max(0, max_iter - state.iteration)
         pct_used = min(100, round(100 * state.iteration / max_iter))
-        return harness.budget_running_out(remaining, pct_used, "ask_user" in guard_ctx.tools)
+        return harness.budget_running_out(remaining, pct_used, _ask_tool(guard_ctx))
+
+
+def _ask_tool(guard_ctx: GuardContext) -> str | None:
+    """The ask-the-user tool's name, if this agent has it."""
+    name = AskUserTool.TOOL_NAME
+    return name if name in guard_ctx.tools else None
 
 
 class NoProgressGuard(LoopGuard):
@@ -296,7 +303,7 @@ class PlanCompletionGuard(LoopGuard):
         # in plain text, we veto, it asks again... Point it at the
         # ask-the-user tool on the FIRST veto so it pauses properly
         # instead of looping.
-        return harness.plan_unfinished(listing, "ask_user" in guard_ctx.tools)
+        return harness.plan_unfinished(listing, _ask_tool(guard_ctx))
 
 
 def default_guards() -> list[LoopGuard]:

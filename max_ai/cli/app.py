@@ -26,6 +26,7 @@ from textual.widgets import Button, DirectoryTree, OptionList, Static, TextArea
 
 from ..agents.agent import Agent
 from ..base.session_store import CoreSessionStore
+from ..capabilities.tools.ask_user import AskUserTool
 from ..core.compaction import client_max_output_tokens, live_message_threshold_tokens
 from ..core.event_type import (
     CompactionEvent,
@@ -101,7 +102,7 @@ PLACEHOLDER = 'Try "summarize this project"  ·  @file  ·  !cmd  ·  /help'
 FORM_PLACEHOLDER = "↑↓ ←→ enter · 1-9 to pick · or type your own answer"
 
 # Rendered as their own fold-able blocks instead of a generic ToolBlock.
-_ASK_USER = "ask_user"
+_ASK_USER = AskUserTool.TOOL_NAME
 _UPDATE_PLAN = "update_plan"
 
 # Harness events worth a line even outside verbose mode.
@@ -1021,27 +1022,22 @@ class MaxAIApp(App[None]):
         if questions:
             answers = await self._ask_form(questions)
             for record in response.pending_questions:
-                ctx.tool_state.apply_user_answer(record.id, answers[record.id])
+                ctx.tool_state.provide_result(
+                    record.id, AskUserTool.answer(record, answers[record.id]),
+                )
 
     def _questions(self, record) -> list[Question]:
-        """Every question a pending ask_user record holds. Labels and
-        descriptions come from the call's params when we saw them; the
-        record's option strings are what gets sent back either way."""
-        items = record.input_questions or [
-            {"question": record.input_question, "header": None, "options": record.input_options}
-        ]
-        raw_items = self._ask_params.get(record.id, {}).get("questions") or []
-        grouped = record.input_questions is not None and len(items) > 1
+        """Every question of a pending record, read from the call itself."""
         questions: list[Question] = []
-        for position, item in enumerate(items):
-            values = list(item.get("options") or [])
-            raw = raw_items[position].get("options") if position < len(raw_items) and isinstance(raw_items[position], dict) else None
-            if isinstance(raw, list) and len(raw) == len(values) and all(isinstance(o, dict) for o in raw):
-                options = [(str(o.get("label", v)), str(o.get("description", ""))) for o, v in zip(raw, values)]
-            else:
-                options = [(v.split(" — ", 1)[0], v.split(" — ", 1)[1] if " — " in v else "") for v in values]
-            text = str(item.get("question") or "Choose an answer")
-            questions.append(Question(record.id, text, options, values, item.get("header"), grouped))
+        for item in record.parameters["questions"]:
+            options = item.get("options") or []
+            questions.append(Question(
+                record.id, item["question"],
+                [(o["label"], o.get("description", "")) for o in options],
+                [o["label"] for o in options],
+                item.get("header"),
+                bool(options and item.get("multi_select")),
+            ))
         return questions
 
     # -------- SESSIONS -----------------------------------------------------------
@@ -1129,7 +1125,7 @@ class MaxAIApp(App[None]):
             )
             self._busy, self._cancel = True, CancellationToken()
             try:
-                session_id = (await self._ask_form([question])).get("resume", "").strip()
+                session_id = str((await self._ask_form([question]))["resume"][question.text]).strip()
             except asyncio.CancelledError:
                 # esc cancels our token; anything else (app exit) must propagate.
                 if self._cancel is None or not self._cancel.is_cancelled():
@@ -1276,7 +1272,7 @@ class MaxAIApp(App[None]):
                 await self._write_event(item)
         return response
 
-    async def _ask_form(self, questions: list[Question]) -> dict[str, str]:
+    async def _ask_form(self, questions: list[Question]) -> dict[str, dict[str, str | list[str]]]:
         """All pending questions in one form; the prompt drives it (↑↓ ←→
         enter) and still takes a free-text answer."""
         await self._finish_assistant()

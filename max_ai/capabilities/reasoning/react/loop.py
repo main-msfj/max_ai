@@ -52,6 +52,7 @@ from ....loggers import ScopedLogger
 from ....types.run_context import RunContext
 from ....types.stacks import PromptCtx
 from ....types.tool_call import ToolCallRecord
+from ...tools.ask_user import AskUserTool
 from ..guards import (
     BudgetGuard,
     GuardContext,
@@ -273,6 +274,11 @@ class ReactLoop(BaseReasoning):
         denied = self._denied_records(records)
 
         if not pause_events and not denied:
+            return
+
+        # The user already wrote something else: read that instead of pausing.
+        if pause_events and not needs_approval and not denied and ctx.inbox:
+            self.dispatcher.close_unanswered(ctx)
             return
 
         if denied:
@@ -647,7 +653,7 @@ class ReactLoop(BaseReasoning):
         ]
 
     _TOOL_DENIED_FOLLOWUP_TOOLS: t.ClassVar[tuple[str, ...]] = (
-        "ask_user",
+        AskUserTool.TOOL_NAME,
         "update_plan",
     )
 
@@ -664,14 +670,16 @@ class ReactLoop(BaseReasoning):
         the old hard pause instead of risking an unconstrained call.
         """
         catalog = self.tool_catalog
-        if "ask_user" not in catalog:
+        # Policy may deny asking itself: forcing it again would loop.
+        name = AskUserTool.TOOL_NAME
+        if name not in catalog or any(r.tool_name == name for r in denied):
             return None
         tools = [
             catalog[name]
             for name in self._TOOL_DENIED_FOLLOWUP_TOOLS
             if name in catalog
         ]
-        return [SystemMessage(source=HARNESS, content=harness.tool_denied(denied))], tools
+        return [SystemMessage(source=HARNESS, content=harness.tool_denied(denied, AskUserTool.TOOL_NAME))], tools
 
     def _reasoning_complete(self, loop_state: ReActLoopState) -> ReasoningCompleteEvent:
         """Build the terminal event for the current turn."""

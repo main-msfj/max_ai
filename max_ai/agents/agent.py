@@ -647,10 +647,15 @@ class Agent(ComponentBase[AgentSpec]):
             if self._closed:
                 raise RuntimeError("Agent is closed")
             if task is not None:
-                if any(not r.is_consumed for r in ctx.tool_state.records.values()):
+                # Only an open question gives way to a new message; approvals block.
+                if any(
+                    not r.is_consumed and not r.is_awaiting_input
+                    for r in ctx.tool_state.records.values()
+                ):
                     raise ValueError(
                         "Resolve pending tool calls before adding another task"
                     )
+                ToolDispatcher.close_unanswered(ctx)
                 # New task: drop last task's tool_state and gate evidence so
                 # completion gates only see evidence from the task actually
                 # in progress.

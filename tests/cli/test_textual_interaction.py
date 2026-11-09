@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 from textual.widgets import Static, TextArea
 
+from max_ai.capabilities.tools.ask_user import AskUserTool
 from max_ai.cli.app import MaxAIApp
 from max_ai.cli.events import event_line
 from max_ai.cli.widgets import InfoPanel
@@ -130,12 +131,16 @@ async def test_always_allow_adds_a_rule_to_the_conversation(tmp_path):
         assert not other.is_pending_approval
 
 
+def _ask(text: str, options: list[str]) -> dict:
+    return {"questions": [{"question": text, "options": [{"label": o} for o in options]}]}
+
+
 @pytest.mark.asyncio
 async def test_question_button_and_token_events(tmp_path):
     app = make_app(tmp_path)
     ctx = RunContext()
-    record = ToolCallRecord(id="q", tool_name="ask_user", parameters={})
-    record.await_user_input("Format?", ["CSV", "JSON"])
+    record = ToolCallRecord(id="q", tool_name=AskUserTool.TOOL_NAME, parameters=_ask("Format?", ["CSV", "JSON"]))
+    record.await_user_input()
     ctx.tool_state.add(record)
     response = AgentResponse(source="test", context=ctx, usage=Usage(), finish_reason="input_needed")
     async with app.run_test(size=(120, 45)) as pilot:
@@ -144,7 +149,7 @@ async def test_question_button_and_token_events(tmp_path):
         await pilot.pause()
         await pilot.press("enter")  # question form: enter picks the highlighted option
         await asyncio.wait_for(worker, 2)
-        assert record.user_answer == "CSV"
+        assert record.result.result == {"answers": {"Format?": "CSV"}}
         for _ in range(2):
             await app._write_event(ModelResponseEvent(source="test", response="", usage=Usage(tokens_input=10, tokens_output=3, tokens_cached=2)))
         assert app._tokens_input == 20
@@ -222,8 +227,8 @@ def _question_response(*questions: tuple[str, list[str]]):
     ctx = RunContext()
     records = []
     for index, (text, options) in enumerate(questions):
-        record = ToolCallRecord(id=f"q{index}", tool_name="ask_user", parameters={})
-        record.await_user_input(text, options)
+        record = ToolCallRecord(id=f"q{index}", tool_name=AskUserTool.TOOL_NAME, parameters=_ask(text, options))
+        record.await_user_input()
         ctx.tool_state.add(record)
         records.append(record)
     return records, AgentResponse(source="test", context=ctx, usage=Usage(), finish_reason="input_needed")
@@ -239,7 +244,7 @@ async def test_a_number_key_picks_the_option(tmp_path):
         await pilot.pause()
         await pilot.press("2")  # no enter needed
         await asyncio.wait_for(worker, 2)
-        assert record.user_answer == "JSON" and app.query_one(TextArea).text == ""
+        assert record.result.result == {"answers": {"Format?": "JSON"}} and app.query_one(TextArea).text == ""
 
 
 @pytest.mark.asyncio
@@ -264,9 +269,104 @@ async def test_other_is_typed_inside_the_question_box(tmp_path):
         await pilot.press("3")
         await pilot.press(*"parquet", "enter")
         await asyncio.wait_for(worker, 2)
-        assert record.user_answer == "parquet"
+        assert record.result.result == {"answers": {"Format?": "parquet"}}
         summary = str(app.query_one(QuestionForm).query_one(".summary", Static).render())
-        assert "Format?" in summary and "⎿  parquet" in summary
+        assert "Format? → parquet" in summary
+
+
+def _multi_select_response():
+    params = {"questions": [{
+        "question": "Files?", "multi_select": True,
+        "options": [{"label": "a"}, {"label": "b", "description": "the second"}, {"label": "c"}],
+    }]}
+    record = ToolCallRecord(id="q", tool_name=AskUserTool.TOOL_NAME, parameters=params)
+    record.await_user_input()
+    ctx = RunContext()
+    ctx.tool_state.add(record)
+    return record, AgentResponse(source="test", context=ctx, usage=Usage(), finish_reason="input_needed")
+
+
+async def _press(pilot, *keys):
+    for key in keys:
+        await pilot.press(key)
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_multi_select_toggles_and_confirms_on_submit(tmp_path):
+    from max_ai.cli.blocks import OptionRow, QuestionForm
+
+    app = make_app(tmp_path)
+    record, response = _multi_select_response()
+    async with app.run_test(size=(120, 45)) as pilot:
+        app._busy = True
+        worker = asyncio.create_task(app._resolve_requests(response))
+        await pilot.pause()
+        await _press(pilot, "1", "2", "1")  # the last one takes "a" back
+        form = app.query_one(QuestionForm)
+        lines = [str(row.render()) for row in form.query(OptionRow) if row.has_class("-current")]
+        assert "[ ] a" in lines[0] and "[x] b" in lines[1]
+        assert "select all that apply" in str(form.query_one(".question", Static).render())
+        assert not worker.done()  # marking never sends
+        await _press(pilot, "right", "enter")
+        await asyncio.wait_for(worker, 2)
+        assert record.result.result == {"answers": {"Files?": ["b"]}}
+        assert "Files? → b" in str(form.query_one(".summary", Static).render())
+
+
+@pytest.mark.asyncio
+async def test_multi_select_other_adds_to_the_selection(tmp_path):
+    app = make_app(tmp_path)
+    record, response = _multi_select_response()
+    async with app.run_test(size=(120, 45)) as pilot:
+        app._busy = True
+        worker = asyncio.create_task(app._resolve_requests(response))
+        await pilot.pause()
+        await _press(pilot, "1", "4")  # "Other"
+        await pilot.press(*"mine", "enter")
+        await pilot.pause()
+        await _press(pilot, "right", "enter")
+        await asyncio.wait_for(worker, 2)
+    assert record.result.result == {"answers": {"Files?": ["a", "mine"]}}
+
+
+@pytest.mark.asyncio
+async def test_multi_select_with_nothing_marked_is_not_answered(tmp_path):
+    app = make_app(tmp_path)
+    record, response = _multi_select_response()
+    async with app.run_test(size=(120, 45)) as pilot:
+        app._busy = True
+        worker = asyncio.create_task(app._resolve_requests(response))
+        await pilot.pause()
+        await _press(pilot, "right", "enter")
+        await asyncio.wait_for(worker, 2)
+    assert "did not answer" in record.result.result["answers"]["Files?"]
+
+
+@pytest.mark.asyncio
+async def test_submit_accepts_unanswered_questions(tmp_path):
+    app = make_app(tmp_path)
+    ctx = RunContext()
+    params = {"questions": [
+        {"question": "A?", "options": [{"label": "x"}, {"label": "y"}]},
+        {"question": "B?", "options": [{"label": "z"}, {"label": "w"}]},
+    ]}
+    record = ToolCallRecord(id="q", tool_name=AskUserTool.TOOL_NAME, parameters=params)
+    record.await_user_input()
+    ctx.tool_state.add(record)
+    response = AgentResponse(source="test", context=ctx, usage=Usage(), finish_reason="input_needed")
+    async with app.run_test(size=(120, 45)) as pilot:
+        app._busy = True
+        worker = asyncio.create_task(app._resolve_requests(response))
+        await pilot.pause()
+        await pilot.press("1")  # answers A?, moves on to B?
+        await pilot.pause()
+        await pilot.press("right")  # the Submit tab
+        await pilot.pause()
+        await pilot.press("enter")
+        await asyncio.wait_for(worker, 2)
+    answers = record.result.result["answers"]
+    assert answers["A?"] == "x" and "did not answer" in answers["B?"]
 
 
 @pytest.mark.asyncio

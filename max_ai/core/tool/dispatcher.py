@@ -17,6 +17,7 @@ from ..event_type import (
     ToolCallResponseEvent,
     UserInputRequestEvent,
 )
+from ..harness import messages as harness
 from ..messages import ToolMessage
 from ..policy import Policy
 from ..termination import CancellationToken
@@ -24,6 +25,7 @@ from .registry import ToolRegistry
 
 if TYPE_CHECKING:
     from ...base.executor import ExecutionSession
+    from ...types.run_context import RunContext
     from ..environment.manager import EnvironmentManager
     from ..middleware.chain import MiddlewareChain
 
@@ -80,6 +82,15 @@ class ToolDispatcher:
             f"{text[:half]}\n\n[... {cut:,} of {len(text):,} characters cut: "
             f"the tool returned more than fits ...]\n\n{text[-half:]}"
         )
+
+    @classmethod
+    def close_unanswered(cls, ctx: "RunContext") -> None:
+        """Close every open question. Call it before a new user message:
+        each tool call needs its answer first, or the provider rejects it."""
+        for record in ctx.tool_state.pending_user_input:
+            result = ToolResult.tool_failure(record.id, harness.QUESTION_NOT_ANSWERED)
+            record.force_consume(result)
+            ctx.messages.append(cls.tool_message(record, result))
 
     @classmethod
     def tool_message(cls, record: ToolCallRecord, result: ToolResult) -> ToolMessage:
@@ -215,41 +226,6 @@ class ToolDispatcher:
                     record.id, validation.msg_error or "Invalid arguments"
                 )
             )
-        from ...capabilities.tools.ask_user import AskUserTool, pending_questions
-
-        if isinstance(tool, AskUserTool):
-            if record.user_answers is not None:
-                return finish(ToolResult.success_result(record.id, {
-                    "answers": record.user_answers,
-                }))
-            if record.user_answer is not None:
-                return finish(ToolResult.success_result(record.id, {
-                    "question": record.input_question,
-                    "answer": record.user_answer,
-                }))
-            if record.is_pending_approval:
-                questions = pending_questions(record.parameters)
-                if not questions:
-                    return finish(ToolResult.invalid_parameters(
-                        record.id, "ask_user needs at least one non-empty question",
-                    ))
-                # input_question/options mirror the first question for
-                # consumers that only know single questions.
-                record.await_user_input(
-                    questions[0]["question"], questions[0]["options"],
-                    questions=questions,
-                )
-            if not record.is_awaiting_input:
-                return finish(ToolResult.execution_error(
-                    record.id, "ask_user requires pending input or a stored answer",
-                ))
-            emit(UserInputRequestEvent(
-                source=self.source, tool_call_id=record.id,
-                question=record.input_question or "", options=record.input_options,
-            ))
-            return None
-        if record.is_awaiting_input:
-            raise ValueError("User input must be resolved before dispatch")
         # One decision for every tool: the agent's Policy plus the rules the
         # user allowed during this session.
         run_ctx = context.deps.get("run_context")
@@ -260,6 +236,15 @@ class ToolDispatcher:
         )
         if decision.verdict == "deny":
             return finish(ToolResult.approval_denied(record.id, f"Denied by policy: {decision.rule}"))
+        # A person will see this call anyway: no approval on top of it.
+        if tool.waits_for_user and record.result is None:
+            if not record.is_awaiting_input:
+                record.await_user_input()
+            emit(UserInputRequestEvent(
+                source=self.source, tool_call_id=record.id,
+                tool_name=record.tool_name, parameters=record.parameters,
+            ))
+            return None
         approval_mode = (
             ToolApprovalMode.AUTO_APPROVED if decision.verdict == "allow"
             else ToolApprovalMode.ASK_APPROVED
@@ -310,6 +295,8 @@ class ToolDispatcher:
             return await tool.execute(record, call_context, cancellation_token)
 
         async def invoke():
+            if record.result is not None:  # a person already produced it
+                return record.result
             # Every tool runs in this process; only bash needs the environment.
             if not tool.runs_commands:
                 return await tool.execute(record, call_context, cancellation_token)

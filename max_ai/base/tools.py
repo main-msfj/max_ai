@@ -124,6 +124,8 @@ class CoreTool(ComponentBase[BaseModel], ABC):
     # -------- POLICY -----------------------------------------------------------
     # Runs commands on the executor: without a sandbox, the Policy always asks.
     runs_commands: t.ClassVar[bool] = False
+    # The result comes from a person: the turn pauses until they answer.
+    waits_for_user: t.ClassVar[bool] = False
 
     def permission_subjects(self, parameters: dict[str, t.Any]) -> tuple[list[str], bool]:
         """What ``Tool(pattern)`` rules match against, and whether that is all

@@ -139,14 +139,8 @@ class ToolState(BaseModel):
         )
         return record
 
-    def apply_user_answer(
-        self, tool_call_id: str, answer: str | dict[str, str]
-    ) -> ToolCallRecord:
-        """Apply the user's answer to a pending question. Returns the record.
-
-        The record moves ``INPUT_NEEDED`` → ``APPROVED`` with the answer
-        stored, so the resumed run's executor completes the call from
-        ``user_answer`` without executing anything.
+    def provide_result(self, tool_call_id: str, result: ToolResult) -> ToolCallRecord:
+        """Keep the result a person produced; the next resume delivers it.
 
         Raises:
             KeyError: If no record exists with that id.
@@ -155,10 +149,10 @@ class ToolState(BaseModel):
         record = self.records.get(tool_call_id)
         if record is None:
             raise KeyError(
-                f"Cannot apply user answer — no tool call {tool_call_id} tracked."
+                f"Cannot provide result — no tool call {tool_call_id} tracked."
             )
-        record.apply_user_answer(answer)
-        log.child(tool_call_id=tool_call_id).info("User answer applied")
+        record.store_result(result)
+        log.child(tool_call_id=tool_call_id).info("Result provided by user")
         return record
 
     def consume(self, tool_call_id: str, result: ToolResult) -> ToolCallRecord:

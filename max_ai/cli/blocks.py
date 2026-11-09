@@ -402,11 +402,11 @@ class Question(t.NamedTuple):
     text: str
     # (label, description) shown to the user.
     options: list[tuple[str, str]]
-    # What gets sent back for each option (records carry "label — description").
+    # What gets sent back for each option.
     values: list[str]
     header: str | None = None
-    # True when the record holds several questions (answers go back as a dict).
-    grouped: bool = False
+    # Several options can be chosen; the answer is then a list.
+    multi_select: bool = False
 
 
 class OptionRow(Static):
@@ -429,7 +429,7 @@ class QuestionForm(Vertical):
     for the current one (↑↓ + enter, a number key or click) plus an "Other"
     row that opens a text field right in the box, and — with several
     questions — a Submit tab to review and send them together. Once sent
-    the box gives way to each question with its answer under ``⎿``.
+    the box gives way to one ``question → answer`` line for each.
     """
 
     DEFAULT_CSS = f"""
@@ -469,7 +469,7 @@ class QuestionForm(Vertical):
         self.current = 0
         # A question without options starts on its "Other" row.
         self.highlight = [0 if q.values else len(q.values) for q in questions]
-        self.answers: dict[int, str] = {}
+        self.answers: dict[int, str | list[str]] = {}
         self.typing = False
         self.done = False
         self.cancelled = False
@@ -491,12 +491,17 @@ class QuestionForm(Vertical):
             self.pick(0, 0)  # nothing to choose: straight to the text field
 
     @property
-    def multi(self) -> bool:
+    def several_questions(self) -> bool:
         return len(self.questions) > 1
 
     @property
+    def has_submit(self) -> bool:
+        """Several questions, or one with several answers, need confirming."""
+        return self.several_questions or self.questions[0].multi_select
+
+    @property
     def on_submit_tab(self) -> bool:
-        return self.multi and self.current == len(self.questions)
+        return self.has_submit and self.current == len(self.questions)
 
     def _is_other(self, q: int, index: int) -> bool:
         return index == len(self.questions[q].values)
@@ -510,17 +515,19 @@ class QuestionForm(Vertical):
         title = " ".join(words[:2]) or question.text
         return title if len(title) <= 22 else title[:21] + "…"
 
-    def _display(self, q: int) -> str | None:
+    def _chosen(self, q: int) -> list[str]:
         answer = self.answers.get(q)
         if answer is None:
-            return None
-        for (label, _), value in zip(self.questions[q].options, self.questions[q].values):
-            if answer == value:
-                return label
-        return answer
+            return []
+        return answer if isinstance(answer, list) else [answer]
 
-    def _is_custom(self, q: int) -> bool:
-        return q in self.answers and self.answers[q] not in self.questions[q].values
+    def _display(self, q: int) -> str | None:
+        labels = dict(zip(self.questions[q].values, (o[0] for o in self.questions[q].options)))
+        return ", ".join(labels.get(value, value) for value in self._chosen(q)) or None
+
+    def _custom(self, q: int) -> str | None:
+        """What the user typed for this question, if anything."""
+        return next((v for v in self._chosen(q) if v not in self.questions[q].values), None)
 
     # -------- drawing
     def redraw(self) -> None:
@@ -528,7 +535,7 @@ class QuestionForm(Vertical):
         if not all(parts.values()):
             return
         tabs, question, hint, summary = (parts[n].first(Static) for n in parts)
-        tabs.display = self.multi and not self.done
+        tabs.display = self.has_submit and not self.done
         tabs.update(self._tabs())
         summary.update(self._summary())
         for row in self.query(OptionRow):
@@ -542,15 +549,17 @@ class QuestionForm(Vertical):
             return
         q = self.questions[self.current]
         title = Text()
-        if self.multi:
+        if self.several_questions:
             title.append(f"{self.current + 1}/{len(self.questions)}  ", style=DIM)
         title.append(q.text, style="bold")
+        if q.multi_select:
+            title.append(" (select all that apply)", style=DIM)
         question.update(title)
         if self.typing:
             keys = "enter send · esc back to the options"
         else:
-            keys = "↑↓ choose · enter or 1-9 select"
-            if self.multi:
+            keys = "↑↓ choose · enter toggles" if q.multi_select else "↑↓ choose · enter or 1-9 select"
+            if self.has_submit:
                 keys += " · ←→ switch question"
             keys += " · esc cancel"
         hint.update(Text(keys, style=DIM))
@@ -558,34 +567,34 @@ class QuestionForm(Vertical):
     def _tabs(self) -> Text:
         line = Text()
         for q, question in enumerate(self.questions):
-            box = "☒" if q in self.answers else "☐"
             style = f"bold reverse {PRIMARY}" if q == self.current else (SUCCESS if q in self.answers else MUTED)
-            line.append(f" {box} {self._tab_title(question)} ", style=style)
+            line.append(f" {self._tab_title(question)} ", style=style)
             line.append(" ")
         ready = len(self.answers) == len(self.questions)
-        style = f"bold reverse {PRIMARY}" if self.on_submit_tab else (SUCCESS if ready else DIM)
-        line.append(" ✓ Submit ", style=style)
+        style = f"bold reverse {PRIMARY}" if self.on_submit_tab else (SUCCESS if ready else TEXT)
+        line.append(" Submit ", style=style)
         return line
 
     def _option_line(self, q: int, index: int) -> Text:
         highlighted = index == self.highlight[q]
         line = Text("❯ " if highlighted else "  ", style=f"bold {PRIMARY}")
+        several = self.questions[q].multi_select
         if self._is_other(q, index):
-            if self._is_custom(q):
-                line.append(f"{index + 1}. ✎ {self.answers[q]}", style=f"bold {SUCCESS}")
-                line.append(" ✓", style=SUCCESS)
+            custom = self._custom(q)
+            mark = ("[x] " if custom else "[ ] ") if several else "✎ "
+            if custom:
+                line.append(f"{index + 1}. {mark}{custom}", style=f"bold {SUCCESS}")
             elif self.typing and highlighted:
-                line.append(f"{index + 1}. ✎ Other", style=f"bold {PRIMARY}")
+                line.append(f"{index + 1}. {mark}Other", style=f"bold {PRIMARY}")
             else:
-                line.append(f"{index + 1}. ✎ Other", style=f"bold {TEXT}" if highlighted else TEXT)
+                line.append(f"{index + 1}. {mark}Other", style=f"bold {TEXT}" if highlighted else TEXT)
                 line.append(" — type your own answer", style=DIM)
             return line
         label, description = self.questions[q].options[index]
-        chosen = self.answers.get(q) == self.questions[q].values[index]
+        chosen = self.questions[q].values[index] in self._chosen(q)
         style = f"bold {SUCCESS}" if chosen else (f"bold {TEXT}" if highlighted else TEXT)
-        line.append(f"{index + 1}. {label}", style=style)
-        if chosen:
-            line.append(" ✓", style=SUCCESS)
+        mark = ("[x] " if chosen else "[ ] ") if several else ""
+        line.append(f"{index + 1}. {mark}{label}", style=style)
         if description:
             line.append(f" — {description}", style=DIM)
         return line
@@ -594,13 +603,12 @@ class QuestionForm(Vertical):
         body = Text("Review your answers\n", style=f"bold {TEXT}")
         for q, question in enumerate(self.questions):
             shown = self._display(q)
-            body.append(f"\n  {question.text}\n", style=TEXT)
-            body.append("   → ", style=DIM)
+            body.append(f"\n  {question.text} → ", style=TEXT)
             body.append(shown or "not answered yet", style=f"bold {SUCCESS}" if shown else WARNING)
         return body
 
     def _summary(self) -> Text:
-        """``? question`` then ``⎿ answer`` under it, for every question."""
+        """One ``question → answer`` line for every question."""
         body = Text()
         if self.cancelled:
             body.append("? ", style=f"bold {PRIMARY}")
@@ -609,9 +617,7 @@ class QuestionForm(Vertical):
         for q, question in enumerate(self.questions):
             if q:
                 body.append("\n")
-            body.append("? ", style=f"bold {PRIMARY}")
-            body.append(question.text, style=f"bold {TEXT}")
-            body.append("\n  ⎿  ", style=DIM)
+            body.append(f"{question.text} → ", style=f"bold {TEXT}")
             body.append(self._display(q) or "(no answer)", style=SUCCESS)
         return body
 
@@ -625,7 +631,7 @@ class QuestionForm(Vertical):
         self.redraw()
 
     def switch(self, delta: int) -> None:
-        if self.done or not self.multi:
+        if self.done or not self.has_submit:
             return
         self._close_field()
         self.current = (self.current + delta) % (len(self.questions) + 1)
@@ -637,12 +643,7 @@ class QuestionForm(Vertical):
         if self.done:
             return
         if self.on_submit_tab:
-            missing = [q for q in range(len(self.questions)) if q not in self.answers]
-            if missing:
-                self.current = missing[0]
-                self.redraw()
-            else:
-                self._complete()
+            self._complete()
             return
         q = self.questions[self.current]
         if text:
@@ -659,11 +660,15 @@ class QuestionForm(Vertical):
         self.current = q
         self.highlight[q] = index
         if self._is_other(q, index):
+            custom = self._custom(q)
+            if custom and self.questions[q].multi_select:
+                self._toggle(q, custom)  # a second press takes it back
+                return
             self.typing = True
             self.set_class(True, "-typing")
             self.redraw()
             field = self.query_one(Input)
-            field.value = self.answers[q] if self._is_custom(q) else ""
+            field.value = custom or ""
             field.focus()
             return
         self._answer(q, self.questions[q].values[index])
@@ -695,10 +700,29 @@ class QuestionForm(Vertical):
         if event.value.strip():
             self._answer(self.current, event.value.strip())
 
+    def _toggle(self, q: int, value: str) -> None:
+        """Mark or unmark ``value``; one typed answer per question at most."""
+        values = self.questions[q].values
+        chosen = self._chosen(q)
+        if value in chosen:
+            chosen.remove(value)
+        else:
+            if value not in values:
+                chosen = [v for v in chosen if v in values]
+            chosen.append(value)
+        if chosen:
+            self.answers[q] = chosen
+        else:
+            self.answers.pop(q, None)
+        self.redraw()
+
     def _answer(self, q: int, value: str) -> None:
         self._close_field()
+        if self.questions[q].multi_select:
+            self._toggle(q, value)
+            return
         self.answers[q] = value
-        if not self.multi:
+        if not self.has_submit:
             self._complete()
             return
         missing = [i for i in range(len(self.questions)) if i not in self.answers]
@@ -718,18 +742,13 @@ class QuestionForm(Vertical):
         self.redraw()
         self.post_message(self.Completed(self))
 
-    def result(self) -> dict[str, str | dict[str, str]]:
-        """Answers per record: a string, or {question: answer} when the
-        record grouped several questions in one ask_user call."""
-        out: dict[str, str | dict[str, str]] = {}
+    def result(self) -> dict[str, dict[str, str | list[str]]]:
+        """Answers per record: {record_id: {question: answer}}."""
+        out: dict[str, dict[str, str | list[str]]] = {}
         for q, question in enumerate(self.questions):
-            answer = self.answers.get(q, "")
-            if question.grouped:
-                group = out.setdefault(question.record_id, {})
-                assert isinstance(group, dict)
-                group[question.text] = answer
-            else:
-                out[question.record_id] = answer
+            group = out.setdefault(question.record_id, {})
+            if q in self.answers:  # unanswered ones stay out: the tool says so
+                group[question.text] = self.answers[q]
         return out
 
 

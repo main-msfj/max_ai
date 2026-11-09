@@ -264,19 +264,18 @@ class PlanningEvent(ReasoningEvent):
 
 
 class UserInputRequestEvent(ReasoningEvent):
-    """The agent asked the user a question; the turn pauses until answered.
+    """A tool needs a person; the turn pauses until they answer.
 
-    Mirrors ``ToolApprovalEvent``: emitted by the executor *instead of*
-    executing the ask-the-user tool. The consumer answers via
-    ``ctx.tool_state.apply_user_answer(tool_call_id, answer)`` and resumes.
+    Mirrors ``ToolApprovalEvent``. The consumer answers via
+    ``ctx.tool_state.provide_result(tool_call_id, result)`` and resumes.
     """
 
     EVENT_TYPE = "user_input_request"
-    question: str = Field(description="Question asked to the user")
-    options: list[str] | None = Field(default=None)
+    tool_name: str = Field(description="Tool waiting for the person")
+    parameters: dict[str, t.Any] = Field(default_factory=dict)
     tool_call_id: str | None = Field(
         default=None,
-        description="Record id to answer via tool_state.apply_user_answer().",
+        description="Record id to answer via tool_state.provide_result().",
     )
 
 
