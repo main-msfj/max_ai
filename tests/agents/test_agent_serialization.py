@@ -22,6 +22,7 @@ from max_ai.capabilities.mcp import HTTPServerConfig
 from max_ai.capabilities.memory import LocalMemoryRegistry
 from max_ai.capabilities.reasoning.guards import RepetitionGuard
 from max_ai.capabilities.reasoning.react import ReactLoop
+from max_ai.capabilities.tools.decorator import tool
 from max_ai.capabilities.workspace.local import LocalWorkspace
 from max_ai.core.model.json_schema import model_from_schema
 
@@ -106,10 +107,10 @@ def test_schema_rebuild_handles_nesting_enums_and_optionals():
 
 def test_python_function_tools_cannot_be_stored(tmp_path):
     def lookup(order_id: str) -> str:
-        """Find an order."""
+        """Find an order by its id."""
         return order_id
 
-    agent = full_agent(tmp_path, toolset=[lookup])
+    agent = full_agent(tmp_path, toolset=[tool(lookup)])
     with pytest.raises(TypeError, match="MCP server"):
         agent.serialize()
 

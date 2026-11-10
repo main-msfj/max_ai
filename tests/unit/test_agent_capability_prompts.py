@@ -17,9 +17,12 @@ from max_ai.capabilities.stacks import (
     MemoryLayer,
     SessionStateLayer,
     SkillsLayer,
+    ToolsLayer,
 )
+from max_ai.capabilities.tools.decorator import tool
 from max_ai.capabilities.workspace.local import LocalWorkspace
 from max_ai.core.messages import AssistantMessage, ToolCall
+from max_ai.errors.tools import ToolRegistryError
 from max_ai.types.completions import ChatCompletionResult, Usage
 from max_ai.types.run_context import RunContext
 
@@ -58,9 +61,14 @@ async def test_no_capabilities(tmp_path):
         await agent.run("hello")
         assert agent.skills is None
         names = {type(layer).__name__ for layer in client.prompts[0].stack}
-        assert names == {"AgentPolicyLayer", "TaskAnalysisLayer", "RenderingLayer", "SessionStateLayer"}
+        assert names == {
+            "AgentPolicyLayer", "TaskAnalysisLayer", "RenderingLayer", "ToolsLayer",
+            "SessionStateLayer",
+        }
         assert client.prompts[0].rendered_layers[SessionStateLayer] == ""  # empty until needed
-        assert "get_context" not in {tool.name for tool in agent._registry.all_tools()}
+        assert client.prompts[0].rendered_layers[ToolsLayer] == ""  # no deferred tools
+        tool_names = {tool.name for tool in agent._registry.all_tools()}
+        assert not tool_names & {"get_context", "search_tools", "call_tool"}
 
 
 async def policy_prompt(agent) -> str:
@@ -145,7 +153,7 @@ async def test_skills_and_knowledge(tmp_path, monkeypatch):
     (skill_dir / "SKILL.md").write_text("---\nname: writing\ndescription: Write reports\n---\nFull instructions.")
     monkeypatch.setattr(LocalSkillRegistry, "_resolve_cache_root", staticmethod(lambda: tmp_path / "cache"))
     skills = LocalSkillRegistry(source=source, skills=["writing"])
-    knowledge = LocalKnowledgeRegistry("docs", "Search documentation", tmp_path)
+    knowledge = LocalKnowledgeRegistry("docs", "Search the documentation of this project", tmp_path)
     client = RecordingClient([ToolCall(id="search", tool_name="search_docs",
                                      parameters={"query": "example"})])
     async with make_agent(tmp_path, client, skills=skills, knowledge=[knowledge]) as agent:
@@ -163,7 +171,8 @@ async def test_skills_and_knowledge(tmp_path, monkeypatch):
 
 def test_duplicate_capability_tool_fails(tmp_path):
     def get_context():
+        """Return some unrelated context."""
         return "unrelated"
-    with pytest.raises(ValueError, match="duplicate tool name"):
-        make_agent(tmp_path, RecordingClient(), toolset=[get_context],
+    with pytest.raises(ToolRegistryError, match="Duplicate tool name"):
+        make_agent(tmp_path, RecordingClient(), toolset=[tool(get_context)],
                    memory=LocalMemoryRegistry("u", "s", tmp_path))

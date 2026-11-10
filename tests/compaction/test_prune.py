@@ -5,7 +5,6 @@ from __future__ import annotations
 from max_ai.base.compaction import CoreCompaction
 from max_ai.core.compaction import (
     CompactionResult,
-    TokenCounter,
     current_turn_start,
     group_atomic_messages,
 )
@@ -17,6 +16,7 @@ from max_ai.core.messages import (
     ToolMessage,
     UserMessage,
 )
+from max_ai.core.tokenizer import TokenCounter
 
 BIG = "línea de log con bastante texto adentro\n" * 400  # ~3.6k tokens
 

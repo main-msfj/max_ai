@@ -41,7 +41,7 @@ class RunContext(BaseModel):
         default_factory=list,
         description=(
             "Policy rules the user allowed during this session (\"always "
-            "allow\"), e.g. bash(npm:*) or WriteFile. Added to the agent's allow list."
+            "allow\"), e.g. bash(npm:*) or write_file. Added to the agent's allow list."
         ),
     )
     completion_state: dict[str, dict[str, JsonValue]] = Field(

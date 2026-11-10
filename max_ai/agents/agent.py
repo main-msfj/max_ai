@@ -41,15 +41,17 @@ from ..capabilities.stacks import (
     SessionStateLayer,
     SkillsLayer,
     TaskAnalysisLayer,
+    ToolsLayer,
 )
 from ..capabilities.stacks.agent_policy_layer import AgentPolicyLayer
 from ..capabilities.tools.ask_user import AskUserTool
 from ..capabilities.tools.bash import BashTool
+from ..capabilities.tools.call_tool import CallToolTool
 from ..capabilities.tools.file_system import FileSystem
 from ..capabilities.tools.plan import AgentUpdatePlanTool
+from ..capabilities.tools.search_tool import SearchToolsTool
 from ..capabilities.workspace.local import LocalWorkspace
 from ..config import setting
-from ..core.compaction import TokenCounter
 from ..core.environment.manager import EnvironmentManager
 from ..core.event_type import CoreEvent, ModelRetryEvent, ModelStreamChunkEvent
 from ..core.events_bus import EventBus
@@ -63,6 +65,7 @@ from ..core.model.json_schema import model_from_schema, schema_of
 from ..core.policy import Policy
 from ..core.stacks.container import LayerContainer
 from ..core.termination import CancellationToken
+from ..core.tokenizer import TokenCounter
 from ..core.tool.dispatcher import ToolDispatcher
 from ..core.tool.registry import ToolRegistry
 from ..loggers.scope import ScopedLogger
@@ -101,7 +104,7 @@ def _storable(component: Any, what: str) -> ComponentBase[Any]:
 class Agent(ComponentBase[AgentSpec]):
     """Connect a pluggable reasoning loop to workspace, skills and execution.
 
-    Supply CoreTool instances or decorated functions through toolset.
+    Supply tools through toolset: CoreTools, or functions made tools with @tool.
     The tool registry is managed internally by the agent.
 
     Memory, skills and knowledge are optional and only enabled when supplied.
@@ -134,7 +137,7 @@ class Agent(ComponentBase[AgentSpec]):
         client: CoreChatCompletionClient,
         *,
         # Most used first; the infrastructure (workspace, executor) has defaults.
-        toolset: Sequence[CoreTool | Callable[..., Any]] | None = None,
+        toolset: Sequence[CoreTool] | None = None,
         policy: Policy | None = None,
         mcp: Sequence[MCPServerConfig] | None = None,
         memory: CoreMemoryRegistry | None = None,
@@ -213,7 +216,7 @@ class Agent(ComponentBase[AgentSpec]):
 
     def _configure_tools(
         self,
-        toolset: Sequence[CoreTool | Callable[..., Any]] | None,
+        toolset: Sequence[CoreTool] | None,
     ) -> None:
         """User tools take precedence over built-in defaults."""
         # The developer's tools; built-ins are recreated, never stored.
@@ -221,6 +224,7 @@ class Agent(ComponentBase[AgentSpec]):
         self._registry = ToolRegistry(self.toolset)
         self._register_filesystem_tools()
         self._register_control_tools()
+        self._register_deferred_access()
 
     def _register_filesystem_tools(self) -> None:
         """Filesystem tools access the persistent workspace on the host."""
@@ -243,6 +247,18 @@ class Agent(ComponentBase[AgentSpec]):
             return
         if self._registry.get("bash") is None:
             self._registry.register(BashTool())
+
+    def _register_deferred_access(self) -> None:
+        """search_tools and call_tool reach the deferred tools; without
+        any, they are left out."""
+        if not self._registry.deferred_tools():
+            return
+        for name, build in (
+            (SearchToolsTool.TOOL_NAME, SearchToolsTool),
+            (CallToolTool.TOOL_NAME, CallToolTool),
+        ):
+            if self._registry.get(name) is None:
+                self._registry.register(build(self._registry))
 
     def _configure_capabilities(
         self,
@@ -310,6 +326,7 @@ class Agent(ComponentBase[AgentSpec]):
             AgentPolicyLayer(),
             TaskAnalysisLayer(),
             RenderingLayer(),
+            ToolsLayer(),
         ]
         if self.skills is not None:
             layers.append(SkillsLayer())
@@ -423,6 +440,14 @@ class Agent(ComponentBase[AgentSpec]):
             "instructions": self.instructions,
             "current_date": datetime.now(UTC).date().isoformat(),
             "can_run_commands": self.executor.runs_commands,
+            # Only the first line: MCP descriptions can be long; search_tools
+            # returns the whole description.
+            "deferred_tools": [
+                {"name": tool.name, "description": tool.description.strip().split("\n")[0]}
+                for tool in self._registry.deferred_tools()
+            ],
+            "search_tool": SearchToolsTool.TOOL_NAME,
+            "call_tool": CallToolTool.TOOL_NAME,
         }
         if self._environment:
             variables["execution_environment"] = self._environment
@@ -492,6 +517,7 @@ class Agent(ComponentBase[AgentSpec]):
                     if self._registry.get(tool.name) is not None:
                         self._registry.unregister(tool.name)
                     self._registry.register(tool)
+            self._register_deferred_access()
 
     async def _drive_connected(
         self,
@@ -647,10 +673,15 @@ class Agent(ComponentBase[AgentSpec]):
             if self._closed:
                 raise RuntimeError("Agent is closed")
             if task is not None:
-                if any(not r.is_consumed for r in ctx.tool_state.records.values()):
+                # Only an open question gives way to a new message; approvals block.
+                if any(
+                    not r.is_consumed and not r.is_awaiting_input
+                    for r in ctx.tool_state.records.values()
+                ):
                     raise ValueError(
                         "Resolve pending tool calls before adding another task"
                     )
+                ToolDispatcher.close_unanswered(ctx)
                 # New task: drop last task's tool_state and gate evidence so
                 # completion gates only see evidence from the task actually
                 # in progress.

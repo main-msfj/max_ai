@@ -38,6 +38,7 @@ class FunctionAsTool(CoreTool):
         approval_mode: ToolApprovalMode | str = ToolApprovalMode.ASK_APPROVED,
         read_only: bool = False,
         policy_subject: str | None = None,
+        deferred: bool = False,
     ):
         """Create a tool from a Python function.
 
@@ -51,6 +52,8 @@ class FunctionAsTool(CoreTool):
                 it at the same time as other read-only calls.
             policy_subject: Parameter that Policy rules like ``name(pattern)``
                 match, e.g. ``url`` for ``fetch(https://acme.com/*)``.
+            deferred: Not sent to the model; found with search_tools and run
+                with call_tool.
         """
         self.func = func
         super().__init__(
@@ -60,6 +63,7 @@ class FunctionAsTool(CoreTool):
             approval_mode=approval_mode,
             read_only=read_only,
             policy_subject=policy_subject,
+            deferred=deferred,
         )
 
         self.signature = inspect.signature(func)

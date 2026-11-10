@@ -53,6 +53,7 @@ class MCPTool(CoreTool):
         version: str = "1.0.0",
         approval_mode: ToolApprovalMode | str = ToolApprovalMode.ASK_APPROVED,
         read_only: bool = False,
+        deferred: bool = True,
     ) -> None:
         self.mcp_tool_name = mcp_tool_name
         self.client_manager = client_manager
@@ -64,7 +65,15 @@ class MCPTool(CoreTool):
             version=version,
             approval_mode=approval_mode,
             read_only=read_only,
+            deferred=deferred,
         )
+
+    # MCP servers write their own names and descriptions: not ours to check.
+    def validate_name(self, name: str) -> None:
+        pass
+
+    def validate_description(self, name: str, description: str) -> None:
+        pass
 
     @property
     def parameters(self) -> dict[str, t.Any]:
@@ -179,6 +188,7 @@ class MCPResourceTool(CoreTool):
         available_resources: list[t.Any] | None = None,
         resource_templates: list[t.Any] | None = None,
         approval_mode: ToolApprovalMode | str = ToolApprovalMode.ASK_APPROVED,
+        deferred: bool = True,
     ) -> None:
         self.client_manager = client_manager
         self.server_id = server_id
@@ -189,6 +199,7 @@ class MCPResourceTool(CoreTool):
             description=self._build_description(),
             approval_mode=approval_mode,
             read_only=True,  # reading a resource changes nothing
+            deferred=deferred,
         )
         self._parameter_schema: dict[str, t.Any] = {
             "type": "object",
@@ -201,6 +212,13 @@ class MCPResourceTool(CoreTool):
             "required": ["uri"],
             "additionalProperties": False,
         }
+
+    # MCP servers write their own names and descriptions: not ours to check.
+    def validate_name(self, name: str) -> None:
+        pass
+
+    def validate_description(self, name: str, description: str) -> None:
+        pass
 
     @property
     def parameters(self) -> dict[str, t.Any]:

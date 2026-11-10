@@ -8,7 +8,7 @@ from ..base.layer import CoreLayer
 from ..core.stacks.container import LayerContainer
 
 if t.TYPE_CHECKING:
-    from ..core.compaction import TokenCounter
+    from ..core.tokenizer import TokenCounter
 
 
 class PromptLayerUsage(BaseModel):

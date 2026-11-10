@@ -39,19 +39,41 @@ def output_cut_off(limit: int) -> str:
         "off; any tool call in it was incomplete and did not run. Every reply, "
         "including tool arguments, must fit in that limit. Do not retry it the "
         "same way: split the work into smaller steps (several smaller files, or "
-        "write a first part and extend it with EditFile), or answer more briefly."
+        "write a first part and extend it with edit_file), or answer more briefly."
     )
 
 
-def tool_denied(denied: t.Sequence[ToolCallRecord]) -> str:
+def tool_denied(denied: t.Sequence[ToolCallRecord], ask_tool: str) -> str:
     """After a denial: explain it, then let the user decide how to go on."""
     listing = ", ".join(f"{r.tool_name} ({r.approval_reason or 'denied'})" for r in denied)
     return (
         f"The user denied: {listing}. Assess how much this blocks the task. "
-        "Explain to the user what happened and why, then call ask_user with "
+        f"Explain to the user what happened and why, then call {ask_tool} with "
         "exactly one of: (1) cancel the remaining task, (2) retry the tool, "
         "or (3) other instructions on how to proceed."
     )
+
+
+# -------- DEFERRED TOOLS -----------------------------------------------------------
+def call_tool_unknown(name: str, search_tool: str) -> str:
+    return f"No tool named {name!r}. Find it with {search_tool} first."
+
+
+def call_tool_loaded(name: str) -> str:
+    return f"{name} is already loaded: call it directly, not through call_tool."
+
+
+
+QUESTION_NOT_ANSWERED = (
+    "The user did not answer this question. Do not take this as permission. "
+    "Ask it again only if you still need the answer."
+)
+
+
+TURN_INTERRUPTED = (
+    "The user interrupted this turn. Anything not reported above did not "
+    "finish; wait for what they say next."
+)
 
 
 # -------- COMPLETION GATE (the framework's own) --------------------------------------
@@ -112,8 +134,8 @@ def repeated_calls(listing: str) -> str:
     )
 
 
-def budget_running_out(remaining: int, pct_used: int, can_ask_user: bool) -> str:
-    ask = " Call ask_user to ask them whether to continue," if can_ask_user else " Tell the user"
+def budget_running_out(remaining: int, pct_used: int, ask_tool: str | None) -> str:
+    ask = f" Call {ask_tool} to ask them whether to continue," if ask_tool else " Tell the user"
     return (
         f"You have {remaining} reasoning iteration(s) left (~{pct_used}% of this "
         f"turn's budget used).{ask} or give them a summary of what you have so "
@@ -128,12 +150,12 @@ def empty_response(tool_names: str) -> str:
     )
 
 
-def plan_unfinished(listing: str, can_ask_user: bool) -> str:
+def plan_unfinished(listing: str, ask_tool: str | None) -> str:
     ask = (
         " If you are blocked because you need information or a decision from "
-        "the user, do NOT repeat the request in plain text — call ask_user to "
+        f"the user, do NOT repeat the request in plain text — call {ask_tool} to "
         "ask them right now."
-        if can_ask_user else ""
+        if ask_tool else ""
     )
     return (
         "Do not stop yet — your plan still has unfinished steps: "

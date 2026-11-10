@@ -1,4 +1,5 @@
-"""Token counting shared by messages, compaction and telemetry.
+"""The one tokenizer: token counting shared by messages, prompts, compaction,
+tools and the CLI.
 
 Depends on messages only for typing: ``core.messages`` imports this module
 (``CoreMessage.with_token_count``), so a runtime import back would cycle.
@@ -15,10 +16,10 @@ from functools import lru_cache
 import tiktoken
 from pydantic import BaseModel, Field, PrivateAttr
 
-from ...config import setting
+from ..config import setting
 
 if t.TYPE_CHECKING:
-    from ..messages import CoreMessage
+    from .messages import CoreMessage
 
 
 logger = logging.getLogger(__name__)

@@ -36,7 +36,9 @@ class _DefaultEmbedding:
         return "DEFAULT_EMBEDDING"
 
 
-DEFAULT_EMBEDDING = _DefaultEmbedding()
+# Typed as CoreEmbedding so `embedding: CoreEmbedding | None = DEFAULT_EMBEDDING`
+# type-checks; callers only ever compare it with `is`.
+DEFAULT_EMBEDDING = t.cast("CoreEmbedding", _DefaultEmbedding())
 
 
 class CoreEmbedding(ComponentBase[BaseModel], ABC):

@@ -149,9 +149,8 @@ class AgentResponse(BaseModel):
 
     @property
     def pending_questions(self) -> list[ToolCallRecord]:
-        """Records in ``INPUT_NEEDED`` — each carries ``input_question`` /
-        ``input_options``; answer via
-        ``context.tool_state.apply_user_answer(record.id, answer)``."""
+        """Records in ``INPUT_NEEDED``; answer via
+        ``context.tool_state.provide_result(record.id, result)``."""
         if self.context is None:
             return []
         return self.context.tool_state.pending_user_input

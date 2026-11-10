@@ -2,13 +2,13 @@
 limits and notes. Kept here so _toolset.py holds only the logic."""
 
 # -------- NAMES -----------------------------------------------------------
-READ_FILE = "ReadFile"
-WRITE_FILE = "WriteFile"
-EDIT_FILE = "EditFile"
-DELETE_FILE = "DeleteFile"
-LIST_DIRECTORY = "ListDirectory"
-FIND_FILES = "FindFiles"
-SEARCH_FILE = "SearchFile"
+READ_FILE = "read_file"
+WRITE_FILE = "write_file"
+EDIT_FILE = "edit_file"
+DELETE_FILE = "delete_file"
+LIST_DIRECTORY = "list_directory"
+FIND_FILES = "find_files"
+SEARCH_FILE = "search_file"
 
 # -------- LIMITS -----------------------------------------------------------
 DEFAULT_READ_LINES = 2000
@@ -24,7 +24,7 @@ MAX_MATCH_CHARS = 500
 READ_FILE_DESCRIPTION = """Read a file from the user's workspace or skills.
 
 - Returns the lines numbered like `cat -n`: number, tab, then the line. The numbers
-  are not part of the file: never copy them into EditFile.
+  are not part of the file: never copy them into edit_file.
 - Reads up to 2000 lines from the start by default. For a long file, read the part
   you need with offset and limit.
 - Lines longer than 2000 characters are cut.
@@ -34,33 +34,33 @@ READ_FILE_DESCRIPTION = """Read a file from the user's workspace or skills.
 WRITE_FILE_DESCRIPTION = """Create a text file in the workspace, or replace one.
 
 - Creates the folders in the path that don't exist yet.
-- To replace an existing file, read it with ReadFile first; prefer EditFile to
+- To replace an existing file, read it with read_file first; prefer edit_file to
   change part of it.
 - Only text: a binary format (xlsx, docx, pdf, png) must be made by running code."""
 
 EDIT_FILE_DESCRIPTION = """Replace exact text in a workspace file.
 
-- Read the file with ReadFile first.
+- Read the file with read_file first.
 - old_string must match the file exactly, with its whitespace and indentation, and
-  without the line numbers ReadFile shows.
+  without the line numbers read_file shows.
 - old_string must appear once: add surrounding lines to make it unique, or set
   replace_all to change every occurrence (for example, to rename something)."""
 
 DELETE_FILE_DESCRIPTION = """Delete a file from the workspace.
 
-- Read it with ReadFile first (for a binary file that returns only its size).
+- Read it with read_file first (for a binary file that returns only its size).
 - Only files: an empty folder disappears on its own."""
 
 LIST_DIRECTORY_DESCRIPTION = """List the files and folders in one folder, with their sizes.
 
-Use it to see what is in a folder. To find files anywhere by name use FindFiles;
-to find text inside files use SearchFile."""
+Use it to see what is in a folder. To find files anywhere by name use find_files;
+to find text inside files use search_file."""
 
 FIND_FILES_DESCRIPTION = """Find files by name with a glob pattern.
 
 - `*.pdf` or `**/*.pdf` finds every PDF; `reports/*.md` looks only in reports/.
 - A name without wildcards (`budget`) finds files whose name contains it.
-- Returns the paths, to use with ReadFile and the other tools."""
+- Returns the paths, to use with read_file and the other tools."""
 
 SEARCH_FILE_DESCRIPTION = """Search the text inside files with a regular expression.
 
@@ -96,4 +96,4 @@ LIMIT_RESULTS = "Most results to return."
 BINARY = "Binary file: only its size is shown. Open it with code (for example Python with bash)."
 EMPTY = "The file is empty."
 MORE_LINES = "The file has {total} lines: continue with offset={next}."
-NOT_READ = "Read {path} with ReadFile before changing it."
+NOT_READ = "Read {path} with read_file before changing it."

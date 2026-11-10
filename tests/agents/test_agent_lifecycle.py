@@ -7,16 +7,21 @@ import asyncio
 
 import pytest
 
-from max_ai.agents import Agent
+from max_ai.agents import Agent, Policy
+from max_ai.base.middleware import CoreMiddleware
+from max_ai.capabilities.tools.ask_user import AskUserTool
 from max_ai.capabilities.tools.function_as_tool import FunctionAsTool
 from max_ai.capabilities.workspace.local import LocalWorkspace
 from max_ai.core.event_type import ErrorEvent, ModelCallEvent, ModelResponseEvent
-from max_ai.core.messages import AssistantMessage, ToolCall, UserMessage
+from max_ai.core.harness import messages as harness
+from max_ai.core.messages import AssistantMessage, ToolCall, ToolMessage, UserMessage
 from max_ai.core.model.llm import ModelConfig
 from max_ai.core.termination import CancellationToken
+from max_ai.core.tool.dispatcher import ToolDispatcher
 from max_ai.types.agent_response import AgentResponse
 from max_ai.types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
 from max_ai.types.run_context import RunContext
+from max_ai.types.tool_call import ToolResult
 from max_ai.types.tools import ToolApprovalMode
 
 PAID: list[int] = []
@@ -64,10 +69,10 @@ def reset():
     PAID.clear()
 
 
-def agent(tmp_path, llm) -> Agent:
+def agent(tmp_path, llm, **options) -> Agent:
     tool = FunctionAsTool(pay, approval_mode=ToolApprovalMode.ASK_APPROVED)
     a = Agent(name="a", description="d", instructions="i", client=llm, toolset=[tool],
-              workspace=LocalWorkspace(root=tmp_path))
+              workspace=LocalWorkspace(root=tmp_path), **options)
     a.reasoning.max_connection_retries = 0
     return a
 
@@ -139,13 +144,114 @@ async def test_only_approved_calls_run(tmp_path):
     assert denied is not None and denied.success is False
 
 
-async def test_a_question_to_the_user_pauses_the_run(tmp_path):
-    ask = AssistantMessage(source="llm", content="", tool_calls=[ToolCall(
-        id="q1", tool_name="ask_user",
+def ask_call() -> AssistantMessage:
+    return AssistantMessage(source="llm", content="", tool_calls=[ToolCall(
+        id="q1", tool_name=AskUserTool.TOOL_NAME,
         parameters={"questions": [{"question": "¿Cuánto pago?", "header": "Monto"}]})])
-    async with agent(tmp_path, ScriptedLLM(ask)) as a:
+
+
+class SpyMiddleware(CoreMiddleware):
+    def __init__(self) -> None:
+        super().__init__()
+        self.requests: list[str] = []
+        self.responses: list[ToolResult] = []
+
+    async def on_tool_request(self, mw, request):
+        self.requests.append(request.record.id)
+
+    async def on_tool_response(self, mw, request, result):
+        self.responses.append(result)
+        return result
+
+
+async def test_a_question_to_the_user_pauses_the_run(tmp_path):
+    async with agent(tmp_path, ScriptedLLM(ask_call())) as a:
         response = await a.run("paga", run_context=RunContext(user_id="u"))
     assert response.finish_reason == "input_needed"
+
+
+async def test_an_answer_survives_a_restart_and_reaches_the_model_once(tmp_path):
+    spy = SpyMiddleware()
+    async with agent(tmp_path, ScriptedLLM(ask_call(), say("listo")), middlewares=[spy]) as a:
+        paused = await a.run("paga", run_context=RunContext(user_id="u"))
+        assert spy.requests == []  # the wait happens before the middleware
+
+        ctx = RunContext.model_validate(paused.context.model_dump(mode="json"))
+        record = ctx.tool_state.records["q1"]
+        ctx.tool_state.provide_result("q1", AskUserTool.answer(record, {"¿Cuánto pago?": "10"}))
+        ctx = RunContext.model_validate(ctx.model_dump(mode="json"))
+        done = await a.resume(ctx)
+
+    assert done.finish_reason == "stop"
+    assert spy.requests == ["q1"]
+    assert spy.responses[0].result == {"answers": {"¿Cuánto pago?": "10"}}
+    messages = [m for m in done.context.messages if isinstance(m, ToolMessage)]
+    assert len(messages) == 1 and "10" in str(messages[0].content)
+
+
+async def test_resuming_without_an_answer_stays_paused(tmp_path):
+    spy = SpyMiddleware()
+    async with agent(tmp_path, ScriptedLLM(ask_call()), middlewares=[spy]) as a:
+        paused = await a.run("paga", run_context=RunContext(user_id="u"))
+        again = await a.resume(paused.context)
+    assert again.finish_reason == "input_needed" and spy.requests == []
+    assert again.context.tool_state.records["q1"].is_awaiting_input
+
+
+async def test_a_new_message_closes_an_open_question_first(tmp_path):
+    ctx = RunContext(user_id="u")
+    async with agent(tmp_path, ScriptedLLM(ask_call(), say("ok"))) as a:
+        await a.run("paga", run_context=ctx)
+        done = await a.run("mejor otra cosa", run_context=ctx)
+    assert done.finish_reason == "stop"
+    kinds = [type(m) for m in done.context.messages]
+    assert kinds.index(ToolMessage) < len(kinds) - 1 - kinds[::-1].index(UserMessage)
+    closed = next(m for m in done.context.messages if isinstance(m, ToolMessage))
+    assert closed.success is False and closed.content == harness.QUESTION_NOT_ANSWERED
+
+
+async def test_a_message_in_the_inbox_is_read_instead_of_pausing(tmp_path):
+    ctx = RunContext(user_id="u")
+
+    class WritesMeanwhile(ScriptedLLM):
+        async def run(self, **kwargs):
+            result = await super().run(**kwargs)
+            if len(self.replies) == 1:
+                ctx.inbox.append("cambio de planes")
+            return result
+
+    async with agent(tmp_path, WritesMeanwhile(ask_call(), say("entendido"))) as a:
+        done = await a.run("paga", run_context=ctx)
+    assert done.finish_reason == "stop" and not done.needs_input
+    texts = [m for m in done.context.messages if isinstance(m, (ToolMessage, UserMessage))]
+    assert isinstance(texts[1], ToolMessage) and texts[2].content == "cambio de planes"
+
+
+async def test_an_open_approval_still_blocks_a_new_message(tmp_path):
+    ctx = RunContext(user_id="u")
+    async with agent(tmp_path, ScriptedLLM(pay_calls(10))) as a:
+        await a.run("paga", run_context=ctx)
+        with pytest.raises(ValueError, match="Resolve pending tool calls"):
+            await a.run("otra cosa", run_context=ctx)
+
+
+async def test_a_new_message_works_after_an_interrupted_approval(tmp_path):
+    ctx = RunContext(user_id="u")
+    async with agent(tmp_path, ScriptedLLM(pay_calls(10), say("ok"))) as a:
+        await a.run("paga", run_context=ctx)
+        ToolDispatcher.close_interrupted(ctx)
+        done = await a.run("mejor no", run_context=ctx)
+    assert done.finish_reason == "stop" and PAID == []
+    assert [m.role for m in done.context.messages] == ["user", "assistant", "tool", "user", "user", "assistant"]
+
+
+async def test_a_policy_can_deny_asking_without_looping(tmp_path):
+    policy = Policy(deny=[AskUserTool.TOOL_NAME])
+    llm = ScriptedLLM(ask_call())
+    async with agent(tmp_path, llm, policy=policy) as a:
+        response = await a.run("paga", run_context=RunContext(user_id="u"))
+    assert response.finish_reason == "tool_denied"
+    assert response.context.tool_state.records["q1"].result.success is False
 
 
 # -------- RESPONSE -----------------------------------------------------------

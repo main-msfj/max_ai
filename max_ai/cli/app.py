@@ -26,6 +26,7 @@ from textual.widgets import Button, DirectoryTree, OptionList, Static, TextArea
 
 from ..agents.agent import Agent
 from ..base.session_store import CoreSessionStore
+from ..capabilities.tools.ask_user import AskUserTool
 from ..core.compaction import client_max_output_tokens, live_message_threshold_tokens
 from ..core.event_type import (
     CompactionEvent,
@@ -44,6 +45,8 @@ from ..core.messages import HARNESS_SOURCE
 from ..core.model.session import SessionInfo
 from ..core.policy import Policy
 from ..core.termination.cancellation import CancellationToken
+from ..core.tokenizer import default_counter
+from ..core.tool.dispatcher import ToolDispatcher
 from ..types.agent_response import AgentResponse
 from ..types.run_context import RunContext
 from ..types.tool_call import ToolResult
@@ -101,7 +104,7 @@ PLACEHOLDER = 'Try "summarize this project"  ·  @file  ·  !cmd  ·  /help'
 FORM_PLACEHOLDER = "↑↓ ←→ enter · 1-9 to pick · or type your own answer"
 
 # Rendered as their own fold-able blocks instead of a generic ToolBlock.
-_ASK_USER = "ask_user"
+_ASK_USER = AskUserTool.TOOL_NAME
 _UPDATE_PLAN = "update_plan"
 
 # Harness events worth a line even outside verbose mode.
@@ -452,8 +455,8 @@ class MaxAIApp(App[None]):
             return
         if not self._busy or self._cancel is None:
             return
-        # Also while paused on a question/approval: the turn is cancelled
-        # and rolled back like any other interrupt.
+        # Also while paused on a question/approval: the turn stops and
+        # what it already did stays, like any other interrupt.
         self._cancel.cancel()
         if self._request_future is not None and not self._request_future.done():
             self._request_future.cancel()
@@ -796,7 +799,7 @@ class MaxAIApp(App[None]):
             self._thinking = block
             await self._mount(block)
         self._thinking.append(chunk)
-        self._turn_tokens += max(1, len(chunk) // 4)
+        self._turn_tokens += default_counter().count_text(chunk)
         self._follow()
 
     async def _write_assistant_chunk(self, chunk: str) -> None:
@@ -809,7 +812,7 @@ class MaxAIApp(App[None]):
             self._assistant = AssistantBlock()
             await self._mount(self._assistant)
         await self._assistant.write(chunk)
-        self._turn_tokens += max(1, len(chunk) // 4)
+        self._turn_tokens += default_counter().count_text(chunk)
         self._follow()
 
     async def _write_event(self, event: CoreEvent) -> None:
@@ -1021,27 +1024,22 @@ class MaxAIApp(App[None]):
         if questions:
             answers = await self._ask_form(questions)
             for record in response.pending_questions:
-                ctx.tool_state.apply_user_answer(record.id, answers[record.id])
+                ctx.tool_state.provide_result(
+                    record.id, AskUserTool.answer(record, answers[record.id]),
+                )
 
     def _questions(self, record) -> list[Question]:
-        """Every question a pending ask_user record holds. Labels and
-        descriptions come from the call's params when we saw them; the
-        record's option strings are what gets sent back either way."""
-        items = record.input_questions or [
-            {"question": record.input_question, "header": None, "options": record.input_options}
-        ]
-        raw_items = self._ask_params.get(record.id, {}).get("questions") or []
-        grouped = record.input_questions is not None and len(items) > 1
+        """Every question of a pending record, read from the call itself."""
         questions: list[Question] = []
-        for position, item in enumerate(items):
-            values = list(item.get("options") or [])
-            raw = raw_items[position].get("options") if position < len(raw_items) and isinstance(raw_items[position], dict) else None
-            if isinstance(raw, list) and len(raw) == len(values) and all(isinstance(o, dict) for o in raw):
-                options = [(str(o.get("label", v)), str(o.get("description", ""))) for o, v in zip(raw, values)]
-            else:
-                options = [(v.split(" — ", 1)[0], v.split(" — ", 1)[1] if " — " in v else "") for v in values]
-            text = str(item.get("question") or "Choose an answer")
-            questions.append(Question(record.id, text, options, values, item.get("header"), grouped))
+        for item in record.parameters["questions"]:
+            options = item.get("options") or []
+            questions.append(Question(
+                record.id, item["question"],
+                [(o["label"], o.get("description", "")) for o in options],
+                [o["label"] for o in options],
+                item.get("header"),
+                bool(options and item.get("multi_select")),
+            ))
         return questions
 
     # -------- SESSIONS -----------------------------------------------------------
@@ -1129,7 +1127,7 @@ class MaxAIApp(App[None]):
             )
             self._busy, self._cancel = True, CancellationToken()
             try:
-                session_id = (await self._ask_form([question])).get("resume", "").strip()
+                session_id = str((await self._ask_form([question]))["resume"][question.text]).strip()
             except asyncio.CancelledError:
                 # esc cancels our token; anything else (app exit) must propagate.
                 if self._cancel is None or not self._cancel.is_cancelled():
@@ -1162,9 +1160,7 @@ class MaxAIApp(App[None]):
     @work(exclusive=True, group="agent")
     async def _run_turn(self, task: str) -> None:
         self._busy = True
-        ctx = self._ensure_context()
-        # Interrupt discards the turn: roll the conversation back to here.
-        snapshot = ctx.model_copy(deep=True)
+        self._ensure_context()
         self._cancel = CancellationToken()
         try:
             # Messages sent after the loop's last look become the next task.
@@ -1175,14 +1171,13 @@ class MaxAIApp(App[None]):
         except asyncio.CancelledError:
             if self._cancel is None or not self._cancel.is_cancelled():
                 raise
-            self.context = snapshot
+            ToolDispatcher.close_interrupted(self.context)
             await self._finish_assistant()
             for block in self._tools.values():
                 block.complete(None)
             self._tools.clear()
             await self._write_system(
-                "Interrupted · turn discarded from the conversation "
-                "(side effects that already ran are not undone).",
+                "Interrupted · what ran so far stays in the conversation.",
                 style=WARNING,
             )
         except Exception as error:
@@ -1276,7 +1271,7 @@ class MaxAIApp(App[None]):
                 await self._write_event(item)
         return response
 
-    async def _ask_form(self, questions: list[Question]) -> dict[str, str]:
+    async def _ask_form(self, questions: list[Question]) -> dict[str, dict[str, str | list[str]]]:
         """All pending questions in one form; the prompt drives it (↑↓ ←→
         enter) and still takes a free-text answer."""
         await self._finish_assistant()

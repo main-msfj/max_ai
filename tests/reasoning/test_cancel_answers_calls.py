@@ -16,14 +16,14 @@ RAN: list[str] = []
 
 
 async def slow() -> str:
-    """Slow work."""
+    """Do some slow work for a while."""
     RAN.append("slow")
     await asyncio.sleep(5)
     return "slow done"
 
 
 async def quick() -> str:
-    """Quick read."""
+    """Do a quick read of something."""
     RAN.append("quick")
     return "quick done"
 

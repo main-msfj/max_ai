@@ -19,7 +19,7 @@ class CutOffLLM:
         self.config = ModelConfig()
         self.generation_options = {"max_tokens": 1500}
         self.seen: list[str] = []
-        broken = ToolCall(id="c1", tool_name="WriteFile", parameters={
+        broken = ToolCall(id="c1", tool_name="write_file", parameters={
             "raw_error_content": '{"file_path": "snake.html", "content": "<html>', "parsing_error": True})
         self.replies = [
             (AssistantMessage(source="llm", content="", tool_calls=[broken]), "length")

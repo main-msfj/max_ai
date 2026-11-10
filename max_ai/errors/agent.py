@@ -45,7 +45,7 @@ class AgentError(Exception):
         return cls(
             f"Agent {agent_name!r} cannot resume: {len(tool_call_ids)} question(s) "
             f"still awaiting a user answer ({tool_call_ids}). Apply answers via "
-            "ctx.tool_state.apply_user_answer() before calling resume()."
+            "ctx.tool_state.provide_result() before calling resume()."
         )
 
     @classmethod

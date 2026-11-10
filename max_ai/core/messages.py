@@ -33,9 +33,7 @@ from pydantic import (
 )
 
 from .ids import short_id
-
-if t.TYPE_CHECKING:
-    from .compaction.token_counter import TokenCounter
+from .tokenizer import TokenCounter, default_counter
 
 # Source of messages the harness itself writes (gate rejections, limits),
 # as opposed to the user or the model.
@@ -197,9 +195,6 @@ class CoreMessage(BaseModel):
         """
         if self.token_count > 0:
             return self
-        # Imported here: token_counter's package imports this module.
-        from .compaction.token_counter import default_counter
-
         count = (counter or default_counter()).count_message(self)
         return self.model_copy(update={"token_count": count})
 
