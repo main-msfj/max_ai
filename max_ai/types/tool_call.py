@@ -167,6 +167,9 @@ class ToolCallRecord(BaseModel):
     id: str = Field(default_factory=short_id)
     tool_name: str = Field(...)
     parameters: dict[str, t.Any] = Field(default_factory=dict)
+    # The tool the model called when it differs from the one that runs
+    # (call_tool); the answer goes back under this name.
+    called_as: str | None = Field(default=None)
 
     # -------- CLASSIFICATION -----------------------------------------------------------
     tool_type: t.Literal["mcp", "custom", "skill"] = Field(default="custom")

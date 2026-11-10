@@ -157,6 +157,10 @@ class CoreTool(ComponentBase[BaseModel], ABC):
     # The result comes from a person: the turn pauses until they answer.
     waits_for_user: t.ClassVar[bool] = False
 
+    def unwrap(self, parameters: dict[str, t.Any]) -> tuple[str, dict[str, t.Any]] | None:
+        """The tool and arguments this call really runs; None runs this tool."""
+        return None
+
     def permission_subjects(self, parameters: dict[str, t.Any]) -> tuple[list[str], bool]:
         """What ``Tool(pattern)`` rules match against, and whether that is all
         of the call. By default, the ``policy_subject`` parameter if set."""

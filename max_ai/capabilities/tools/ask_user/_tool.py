@@ -66,10 +66,15 @@ class AskUserTool(CoreTool):
     @staticmethod
     def answer(record: ToolCallRecord, answers: dict[str, str | list[str]]) -> ToolResult:
         """A person's answers, as this call's result: one per question."""
-        return ToolResult.success_result(record.id, {"answers": {
-            q["question"]: answers.get(q["question"], harness.QUESTION_NOT_ANSWERED)
-            for q in record.parameters["questions"]
-        }})
+        return ToolResult.success_result(
+            record.id,
+            {
+                "answers": {
+                    q["question"]: answers.get(q["question"], harness.QUESTION_NOT_ANSWERED)
+                    for q in record.parameters["questions"]
+                }
+            },
+        )
 
     @property
     def parameters(self) -> dict[str, t.Any]:
@@ -149,5 +154,3 @@ class AskUserTool(CoreTool):
         return ToolResult.execution_error(
             tool_request.id, f"{self.TOOL_NAME} is answered by a person"
         )
-
-

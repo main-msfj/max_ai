@@ -217,10 +217,16 @@ class ReactLoop(BaseReasoning):
         """
         records: list[ToolCallRecord] = []
         for tc in tool_calls:
+            # call_tool(tool, arguments) becomes the real call here, once:
+            # Policy, approval, middleware and tracing only see the real tool.
+            tool = self.dispatcher.registry.get(tc.tool_name)
+            target = tool.unwrap(tc.parameters) if tool is not None else None
+            name, parameters = target or (tc.tool_name, tc.parameters)
             record = ToolCallRecord(
                 id=tc.id,
-                tool_name=tc.tool_name,
-                parameters=tc.parameters,
+                tool_name=name,
+                parameters=parameters,
+                called_as=tc.tool_name if target else None,
                 session_id=ctx.session_id,
             )
             ctx.tool_state.add(record)

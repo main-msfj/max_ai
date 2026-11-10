@@ -54,6 +54,16 @@ def tool_denied(denied: t.Sequence[ToolCallRecord], ask_tool: str) -> str:
     )
 
 
+# -------- DEFERRED TOOLS -----------------------------------------------------------
+def call_tool_unknown(name: str, search_tool: str) -> str:
+    return f"No tool named {name!r}. Find it with {search_tool} first."
+
+
+def call_tool_loaded(name: str) -> str:
+    return f"{name} is already loaded: call it directly, not through call_tool."
+
+
+
 QUESTION_NOT_ANSWERED = (
     "The user did not answer this question. Do not take this as permission. "
     "Ask it again only if you still need the answer."
