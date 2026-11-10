@@ -19,7 +19,7 @@ from ....types.tools import ToolApprovalMode
 class AskUserTool(CoreTool):
     """Native framework tool — pause the run to ask the user questions."""
 
-    TOOL_NAME: t.ClassVar[str] = "AskUser"
+    TOOL_NAME: t.ClassVar[str] = "ask_user"
     waits_for_user = True
     _OPTION_SCHEMA: t.ClassVar[dict[str, t.Any]] = {
         "type": "array",

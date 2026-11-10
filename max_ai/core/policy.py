@@ -3,7 +3,7 @@
 Rules look like Claude Code permissions: ``Tool`` or ``Tool(pattern)``. The
 tool name may be a glob (``acme_hr_*``) and is not case sensitive. What a
 pattern matches depends on the tool: bash matches each command in the line
-(``Bash(git push:*)``), the file tools match the path (``WriteFile(secrets/**)``),
+(``bash(git push:*)``), the file tools match the path (``write_file(secrets/**)``),
 any tool can name a parameter with ``policy_subject``.
 
 deny wins over ask, ask over allow; with no rule the tool's own default
@@ -25,12 +25,12 @@ if t.TYPE_CHECKING:
 
 Verdict = t.Literal["allow", "ask", "deny"]
 
-DEFAULT_ALLOW = ["Bash(pwd)", "Bash(git status)"]
-DEFAULT_ASK = ["Bash(git push:*)"]
+DEFAULT_ALLOW = ["bash(pwd)", "bash(git status)"]
+DEFAULT_ASK = ["bash(git push:*)"]
 DEFAULT_DENY = [
-    "Bash(sudo:*)", "Bash(su:*)", "Bash(doas:*)", "Bash(shutdown:*)", "Bash(reboot:*)",
-    "Bash(halt:*)", "Bash(poweroff:*)", "Bash(mkfs:*)", "Bash(mount:*)", "Bash(umount:*)",
-    "Bash(rm -rf /*)", "Bash(git push --force:*)",
+    "bash(sudo:*)", "bash(su:*)", "bash(doas:*)", "bash(shutdown:*)", "bash(reboot:*)",
+    "bash(halt:*)", "bash(poweroff:*)", "bash(mkfs:*)", "bash(mount:*)", "bash(umount:*)",
+    "bash(rm -rf /*)", "bash(git push --force:*)",
 ]
 ON_HOST = "commands on this machine always ask"
 
@@ -51,7 +51,7 @@ class Policy(BaseModel):
 
     allow: list[str] = Field(
         default_factory=lambda: list(DEFAULT_ALLOW),
-        description="Rules that run without asking, e.g. Bash(npm test:*) or ReadFile.",
+        description="Rules that run without asking, e.g. bash(npm test:*) or read_file.",
     )
     ask: list[str] = Field(
         default_factory=lambda: list(DEFAULT_ASK),
@@ -59,7 +59,7 @@ class Policy(BaseModel):
     )
     deny: list[str] = Field(
         default_factory=lambda: list(DEFAULT_DENY),
-        description="Rules that never run, e.g. Bash(sudo:*) or WriteFile(secrets/**).",
+        description="Rules that never run, e.g. bash(sudo:*) or write_file(secrets/**).",
     )
 
     @field_validator("allow", "ask", "deny")
@@ -98,7 +98,7 @@ class Policy(BaseModel):
         return _on_host(tool, Decision(default, None), isolated)
 
     def rules_for(self, tool: CoreTool, parameters: dict[str, t.Any]) -> list[str]:
-        """What "always allow" adds for this call: ``Bash(npm:*)`` for each
+        """What "always allow" adds for this call: ``bash(npm:*)`` for each
         command in the line, the bare tool name otherwise; [] when the call
         can't be read well enough to allow it again safely."""
         subjects, certain = tool.permission_subjects(parameters)
@@ -113,7 +113,7 @@ def _covering(
     rules: t.Sequence[str], tool: CoreTool, subjects: list[str], certain: bool
 ) -> list[str]:
     """The rules that allow every subject, one per subject; [] if any is
-    left out. A whole-tool rule (``Bash``) covers even what the tool
+    left out. A whole-tool rule (``bash``) covers even what the tool
     couldn't read."""
     found = [next((r for r in rules if _match(r, tool, s)), None) for s in subjects or [None]]
     if not all(found):

@@ -91,7 +91,7 @@ class BashTool(CoreRuntimeTool):
     environment variables do not (every call is a fresh shell). Every call
     stops after ``TOOL_TIMEOUT_SECONDS``.
 
-    Whether a command runs is the agent's Policy: rules like ``Bash(git push:*)``
+    Whether a command runs is the agent's Policy: rules like ``bash(git push:*)``
     match each command in the line (see ``permission_subjects``).
     """
 

@@ -84,9 +84,9 @@ mention it: carry on with the user's task.
   conversation. Skills live in skills/.
 - File tools default to the workspace. Pass only a short relative name
   such as report.md or documents/report.docx; do not repeat workspace or
-  user paths. FindFiles (by name) and SearchFile (by content) search the
+  user paths. find_files (by name) and search_file (by content) search the
   whole workspace and the skills.
-- Read a file with ReadFile before you edit, overwrite or delete it.
+- Read a file with read_file before you edit, overwrite or delete it.
 {% if can_run_commands != false %}
 - Execution tools receive WORKSPACE in their environment and start there.
   Do not invent host paths or access another user's workspace.

@@ -78,7 +78,7 @@ def _left_in_workspace(records: list[ToolCallRecord]) -> list[str]:
     """Workspace files this turn wrote that nothing deleted afterwards.
 
     Each bash result lists the files its command created, modified and
-    deleted; WriteFile and DeleteFile report their own path.
+    deleted; write_file and delete_file report their own path.
     """
     alive: set[str] = set()
     for record in records:
@@ -90,9 +90,9 @@ def _left_in_workspace(records: list[ToolCallRecord]) -> list[str]:
             files = result.result.get("files", {})
             alive.update(files.get("created", []), files.get("modified", []))
             alive.difference_update(files.get("deleted", []))
-        elif record.tool_name == "WriteFile":
+        elif record.tool_name == "write_file":
             alive.add(path)
-        elif record.tool_name == "DeleteFile":
+        elif record.tool_name == "delete_file":
             alive.discard(path)
     return sorted(alive)
 
@@ -117,7 +117,7 @@ class RuntimeCompletionGate(CompletionBase):
     the harness reports it even if the model stays silent.
 
     Intermediate files the turn left in the workspace (inside tmp/, temp/ or
-    scratch/, as the bash and WriteFile results report them) get the same
+    scratch/, as the bash and write_file results report them) get the same
     treatment: one nudge, then a note. The gate never deletes them.
     """
 

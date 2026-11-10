@@ -172,7 +172,7 @@ def test_tool_summaries_stay_on_one_short_line():
 
     script = "cat > plan.py << 'EOF'\n" + "x = 1\n" * 200 + "EOF"
     assert tool_summary("bash", {"command": script}) == "cat > plan.py << 'EOF' … (+201 lines)"
-    assert tool_summary("WriteFile", {"file_path": "a.py", "content": "x\n" * 300}) == "a.py"
+    assert tool_summary("write_file", {"file_path": "a.py", "content": "x\n" * 300}) == "a.py"
     assert len(tool_summary("bash", {"command": "echo " + "a" * 500})) == 100
 
 

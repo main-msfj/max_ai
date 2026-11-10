@@ -1,5 +1,5 @@
-"""User-scoped file tools, in the style of Claude Code: ReadFile, WriteFile,
-EditFile, DeleteFile, ListDirectory, FindFiles and SearchFile.
+"""User-scoped file tools, in the style of Claude Code: read_file, write_file,
+edit_file, delete_file, list_directory, find_files and search_file.
 
 The harness remembers what the model read (``RunContext.file_reads``): writing
 over, editing or deleting a file needs a read of its current version.
@@ -278,12 +278,12 @@ class FileSystemTools:
 
     @staticmethod
     def _search_root(context: ToolContext, path: str) -> str:
-        """Where FindFiles/SearchFile look: empty is the workspace and the skills."""
+        """Where find_files/search_file look: empty is the workspace and the skills."""
         return "" if path in ("", ".") else FileSystemTools._workspace_path(context, path)
 
     @staticmethod
     def _write_target(context: ToolContext, path: str) -> str:
-        """Resolve a WriteFile path to its full location (always in the workspace)."""
+        """Resolve a write_file path to its full location (always in the workspace)."""
         parts = FileSystemTools._as_given(context, UserFileSystem._visible_parts(path))
         return "/".join(("workspace", *parts))
 
@@ -377,7 +377,7 @@ class FileSystemTools:
 
 def _rows(lines: list[str], first: int) -> list[str]:
     """Lines numbered like ``cat -n``, as many as fit the tool-result budget:
-    ReadFile stops on a whole line instead of being cut by the dispatcher."""
+    read_file stops on a whole line instead of being cut by the dispatcher."""
     budget = setting.max_tool_result_chars - 1_000  # room for the path and the note
     rows: list[str] = []
     for number, line in enumerate(lines, start=first):
@@ -390,7 +390,7 @@ def _rows(lines: list[str], first: int) -> list[str]:
 
 
 def _cut(line: str) -> str:
-    """A line as ReadFile shows it: long ones end in ``…``."""
+    """A line as read_file shows it: long ones end in ``…``."""
     return line if len(line) <= c.MAX_LINE_CHARS else line[:c.MAX_LINE_CHARS] + "…"
 
 

@@ -395,7 +395,7 @@ class FileWrittenEvent(ToolEvent):
 
     EVENT_TYPE = "file_written"
     tool_call_id: str
-    operation: t.Literal["WriteFile", "EditFile"]
+    operation: t.Literal["write_file", "edit_file"]
     path: str
     root_dir: str
     content_hash: str
@@ -406,7 +406,7 @@ class FilesSearchedEvent(ToolEvent):
 
     EVENT_TYPE = "files_searched"
     tool_call_id: str
-    operation: t.Literal["FindFiles", "SearchFile"]
+    operation: t.Literal["find_files", "search_file"]
     path: str
     root_dir: str
     match_count: int

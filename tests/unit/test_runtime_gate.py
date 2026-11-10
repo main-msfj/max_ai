@@ -36,7 +36,7 @@ def test_files_left_in_tmp_are_nudged_once_then_noted():
 def test_files_deleted_later_in_the_turn_are_not_left():
     gate = RuntimeCompletionGate()
     by_rm = closing_after(bash(created=["tmp/a.py"]), bash(deleted=["tmp/a.py"]))
-    by_tool = closing_after(bash(created=["tmp/a.py"]), ("DeleteFile", {"path": "workspace/tmp/a.py"}))
+    by_tool = closing_after(bash(created=["tmp/a.py"]), ("delete_file", {"path": "workspace/tmp/a.py"}))
     assert gate.on_final_response(by_rm).status == "completed"
     assert gate.on_final_response(by_tool).status == "completed"
 
@@ -48,8 +48,8 @@ def test_deliverable_folders_are_not_intermediate():
 
 def test_files_written_with_write_file_count_too():
     gate = RuntimeCompletionGate()
-    written = closing_after(("WriteFile", {"path": "workspace/scratch/probe.py"}))
+    written = closing_after(("write_file", {"path": "workspace/scratch/probe.py"}))
     assert gate.on_final_response(written).status == "incomplete"
-    cleaned = closing_after(("WriteFile", {"path": "workspace/scratch/probe.py"}),
-                            ("DeleteFile", {"path": "workspace/scratch/probe.py"}))
+    cleaned = closing_after(("write_file", {"path": "workspace/scratch/probe.py"}),
+                            ("delete_file", {"path": "workspace/scratch/probe.py"}))
     assert gate.on_final_response(cleaned).status == "completed"

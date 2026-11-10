@@ -39,7 +39,7 @@ def output_cut_off(limit: int) -> str:
         "off; any tool call in it was incomplete and did not run. Every reply, "
         "including tool arguments, must fit in that limit. Do not retry it the "
         "same way: split the work into smaller steps (several smaller files, or "
-        "write a first part and extend it with EditFile), or answer more briefly."
+        "write a first part and extend it with edit_file), or answer more briefly."
     )
 
 

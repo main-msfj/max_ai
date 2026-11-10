@@ -18,8 +18,8 @@ from typing import Any
 
 _ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _RESERVED_ROOT_DIRS = {"tools", "skills", "artifacts", "workspace"}
-# Hidden from root listings (ListDirectory/FindFiles at the user root).
-# workspace stays visible so FindFiles/SearchFile keep descending into it.
+# Hidden from root listings (list_directory/find_files at the user root).
+# workspace stays visible so find_files/search_file keep descending into it.
 _HIDDEN_ROOT_DIRS = _RESERVED_ROOT_DIRS - {"skills", "workspace"}
 # Blocked from explicit path resolution too. skills/workspace stay
 # reachable by name; tools/artifacts are fully off-limits.
@@ -347,7 +347,7 @@ class UserFileSystem:
             # Text written into e.g. .xlsx is a broken file, not a spreadsheet.
             raise ValueError(
                 f"{parts[-1]} is a binary format: create it by running code "
-                "(for example a Python script with bash), not with WriteFile"
+                "(for example a Python script with bash), not with write_file"
             )
         return self._write(user_id, parts, self._text_bytes(content), expected)
 
@@ -440,7 +440,7 @@ class UserFileSystem:
             count = text.count(old_text)
             if count == 0:
                 raise ValueError(
-                    "old_string was not found. Copy it exactly from ReadFile, "
+                    "old_string was not found. Copy it exactly from read_file, "
                     "without the line numbers, and keep its whitespace."
                 )
             if count > 1 and not replace_all:

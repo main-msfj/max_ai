@@ -10,9 +10,9 @@ from max_ai.agents import Agent, Policy
 from max_ai.core.policy import DEFAULT_DENY
 
 agent = Agent(..., policy=Policy(
-    allow=["Bash(git status)", "Bash(npm test:*)"],
-    ask=["Bash(git push:*)"],
-    deny=[*DEFAULT_DENY, "Bash(curl:*)"],
+    allow=["bash(git status)", "bash(npm test:*)"],
+    ask=["bash(git push:*)"],
+    deny=[*DEFAULT_DENY, "bash(curl:*)"],
 ))
 ```
 
@@ -74,7 +74,7 @@ is inside the user's files), and returns the rest. Strings and limits are in
 The agent's `Policy` decides each call (see `max_ai/core/policy.py`): deny,
 then ask, then allow; with no rule, bash asks.
 
-- `Bash(pattern)` rules match each command in the line. Patterns match words,
+- `bash(pattern)` rules match each command in the line. Patterns match words,
   with shell globs inside each word. A trailing `:*` allows extra arguments:
   `git status` is exact, `git status:*` is not.
 - Every part of `&&`, `||`, `;`, newlines and pipes is checked: one denied
@@ -89,10 +89,10 @@ then ask, then allow; with no rule, bash asks.
   destructive or system commands (`sudo`, `mkfs`, `rm -rf /*`, ...).
 - Without a sandbox (`LocalExecutor`) the agent's allow rules still ask; only
   the user's own "always allow" in the session runs a command unasked. The
-  CLI's "always allow" adds `Bash(<first word>:*)` for each command in the
+  CLI's "always allow" adds `bash(<first word>:*)` for each command in the
   line, and nothing when the line can't be read safely.
 
 Dynamically built commands are not interpreted, and an allowed interpreter
-such as `Bash(python:*)` can run anything: rules are a guard rail, not a
+such as `bash(python:*)` can run anything: rules are a guard rail, not a
 sandbox. Use `DockerExecutor` or `ModalExecutor` outside local development.
 Calling `BashTool.execute` directly skips the dispatcher and its Policy.
