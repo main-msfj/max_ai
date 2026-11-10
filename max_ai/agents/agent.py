@@ -101,7 +101,7 @@ def _storable(component: Any, what: str) -> ComponentBase[Any]:
 class Agent(ComponentBase[AgentSpec]):
     """Connect a pluggable reasoning loop to workspace, skills and execution.
 
-    Supply CoreTool instances or decorated functions through toolset.
+    Supply tools through toolset: CoreTools, or functions made tools with @tool.
     The tool registry is managed internally by the agent.
 
     Memory, skills and knowledge are optional and only enabled when supplied.
@@ -134,7 +134,7 @@ class Agent(ComponentBase[AgentSpec]):
         client: CoreChatCompletionClient,
         *,
         # Most used first; the infrastructure (workspace, executor) has defaults.
-        toolset: Sequence[CoreTool | Callable[..., Any]] | None = None,
+        toolset: Sequence[CoreTool] | None = None,
         policy: Policy | None = None,
         mcp: Sequence[MCPServerConfig] | None = None,
         memory: CoreMemoryRegistry | None = None,
@@ -213,7 +213,7 @@ class Agent(ComponentBase[AgentSpec]):
 
     def _configure_tools(
         self,
-        toolset: Sequence[CoreTool | Callable[..., Any]] | None,
+        toolset: Sequence[CoreTool] | None,
     ) -> None:
         """User tools take precedence over built-in defaults."""
         # The developer's tools; built-ins are recreated, never stored.

@@ -18,8 +18,10 @@ from max_ai.capabilities.stacks import (
     SessionStateLayer,
     SkillsLayer,
 )
+from max_ai.capabilities.tools.decorator import tool
 from max_ai.capabilities.workspace.local import LocalWorkspace
 from max_ai.core.messages import AssistantMessage, ToolCall
+from max_ai.errors.tools import ToolRegistryError
 from max_ai.types.completions import ChatCompletionResult, Usage
 from max_ai.types.run_context import RunContext
 
@@ -165,6 +167,6 @@ def test_duplicate_capability_tool_fails(tmp_path):
     def get_context():
         """Return some unrelated context."""
         return "unrelated"
-    with pytest.raises(ValueError, match="duplicate tool name"):
-        make_agent(tmp_path, RecordingClient(), toolset=[get_context],
+    with pytest.raises(ToolRegistryError, match="Duplicate tool name"):
+        make_agent(tmp_path, RecordingClient(), toolset=[tool(get_context)],
                    memory=LocalMemoryRegistry("u", "s", tmp_path))

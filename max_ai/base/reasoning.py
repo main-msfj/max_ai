@@ -481,7 +481,7 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
         skill registry that mutates the catalog after ``prepare()`` is
         reflected in subsequent calls.
         """
-        return self.dispatcher.registry.loaded()
+        return self.dispatcher.registry.loaded_tools()
 
     @property
     def tool_catalog(self) -> dict[str, CoreTool]:

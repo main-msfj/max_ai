@@ -91,14 +91,14 @@ class SearchToolsTool(CoreTool):
             ]
         }
         if unknown or not found:
-            available = ", ".join(tool.name for tool in self._catalog.deferred()) or "none"
+            available = ", ".join(tool.name for tool in self._catalog.deferred_tools()) or "none"
             missed = f"No tool named {', '.join(unknown)}. " if unknown else ""
             payload["hint"] = f"{missed}Tools you can load: {available}."
         return ToolResult.success_result(tool_request.id, payload)
 
     async def search(self, query: str) -> list[CoreTool]:
         """The best ``LIMIT`` deferred tools for ``query``, best first."""
-        tools = self._catalog.deferred()
+        tools = self._catalog.deferred_tools()
         if not tools:
             return []
 

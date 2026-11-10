@@ -10,6 +10,7 @@ from max_ai.capabilities.workspace.local import LocalWorkspace
 from max_ai.core.messages import AssistantMessage, ToolCall
 from max_ai.core.model.llm import ModelConfig
 from max_ai.core.tool.registry import ToolRegistry
+from max_ai.errors.tools import ToolRegistryError
 from max_ai.types.completions import ChatCompletionResult, Usage
 from max_ai.types.run_context import RunContext
 
@@ -69,9 +70,8 @@ def reset():
 
 def test_the_registry_splits_loaded_and_deferred():
     registry = ToolRegistry([tool(hello), tool(weather, deferred=True)])
-    assert [t.name for t in registry.loaded()] == ["hello"]
-    assert [t.name for t in registry.deferred()] == ["weather"]
-    assert [d.name for d in registry.definitions()] == ["hello"]
+    assert [t.name for t in registry.loaded_tools()] == ["hello"]
+    assert [t.name for t in registry.deferred_tools()] == ["weather"]
     assert registry.get("weather") is not None
 
 
@@ -91,3 +91,12 @@ async def test_a_deferred_tool_called_by_name_still_runs(tmp_path):
     async with agent(tmp_path, RecordingLLM(call, say("listo"))) as a:
         done = await a.run("¿clima?", run_context=RunContext(user_id="u"))
     assert done.finish_reason == "stop" and WEATHER == ["Lima"]
+
+
+def test_the_registry_refuses_duplicates_and_non_tools():
+    registry = ToolRegistry([tool(hello)])
+    with pytest.raises(ToolRegistryError, match="Duplicate tool name: 'hello'") as duplicate:
+        registry.register(tool(hello))
+    with pytest.raises(ToolRegistryError, match="got int") as wrong:
+        registry.register(42)  # type: ignore[arg-type]
+    assert (duplicate.value.kind, wrong.value.kind) == ("duplicate_name", "not_a_tool")

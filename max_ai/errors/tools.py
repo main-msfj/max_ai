@@ -9,17 +9,17 @@ class ToolRetry(Exception):
         super().__init__(message)
 
 
-class BaseToolError(Exception):
-    """Raised for invalid tool instances."""
+class ToolRegistryError(Exception):
+    """Raised when a tool cannot be registered."""
 
-    def __init__(self, tool: t.Any):
-        super().__init__(
-            f"Invalid tool type: {type(tool)}. Must be BaseTool or @tool callable."
-        )
+    def __init__(self, message: str, kind: str = "generic") -> None:
+        super().__init__(message)
+        self.kind = kind
 
+    @classmethod
+    def not_a_tool(cls, value: t.Any) -> "ToolRegistryError":
+        return cls(f"Expected a CoreTool, got {type(value).__name__}; wrap functions with @tool", "not_a_tool")
 
-class BaseToolDuplicateError(Exception):
-    """Raised when duplicate tool names are detected."""
-
-    def __init__(self, names: t.Set[str]):
-        super().__init__(f"Duplicate tool names: {', '.join(names)}")
+    @classmethod
+    def duplicate_name(cls, name: str) -> "ToolRegistryError":
+        return cls(f"Duplicate tool name: {name!r}", "duplicate_name")
