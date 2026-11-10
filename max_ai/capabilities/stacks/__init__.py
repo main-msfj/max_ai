@@ -7,6 +7,7 @@ from .rendering_layer import RenderingLayer
 from .session_state_layer import SessionStateLayer
 from .skills_layer import SkillsLayer
 from .task_analysis_layer import TaskAnalysisLayer
+from .tools_layer import ToolsLayer
 
 __all__ = [
     "CoreLayer",
@@ -17,4 +18,5 @@ __all__ = [
     "SessionStateLayer",
     "TaskAnalysisLayer",
     "SkillsLayer",
+    "ToolsLayer",
 ]

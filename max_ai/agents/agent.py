@@ -41,12 +41,15 @@ from ..capabilities.stacks import (
     SessionStateLayer,
     SkillsLayer,
     TaskAnalysisLayer,
+    ToolsLayer,
 )
 from ..capabilities.stacks.agent_policy_layer import AgentPolicyLayer
 from ..capabilities.tools.ask_user import AskUserTool
 from ..capabilities.tools.bash import BashTool
+from ..capabilities.tools.call_tool import CallToolTool
 from ..capabilities.tools.file_system import FileSystem
 from ..capabilities.tools.plan import AgentUpdatePlanTool
+from ..capabilities.tools.search_tool import SearchToolsTool
 from ..capabilities.workspace.local import LocalWorkspace
 from ..config import setting
 from ..core.environment.manager import EnvironmentManager
@@ -221,6 +224,7 @@ class Agent(ComponentBase[AgentSpec]):
         self._registry = ToolRegistry(self.toolset)
         self._register_filesystem_tools()
         self._register_control_tools()
+        self._register_deferred_access()
 
     def _register_filesystem_tools(self) -> None:
         """Filesystem tools access the persistent workspace on the host."""
@@ -243,6 +247,18 @@ class Agent(ComponentBase[AgentSpec]):
             return
         if self._registry.get("bash") is None:
             self._registry.register(BashTool())
+
+    def _register_deferred_access(self) -> None:
+        """search_tools and call_tool reach the deferred tools; without
+        any, they are left out."""
+        if not self._registry.deferred_tools():
+            return
+        for name, build in (
+            (SearchToolsTool.TOOL_NAME, SearchToolsTool),
+            (CallToolTool.TOOL_NAME, CallToolTool),
+        ):
+            if self._registry.get(name) is None:
+                self._registry.register(build(self._registry))
 
     def _configure_capabilities(
         self,
@@ -310,6 +326,7 @@ class Agent(ComponentBase[AgentSpec]):
             AgentPolicyLayer(),
             TaskAnalysisLayer(),
             RenderingLayer(),
+            ToolsLayer(),
         ]
         if self.skills is not None:
             layers.append(SkillsLayer())
@@ -423,6 +440,14 @@ class Agent(ComponentBase[AgentSpec]):
             "instructions": self.instructions,
             "current_date": datetime.now(UTC).date().isoformat(),
             "can_run_commands": self.executor.runs_commands,
+            # Only the first line: MCP descriptions can be long; search_tools
+            # returns the whole description.
+            "deferred_tools": [
+                {"name": tool.name, "description": tool.description.strip().split("\n")[0]}
+                for tool in self._registry.deferred_tools()
+            ],
+            "search_tool": SearchToolsTool.TOOL_NAME,
+            "call_tool": CallToolTool.TOOL_NAME,
         }
         if self._environment:
             variables["execution_environment"] = self._environment
@@ -492,6 +517,7 @@ class Agent(ComponentBase[AgentSpec]):
                     if self._registry.get(tool.name) is not None:
                         self._registry.unregister(tool.name)
                     self._registry.register(tool)
+            self._register_deferred_access()
 
     async def _drive_connected(
         self,

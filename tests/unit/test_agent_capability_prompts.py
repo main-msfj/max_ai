@@ -17,6 +17,7 @@ from max_ai.capabilities.stacks import (
     MemoryLayer,
     SessionStateLayer,
     SkillsLayer,
+    ToolsLayer,
 )
 from max_ai.capabilities.tools.decorator import tool
 from max_ai.capabilities.workspace.local import LocalWorkspace
@@ -60,9 +61,14 @@ async def test_no_capabilities(tmp_path):
         await agent.run("hello")
         assert agent.skills is None
         names = {type(layer).__name__ for layer in client.prompts[0].stack}
-        assert names == {"AgentPolicyLayer", "TaskAnalysisLayer", "RenderingLayer", "SessionStateLayer"}
+        assert names == {
+            "AgentPolicyLayer", "TaskAnalysisLayer", "RenderingLayer", "ToolsLayer",
+            "SessionStateLayer",
+        }
         assert client.prompts[0].rendered_layers[SessionStateLayer] == ""  # empty until needed
-        assert "get_context" not in {tool.name for tool in agent._registry.all_tools()}
+        assert client.prompts[0].rendered_layers[ToolsLayer] == ""  # no deferred tools
+        tool_names = {tool.name for tool in agent._registry.all_tools()}
+        assert not tool_names & {"get_context", "search_tools", "call_tool"}
 
 
 async def policy_prompt(agent) -> str:

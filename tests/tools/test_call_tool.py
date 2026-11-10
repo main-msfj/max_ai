@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 
 from max_ai.agents import Agent, Policy
-from max_ai.capabilities.tools.call_tool import CallToolTool
+from max_ai.capabilities.stacks import ToolsLayer
 from max_ai.capabilities.tools.decorator import tool
 from max_ai.capabilities.workspace.local import LocalWorkspace
 from max_ai.core.harness import messages as harness
@@ -58,7 +58,7 @@ def say(text: str) -> AssistantMessage:
 
 
 def agent(tmp_path, *replies, policy: Policy | None = None) -> Agent:
-    a = Agent(
+    return Agent(
         name="a",
         description="d",
         instructions="i",
@@ -67,8 +67,6 @@ def agent(tmp_path, *replies, policy: Policy | None = None) -> Agent:
         policy=policy,
         workspace=LocalWorkspace(root=tmp_path),
     )
-    a._registry.register(CallToolTool(a._registry))
-    return a
 
 
 async def run(tmp_path, *replies, policy: Policy | None = None) -> RunContext:
@@ -116,7 +114,8 @@ async def test_arguments_sent_as_a_json_string_work(tmp_path):
     ("parameters", "expected"),
     [
         ({"tool": "hello", "arguments": {"name": "x"}}, harness.call_tool_loaded("hello")),
-        ({"tool": "nope"}, harness.call_tool_unknown("nope", "search_tools")),
+        ({"tool": "nope", "arguments": {}}, harness.call_tool_unknown("nope", "search_tools")),
+        ({"tool": "weather"}, "'arguments' is a required property"),
         ({"tool": "weather", "arguments": "not json"}, "is not of type 'object'"),
     ],
 )
@@ -124,3 +123,12 @@ async def test_a_wrong_call_tells_the_model_what_to_fix(tmp_path, parameters, ex
     ctx = await run(tmp_path, call(**parameters), say("ok"))
     assert ctx.tool_state.records["c"].tool_name == "call_tool"
     assert expected in answer(ctx).content and WEATHER == []
+
+
+async def test_the_prompt_lists_deferred_tools_and_the_model_gets_only_loaded_ones(tmp_path):
+    a = agent(tmp_path)
+    prompt = (await a._prompts(RunContext(user_id="u"))).rendered_layers[ToolsLayer]
+    assert "- `weather`: Current forecast for a city." in prompt
+    assert "`hello`" not in prompt
+    loaded = {tool.name for tool in a._registry.loaded_tools()}
+    assert {"hello", "search_tools", "call_tool"} <= loaded and "weather" not in loaded

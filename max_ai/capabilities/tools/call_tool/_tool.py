@@ -43,7 +43,7 @@ class CallToolTool(CoreTool):
                 "tool": {"type": "string", "description": "Name of the tool to run."},
                 "arguments": {"type": "object", "description": "The tool's parameters."},
             },
-            "required": ["tool"],
+            "required": ["tool", "arguments"],
         }
 
     def unwrap(self, parameters: dict[str, t.Any]) -> tuple[str, dict[str, t.Any]] | None:
@@ -73,7 +73,7 @@ class CallToolTool(CoreTool):
     @staticmethod
     def _arguments(parameters: dict[str, t.Any]) -> dict[str, t.Any] | None:
         # Some models send the arguments as a JSON string.
-        arguments = parameters.get("arguments", {})
+        arguments = parameters.get("arguments")
         if isinstance(arguments, str):
             try:
                 arguments = json.loads(arguments or "{}")

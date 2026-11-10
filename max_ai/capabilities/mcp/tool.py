@@ -53,7 +53,7 @@ class MCPTool(CoreTool):
         version: str = "1.0.0",
         approval_mode: ToolApprovalMode | str = ToolApprovalMode.ASK_APPROVED,
         read_only: bool = False,
-        deferred: bool = False,
+        deferred: bool = True,
     ) -> None:
         self.mcp_tool_name = mcp_tool_name
         self.client_manager = client_manager
@@ -188,7 +188,7 @@ class MCPResourceTool(CoreTool):
         available_resources: list[t.Any] | None = None,
         resource_templates: list[t.Any] | None = None,
         approval_mode: ToolApprovalMode | str = ToolApprovalMode.ASK_APPROVED,
-        deferred: bool = False,
+        deferred: bool = True,
     ) -> None:
         self.client_manager = client_manager
         self.server_id = server_id

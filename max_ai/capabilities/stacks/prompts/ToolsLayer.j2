@@ -1,0 +1,33 @@
+{% if deferred_tools %}
+<DEFERRED_TOOLS>
+<purpose>
+Besides the tools you can call directly, the tools below can only be run
+through `{{ call_tool }}`. Learn their parameters with `{{ search_tool }}`,
+then run them with `{{ call_tool }}`.
+</purpose>
+
+<tools_through_call_tool>
+{% for tool in deferred_tools %}
+- `{{ tool.name }}`: {{ tool.description }}
+{% endfor %}
+</tools_through_call_tool>
+
+<workflow>
+1. Pick the tool from the list above that fits the task.
+2. Call `{{ search_tool }}` with its exact name in `names` (several at
+   once if you need more than one). When unsure which one fits, pass a
+   `query` describing what you need instead. It returns each tool's
+   parameters.
+3. Call `{{ call_tool }}` with `tool` set to the exact name and
+   `arguments` set to an object that matches those parameters.
+</workflow>
+
+<rules>
+- Learn a tool's parameters with `{{ search_tool }}` before its first
+  `{{ call_tool }}`; never guess them.
+- Tools you already have are called directly, never through `{{ call_tool }}`.
+- If `{{ call_tool }}` returns an error, fix the call as the message says
+  and try again.
+</rules>
+</DEFERRED_TOOLS>
+{% endif %}

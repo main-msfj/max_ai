@@ -18,10 +18,10 @@ from max_ai.capabilities.workspace import MinIOWorkspace
 from max_ai.cli import run_cli
 from max_ai.types.tools import ToolApprovalMode
 
-# Free OpenRouter models, with fallbacks when one is busy.
+# Cheap paid OpenRouter models (free ones hang), with fallbacks.
 _client: dict[str, t.Any] = {
-    "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
-    "fallback_models": ["nvidia/nemotron-3.5-lightning:free", "google/gemma-4-31b-it:free"],
+    "model": "deepseek/deepseek-v4-flash",
+    "fallback_models": ["z-ai/glm-5.3-flash", "qwen/qwen3.7-flash"],
     "reasoning": {"effort": "low"},
     "app_name": "travel_agent",
 }
