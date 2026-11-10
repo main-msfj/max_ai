@@ -28,7 +28,7 @@ class AgentUpdatePlanTool(CoreTool):
         super().__init__(
             name=self.TOOL_NAME,
             description=(
-                "Create or update your todo list / execution plan, shown "
+                "Create or update your plan, shown "
                 "live to the user. For ANY multi-step task: call this first "
                 "with the full list of steps (first step 'active', rest "
                 "'pending'), then keep it current as you progress — you can "

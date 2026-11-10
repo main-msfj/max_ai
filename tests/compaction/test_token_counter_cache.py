@@ -6,9 +6,9 @@ import gc
 
 import pytest
 
-from max_ai.core.compaction import token_counter as module
-from max_ai.core.compaction.token_counter import TokenCounter
+from max_ai.core import tokenizer as module
 from max_ai.core.messages import AssistantMessage, ToolCall, UserMessage
+from max_ai.core.tokenizer import TokenCounter
 
 
 class CountingEncoding:

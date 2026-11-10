@@ -10,7 +10,7 @@ from ..messages import (
     UserMessage,
 )
 from ..model.compaction import MessageGroup
-from .token_counter import TokenCounter
+from ..tokenizer import TokenCounter
 
 
 def group_atomic_messages(

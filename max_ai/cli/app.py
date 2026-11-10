@@ -45,6 +45,7 @@ from ..core.messages import HARNESS_SOURCE
 from ..core.model.session import SessionInfo
 from ..core.policy import Policy
 from ..core.termination.cancellation import CancellationToken
+from ..core.tokenizer import default_counter
 from ..core.tool.dispatcher import ToolDispatcher
 from ..types.agent_response import AgentResponse
 from ..types.run_context import RunContext
@@ -798,7 +799,7 @@ class MaxAIApp(App[None]):
             self._thinking = block
             await self._mount(block)
         self._thinking.append(chunk)
-        self._turn_tokens += max(1, len(chunk) // 4)
+        self._turn_tokens += default_counter().count_text(chunk)
         self._follow()
 
     async def _write_assistant_chunk(self, chunk: str) -> None:
@@ -811,7 +812,7 @@ class MaxAIApp(App[None]):
             self._assistant = AssistantBlock()
             await self._mount(self._assistant)
         await self._assistant.write(chunk)
-        self._turn_tokens += max(1, len(chunk) // 4)
+        self._turn_tokens += default_counter().count_text(chunk)
         self._follow()
 
     async def _write_event(self, event: CoreEvent) -> None:

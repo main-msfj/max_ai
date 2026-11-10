@@ -53,6 +53,7 @@ exclude = [
 ]
 
 [tool.ruff]
+line-length = 100
 force-exclude = true
 extend-exclude = ["website"]
 

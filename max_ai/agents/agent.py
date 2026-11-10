@@ -49,7 +49,6 @@ from ..capabilities.tools.file_system import FileSystem
 from ..capabilities.tools.plan import AgentUpdatePlanTool
 from ..capabilities.workspace.local import LocalWorkspace
 from ..config import setting
-from ..core.compaction import TokenCounter
 from ..core.environment.manager import EnvironmentManager
 from ..core.event_type import CoreEvent, ModelRetryEvent, ModelStreamChunkEvent
 from ..core.events_bus import EventBus
@@ -63,6 +62,7 @@ from ..core.model.json_schema import model_from_schema, schema_of
 from ..core.policy import Policy
 from ..core.stacks.container import LayerContainer
 from ..core.termination import CancellationToken
+from ..core.tokenizer import TokenCounter
 from ..core.tool.dispatcher import ToolDispatcher
 from ..core.tool.registry import ToolRegistry
 from ..loggers.scope import ScopedLogger

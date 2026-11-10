@@ -14,7 +14,7 @@ CTX = RunContext(user_id="u", session_id="s")
 
 
 async def lookup() -> str:
-    """Look something up."""
+    """Look up the price of something."""
     CTX.inbox.append("also in euros")
     return "42 dollars"
 

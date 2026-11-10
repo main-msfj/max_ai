@@ -35,7 +35,6 @@ from abc import ABC, abstractmethod
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..core.compaction import TokenCounter
 from ..core.event_type import (
     CompactionEvent,
     CoreEvent,
@@ -58,6 +57,7 @@ from ..core.messages import (
 from ..core.middleware.chain import MiddlewareChain
 from ..core.retry import RetryPolicy, rate_limited, retry_after
 from ..core.termination import CancellationToken
+from ..core.tokenizer import TokenCounter
 from ..errors.client import ClientError
 from ..loggers import ScopedLogger
 from ..types.chat_history import ChatHistory
@@ -475,13 +475,13 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
 
     @property
     def _tools(self) -> list[CoreTool]:
-        """Tools currently available to the agent.
+        """Tools sent to the model: every tool except the deferred ones.
 
-        Sourced from the executor each turn rather than cached, so a
+        Sourced from the registry each turn rather than cached, so a
         skill registry that mutates the catalog after ``prepare()`` is
         reflected in subsequent calls.
         """
-        return list(self.tool_catalog.values())
+        return self.dispatcher.registry.loaded()
 
     @property
     def tool_catalog(self) -> dict[str, CoreTool]:

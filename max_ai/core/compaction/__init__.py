@@ -1,5 +1,5 @@
-"""Compaction machinery shared by every strategy: models, token counting,
-budget math and atomic message blocks."""
+"""Compaction machinery shared by every strategy: models, budget math and
+atomic message blocks. Token counting lives in ``core.tokenizer``."""
 
 from ..model.compaction import (
     CompactionConfig,
@@ -22,7 +22,6 @@ from .groups import (
     split_recent_messages,
     turn_starts,
 )
-from .token_counter import TokenCounter
 
 __all__ = [
     "CompactionConfig",
@@ -32,7 +31,6 @@ __all__ = [
     "MemoryFactUpdate",
     "MemoryMaintenanceOutput",
     "MessageGroup",
-    "TokenCounter",
     "client_max_output_tokens",
     "live_message_budget_tokens",
     "live_message_capacity_tokens",

@@ -72,7 +72,7 @@ async def test_concurrent_insert_retries_only_the_same_identity():
 
 
 async def test_knowledge_search_and_ingestion_are_source_scoped():
-    knowledge = MongoDBKnowledgeRegistry("manual", "Search the manual", embedding=None)
+    knowledge = MongoDBKnowledgeRegistry("manual", "Search the product manual pages", embedding=None)
     collection, cursor = connected(knowledge, [dict(content="Python guide", tokens=2, metadata={"page": 1})])
     result = await knowledge.search(" Python ", limit=2)
     assert result == [KnowledgeBlock(content="Python guide", tokens=2, metadata={"page": 1})]

@@ -23,7 +23,7 @@ TIMELINE: list[tuple[str, float, float]] = []
 
 
 async def lookup(city: str) -> dict:
-    """Read-only lookup."""
+    """Look up a city, read-only."""
     start = time.monotonic()
     await asyncio.sleep(DELAY)
     TIMELINE.append((f"lookup:{city}", start, time.monotonic()))
@@ -31,7 +31,7 @@ async def lookup(city: str) -> dict:
 
 
 async def save(city: str) -> dict:
-    """Writes something."""
+    """Write something about a city."""
     start = time.monotonic()
     await asyncio.sleep(DELAY)
     TIMELINE.append((f"save:{city}", start, time.monotonic()))

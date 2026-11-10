@@ -17,6 +17,7 @@ def tool(
     approval_mode: str | ToolApprovalMode = ToolApprovalMode.AUTO_APPROVED,
     read_only: bool = False,
     policy_subject: str | None = None,
+    deferred: bool = False,
 ) -> t.Callable[[t.Callable[..., t.Any]], FunctionAsTool]:
     ...
 
@@ -30,6 +31,7 @@ def tool(
     approval_mode: str | ToolApprovalMode = ToolApprovalMode.AUTO_APPROVED,
     read_only: bool = False,
     policy_subject: str | None = None,
+    deferred: bool = False,
 ) -> FunctionAsTool:
     ...
 
@@ -42,6 +44,7 @@ def tool(
     approval_mode: str | ToolApprovalMode = ToolApprovalMode.AUTO_APPROVED,
     read_only: bool = False,
     policy_subject: str | None = None,
+    deferred: bool = False,
 ) -> FunctionAsTool | t.Callable[[t.Callable[..., t.Any]], FunctionAsTool]:
     """Wrap a function as a FunctionAsTool.
 
@@ -63,6 +66,7 @@ def tool(
         read_only: No side effects: may run in parallel with other read-only calls.
         policy_subject: Parameter that Policy rules like ``name(pattern)`` match
             against, e.g. ``@tool(policy_subject="url")`` for ``fetch(https://acme.com/*)``.
+        deferred: Not sent to the model; found with search_tools, run with call_tool.
     """
 
     def decorator(fn: t.Callable[..., t.Any]) -> FunctionAsTool:
@@ -73,6 +77,7 @@ def tool(
             approval_mode=approval_mode,
             read_only=read_only,
             policy_subject=policy_subject,
+            deferred=deferred,
         )
 
     return decorator(func) if func is not None else decorator

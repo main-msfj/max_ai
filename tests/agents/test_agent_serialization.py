@@ -106,7 +106,7 @@ def test_schema_rebuild_handles_nesting_enums_and_optionals():
 
 def test_python_function_tools_cannot_be_stored(tmp_path):
     def lookup(order_id: str) -> str:
-        """Find an order."""
+        """Find an order by its id."""
         return order_id
 
     agent = full_agent(tmp_path, toolset=[lookup])

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from max_ai.core.compaction import (
     CompactionOutput,
-    TokenCounter,
     group_atomic_messages,
     split_recent_messages,
 )
@@ -14,6 +13,7 @@ from max_ai.core.messages import (
     ToolMessage,
     UserMessage,
 )
+from max_ai.core.tokenizer import TokenCounter
 
 
 class FixedCounter:

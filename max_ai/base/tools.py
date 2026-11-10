@@ -6,13 +6,16 @@ to execute external actions (e.g., APIs, file I/O, services).
 """
 
 import fnmatch
+import re
 import typing as t
 from abc import ABC, abstractmethod
 
 from jsonschema import Draft202012Validator
 from pydantic import BaseModel
 
+from ..config import setting
 from ..core.termination import CancellationToken
+from ..core.tokenizer import default_counter
 from ..types.tool_call import ToolCallRecord, ToolResult
 from ..types.tools import (
     CoreToolDefinition,
@@ -85,6 +88,7 @@ class CoreTool(ComponentBase[BaseModel], ABC):
         approval_mode: ToolApprovalMode | str = ToolApprovalMode.ASK_APPROVED,
         read_only: bool = False,
         policy_subject: str | None = None,
+        deferred: bool = False,
     ):
         """
         Initialize the run-scoped context supplied to a tool.
@@ -103,17 +107,43 @@ class CoreTool(ComponentBase[BaseModel], ABC):
             Value used to configure the tool or its run-scoped context.
         policy_subject : str | None, default=None
             Parameter that Policy rules like ``Tool(pattern)`` match against.
+        deferred : bool, default=False
+            Not sent to the model: it is listed in the prompt, found with
+            ``search_tools`` and run with ``call_tool``.
         """
+        self.validate_name(name)
+        self.validate_description(name, description)
         self.name = name
         self.version = version
         self.description = description
         self.approval_mode = approval_mode
-        # No side effects: may run at the same time as other read-only calls.
         self.read_only = read_only
         self.policy_subject = policy_subject
+        self.deferred = deferred
 
         # Lazily-built schema validator
         self._schema_validator: Draft202012Validator | None = None
+
+    # -------- DEFINITION --------------------------------------------------------
+    def validate_name(self, name: str) -> None:
+        """Raise unless ``name`` matches ``setting.tool_name_pattern``."""
+        if not re.fullmatch(setting.tool_name_pattern, name):
+            raise ValueError(f"Tool name {name!r} must be snake_case, at most 64 characters")
+
+    def validate_description(self, name: str, description: str) -> None:
+        """Raise unless the description says what the tool does in a few
+        words; how to use it belongs in the prompt."""
+        tokens = default_counter().count_text(description)
+        if tokens < setting.tool_description_min_tokens:
+            raise ValueError(
+                f"Tool {name!r}: description has {tokens} tokens, at least "
+                f"{setting.tool_description_min_tokens}; say what the tool does"
+            )
+        if tokens > setting.tool_description_max_tokens:
+            raise ValueError(
+                f"Tool {name!r}: description has {tokens} tokens, at most "
+                f"{setting.tool_description_max_tokens}; move how to use it to the prompt"
+            )
 
     @property
     @abstractmethod

@@ -103,7 +103,7 @@ def test_store_is_a_serializable_component(tmp_path):
 
 # -------- the production flow: load → run → save, across "processes" ------------------
 def send_email(to: str) -> dict:
-    """Send an email."""
+    """Send an email to an address."""
     return {"sent": to}
 
 

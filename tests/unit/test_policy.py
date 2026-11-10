@@ -99,6 +99,7 @@ def test_a_new_tool_needs_nothing_and_can_name_its_subject():
 
     @tool(approval_mode=ToolApprovalMode.ASK_APPROVED, policy_subject="url")
     def fetch(url: str) -> str:
+        """Fetch the page at a URL."""
         return url
 
     policy = Policy(allow=["fetch(https://api.acme.com/*)"], deny=["fetch(*internal*)"])

@@ -36,9 +36,18 @@ class ToolRegistry:
     def all_tools(self) -> list[CoreTool]:
         return list(self._tools.values())
 
+    def loaded(self) -> list[CoreTool]:
+        """Sent to the model on every request."""
+        return [tool for tool in self._tools.values() if not tool.deferred]
+
+    def deferred(self) -> list[CoreTool]:
+        """Listed in the prompt and found with search_tools."""
+        return [tool for tool in self._tools.values() if tool.deferred]
+
     def definitions(self) -> list[CoreToolDefinition]:
         return [
-            CoreToolDefinition(name=tool.name, description=tool.description,
-                               parameters=deepcopy(tool.parameters))
-            for tool in self._tools.values()
+            CoreToolDefinition(
+                name=tool.name, description=tool.description, parameters=deepcopy(tool.parameters)
+            )
+            for tool in self.loaded()
         ]

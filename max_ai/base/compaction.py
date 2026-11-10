@@ -15,7 +15,6 @@ from ..core.compaction import (
     CompactionResult,
     MemoryMaintenanceOutput,
     MessageGroup,
-    TokenCounter,
     client_max_output_tokens,
     current_turn_start,
     group_atomic_messages,
@@ -30,6 +29,7 @@ from ..core.messages import (
     ToolMessage,
     UserMessage,
 )
+from ..core.tokenizer import TokenCounter
 from ..errors.compaction import CompactionError
 from ..types.run_context import RunContext
 from ..types.stacks import PromptCtx
