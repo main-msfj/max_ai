@@ -32,6 +32,7 @@ ComponentType = t.Union[
         "prompts",
         "skills",
         "context",
+        "sandbox",
     ],
     str,
 ]

@@ -6,6 +6,7 @@ name, e.g. ``MAX_LOOP_ITERATIONS=30``. ``root_dir`` reads ``HOST_WORKSPACE``.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from pydantic import Field, field_validator
@@ -23,6 +24,7 @@ class Settings(BaseSettings):
 
     # -------- HOST -------------------------------------------------------------
     root_dir: Path = Field(default_factory=Path.cwd, validation_alias="HOST_WORKSPACE")
+    max_ai_home: Path = Field(default_factory=lambda: Path.home() / ".max_ai")
     default_tokenizer: str = Field(
         default="o200k_base",
         description="tiktoken encoding; a model's tokenizer_base overrides it.",
@@ -69,6 +71,20 @@ class Settings(BaseSettings):
     def _resolve_root(cls, v: Path) -> Path:
         """Store root_dir absolute, so relative HOST_WORKSPACE paths work."""
         return v.expanduser().resolve()
+
+    def create_global(self) -> Path:
+        """Create ``~/.max_ai/setting.global.json`` if it is missing; never
+        overwrite it. The Agent calls it when it starts."""
+        home = self.max_ai_home.expanduser().resolve()
+        home.mkdir(parents=True, exist_ok=True)
+        path = home / "setting.global.json"
+        # "x" fails if the file exists: two starts at once never overwrite.
+        try:
+            with path.open("x", encoding="utf-8") as file:
+                file.write(json.dumps({"skills": {}}, indent=2) + "\n")
+        except FileExistsError:
+            pass
+        return path
 
 
 setting = Settings()

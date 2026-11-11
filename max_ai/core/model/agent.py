@@ -24,6 +24,7 @@ class AgentSpec(BaseModel):
     reasoning: dict[str, t.Any] | None = None
     workspace: dict[str, t.Any] | None = None
     executor: dict[str, t.Any] | None = None
+    sandbox: dict[str, t.Any] | None = None
     memory: dict[str, t.Any] | None = None
     skills: dict[str, t.Any] | None = None
     knowledge: list[dict[str, t.Any]] = Field(default_factory=list)

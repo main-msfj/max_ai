@@ -26,6 +26,7 @@ from ..base.layer import CoreLayer
 from ..base.memory import CoreMemoryRegistry
 from ..base.middleware import CoreMiddleware, MiddlewareContext, StopRun
 from ..base.reasoning import BaseReasoning
+from ..base.sandbox import SandboxCore
 from ..base.skills import CoreSkillRegistry
 from ..base.tools import CoreTool, ToolContext
 from ..base.workspace import WorkspaceBase
@@ -151,8 +152,12 @@ class Agent(ComponentBase[AgentSpec]):
         prompt_layers: Sequence[CoreLayer] | None = None,
         workspace: WorkspaceBase | None = None,
         executor: ExecutorBase | None = None,
+        sandbox: SandboxCore | None = None,
     ) -> None:
         self._validate_configuration(executor, reasoning)
+        if sandbox is not None and not isinstance(sandbox, SandboxCore):
+            raise TypeError("Use a sandbox from max_ai.capabilities.sandbox")
+        self.sandbox = sandbox
         if compaction is not None and not isinstance(compaction, CoreCompaction):
             raise TypeError("compaction must implement CoreCompaction")
         # None: the window is never compacted (fine for short sessions).
@@ -369,6 +374,7 @@ class Agent(ComponentBase[AgentSpec]):
             reasoning=dump(self.reasoning),
             workspace=dump(self.workspace),
             executor=dump(self.executor),
+            sandbox=dump(self.sandbox) if self.sandbox is not None else None,
             memory=dump(self.memory) if self.memory is not None else None,
             skills=dump(self.skills) if self.skills is not None else None,
             knowledge=[dump(source) for source in self.knowledge],
@@ -397,6 +403,7 @@ class Agent(ComponentBase[AgentSpec]):
             mcp=list(config.mcp),
             executor=load(config.executor, ExecutorBase),
             workspace=load(config.workspace, WorkspaceBase),
+            sandbox=load(config.sandbox, SandboxCore),
             skills=load(config.skills, CoreSkillRegistry),
             memory=load(config.memory, CoreMemoryRegistry),
             knowledge=[load(source, CoreKnowledgeRegistry) for source in config.knowledge],
