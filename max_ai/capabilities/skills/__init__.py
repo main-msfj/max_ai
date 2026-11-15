@@ -1,8 +1,6 @@
-"""Module providing capability implementations and supporting utilities."""
-from .github import GithubSkillRegistry, GithubSkillRegistryConfig
-from .local import LocalSkillRegistry, LocalSkillRegistryConfig
+"""Where skills come from."""
 
-__all__ = [
-    "LocalSkillRegistry", "LocalSkillRegistryConfig",
-    "GithubSkillRegistry", "GithubSkillRegistryConfig",
-]
+from .github import GitHubSkills, GitHubSkillsConfig
+from .local import LocalSkills, LocalSkillsConfig
+
+__all__ = ["GitHubSkills", "GitHubSkillsConfig", "LocalSkills", "LocalSkillsConfig"]

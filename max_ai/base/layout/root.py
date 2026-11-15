@@ -42,6 +42,11 @@ class Layout:
     def tmp(self) -> PurePosixPath:
         return self.root / "tmp"
 
+    @property
+    def lock(self) -> PurePosixPath:
+        """Held while a skill is installed: one install at a time."""
+        return self.root / ".lock"
+
     def skeleton(self) -> dict[str, t.Any]:
         """What ``SCRIPT`` needs to create ``.agent/``: the folders, and the
         settings file with its first content."""

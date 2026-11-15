@@ -1,6 +1,5 @@
-"""GitHub-backed skill registry, available through max_ai.capabilities.skills.github."""
+"""Skills that are folders of a GitHub repository."""
 
-from ._model import GithubSkillRegistryConfig
-from ._registry import GithubSkillRegistry
+from .skills import GitHubSkills, GitHubSkillsConfig
 
-__all__ = ["GithubSkillRegistry", "GithubSkillRegistryConfig"]
+__all__ = ["GitHubSkills", "GitHubSkillsConfig"]

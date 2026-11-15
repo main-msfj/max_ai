@@ -1,18 +1,26 @@
 """The machine where the agent works: one per user.
 
-It owns the project's ``.agent/`` (through Layout): skills go in, the
-files the agent creates come out, and commands run there.
+``.agent/`` lives inside it (see Layout): skills and the user's files go
+in, and commands run there.
 """
 
 from __future__ import annotations
 
+import copy
+import hashlib
+import json
+import posixpath
+import shlex
+import typing as t
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 from pydantic import BaseModel
 
-from .layout import Layout
+from ..config import setting
 from .component import ComponentBase
+from .layout import SCRIPT, Layout
+from .session_store import validate_id
 
 
 @dataclass(frozen=True)
@@ -25,31 +33,27 @@ class CommandResult:
     timed_out: bool = False
 
 
-class SandboxCore(ComponentBase[BaseModel], Layout, ABC):
+class SandboxError(RuntimeError):
+    """The harness could not do its own work inside the sandbox."""
+
+
+class SandboxCore(ComponentBase[BaseModel], ABC):
     """Implement once per provider: Local, Docker, ACA, Firecracker.
 
-    Each provider defines its own config model and overrides
-    ``_to_config`` / ``_from_config``."""
+    A child only says where ``.agent/`` goes (``base``) and how a command
+    runs; it also defines its config model and ``_to_config`` /
+    ``_from_config``. Everything else is written here, once.
+    """
 
     component_type = "sandbox"
 
-    @abstractmethod
-    async def synchronize_environment(self, skill_var: dict[str, str], identifier: str) -> None:
-        """Bring the sandbox and ``.agent/`` in line: skills in, the files
-        the agent created out.
+    def __init__(self, base: str) -> None:
+        self.layout = Layout(base)
+        # Set by bind(): whose machine this is and what its commands see.
+        self.identifier: str | None = None
+        self.variables: dict[str, str] = {}
 
-        ``skill_var`` maps each skill's name to its value, as in
-        ``setting.global.json``; ``identifier`` names whose machine it is
-        (the user_id)."""
-
-    @abstractmethod
-    async def upload_file(self, path: str, content: bytes) -> None:
-        """Put ``content`` at ``path`` inside the sandbox."""
-
-    @abstractmethod
-    async def get_or_update_skill(self, name: str) -> None:
-        """Copy skill ``name`` into the sandbox, or refresh it if it changed."""
-
+    # -------- EACH PROVIDER ------------------------------------------------------
     @abstractmethod
     async def execute_command(
         self,
@@ -58,5 +62,81 @@ class SandboxCore(ComponentBase[BaseModel], Layout, ABC):
         timeout: float = 60,
         stdin: bytes | None = None,
     ) -> CommandResult:
-        """Run ``command`` with bash in the sandbox. A failing command is an
-        exit code; only infrastructure problems raise."""
+        """Run ``command`` with bash in the sandbox, with ``self.variables``
+        in its environment. A failing command is an exit code; only
+        infrastructure problems raise."""
+
+    async def close(self) -> None:
+        """Release what the provider started (a container). Nothing by default."""
+
+    # -------- WRITTEN ONCE -------------------------------------------------------
+    def bind(self, identifier: str, variables: dict[str, str] | None = None) -> t.Self:
+        """A copy for one user: ``identifier`` names whose machine it is,
+        ``variables`` is what their commands see. ``self`` is never changed
+        and the variables are never serialized."""
+        bound = copy.copy(self)
+        bound.identifier = identifier
+        bound.variables = dict(variables or {})
+        return bound
+
+    async def prepare(self) -> None:
+        """Create ``.agent/`` if it is missing; never overwrite what is there."""
+        await self._run("create", **self.layout.skeleton())
+
+    async def upload_file(self, session_id: str, path: str, content: bytes) -> str:
+        """Put a file the user attached (an image, a PDF) at ``path`` inside
+        the session's folder. Returns where it is in the sandbox."""
+        validate_id("session_id", session_id)
+        if posixpath.isabs(path):
+            raise ValueError(f"{path} must be relative to the session's folder")
+        answer = await self._run(
+            "upload", content, folder=str(self.layout.workspace / session_id), path=path,
+        )
+        return answer["path"]
+
+    async def outdated_skills(self, wanted: dict[str, str]) -> list[str]:
+        """The skills of ``wanted`` (name → hash or commit) that are not
+        installed or whose key in ``setting.json`` is another one."""
+        installed = await self.installed_skills()
+        return [name for name, key in wanted.items() if installed.get(name, {}).get("key") != key]
+
+    async def installed_skills(self) -> dict[str, dict[str, str]]:
+        """What ``setting.json`` says is installed: name → its ``key`` and
+        ``description``."""
+        answer = await self._run("settings", settings=str(self.layout.settings))
+        return answer["settings"].get("skills", {})
+
+    async def install_skill(self, name: str, key: str, archive: bytes, description: str = "") -> None:
+        """Unpack ``archive`` (a tar, compressed or not) into ``skills/<name>``,
+        replacing what was there, and record ``key`` and ``description`` in
+        ``setting.json``."""
+        validate_id("skill name", name)
+        await self._run(
+            "install",
+            archive,
+            name=name,
+            key=key,
+            description=description,
+            folder=str(self.layout.skills / name),
+            settings=str(self.layout.settings),
+            lock=str(self.layout.lock),
+        )
+
+    async def _run(self, op: str, data: bytes | None = None, **request: t.Any) -> dict[str, t.Any]:
+        """Run one operation of ``layout/script.py`` inside the sandbox. The
+        request goes as an argument; ``data`` goes as it is on stdin, with
+        its sha256 in the request so the script knows all of it arrived."""
+        request["op"] = op
+        if data is not None:
+            request["sha256"] = hashlib.sha256(data).hexdigest()
+        result = await self.execute_command(
+            f"python3 -c {shlex.quote(SCRIPT)} {shlex.quote(json.dumps(request))}",
+            timeout=setting.tool_timeout_seconds,
+            stdin=data,
+        )
+        if result.timed_out or result.exit_code != 0:
+            raise SandboxError(f"{op} failed in the sandbox: {result.stderr.strip() or 'timed out'}")
+        answer = json.loads(result.stdout)
+        if not answer.pop("ok"):
+            raise SandboxError(f"{op} failed in the sandbox: {answer['error']}")
+        return answer

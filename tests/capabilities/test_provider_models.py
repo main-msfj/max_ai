@@ -18,8 +18,6 @@ import pytest
          {"name": "docs", "description": "Docs", "base_path": "/tmp"}),
         ("knowledge.mongodb", "MongoDBKnowledgeRegistry", "MongoDBKnowledgeRegistryConfig",
          {"name": "docs", "description": "Docs"}),
-        ("skills.local", "LocalSkillRegistry", "LocalSkillRegistryConfig",
-         {"source": "/tmp", "skills": []}),
         ("context.local", "LocalContextRegistry", "LocalContextRegistryConfig",
          {"user_id": "u", "session_id": "s", "base_path": "/tmp"}),
         ("context.sqlite", "SQLiteContextRegistry", "SQLiteContextRegistryConfig",

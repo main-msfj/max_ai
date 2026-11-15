@@ -1,6 +1,5 @@
-"""Local-filesystem skill registry, available through max_ai.capabilities.skills.local."""
+"""Skills that are folders on this machine."""
 
-from ._model import LocalSkillRegistryConfig
-from ._registry import LocalSkillRegistry
+from .skills import LocalSkills, LocalSkillsConfig
 
-__all__ = ["LocalSkillRegistry", "LocalSkillRegistryConfig"]
+__all__ = ["LocalSkills", "LocalSkillsConfig"]
