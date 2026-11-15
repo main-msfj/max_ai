@@ -4,7 +4,7 @@ Layout; neither overwrites a file that already exists."""
 import json
 
 from max_ai.config import Settings
-from max_ai.core.harness.root import Layout
+from max_ai.base.layout import Layout
 
 
 def test_create_global_writes_the_global_settings(tmp_path):

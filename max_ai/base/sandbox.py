@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel
 
-from ..core.harness.root import Layout
+from .layout import Layout
 from .component import ComponentBase
 
 
@@ -50,14 +50,13 @@ class SandboxCore(ComponentBase[BaseModel], Layout, ABC):
     async def get_or_update_skill(self, name: str) -> None:
         """Copy skill ``name`` into the sandbox, or refresh it if it changed."""
 
-    # Not yet: commands come back when bash moves to the sandbox.
-    # @abstractmethod
-    # async def execute_command(
-    #     self,
-    #     command: str,
-    #     *,
-    #     timeout: float = 60,
-    #     stdin: bytes | None = None,
-    # ) -> CommandResult:
-    #     """Run ``command`` with bash in the sandbox. A failing command is an
-    #     exit code; only infrastructure problems raise."""
+    @abstractmethod
+    async def execute_command(
+        self,
+        command: str,
+        *,
+        timeout: float = 60,
+        stdin: bytes | None = None,
+    ) -> CommandResult:
+        """Run ``command`` with bash in the sandbox. A failing command is an
+        exit code; only infrastructure problems raise."""

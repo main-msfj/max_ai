@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
+import signal
 from pathlib import Path
 
 from pydantic import BaseModel
 
-from ....base.sandbox import SandboxCore
+from ....base.sandbox import CommandResult, SandboxCore
 
 
 class LocalSandboxConfig(BaseModel):
@@ -39,4 +42,28 @@ class LocalSandbox(SandboxCore):
 
     async def get_or_update_skill(self, name: str) -> None:
         raise NotImplementedError
+
+    async def execute_command(
+        self,
+        command: str,
+        *,
+        timeout: float = 60,
+        stdin: bytes | None = None,
+    ) -> CommandResult:
+        """Run ``command`` with bash on this computer, starting in the workspace."""
+        process = await asyncio.create_subprocess_exec(
+            "bash", "-c", command,
+            cwd=self.workspace,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,  # its own group, so a timeout kills every child
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(stdin), timeout)
+        except asyncio.TimeoutError:
+            os.killpg(process.pid, signal.SIGKILL)
+            stdout, stderr = await process.communicate()
+            return CommandResult(stdout.decode(), stderr.decode(), None, timed_out=True)
+        return CommandResult(stdout.decode(), stderr.decode(), process.returncode)
 
