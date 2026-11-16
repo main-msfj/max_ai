@@ -33,7 +33,7 @@ class PromptBuilder:
     TOOL_NAMES: t.ClassVar[dict[str, str]] = {
         "search_tool": "search_tools",
         "call_tool": "call_tool",
-        "skill_tool": "skill",
+        "skill_tool": "read_skill",
         "bash_tool": "bash",
     }
 
