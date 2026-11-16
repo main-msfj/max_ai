@@ -1,3 +1,4 @@
+{% if workspace %}
 <WORKSPACE>
 You work inside a sandbox. Everything you read, write or run happens there.
 
@@ -5,9 +6,11 @@ You work inside a sandbox. Everything you read, write or run happens there.
 - Working directory: `{{ workspace }}`
   The files of this conversation. Commands start here and relative paths
   are resolved from here.
+{% if tmp %}
 - Temporary files: `{{ tmp }}`
   Scripts you write, downloads and drafts. Large tool results are saved in
   `{{ tmp }}/tool_results`.
+{% endif %}
 </folders>
 
 <rules>
@@ -19,3 +22,4 @@ You work inside a sandbox. Everything you read, write or run happens there.
   If it cannot be installed, say what is missing; do not improvise.
 </rules>
 </WORKSPACE>
+{% endif %}

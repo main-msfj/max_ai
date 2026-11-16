@@ -1,0 +1,16 @@
+{% if current_date or summary %}
+<SESSION>
+{% if current_date %}
+<current_date>Today is {{ current_date }} (UTC).</current_date>
+{% endif %}
+{% if summary %}
+<summary>
+The conversation so far, summarized. Earlier messages are no longer
+visible: continue from here without asking again for what it covers. If
+the user's current message contradicts it, the message wins.
+
+{{ summary }}
+</summary>
+{% endif %}
+</SESSION>
+{% endif %}

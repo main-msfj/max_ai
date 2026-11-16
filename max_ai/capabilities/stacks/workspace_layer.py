@@ -9,12 +9,12 @@ from ...core.model.stacks import StackConfig
 
 class WorkspaceLayer(Component[StackConfig], CoreLayer):
     """
-    Prompt layer with the folders of the sandbox. Leave it out of the
-    stack when the agent has no sandbox.
+    Prompt layer with the folders of the sandbox. Renders nothing when no
+    ``workspace`` is given, so it can always be in the stack.
 
-    Template Variables:
-        workspace (required): the session's working directory.
-        tmp (required): the session's folder for temporary files.
+    Template Variables (``sandbox.session_paths(session_id)`` gives both):
+        workspace (optional): the session's working directory.
+        tmp (optional): the session's folder for temporary files.
     """
 
     component_schema = StackConfig
@@ -37,5 +37,5 @@ class WorkspaceLayer(Component[StackConfig], CoreLayer):
     def _default_template(self) -> str:
         return self._load_file(self._DEFAULT_TEMPLATE_PATH / f"{self.name}.j2")
 
-    def _required_variables(self) -> set[str]:
+    def _optional_variables(self) -> set[str]:
         return {"workspace", "tmp"}

@@ -86,6 +86,14 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
         """Create ``.agent/`` if it is missing; never overwrite what is there."""
         await self._run("create", **self.layout.skeleton())
 
+    def session_paths(self, session_id: str) -> dict[str, str]:
+        """Where a session works in the sandbox: what the prompt shows."""
+        validate_id("session_id", session_id)
+        return {
+            "workspace": str(self.layout.workspace / session_id),
+            "tmp": str(self.layout.tmp / session_id),
+        }
+
     async def upload_file(
         self, session_id: str, path: str, content: bytes, *, temporary: bool = False
     ) -> str:
