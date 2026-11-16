@@ -518,7 +518,7 @@ class BaseReasoning(ComponentBase[ReasoningConfig], ABC):
         try:
             async with aclosing(
                 self.dispatcher.dispatch_many(
-                    records, self._tool_context, cancellation_token
+                    records, ctx, cancellation_token
                 )
             ) as stream:
                 async for item in stream:

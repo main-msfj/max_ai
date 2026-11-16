@@ -45,6 +45,9 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
     ``_from_config``. Everything else is written here, once.
     """
 
+    # True: commands cannot reach the host. The Policy asks less then.
+    isolated: t.ClassVar[bool] = False
+
     component_type = "sandbox"
 
     def __init__(self, base: str) -> None:
@@ -83,14 +86,18 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
         """Create ``.agent/`` if it is missing; never overwrite what is there."""
         await self._run("create", **self.layout.skeleton())
 
-    async def upload_file(self, session_id: str, path: str, content: bytes) -> str:
+    async def upload_file(
+        self, session_id: str, path: str, content: bytes, *, temporary: bool = False
+    ) -> str:
         """Put a file the user attached (an image, a PDF) at ``path`` inside
-        the session's folder. Returns where it is in the sandbox."""
+        the session's folder; with ``temporary``, inside the session's tmp
+        folder instead. Returns where it is in the sandbox."""
         validate_id("session_id", session_id)
         if posixpath.isabs(path):
             raise ValueError(f"{path} must be relative to the session's folder")
+        root = self.layout.tmp if temporary else self.layout.workspace
         answer = await self._run(
-            "upload", content, folder=str(self.layout.workspace / session_id), path=path,
+            "upload", content, folder=str(root / session_id), path=path,
         )
         return answer["path"]
 

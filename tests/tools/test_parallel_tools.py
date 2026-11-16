@@ -117,7 +117,7 @@ async def test_read_only_mcp_tools_run_in_parallel_on_one_connection(tmp_path, m
         await asyncio.sleep(DELAY)
         return f"found {city}"
 
-    monkeypatch.setattr(module, "create_mcp_client", lambda config: Client(server))
+    monkeypatch.setattr(module, "create_mcp_client", lambda config, extensions=None: Client(server))
     llm = OneRound(*[("web_search", c) for c in ("Lima", "Quito", "Cusco")])
     async with Agent(name="a", description="d", instructions="i", client=llm,
                      workspace=LocalWorkspace(root=tmp_path),

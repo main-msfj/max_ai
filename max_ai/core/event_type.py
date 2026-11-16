@@ -370,6 +370,18 @@ class BashCancelledEvent(ToolEvent):
     reason: str
 
 
+class MCPProgressEvent(ToolEvent):
+    """An MCP server reported how far a running call has got."""
+
+    EVENT_TYPE = "mcp_progress"
+    tool_call_id: str
+    server_id: str
+    tool_name: str
+    progress: float
+    total: float | None = None
+    message: str | None = None
+
+
 class FileReadEvent(ToolEvent):
     """A workspace file was read successfully."""
 

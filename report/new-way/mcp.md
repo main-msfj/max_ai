@@ -1,94 +1,126 @@
-# Feedback: `capabilities/mcp`
+# MCP: estado y pendientes
 
-Revisado el 2026-11-15 sobre la rama `feat/workspace-new-approach`. Es una revisión por lectura: salvo donde se indica, no ejecuté los casos.
+Actualizado el 2026-11-16 sobre la rama `feat/workspace-new-approach`. La primera versión de este archivo (2026-11-15) era una revisión por lectura; esta recoge lo que ya se corrigió, lo que se añadió y lo que falta.
 
-**Resumen:** la parte difícil (mantener la conexión viva, reconectar, no repetir llamadas que cambian algo) está bien hecha. Los problemas son de seguridad y de varios usuarios, no de código: un servidor stdio corre en tu máquina fuera del sandbox, el servidor decide solo qué se aprueba sin preguntar, y todos los usuarios comparten una conexión y un token.
+**Resumen:** las correcciones de seguridad y las fallas pequeñas están hechas. Además MCP ahora maneja archivos (imágenes y binarios), progreso de llamadas largas y tareas en segundo plano. Lo que falta está fuera de MCP: el loop tiene que recoger las tareas terminadas, y `agent.py` tiene que pasar la configuración.
 
-| Archivo | Líneas | Estado |
-|---|---|---|
-| `_model.py` | 138 | bien |
-| `client_manager.py` | 381 | bien, con dos fallas |
-| `tool.py` | 307 | funciona; código repetido y una transformación que pierde datos |
-| `transport.py` | 35 | bien; mezcla `httpx2` con `httpx` |
-| `integration.py` | 29 | solo lo usa un test |
-| `config.py` | 15 | sobra |
+| Archivo | Qué hace |
+|---|---|
+| `_model.py` | configuración de servidores; los secretos nunca se guardan |
+| `client_manager.py` | conexiones, reintentos, límites de tiempo, tareas |
+| `tool.py` | `MCPTool` y `MCPResourceTool`: adaptan un tool o recurso del servidor |
+| `task.py` | tareas en segundo plano (nuevo) |
+| `transport.py` | crea el cliente del SDK según el tipo de servidor |
+| `integration.py`, `config.py` | sobran; ver Limpieza |
 
-## Lo que está bien
+## Lo que ya estaba bien
 
-- **Los secretos nunca se guardan.** Los campos `*_env` nombran la variable y se resuelven al conectar; `token` está excluido y `serialize_mcp_servers` rechaza un token literal.
-- **Una tarea es dueña de cada conexión** y cada llamada corre en su propia subtarea. Es la forma correcta con el SDK, y las llamadas en paralelo no se esperan entre sí.
+- **Los secretos nunca se guardan.** Los campos `*_env` nombran la variable y se resuelven al conectar; `serialize_mcp_servers` rechaza un token literal.
+- **Una tarea de asyncio es dueña de cada conexión** y cada llamada corre en su propia subtarea, así que las llamadas en paralelo no se esperan entre sí.
 - **Si la conexión se cae a media llamada, solo se repiten las de solo lectura.** Una que cambia algo le dice al modelo que quizá sí corrió.
 - **Un servidor caído no se vuelve a intentar durante `retry_after_seconds`**, y `required` decide si la corrida falla o sigue sin él.
 - **Las tools de MCP son diferidas por defecto**, así que no llenan el prompt.
 
-## Problemas importantes
+## Lo que se corrigió
 
-### 1. Un servidor stdio corre en tu máquina, fuera del sandbox
+| Problema | Cómo quedó |
+|---|---|
+| El servidor decidía qué se aprueba sin preguntar | Sus marcas (`read_only_hint`) solo cuentan si la config dice `trusted=True`. Por defecto manda `approval_mode`. |
+| Un servidor stdio es un programa que corre en tu máquina | `MCPClientManager(stdio_commands=[...])` limita qué comandos se aceptan. `None` permite cualquiera; una lista vacía, ninguno. |
+| `{"result": x, "warnings": [...]}` perdía los avisos | Solo se desenvuelve cuando `result` o `results` es la única clave. |
+| Los fallos de red por HTTP no se reintentaban | `_unreachable` reconoce también `httpx2.TransportError`. |
+| `disconnect_all` se detenía si una conexión había muerto con error | Cierra todas aunque una falle. |
+| El límite de tiempo se leía de `setting` | Son parámetros del manager; nada de MCP lee `setting`. |
 
-`StdioMCPServerConfig(command=..., args=...)` lanza ese comando en el proceso del harness, con acceso a tu disco y a tu red. El sandbox no interviene.
+## Lo que se añadió
 
-Esto pesa más por cómo usas el framework: los agentes te llegan como JSON o YAML. Quien escribe ese archivo elige el `command`, así que cargar un agente ajeno equivale a ejecutar un programa suyo en tu servidor.
+### Imágenes y binarios
 
-Opciones, de menos a más trabajo:
+Un tool de MCP puede devolver imágenes, audio o archivos. Antes llegaban al modelo como texto en base64.
 
-- En producción aceptar solo servidores HTTP.
-- Una lista de comandos permitidos, definida en el código y no en el archivo.
-- Lanzar el servidor stdio dentro del sandbox. Hoy no se puede: `execute_command` espera a que el comando termine, y un servidor necesita una conexión que quede abierta.
+- `MCPTool` separa el texto de los archivos: el texto va en el resultado y los archivos en `ToolResult.files`.
+- `ToolHook.keep_files` los guarda en `tmp/<sesión>/tool_results/` del sandbox y añade la ruta al texto. Tope de 20 MB por archivo.
+- Sin sandbox, el modelo recibe un aviso de qué archivo era y que no se guardó.
+- El modelo recibe hoy solo texto con la ruta. Pasarle la imagen directamente está decidido pero no construido (ver Pendientes).
 
-### 2. El servidor decide qué se aprueba sin preguntar
+### Progreso y límites de tiempo
 
-`_approval_mode_for_tool` pone `AUTO_APPROVED` cuando el servidor declara `read_only_hint`. Esas marcas las escribe el servidor y nadie las comprueba: un servidor que miente consigue que sus tools corran sin aprobación. También se usan para decidir qué llamadas se repiten tras un corte.
-
-Recomiendo que las marcas solo cuenten si la config dice que confías en ese servidor (por ejemplo `trusted: bool = False`). Sin eso, manda `approval_mode` y `tool_approval_modes`.
-
-### 3. Todos los usuarios comparten una conexión y un token
-
-El `Agent` tiene un solo `MCPClientManager` y los headers se resuelven una vez, al conectar, desde las variables del proceso. Un agente que sirve a varios usuarios habla con el servidor MCP como una sola identidad. Es el mismo problema que señalaste con las variables de las skills.
-
-No hay que resolverlo ahora, pero el diseño debería dejarle lugar: lo natural es lo mismo que en el sandbox, una copia por usuario (`manager.bind(identifier, tokens)`).
-
-### 4. Las descripciones del servidor entran al prompt sin límite
-
-Nombres y descripciones de tools, y la lista completa de recursos en `MCPResourceTool._build_description`, vienen del servidor y llegan al modelo tal cual. Un servidor con 500 recursos produce una descripción enorme, y es texto ajeno dentro del prompt. Falta un límite de tamaño por descripción y por lista.
-
-## Fallas
-
-- **`{"result": x, ...}` pierde datos.** En `MCPTool.execute`, si la respuesta es un diccionario con la clave `results` o `result`, se devuelve solo esa clave y el resto se descarta. Una tool que responde `{"result": 5, "warnings": [...]}` pierde los avisos.
-- **Los fallos de red por HTTP no se reintentan.** `transport.py` crea el cliente con `httpx2`, pero `_unreachable` en `client_manager.py` busca `httpx.TransportError`. Comprobé que `httpx2.TransportError` no es una subclase de `httpx.TransportError`, así que un error de conexión de `httpx2` no cuenta como "vale la pena reintentar". No lo probé contra un servidor caído.
-- **`disconnect` puede fallar con un error viejo.** Si la conexión murió con una excepción, `await worker` la vuelve a lanzar, y `disconnect_all` se detiene ahí sin cerrar los demás servidores. Visto por lectura, no lo ejecuté.
-- **Dos tools pueden terminar con el mismo nombre.** `_sanitize_name` convierte `a-b` y `a_b` en lo mismo, y el registro rechaza el duplicado al arrancar. Tampoco recorta el nombre: los proveedores suelen aceptar hasta 64 caracteres.
-- **Las imágenes llegan como texto.** `_extract_tool_result` las devuelve en base64 dentro del JSON, así que el modelo recibe una cadena larga que además se corta por el medio. Es la misma limitación de `tool_message` en el dispatcher.
-- **Una tool que el servidor quitó sigue registrada.** Al reconectar, el `Agent` reemplaza las que cambiaron pero no retira las que ya no existen. Tampoco se atiende el aviso del servidor de que su lista cambió.
-- **El tiempo límite se aplica de dos formas**: `call_tool` se lo pasa al SDK y `read_resource` usa `asyncio.wait_for`.
-
-## Limpieza
-
-- **`config.py` sobra.** Dice "compatibility imports" y repite lo que ya exporta `__init__.py`. Sin usuarios todavía, no hay nada que mantener compatible.
-- **`integration.py`** tiene una función de 29 líneas que solo usa un test; el `Agent` usa el manager directo. Borrarla o hacer que el `Agent` la use.
-- **`tool.py` repite unas 40 líneas** entre `MCPTool` y `MCPResourceTool`: validar, registrar y la cadena de `except`. Las dos vuelven a validar parámetros que el dispatcher ya validó.
-- **`env` y `transport_protocol` están en la clase base** pero `env` solo sirve a stdio.
-- **Dos reglas distintas para un token literal.** MCP se niega a serializar un `token` pasado en código; `GitHubSkills` lo acepta y al serializar escribe el nombre de la variable. Conviene una sola regla para todo el framework.
-- **MCP no es un componente.** Todo lo demás se serializa con `ComponentBase`; MCP tiene sus propias `serialize_mcp_servers` y `deserialize_mcp_servers`.
-
-## Cómo encaja con lo nuevo
-
-```
-Agent
- ├─ sandbox   ← copia por usuario (bind)
- ├─ skills    ← llegan al sandbox
- ├─ tools     ← dispatcher + Policy
- └─ mcp       ← hoy: una conexión para todos, stdio fuera del sandbox
+```python
+MCPClientManager(idle_timeout=360, max_timeout=600, task_wait=60)
 ```
 
-MCP es la única pieza que todavía no tiene idea de "por usuario" ni de "dentro del sandbox". No bloquea lo que estamos haciendo, pero los puntos 1 y 2 conviene cerrarlos antes de aceptar agentes de terceros.
+- **`idle_timeout`**: segundos que una llamada puede pasar sin dar señales. Cada aviso de progreso del servidor reinicia la cuenta.
+- **`max_timeout`**: tope total de una llamada, avise o no.
+- Al cortarse, el modelo recibe un error normal del tool (`MCP tool 'x' of 'server' stopped answering.`) y la conexión sigue sirviendo.
+- `MCPTool` convierte cada aviso en un `MCPProgressEvent`, que sale por el mismo flujo de eventos que los demás.
+- El dispatcher respeta el `timeout` que declara cada tool; `MCPTool` declara el `max_timeout` del manager.
 
-## Orden recomendado
+Probado contra un servidor real por stdio: una llamada de 5 segundos con avisos termina bien aunque el límite sin señales sea 3; una callada se corta a los 3; una que avisa sin parar se corta en el tope total.
 
-| # | Cambio | Tamaño |
-|---|---|---|
-| 1 | Marcas del servidor solo si `trusted` | pequeño |
-| 2 | stdio: solo HTTP en producción, o lista de comandos permitidos | pequeño |
-| 3 | Fallas: `result`/`results`, `httpx2`, `disconnect`, nombres | pequeño |
-| 4 | Límite de tamaño a descripciones y lista de recursos | pequeño |
-| 5 | Limpieza: borrar `config.py`, unir lo repetido en `tool.py` | pequeño |
-| 6 | Una copia del manager por usuario | grande, junto con producción |
+### Tareas en segundo plano
+
+Algunos servidores pueden correr un tool como tarea: responden enseguida con un id y el trabajo sigue en el servidor. Es la extensión `io.modelcontextprotocol/tasks` del protocolo `2026-07-28`.
+
+```
+1. el modelo llama un tool
+2. el servidor devuelve una tarea  ──►  el manager espera hasta task_wait (60 s)
+       terminó en ese rato   ──►  resultado normal; el modelo no nota la diferencia
+       no terminó            ──►  3
+3. MCPTool anota la tarea en RunContext.mcp_tasks y responde:
+       "The tool is still working on the server. Its result will arrive when it is ready."
+4. más tarde:  manager.collect_tasks(ctx)
+       sigue trabajando  ──►  se queda anotada
+       terminó o falló   ──►  se borra de la lista y se devuelve su resultado
+       el servidor ya no la tiene, o caducó  ──►  se borra y se devuelve None
+```
+
+- **La lista vive en `RunContext.mcp_tasks`**, no en el texto de la conversación. Sobrevive a guardar y cargar la sesión y a una compactación, y no depende de que el modelo se acuerde de consultar.
+- **`collect_tasks(ctx)`** funciona desde un manager nuevo y una conexión nueva: es el caso "termino, y más tarde el usuario dice hola".
+- **`cancel_task(ctx, task_id)`** pide al servidor que la detenga y la borra.
+- **El resultado caduca.** El servidor dice cuánto lo guarda (15 minutos por defecto en FastMCP); pasado ese tiempo ya no se le pregunta.
+- **Una tarea que pide datos al usuario a mitad de camino** se cierra con error; este cliente no los contesta.
+- Los servidores sin tareas no notan nada.
+
+Probado contra un servidor real de tareas (FastMCP 4.2, instalado aparte y no como dependencia del proyecto): tarea corta, tarea larga recogida después desde otra conexión, tarea que falla, id desconocido y cancelación.
+
+## Decisiones tomadas
+
+- **Las descripciones de los tools no se recortan.** Quien conecta un servidor MCP asume ese riesgo. Lo que se controla es cuánto entra al prompt: los tools son diferidos y `search_tools` enseña solo nombre y descripción.
+- **La consulta de tareas es automática**, no un tool que el modelo deba llamar. Un modelo débil no consultaría.
+- **Los resultados grandes** los corta o guarda el `ToolHook` general (más de 40,000 caracteres), igual que para cualquier tool.
+
+## Pendientes
+
+### Fuera de MCP
+
+| Dónde | Qué falta |
+|---|---|
+| Loop | Llamar a `collect_tasks(ctx)` antes de cada llamada al modelo y meter cada resultado como mensaje `[harness]`. Sin esto la tarea queda anotada y nadie la recoge. |
+| `agent.py` | Pasar `stdio_commands`, `idle_timeout`, `max_timeout` y `task_wait`. |
+| Client del modelo | Pasar la imagen al modelo cuando lee imágenes. Decidido: se queda en el historial y, tras una compactación, se cambia por "image omitted" con la ruta. |
+| Producción | Una copia del manager por usuario. Hoy todos los usuarios comparten una conexión y un token. |
+
+### Dentro de MCP
+
+- **Dos tools pueden terminar con el mismo nombre.** `_sanitize_name` convierte `a-b` y `a_b` en lo mismo y no recorta a los 64 caracteres que suelen aceptar los proveedores.
+- **Un tool que el servidor quitó sigue registrado.** Tampoco se atiende el aviso del servidor de que su lista cambió.
+- **Un servidor stdio corre fuera del sandbox.** La lista de comandos lo limita, pero no lo aísla.
+- **Nadie muestra el progreso todavía.** El evento existe; falta que el CLI lo pinte.
+
+### Limpieza
+
+- `config.py` repite lo que ya exporta `__init__.py`.
+- `integration.py` tiene una función que solo usa un test.
+- `tool.py` repite unas 40 líneas entre `MCPTool` y `MCPResourceTool`.
+- MCP se serializa con funciones propias en vez de `ComponentBase`.
+
+## Pruebas
+
+| Archivo | Qué cubre |
+|---|---|
+| `tests/mcp/test_mcp_safety.py` | `trusted`, lista de comandos stdio, errores de red, desenvolver `result`, imágenes |
+| `tests/mcp/test_mcp_progress.py` | progreso, corte por silencio, tope total, evento de progreso |
+| `tests/mcp/test_mcp_tasks.py` | tarea anotada en `RunContext`, `collect_tasks` |
+| `tests/mcp/test_mcp_integration.py`, `test_mcp_unavailable.py` | conexión, reintentos, servidor caído |
+
+`tests/mcp/test_agent_mcp.py` falla hasta que `agent.py` use el dispatcher nuevo.

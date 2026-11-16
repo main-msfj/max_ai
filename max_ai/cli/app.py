@@ -40,8 +40,9 @@ from ..core.event_type import (
     ToolCallEvent,
     ToolCallResponseEvent,
 )
+from ..core.harness import messages as harness
 from ..core.ids import short_id
-from ..core.messages import HARNESS_SOURCE
+from ..core.messages import HARNESS_SOURCE, HARNESS_TAG, UserMessage
 from ..core.model.session import SessionInfo
 from ..core.policy import Policy
 from ..core.termination.cancellation import CancellationToken
@@ -1172,6 +1173,12 @@ class MaxAIApp(App[None]):
             if self._cancel is None or not self._cancel.is_cancelled():
                 raise
             ToolDispatcher.close_interrupted(self.context)
+            # The harness tells the model what happened; the dispatcher only closes calls.
+            self.context.messages.append(
+                UserMessage(
+                    source=HARNESS_SOURCE, content=f"{HARNESS_TAG} {harness.TURN_INTERRUPTED}"
+                )
+            )
             await self._finish_assistant()
             for block in self._tools.values():
                 block.complete(None)

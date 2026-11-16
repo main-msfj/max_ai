@@ -102,17 +102,17 @@ class AgentUpdatePlanTool(CoreTool):
         tool_context: ToolContext | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> ToolResult:
-        if tool_context is None or "run_context" not in tool_context.deps:
+        if tool_context is None:
             return ToolResult(
                 tool_call_id=tool_request.id,
                 success=False,
                 error=(
-                    "update_plan requires a RunContext at "
-                    "ToolContext.deps['run_context'] — the caller must set "
-                    "it before dispatching this tool."
+                    "update_plan needs the dispatcher's ToolContext: "
+                    "it changes the plan kept in its "
+                    "run_context."
                 ),
             )
-        ctx = tool_context.deps["run_context"]
+        ctx = tool_context.run_context
 
         raw_steps = tool_request.parameters.get("steps", [])
         rationale = tool_request.parameters.get("rationale", "")

@@ -1,0 +1,21 @@
+<WORKSPACE>
+You work inside a sandbox. Everything you read, write or run happens there.
+
+<folders>
+- Working directory: `{{ workspace }}`
+  The files of this conversation. Commands start here and relative paths
+  are resolved from here.
+- Temporary files: `{{ tmp }}`
+  Scripts you write, downloads and drafts. Large tool results are saved in
+  `{{ tmp }}/tool_results`.
+</folders>
+
+<rules>
+- What the user asked for goes in the working directory. Anything you
+  will not need again goes in the temporary folder, or is not saved at all.
+- Stay inside these folders.
+- Before you change or delete a file you did not create, read it.
+- If a command needs a package that is missing, install only that package.
+  If it cannot be installed, say what is missing; do not improvise.
+</rules>
+</WORKSPACE>

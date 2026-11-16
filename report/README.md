@@ -16,6 +16,7 @@ No toqué nada del código. Todo lo que hay aquí es lectura, pruebas en una car
 | [05-multi-agent-a2a.md](05-multi-agent-a2a.md) | Guía de multi-agent y de A2A sobre tu framework. |
 | [06-subagentes-y-orquestador.md](06-subagentes-y-orquestador.md) | Subagentes como Claude Code y Codex (`spawn_agent`), y el orquestador multi-agent. |
 | [07-opinion-honesta.md](07-opinion-honesta.md) | Mi opinión del framework, sin suavizar. |
+| [08-dream-system.md](08-dream-system.md) | Memoria como archivos en el sandbox y cómo hacer un "dreaming" como el de Anthropic. |
 
 ## Lo más importante, en orden
 

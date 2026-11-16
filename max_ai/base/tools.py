@@ -24,45 +24,41 @@ from ..types.tools import (
 )
 from .component import ComponentBase
 
+if t.TYPE_CHECKING:
+    from ..types.run_context import RunContext
+    from .sandbox import SandboxCore
+
 
 class ToolContext:
-    """Runtime context available to tools."""
+    """What a tool has at hand while it runs: the conversation, the sandbox
+    it may use and how to tell the outside what happens. The dispatcher
+    builds it; who it is for comes from ``run_context``."""
 
-    __slots__ = ("user_id", "session_id", "run_id", "retry_count", "deps", "emit_event")
+    __slots__ = ("run_context", "sandbox", "emit_event", "deps")
 
     def __init__(
         self,
-        run_id: str,
-        session_id: str = "",
-        user_id: str = "runtime",
-        retry_count: int = 0,
-        deps: dict[str, t.Any] | None = None,
+        run_context: "RunContext",
+        sandbox: "SandboxCore | None" = None,
         emit_event: t.Callable[[t.Any], None] | None = None,
-    ):
-        """
-        Initialize the run-scoped context supplied to a tool.
-
-        Parameters
-        ----------
-        run_id : str
-            Value used to configure the tool or its run-scoped context.
-        session_id : str, default=''
-            Identifier for the current session.
-        user_id : str, default='runtime'
-            Identifier for the user scope.
-        retry_count : int, default=0
-            Number of retries attempted for the current call.
-        deps : dict[str, t.Any] | None, default=None
-            Dependencies made available to the tool.
-        emit_event : t.Callable[[t.Any], None] | None, default=None
-            Optional callback for emitting runtime events.
-        """
-        self.run_id = run_id
-        self.user_id = user_id
-        self.session_id = session_id
-        self.retry_count = retry_count
-        self.deps = deps or {}
+        deps: dict[str, t.Any] | None = None,
+    ) -> None:
+        self.run_context = run_context
+        self.sandbox = sandbox  # already bound to the user
         self.emit_event = emit_event
+        self.deps = deps or {}  # the developer's own objects
+
+    @property
+    def user_id(self) -> str:
+        return self.run_context.user_id
+
+    @property
+    def session_id(self) -> str:
+        return self.run_context.session_id or ""
+
+    @property
+    def run_id(self) -> str:
+        return self.run_context.run_id
 
 
 class CoreTool(ComponentBase[BaseModel], ABC):
@@ -154,6 +150,8 @@ class CoreTool(ComponentBase[BaseModel], ABC):
     # -------- POLICY -----------------------------------------------------------
     # Runs commands on the executor: without a sandbox, the Policy always asks.
     runs_commands: t.ClassVar[bool] = False
+    # True: it runs in the sandbox. False: it runs on the host.
+    sandbox: t.ClassVar[bool] = False
     # The result comes from a person: the turn pauses until they answer.
     waits_for_user: t.ClassVar[bool] = False
 
@@ -233,6 +231,7 @@ class CoreTool(ComponentBase[BaseModel], ABC):
             name=f"{self.name}_v{self.version}",
             description=self.description,
             parameters=self.parameters,
+            sandbox=self.sandbox,
         )
 
     # -------- PRIVATE -----------------------------------------------------------

@@ -1,4 +1,4 @@
-"""Tool runtime: record state, registry and dispatcher.
+"""Tool runtime: record state, registry, dispatcher and its hook.
 
 Dispatcher and registry load lazily (PEP 562): ``types.run_context`` imports
 ``core.tool.state``, and loading the dispatcher here eagerly would import
@@ -11,9 +11,10 @@ from .state import ToolState
 
 if t.TYPE_CHECKING:
     from .dispatcher import ToolDispatcher
+    from .hook import ToolHook
     from .registry import ToolRegistry
 
-__all__ = ["ToolDispatcher", "ToolRegistry", "ToolState"]
+__all__ = ["ToolDispatcher", "ToolHook", "ToolRegistry", "ToolState"]
 
 
 def __getattr__(name: str) -> t.Any:
@@ -21,6 +22,10 @@ def __getattr__(name: str) -> t.Any:
         from .dispatcher import ToolDispatcher
 
         return ToolDispatcher
+    if name == "ToolHook":
+        from .hook import ToolHook
+
+        return ToolHook
     if name == "ToolRegistry":
         from .registry import ToolRegistry
 

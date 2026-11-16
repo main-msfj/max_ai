@@ -141,7 +141,7 @@ async def test_mcp_connects_once_for_every_concurrent_run(tmp_path, monkeypatch)
 
     connections = []
 
-    def connect(config):
+    def connect(config, extensions=None):
         connections.append(config.server_id)
         return Client(server)
 

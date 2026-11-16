@@ -1,9 +1,11 @@
-"""Single tool catalog. Provider-specific schema conversion stays in clients."""
+"""The tools an agent has. Knows nothing about users, sandboxes or runs."""
 
+import typing as t
 from collections.abc import Iterable
 
 from ...base.tools import CoreTool
 from ...errors.tools import ToolRegistryError
+from ...types.tools import CoreToolDefinition
 
 
 class ToolRegistry:
@@ -12,7 +14,7 @@ class ToolRegistry:
         for tool in tools:
             self.register(tool)
 
-    def register(self, tool: CoreTool) -> CoreTool:
+    def register(self, tool: t.Any) -> CoreTool:
         """Add a CoreTool; a function becomes one with @tool or FunctionAsTool."""
         if not isinstance(tool, CoreTool):
             raise ToolRegistryError.not_a_tool(tool)
@@ -38,3 +40,8 @@ class ToolRegistry:
     def deferred_tools(self) -> list[CoreTool]:
         """Listed in the prompt and found with search_tools."""
         return [tool for tool in self._tools.values() if tool.deferred]
+
+    def definitions(self) -> list[CoreToolDefinition]:
+        """What the model receives: name, description and parameters of each
+        loaded tool. Each client turns it into its provider's format."""
+        return [tool.build_tool_definition() for tool in self.loaded_tools()]

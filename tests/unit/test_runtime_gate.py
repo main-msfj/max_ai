@@ -15,7 +15,7 @@ def closing_after(*calls: tuple[str, dict]) -> RunContext:
     for name, data in calls:
         record = ToolCallRecord(tool_name=name, parameters={"command": "x"})
         ctx.tool_state.add(record.auto_approve().start_execution())
-        ctx.tool_state.consume(record.id, ToolResult.success_result(record.id, data))
+        record.mark_consumed(ToolResult.success_result(record.id, data))
     return ctx
 
 

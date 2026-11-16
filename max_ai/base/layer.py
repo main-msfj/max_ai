@@ -191,6 +191,12 @@ class CoreLayer(ComponentBase[BaseModel], ABC):
         """Variables that MAY be supplied to render()."""
         return set()
 
+    def declared_variables(self) -> set[str]:
+        """Every variable this layer accepts in render()."""
+        return (
+            self._required_variables() | self._optional_variables() | set(self._extra_variables)
+        )
+
     def validate_placeholders(self) -> None:
         """
         Verify template variables match the declared contract. Runs once at

@@ -8,6 +8,13 @@ from ..core.primitives import FailureReason, ToolCallStatus
 
 
 # -------- TOOL RESULT -----------------------------------------------------------
+class ToolFile(BaseModel):
+    """A file a tool returned: an image, a PDF, anything that is not text."""
+
+    data: bytes
+    mime_type: str = "application/octet-stream"
+
+
 class ToolResult(BaseModel):
     """Tool execution result to be returned to the LLM.
 
@@ -24,6 +31,9 @@ class ToolResult(BaseModel):
     error: str | None = Field(default=None)
     result: t.Any | None = Field(default=None, description="Tool execution output")
     failure_reason: FailureReason | None = Field(default=None)
+    # Never saved with the session: the dispatcher's hook keeps each file in
+    # the sandbox and leaves its path in the text.
+    files: list[ToolFile] = Field(default_factory=list, exclude=True)
 
     # -------- TRACKING -----------------------------------------------------------
     tool_call_id: str = Field(

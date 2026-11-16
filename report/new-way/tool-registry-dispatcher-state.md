@@ -14,7 +14,7 @@ Revisado el 2026-11-15 sobre la rama `feat/workspace-new-approach`. Objetivo de 
 
 Un catálogo por nombre, sin dependencias. Se usa solo. Está bien.
 
-- **`read_only` no está declarado en `CoreTool`.** El dispatcher lo lee con `getattr(tool, "read_only", False)`. Debe ser un atributo normal, como `deferred` y `runs_commands`.
+- **Corregido el 2026-11-16.** `read_only` sí está declarado en `CoreTool`; lo que había era un `getattr(..., "read_only", False)` en el dispatcher para cubrir una tool desconocida. Ahora lo lee como atributo normal.
 
 ## `state.py`
 

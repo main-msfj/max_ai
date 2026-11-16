@@ -25,3 +25,6 @@ class CoreToolDefinition(BaseModel):
     name: str = Field(..., description="Name of the given tool from custom ot MCP")
     description: str = Field(..., description="Description of the tool's purpose")
     parameters: dict[str, t.Any] = Field(default_factory=dict)
+    sandbox: bool = Field(
+        default=False, description="True: it runs in the sandbox. False: it runs on the host."
+    )

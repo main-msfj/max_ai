@@ -25,7 +25,7 @@ async def test_manager_uses_v2_client_for_multiple_servers(monkeypatch):
 
         servers[server_id] = server
 
-    monkeypatch.setattr(module, "create_mcp_client", lambda config: Client(servers[config.server_id]))
+    monkeypatch.setattr(module, "create_mcp_client", lambda config, extensions=None: Client(servers[config.server_id]))
     manager = MCPClientManager()
     for server_id in servers:
         manager.add_server(StdioMCPServerConfig(
@@ -58,7 +58,7 @@ async def test_agent_shares_one_mcp_connection_until_close(monkeypatch):
     async def search(q: str) -> str:
         return q
 
-    monkeypatch.setattr(module, "create_mcp_client", lambda config: Client(server))
+    monkeypatch.setattr(module, "create_mcp_client", lambda config, extensions=None: Client(server))
     config = StdioMCPServerConfig(server_id="docs", command="unused")
     agent = Agent(
         name="test", description="test", instructions="test", client=None,
