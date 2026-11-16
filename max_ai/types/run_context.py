@@ -52,6 +52,7 @@ class RunContext(BaseModel):
         ),
     )
     mcp_tasks: dict[str, dict[str, JsonValue]] = Field(default_factory=dict)  # MCP tasks still running, by task id
+    cwd: str | None = None  # where bash ended, when not the workspace
     inbox: list[str] = Field(
         default_factory=list,
         description=(
