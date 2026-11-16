@@ -17,6 +17,8 @@ class ReadSkillTool(CoreTool):
     TOOL_NAME: t.ClassVar[str] = "read_skill"
     DESCRIPTION: t.ClassVar[str] = "Read the instructions of a skill. Call it before you use a skill."
     FILE: t.ClassVar[str] = "SKILL.md"
+    MAX_FILES: t.ClassVar[int] = 100  # files of the skill listed at most
+    MARK: t.ClassVar[str] = "__skill_md__"  # between the list of files and the SKILL.md
     SKILL_NAME: t.ClassVar[str] = r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}"
 
     sandbox = True  # the skills are installed there, not on the host
@@ -54,13 +56,21 @@ class ReadSkillTool(CoreTool):
         #    never gets here without one.
         sandbox = tool_ctx.sandbox
 
-        # 3. Where the layout puts it: .agent/skills/<name>/SKILL.md
-        path = sandbox.layout.skills / name / self.FILE
-        read = await sandbox.execute_command(f"cat {shlex.quote(str(path))}")
+        # 3. Where the layout puts it: .agent/skills/<name>, with its SKILL.md
+        folder = shlex.quote(str(sandbox.layout.skills / name))
+        read = await sandbox.execute_command(
+            f"cd {folder} && find . -type f | sed 's|^\\./||' | sort | head -n {self.MAX_FILES}"
+            f" && echo {self.MARK} && cat {self.FILE}"
+        )
 
-        # 4. cat fails when the file is missing: the skill is not installed.
+        # 4. cd or cat fail when it is missing: the skill is not installed.
         if read.exit_code != 0:
             return ToolResult.execution_error(
                 tool_request.id, f"There is no skill named {name!r}."
             )
-        return ToolResult.success_result(tool_request.id, read.stdout)
+
+        # 5. First the folder and its files, so the model can open them; then the SKILL.md.
+        files, _, instructions = read.stdout.partition(f"{self.MARK}\n")
+        listed = "".join(f"  {file}\n" for file in files.splitlines())
+        header = f"Skill folder: {sandbox.layout.skills / name}\n{listed}"
+        return ToolResult.success_result(tool_request.id, f"{header}\n{instructions}")

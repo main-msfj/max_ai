@@ -18,6 +18,8 @@ async def sandbox(tmp_path):
     source = tmp_path / "source/hello"
     source.mkdir(parents=True)
     (source / "SKILL.md").write_text(SKILL)
+    (source / "scripts").mkdir()
+    (source / "scripts/run.sh").write_text("echo hello\n")
     (tmp_path / "env").mkdir()
     (tmp_path / "env/secret.txt").write_text("not a skill")
     bound = LocalSandbox(root=str(tmp_path / "env")).bind("user-1")
@@ -34,7 +36,9 @@ async def read(sandbox, skill_name):
 
 async def test_it_returns_the_instructions_of_the_skill(sandbox):
     result = await read(sandbox, "hello")
-    assert result.success and result.result == SKILL
+    folder = sandbox.layout.skills / "hello"
+    assert result.success
+    assert result.result == f"Skill folder: {folder}\n  SKILL.md\n  scripts/run.sh\n\n{SKILL}"
 
 
 async def test_a_skill_that_is_not_installed_says_so(sandbox):
