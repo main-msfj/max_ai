@@ -55,7 +55,7 @@ async def test_it_needs_a_user():
 def test_it_is_stored_with_image_dockerfile_and_networks():
     sandbox = DockerSandbox(dockerfile="Dockerfile", networks=["pypi.org"])
     stored = sandbox.serialize()
-    assert stored.config == {"image": "python:3.12-slim", "dockerfile": "Dockerfile", "networks": ["pypi.org"]}
+    assert stored.config == {"dockerfile": "Dockerfile", "networks": ["pypi.org"]}
     again = SandboxCore.deserialize(stored.model_dump())
     assert isinstance(again, DockerSandbox) and again.networks == ["pypi.org"]
 

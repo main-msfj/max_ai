@@ -23,7 +23,6 @@ from mcp.types import (
 
 from ...base.tools import CoreTool, ToolContext
 from ...core.event_type import MCPProgressEvent
-from ...core.termination import CancellationToken
 from ...errors.mcp import (
     MCPConnectionLost,
     MCPToolContentError,
@@ -96,10 +95,9 @@ class MCPTool(CoreTool):
     async def execute(
         self,
         tool_request: ToolCallRecord,
-        tool_context: ToolContext | None = None,
-        cancellation_token: CancellationToken | None = None,
+        tool_context: ToolContext | None = None,  # None: called without a dispatcher
     ) -> ToolResult:
-        if cancellation_token and cancellation_token.is_cancelled():
+        if tool_context is not None and tool_context.cancelled:
             return ToolResult.cancelled_before_start(tool_request.id)
 
         params = self.validate_parameters(tool_request)
@@ -255,10 +253,9 @@ class MCPResourceTool(CoreTool):
     async def execute(
         self,
         tool_request: ToolCallRecord,
-        tool_context: ToolContext | None = None,
-        cancellation_token: CancellationToken | None = None,
+        tool_context: ToolContext | None = None,  # None: called without a dispatcher
     ) -> ToolResult:
-        if cancellation_token and cancellation_token.is_cancelled():
+        if tool_context is not None and tool_context.cancelled:
             return ToolResult.cancelled_before_start(tool_request.id)
 
         params = self.validate_parameters(tool_request)

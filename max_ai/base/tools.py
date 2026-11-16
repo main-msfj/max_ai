@@ -32,7 +32,7 @@ class ToolContext:
     it may use and how to tell the outside what happens. The dispatcher
     builds it; who it is for comes from ``run_context``."""
 
-    __slots__ = ("run_context", "sandbox", "emit_event", "deps")
+    __slots__ = ("run_context", "sandbox", "emit_event", "deps", "cancellation")
 
     def __init__(
         self,
@@ -40,11 +40,18 @@ class ToolContext:
         sandbox: "SandboxCore | None" = None,
         emit_event: t.Callable[[t.Any], None] | None = None,
         deps: dict[str, t.Any] | None = None,
+        cancellation: CancellationToken | None = None,
     ) -> None:
         self.run_context = run_context
         self.sandbox = sandbox  # already bound to the user
         self.emit_event = emit_event
         self.deps = deps or {}  # the developer's own objects
+        self.cancellation = cancellation  # for tools that leave something running
+
+    @property
+    def cancelled(self) -> bool:
+        """The user cancelled: stop at the next clean point."""
+        return self.cancellation is not None and self.cancellation.is_cancelled()
 
     @property
     def user_id(self) -> str:
@@ -147,20 +154,12 @@ class CoreTool(ComponentBase[BaseModel], ABC):
 
     # -------- ABSTRACT -----------------------------------------------------------
     @abstractmethod
-    async def execute(
-        self,
-        tool_request: ToolCallRecord,
-        tool_context: ToolContext | None = None,
-        cancellation_token: CancellationToken | None = None,
-    ) -> ToolResult:
-        """Execute the tool
-        Args:
-            tool_request: Input parameters for this invocation.
-            tool_context: Runtime context (run id, session id, deps, ...).
-            cancellation_token: Token for cooperative cancellation.
+    async def execute(self, tool_request: ToolCallRecord, tool_ctx: ToolContext) -> ToolResult:
+        """Run the tool and return what happened.
 
-        Returns:
-            A ToolResult describing the outcome.
+        The dispatcher already stops a cancelled call from outside. Look at
+        ``tool_ctx.cancelled`` only when stopping is not enough: a process
+        left running, a task on a server, work half done.
         """
         ...
 

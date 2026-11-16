@@ -243,7 +243,7 @@ class ToolDispatcher:
         tool = self._check(record)
         if isinstance(tool, ToolResult):
             return self._finish(record, tool, emit)
-        tool_ctx = ToolContext(ctx, self.sandbox, emit, dict(self.deps))
+        tool_ctx = ToolContext(ctx, self.sandbox, emit, dict(self.deps), cancellation_token)
 
         # 1. before: the hook may stop the call here.
         if (answered := await self.hook.before(tool, record, tool_ctx)) is not None:
@@ -348,7 +348,7 @@ class ToolDispatcher:
             # object: a user's tool may return anything; checked below.
             if record.result is not None:  # a person already produced it
                 return record.result
-            return await tool.execute(record, tool_ctx, cancellation_token)
+            return await tool.execute(record, tool_ctx)
 
         record.start_execution()
         limit = self.timeout

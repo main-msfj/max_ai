@@ -13,7 +13,6 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError, create_model
 
 from ...base.tools import CoreTool, ToolContext
 from ...config import setting
-from ...core.termination import CancellationToken
 from ...errors.tools import ToolRetry
 from ...loggers import ScopedLogger
 from ...types.tool_call import ToolCallRecord, ToolResult
@@ -107,8 +106,7 @@ class FunctionAsTool(CoreTool):
     async def execute(
         self,
         tool_request: ToolCallRecord,
-        tool_context: ToolContext | None = None,
-        cancellation_token: CancellationToken | None = None,
+        tool_context: ToolContext | None = None,  # None: called without a dispatcher
     ) -> ToolResult:
         logs = log.child(
             action="Executing FunctionTool",
@@ -149,8 +147,8 @@ class FunctionAsTool(CoreTool):
                 loop = asyncio.get_running_loop()
                 task = loop.run_in_executor(None, lambda: self.func(**kwargs))
 
-            if cancellation_token:
-                cancellation_token.link_future(task)
+            if tool_context is not None and tool_context.cancellation is not None:
+                tool_context.cancellation.link_future(task)
 
             result = await asyncio.wait_for(task, timeout=setting.tool_timeout_seconds)
             return ToolResult.success_result(

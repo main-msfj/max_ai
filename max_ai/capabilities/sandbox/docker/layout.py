@@ -17,10 +17,11 @@ TIMED_OUT = (124, 137)  # how `timeout` ends a command it had to stop
 # Read once from the package, then run in the proxy's container.
 PROXY = Path(__file__).with_name("proxy.py").read_text()
 PROXY_PORT = 3128
+DOCKERFILE = str(Path(__file__).with_name("Dockerfile"))  # ours: python + pypdf
 
 
 class DockerSandboxConfig(BaseModel):
-    image: str = "python:3.12-slim"
+    image: str | None = None
     dockerfile: str | None = None
     networks: list[str] = Field(default_factory=list)
 
@@ -29,8 +30,10 @@ class DockerSandbox(SandboxCore):
     """A container named ``docker-sandbox-<identifier>`` with a volume of the
     same name, so skills and files survive the container.
 
-    ``image`` needs bash and python3. With ``dockerfile`` (a path), the image
-    is built from it instead, once per content of the file.
+    With nothing given, the image is built from our ``Dockerfile`` (python and
+    pypdf, which read_file uses for PDFs). Your ``image`` needs bash and
+    python3. With ``dockerfile`` (a path), the image is built from it
+    instead, once per content of the file.
 
     ``networks`` are the domains the container may reach, subdomains
     included (``["pypi.org", "files.pythonhosted.org"]``); empty means no
@@ -46,7 +49,7 @@ class DockerSandbox(SandboxCore):
 
     def __init__(
         self,
-        image: str = "python:3.12-slim",
+        image: str | None = None,
         dockerfile: str | None = None,
         networks: list[str] | None = None,
     ) -> None:
@@ -150,9 +153,12 @@ class DockerSandbox(SandboxCore):
     async def _image(self) -> str:
         """The image to run: ``image``, or the one built from ``dockerfile``.
         Its tag is the hash of the file, so it is rebuilt only when it changes."""
-        if self.dockerfile is None:
+        # 1. Their image is used as it is; with nothing given, ours is built.
+        if self.dockerfile is None and self.image is not None:
             return self.image
-        path = Path(self.dockerfile).expanduser().resolve()
+        path = Path(self.dockerfile or DOCKERFILE).expanduser().resolve()
+
+        # 2. Build only when no image has this file's hash as its tag.
         tag = f"docker-sandbox-image:{hashlib.sha256(path.read_bytes()).hexdigest()[:12]}"
         code, _, _ = await self._docker("image", "inspect", tag)
         if code != 0:
@@ -160,7 +166,7 @@ class DockerSandbox(SandboxCore):
                 "build", "-t", tag, "-f", str(path), str(path.parent)
             )
             if code != 0:
-                raise SandboxError(f"could not build {self.dockerfile}: {error.strip()[-500:]}")
+                raise SandboxError(f"could not build {path}: {error.strip()[-500:]}")
         return tag
 
     @staticmethod
