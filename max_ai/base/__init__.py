@@ -26,7 +26,7 @@ from .middleware import (
 from .quota_store import CoreQuotaStore
 from .session_store import CoreSessionStore
 from .skills import CoreSkillRegistry
-from .tools import CoreRuntimeTool, CoreTool, ToolContext
+from .tools import CoreTool, ToolContext, ToolDefinitionError
 from .workspace import WorkspaceBase
 
 __all__ = [
@@ -46,7 +46,7 @@ __all__ = [
     "CoreQuotaStore",
     "CoreSessionStore",
     "CoreTool",
-    "CoreRuntimeTool",
+    "ToolDefinitionError",
     "CoreMemoryRegistry",
     "CoreKnowledgeRegistry",
     "CoreLogBookRegistry",

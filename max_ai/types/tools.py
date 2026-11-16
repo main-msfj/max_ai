@@ -12,6 +12,14 @@ class ToolApprovalMode(str, Enum):
     ASK_APPROVED = "ask_for_approval"
 
 
+class ToolKind(str, Enum):
+    """Where a tool comes from; it decides which rules its name follows."""
+
+    NATIVE = "native"  # written for the framework (bash, read_file)
+    FUNCTION = "function"  # a Python function turned into a tool
+    MCP = "mcp"  # given by an MCP server, which names it
+
+
 class CoreToolParameters(BaseModel):
     """Core tool parameters"""
 

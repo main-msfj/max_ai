@@ -11,7 +11,7 @@ import shlex
 import typing as t
 from pathlib import Path, PurePosixPath
 
-from ....base.tools import CoreRuntimeTool, ToolContext
+from ....base.tools import CoreTool, ToolContext
 from ....config import setting
 from ....core.ids import short_id
 from ....core.termination import CancellationToken
@@ -84,7 +84,7 @@ def _first(paths: list[str]) -> list[str]:
     return [*paths[: c.MAX_LISTED], f"... and {len(paths) - c.MAX_LISTED} more"]
 
 
-class BashTool(CoreRuntimeTool):
+class BashTool(CoreTool):
     """Run shell commands in the agent's execution environment.
 
     The working directory persists between calls of a conversation;

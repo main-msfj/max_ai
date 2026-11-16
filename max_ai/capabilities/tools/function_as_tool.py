@@ -17,7 +17,7 @@ from ...core.termination import CancellationToken
 from ...errors.tools import ToolRetry
 from ...loggers import ScopedLogger
 from ...types.tool_call import ToolCallRecord, ToolResult
-from ...types.tools import CoreToolParameters, ToolApprovalMode
+from ...types.tools import CoreToolParameters, ToolApprovalMode, ToolKind
 
 # -------- LOGGER -----------------------------------------------------------
 logger = logging.getLogger(__name__)
@@ -26,6 +26,8 @@ log = ScopedLogger(logger, scope="FunctionAsTool")
 
 class FunctionAsTool(CoreTool):
     """Wrap a Python function as a tool with schema + validation."""
+
+    kind = ToolKind.FUNCTION
 
     _LOG_ACTION: str = "Yielding validation error to LLM/UI."
 
@@ -37,7 +39,6 @@ class FunctionAsTool(CoreTool):
         version: str = "1.0.0",
         approval_mode: ToolApprovalMode | str = ToolApprovalMode.ASK_APPROVED,
         read_only: bool = False,
-        policy_subject: str | None = None,
         deferred: bool = False,
     ):
         """Create a tool from a Python function.
@@ -50,8 +51,6 @@ class FunctionAsTool(CoreTool):
             approval_mode: Whether approval is required before execution.
             read_only: The function has no side effects, so the agent may run
                 it at the same time as other read-only calls.
-            policy_subject: Parameter that Policy rules like ``name(pattern)``
-                match, e.g. ``url`` for ``fetch(https://acme.com/*)``.
             deferred: Not sent to the model; found with search_tools and run
                 with call_tool.
         """
@@ -62,7 +61,6 @@ class FunctionAsTool(CoreTool):
             version=version,
             approval_mode=approval_mode,
             read_only=read_only,
-            policy_subject=policy_subject,
             deferred=deferred,
         )
 

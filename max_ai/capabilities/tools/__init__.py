@@ -11,7 +11,6 @@ import typing as t
 
 __all__ = [
     "CoreTool",
-    "CoreRuntimeTool",
     "tool",
     "FunctionAsTool",
     "BashTool",
@@ -22,7 +21,6 @@ __all__ = [
 
 _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "CoreTool": ("max_ai.base.tools", "CoreTool"),
-    "CoreRuntimeTool": ("max_ai.base.tools", "CoreRuntimeTool"),
     "tool": ("max_ai.capabilities.tools.decorator", "tool"),
     "FunctionAsTool": ("max_ai.capabilities.tools.function_as_tool", "FunctionAsTool"),
     "BashTool": ("max_ai.capabilities.tools.bash", "BashTool"),
@@ -32,7 +30,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
 }
 
 if t.TYPE_CHECKING:  # static analyzers see the real symbols
-    from ...base.tools import CoreRuntimeTool, CoreTool
+    from ...base.tools import CoreTool
     from .bash import BashTool
     from .decorator import tool
     from .file_system import FileSystem, FileSystemTools, UserFileSystem

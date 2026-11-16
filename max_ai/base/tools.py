@@ -5,22 +5,20 @@ Defines base classes and interfaces that enable agents
 to execute external actions (e.g., APIs, file I/O, services).
 """
 
-import fnmatch
 import re
 import typing as t
 from abc import ABC, abstractmethod
 
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, ValidationError
 from pydantic import BaseModel
 
-from ..config import setting
 from ..core.termination import CancellationToken
-from ..core.tokenizer import default_counter
 from ..types.tool_call import ToolCallRecord, ToolResult
 from ..types.tools import (
     CoreToolDefinition,
     CoreToolParameters,
     ToolApprovalMode,
+    ToolKind,
 )
 from .component import ComponentBase
 
@@ -62,19 +60,20 @@ class ToolContext:
 
 
 class CoreTool(ComponentBase[BaseModel], ABC):
-    """Base class for all agent tools."""
+    """Base class for all agent tools.
+
+    A tool checks its own name and description when it is built, long
+    before any agent uses it: a tool that cannot be used never starts one.
+    """
 
     component_type = "tool"
+    NAME_PATTERN: t.ClassVar[str] = r"[a-z][a-z0-9_]{0,63}"
 
-    _JSON_TYPE_MAP: t.ClassVar[dict[str, type | tuple[type, ...]]] = {
-        "string": str,
-        "number": (int, float),
-        "integer": int,
-        "boolean": bool,
-        "array": list,
-        "object": dict,
-        "null": type(None),
-    }
+    kind: t.ClassVar[ToolKind] = ToolKind.NATIVE
+    sandbox: t.ClassVar[bool] = False  # True: runs in the sandbox. False: on the host.
+    waits_for_user: t.ClassVar[bool] = False  # The result comes from a person.
+    instructions: t.ClassVar[str] = ""  # How to use it; goes to the prompt.
+    timeout: float | None = None  # Seconds one call may run; None: the dispatcher's.
 
     def __init__(
         self,
@@ -83,63 +82,58 @@ class CoreTool(ComponentBase[BaseModel], ABC):
         version: str = "1.0.0",
         approval_mode: ToolApprovalMode | str = ToolApprovalMode.ASK_APPROVED,
         read_only: bool = False,
-        policy_subject: str | None = None,
         deferred: bool = False,
     ):
         """
-        Initialize the run-scoped context supplied to a tool.
-
         Parameters
         ----------
         name : str
-            Name assigned to the component or resource.
+            What the model calls. snake_case, at most 64 characters, except
+            for an MCP tool, whose server names it.
         description : str
-            Human-readable description of the resource.
-        version : str, default='1.0.0'
-            Version number of the saved configuration.
-        approval_mode : ToolApprovalMode | str, default=ToolApprovalMode.ASK_APPROVED
-            Value used to configure the tool or its run-scoped context.
-        read_only : bool, default=False
-            Value used to configure the tool or its run-scoped context.
-        policy_subject : str | None, default=None
-            Parameter that Policy rules like ``Tool(pattern)`` match against.
-        deferred : bool, default=False
+            What the tool does, in a few words. How to use it goes in
+            ``instructions``.
+        approval_mode : ToolApprovalMode | str
+            Whether a call asks the user first. The dispatcher's hook may
+            decide otherwise.
+        read_only : bool
+            The tool changes nothing: it only reads. It is a fact about the
+            tool, not a permission. Two things use it: the dispatcher runs
+            consecutive read-only calls in parallel, and MCP sends a
+            read-only call again when the connection drops mid-call.
+        deferred : bool
             Not sent to the model: it is listed in the prompt, found with
             ``search_tools`` and run with ``call_tool``.
         """
-        self.validate_name(name)
-        self.validate_description(name, description)
         self.name = name
         self.version = version
         self.description = description
         self.approval_mode = approval_mode
         self.read_only = read_only
-        self.policy_subject = policy_subject
         self.deferred = deferred
-
-        # Lazily-built schema validator
-        self._schema_validator: Draft202012Validator | None = None
+        self._schema_validator: Draft202012Validator | None = None  # built on first use
+        self._check_definition()
 
     # -------- DEFINITION --------------------------------------------------------
-    def validate_name(self, name: str) -> None:
-        """Raise unless ``name`` matches ``setting.tool_name_pattern``."""
-        if not re.fullmatch(setting.tool_name_pattern, name):
-            raise ValueError(f"Tool name {name!r} must be snake_case, at most 64 characters")
+    def _check_definition(self) -> None:
+        """Everything a tool must have to be usable; raises on the first miss."""
+        self.required_name()
+        self.required_description()
 
-    def validate_description(self, name: str, description: str) -> None:
-        """Raise unless the description says what the tool does in a few
-        words; how to use it belongs in the prompt."""
-        tokens = default_counter().count_text(description)
-        if tokens < setting.tool_description_min_tokens:
-            raise ValueError(
-                f"Tool {name!r}: description has {tokens} tokens, at least "
-                f"{setting.tool_description_min_tokens}; say what the tool does"
+    def required_name(self) -> None:
+        """Raise unless the tool has a usable name. A server names its own
+        tools, so an MCP tool only needs to have one."""
+        if not self.name:
+            raise ToolDefinitionError("The tool has no name.")
+        if self.kind is not ToolKind.MCP and not re.fullmatch(self.NAME_PATTERN, self.name):
+            raise ToolDefinitionError(
+                f"Tool name {self.name!r} must be snake_case, at most 64 characters."
             )
-        if tokens > setting.tool_description_max_tokens:
-            raise ValueError(
-                f"Tool {name!r}: description has {tokens} tokens, at most "
-                f"{setting.tool_description_max_tokens}; move how to use it to the prompt"
-            )
+
+    def required_description(self) -> None:
+        """Raise unless the tool says what it does."""
+        if not self.description or not self.description.strip():
+            raise ToolDefinitionError(f"Tool {self.name!r} has no description.")
 
     @property
     @abstractmethod
@@ -147,34 +141,9 @@ class CoreTool(ComponentBase[BaseModel], ABC):
         """JSON schema for tool inputs."""
         ...
 
-    # -------- POLICY -----------------------------------------------------------
-    # Runs commands on the executor: without a sandbox, the Policy always asks.
-    runs_commands: t.ClassVar[bool] = False
-    # True: it runs in the sandbox. False: it runs on the host.
-    sandbox: t.ClassVar[bool] = False
-    # The result comes from a person: the turn pauses until they answer.
-    waits_for_user: t.ClassVar[bool] = False
-
     def unwrap(self, parameters: dict[str, t.Any]) -> tuple[str, dict[str, t.Any]] | None:
         """The tool and arguments this call really runs; None runs this tool."""
         return None
-
-    def permission_subjects(self, parameters: dict[str, t.Any]) -> tuple[list[str], bool]:
-        """What ``Tool(pattern)`` rules match against, and whether that is all
-        of the call. By default, the ``policy_subject`` parameter if set."""
-        if self.policy_subject is None:
-            return [], True
-        value = parameters.get(self.policy_subject)
-        if not isinstance(value, str):
-            return [], False
-        # Rules name workspace paths as the user sees them (secrets/**), however
-        # the model wrote them (./secrets/key, workspace/secrets/key).
-        return [value.strip().removeprefix("./").removeprefix("workspace/")], True
-
-    def matches(self, pattern: str, subject: str) -> bool:
-        """``subject`` matches a rule's pattern: a glob, where ``**`` is any depth."""
-        return fnmatch.fnmatchcase(subject, pattern.replace("**/", "*").replace("/**", "/*"))
-
 
     # -------- ABSTRACT -----------------------------------------------------------
     @abstractmethod
@@ -209,13 +178,12 @@ class CoreTool(ComponentBase[BaseModel], ABC):
         """
         validator = self._get_validator()
 
-        # iter_errors yields ALL errors, not just the first. Sorting by path
-        # gives stable, deterministic messages (useful for tests and for the
-        # LLM to correct everything in a single retry).
-        errors = sorted(
-            validator.iter_errors(tool_request.parameters),
-            key=lambda e: list(e.absolute_path),
+        # All the errors, sorted by path: the model can fix them in one retry.
+        # jsonschema's own type hints leave iter_errors partly untyped.
+        found: t.Iterable[ValidationError] = validator.iter_errors(  # pyright: ignore[reportUnknownMemberType]
+            tool_request.parameters
         )
+        errors = sorted(found, key=lambda e: list(e.absolute_path))
         if not errors:
             return CoreToolParameters(is_tool_valid=True, msg_error=None)
 
@@ -228,25 +196,13 @@ class CoreTool(ComponentBase[BaseModel], ABC):
     def build_tool_definition(self) -> CoreToolDefinition:
         """Return a provider-agnostic descriptor of this tool."""
         return CoreToolDefinition(
-            name=f"{self.name}_v{self.version}",
+            name=self.name,
             description=self.description,
             parameters=self.parameters,
             sandbox=self.sandbox,
         )
 
     # -------- PRIVATE -----------------------------------------------------------
-    @classmethod
-    def _check_type(cls, value: t.Any, expected_type: str) -> bool:
-        """Match value to JSON schema type."""
-        if expected_type == "boolean":
-            return isinstance(value, bool)
-        if expected_type in ("number", "integer") and isinstance(value, bool):
-            return False
-        expected = cls._JSON_TYPE_MAP.get(expected_type)
-        if expected is None:
-            return True
-        return isinstance(value, expected)
-
     def _get_validator(self) -> Draft202012Validator:
         """Lazily build and cache the JSON Schema Validator"""
         if self._schema_validator is None:
@@ -257,25 +213,9 @@ class CoreTool(ComponentBase[BaseModel], ABC):
 
     # -------- DUNDERS -----------------------------------------------------------
     def __str__(self) -> str:
-        """
-        Return the tool name for display.
-
-        Returns
-        -------
-        str
-            The resulting text value.
-        """
         return f"{type(self).__name__}(name='{self.name}')"
 
     def __repr__(self) -> str:
-        """
-        Return a readable representation of this tool.
-
-        Returns
-        -------
-        str
-            The resulting text value.
-        """
         return (
             f"<{type(self).__name__} "
             f"name='{self.name}' "
@@ -284,10 +224,5 @@ class CoreTool(ComponentBase[BaseModel], ABC):
         )
 
 
-class CoreRuntimeTool(CoreTool, ABC):
-    """Marker base for tools that must run in an isolated runtime.
-
-    Normal ``CoreTool`` instances are safe to execute in the agent process
-    by default. Runtime tools need a filesystem/runtime environment such as
-    Docker, Firecracker, or another sandbox.
-    """
+class ToolDefinitionError(ValueError):
+    """A tool was built with a name or a description that cannot be used."""

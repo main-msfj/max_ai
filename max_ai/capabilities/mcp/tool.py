@@ -32,7 +32,7 @@ from ...errors.mcp import (
 )
 from ...loggers import ScopedLogger
 from ...types.tool_call import ToolCallRecord, ToolFile, ToolResult
-from ...types.tools import ToolApprovalMode
+from ...types.tools import ToolApprovalMode, ToolKind
 from .task import MCPTask, MCPTaskRunning
 
 if t.TYPE_CHECKING:
@@ -56,6 +56,8 @@ def _sanitize_name(raw: str) -> str:
 
 class MCPTool(CoreTool):
     """Adapter that exposes one remote MCP tool as a local CoreTool."""
+
+    kind = ToolKind.MCP  # the server names it
 
     def __init__(
         self,
@@ -81,13 +83,6 @@ class MCPTool(CoreTool):
             read_only=read_only,
             deferred=deferred,
         )
-
-    # MCP servers write their own names and descriptions: not ours to check.
-    def validate_name(self, name: str) -> None:
-        pass
-
-    def validate_description(self, name: str, description: str) -> None:
-        pass
 
     @property
     def parameters(self) -> dict[str, t.Any]:
@@ -219,6 +214,8 @@ def _read_resource(resource: t.Any, texts: list[str], files: list[ToolFile]) -> 
 class MCPResourceTool(CoreTool):
     """Synthetic CoreTool for reading resources from one MCP server."""
 
+    kind = ToolKind.MCP
+
     def __init__(
         self,
         client_manager: "MCPClientManager",
@@ -250,13 +247,6 @@ class MCPResourceTool(CoreTool):
             "required": ["uri"],
             "additionalProperties": False,
         }
-
-    # MCP servers write their own names and descriptions: not ours to check.
-    def validate_name(self, name: str) -> None:
-        pass
-
-    def validate_description(self, name: str, description: str) -> None:
-        pass
 
     @property
     def parameters(self) -> dict[str, t.Any]:
