@@ -13,6 +13,7 @@ from jsonschema import Draft202012Validator, ValidationError
 from pydantic import BaseModel
 
 from ..core.termination import CancellationToken
+from ..types.run_context import RunContext
 from ..types.tool_call import ToolCallRecord, ToolResult
 from ..types.tools import (
     CoreToolDefinition,
@@ -21,10 +22,7 @@ from ..types.tools import (
     ToolKind,
 )
 from .component import ComponentBase
-
-if t.TYPE_CHECKING:
-    from ..types.run_context import RunContext
-    from .sandbox import SandboxCore
+from .sandbox import SandboxCore
 
 
 class ToolContext:
@@ -36,8 +34,8 @@ class ToolContext:
 
     def __init__(
         self,
-        run_context: "RunContext",
-        sandbox: "SandboxCore | None" = None,
+        run_context: RunContext,
+        sandbox: SandboxCore | None = None,
         emit_event: t.Callable[[t.Any], None] | None = None,
         deps: dict[str, t.Any] | None = None,
         cancellation: CancellationToken | None = None,
