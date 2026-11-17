@@ -6,10 +6,18 @@ from pathlib import Path
 import pytest
 
 from max_ai.capabilities.sandbox.local import LocalSandbox
-from max_ai.capabilities.tools.filesystem import WriteFileTool
+from max_ai.capabilities.tools.filesystem import ReadFileTool, WriteFileTool
 from max_ai.core.tool import ToolDispatcher, ToolRegistry
 from max_ai.types.run_context import RunContext
 from max_ai.types.tool_call import ToolCallRecord
+
+CTX: list[RunContext] = []  # the conversation of the test in course
+
+
+@pytest.fixture(autouse=True)
+def ctx():
+    CTX[:] = [RunContext(user_id="user-1", session_id="s1")]
+    return CTX[0]
 
 
 @pytest.fixture
@@ -30,7 +38,7 @@ def workspace(sandbox):
 
 async def write(sandbox, path, content):
     record = ToolCallRecord(tool_name="write_file", parameters={"path": path, "content": content})
-    ctx = RunContext(user_id="user-1", session_id="s1")
+    ctx = CTX[0]
     return await ToolDispatcher(ToolRegistry([WriteFileTool()]), sandbox).dispatch(record, ctx)
 
 
@@ -41,7 +49,16 @@ async def test_a_new_file_is_created_with_its_folders(sandbox, workspace):
     assert not list(workspace.rglob("*.partial"))
 
 
-async def test_an_existing_file_is_replaced_whole(sandbox, workspace):
+async def read(sandbox, path):
+    record = ToolCallRecord(tool_name="read_file", parameters={"path": path})
+    return await ToolDispatcher(ToolRegistry([ReadFileTool()]), sandbox).dispatch(record, CTX[0])
+
+
+async def test_an_existing_file_is_replaced_whole_once_it_was_read(sandbox, workspace):
+    refused = await write(sandbox, "app.py", "print('new')\n")
+    assert not refused.success and "you have not read it; read it first" in refused.error
+    assert (workspace / "app.py").read_text() == "print('old')\n"
+    await read(sandbox, "app.py")
     result = await write(sandbox, "app.py", "print('new')\n")
     assert result.result == "Replaced app.py (1 lines)."
     assert (workspace / "app.py").read_text() == "print('new')\n"
@@ -49,7 +66,8 @@ async def test_an_existing_file_is_replaced_whole(sandbox, workspace):
 
 async def test_a_replaced_script_stays_executable(sandbox, workspace):
     os.chmod(workspace / "app.py", 0o755)
-    await write(sandbox, "app.py", "#!/usr/bin/env python3\n")
+    await read(sandbox, "app.py")
+    assert (await write(sandbox, "app.py", "#!/usr/bin/env python3\n")).success
     assert os.access(workspace / "app.py", os.X_OK)
 
 

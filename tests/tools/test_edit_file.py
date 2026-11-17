@@ -13,6 +13,14 @@ from max_ai.types.tool_call import ToolCallRecord
 
 CODE = "def add(a, b):\n    return a + b\n\ndef sub(a, b):\n    return a + b\n"
 
+CTX: list[RunContext] = []  # the conversation of the test in course
+
+
+@pytest.fixture(autouse=True)
+def ctx():
+    CTX[:] = [RunContext(user_id="user-1", session_id="s1")]
+    return CTX[0]
+
 
 @pytest.fixture
 async def sandbox(tmp_path):
@@ -35,7 +43,7 @@ def workspace(sandbox):
 async def edit(sandbox, path, old, new, **more):
     parameters = {"path": path, "old_text": old, "new_text": new, **more}
     record = ToolCallRecord(tool_name="edit_file", parameters=parameters)
-    ctx = RunContext(user_id="user-1", session_id="s1")
+    ctx = CTX[0]
     return await ToolDispatcher(ToolRegistry([EditFileTool()]), sandbox).dispatch(record, ctx)
 
 

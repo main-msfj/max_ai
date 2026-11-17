@@ -24,8 +24,17 @@ def write(request, content):
     if os.path.isdir(file):
         raise ValueError("it is a folder, not a file")
 
-    # 3. Write beside the file and swap, so a cut write leaves no half file.
+    # 3. An existing file is replaced only if the model saw it as it is now.
     existed = os.path.exists(file)
+    if existed:
+        with open(file, "rb") as handle:
+            now = hashlib.sha256(handle.read()).hexdigest()
+        if request["seen"] is None:
+            raise ValueError("it already exists and you have not read it; read it first")
+        if request["seen"] != now:
+            raise ValueError("it changed since you read it; read it again")
+
+    # 4. Write beside the file and swap, so a cut write leaves no half file.
     os.makedirs(os.path.dirname(file), exist_ok=True)
     partial = file + ".partial"
     with open(partial, "wb") as handle:

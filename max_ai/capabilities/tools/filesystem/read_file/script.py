@@ -1,5 +1,6 @@
 """Runs inside the sandbox: reads one file for read_file. Standard library only."""
 
+import hashlib
 import json
 import os
 import sys
@@ -69,7 +70,11 @@ def read(request):
     first, last = request["first"], request["first"] + request["limit"] - 1
     wanted = lines[first - 1:last]
     numbered = [f"{first + i:>6}\t{line[:request['width']]}" for i, line in enumerate(wanted)]
-    return {"total": len(lines), "lines": "\n".join(numbered)}
+
+    # 4. The hash of the whole file: what the model has now seen.
+    with open(file, "rb") as handle:
+        seen = hashlib.sha256(handle.read()).hexdigest()
+    return {"total": len(lines), "lines": "\n".join(numbered), "sha256": seen}
 
 
 def main():

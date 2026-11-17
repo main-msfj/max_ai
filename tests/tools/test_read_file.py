@@ -12,6 +12,14 @@ from max_ai.core.tool import ToolDispatcher, ToolRegistry
 from max_ai.types.run_context import RunContext
 from max_ai.types.tool_call import ToolCallRecord
 
+CTX: list[RunContext] = []  # the conversation of the test in course
+
+
+@pytest.fixture(autouse=True)
+def ctx():
+    CTX[:] = [RunContext(user_id="user-1", session_id="s1")]
+    return CTX[0]
+
 
 @pytest.fixture
 async def sandbox(tmp_path):
@@ -30,7 +38,7 @@ async def sandbox(tmp_path):
 
 async def read(sandbox, **parameters):
     record = ToolCallRecord(tool_name="read_file", parameters=parameters)
-    ctx = RunContext(user_id="user-1", session_id="s1")
+    ctx = CTX[0]
     return await ToolDispatcher(ToolRegistry([ReadFileTool()]), sandbox).dispatch(record, ctx)
 
 

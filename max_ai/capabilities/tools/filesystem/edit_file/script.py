@@ -1,5 +1,6 @@
 """Runs inside the sandbox: edits one file for edit_file. Standard library only."""
 
+import hashlib
 import json
 import os
 import shutil
@@ -52,12 +53,13 @@ def edit(request):
         )
 
     # 5. Write beside the file and swap, so a cut write leaves no half file.
+    edited = content.replace(old, new).encode("utf-8")
     partial = file + ".partial"
     with open(partial, "wb") as handle:
-        handle.write(content.replace(old, new).encode("utf-8"))
+        handle.write(edited)
     shutil.copymode(file, partial)  # a script stays executable
     os.replace(partial, file)
-    return {"replaced": found}
+    return {"replaced": found, "sha256": hashlib.sha256(edited).hexdigest()}
 
 
 def main():

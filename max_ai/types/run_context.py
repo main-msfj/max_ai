@@ -53,6 +53,7 @@ class RunContext(BaseModel):
     )
     mcp_tasks: dict[str, dict[str, JsonValue]] = Field(default_factory=dict)  # MCP tasks still running, by task id
     cwd: str | None = None  # where bash ended, when not the workspace
+    files_seen: dict[str, str] = Field(default_factory=dict)  # file path -> sha256 the model saw
     inbox: list[str] = Field(
         default_factory=list,
         description=(

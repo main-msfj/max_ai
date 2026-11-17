@@ -10,6 +10,7 @@ from pathlib import Path
 from .....base.tools import CoreTool, ToolContext
 from .....types.tool_call import ToolCallRecord, ToolResult
 from .....types.tools import ToolApprovalMode
+from .._seen import FilesSeen
 
 SCRIPT = Path(__file__).with_name("script.py").read_text()  # sent to the sandbox
 
@@ -67,8 +68,9 @@ class ReadFileTool(CoreTool):
         # 1. Where this session may read: its workspace, its tmp and the skills.
         sandbox = tool_ctx.sandbox
         paths = sandbox.session_paths(tool_ctx.session_id)
+        start = FilesSeen.start(tool_ctx, paths["workspace"])
         request = {
-            "path": path, "cwd": paths["workspace"], "first": first, "limit": limit,
+            "path": path, "cwd": start, "first": first, "limit": limit,
             "width": self.MAX_LINE_CHARS,
             "allowed": [paths["workspace"], paths["tmp"], str(sandbox.layout.skills)],
         }
@@ -85,7 +87,10 @@ class ReadFileTool(CoreTool):
         if not answer["ok"]:
             return ToolResult.execution_error(tool_request.id, f"{path}: {answer['error']}.")
 
-        # 4. Tell the model when there is more, and where to continue.
+        # 4. Note what the model saw, so a later write knows the file is known.
+        tool_ctx.run_context.files_seen[FilesSeen.key(start, path)] = answer["sha256"]
+
+        # 5. Tell the model when there is more, and where to continue.
         total, lines = answer["total"], answer["lines"]
         last = first + limit - 1
         if not lines:
