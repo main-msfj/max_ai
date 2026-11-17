@@ -6,9 +6,9 @@ import pytest
 from max_ai.base.tools import ToolDefinitionError
 from max_ai.capabilities.mcp.tool import MCPTool
 from max_ai.capabilities.tools.ask_user import AskUserTool
-from max_ai.capabilities.tools.bash import BashTool
+from max_ai.capabilities.tools.to_delete.bash import BashTool
 from max_ai.capabilities.tools.decorator import tool
-from max_ai.capabilities.tools.file_system import FileSystemTools
+from max_ai.capabilities.tools.to_delete.file_system import FileSystemTools
 from max_ai.capabilities.tools.plan import AgentUpdatePlanTool
 from max_ai.capabilities.tools.search_tool import SearchToolsTool
 from max_ai.core.tool.registry import ToolRegistry

@@ -4,7 +4,7 @@ never leave its workspace."""
 import pytest
 
 from max_ai.capabilities.sandbox.local import LocalSandbox
-from max_ai.capabilities.tools.filesystem import filesystem_tools
+from max_ai.capabilities.tools.to_delete.filesystem import filesystem_tools
 from max_ai.types.tool_call import ToolCallRecord
 
 

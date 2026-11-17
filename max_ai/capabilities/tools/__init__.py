@@ -23,17 +23,17 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "CoreTool": ("max_ai.base.tools", "CoreTool"),
     "tool": ("max_ai.capabilities.tools.decorator", "tool"),
     "FunctionAsTool": ("max_ai.capabilities.tools.function_as_tool", "FunctionAsTool"),
-    "BashTool": ("max_ai.capabilities.tools.bash", "BashTool"),
-    "FileSystem": ("max_ai.capabilities.tools.file_system", "FileSystem"),
-    "FileSystemTools": ("max_ai.capabilities.tools.file_system", "FileSystemTools"),
-    "UserFileSystem": ("max_ai.capabilities.tools.file_system", "UserFileSystem"),
+    "BashTool": ("max_ai.capabilities.tools.to_delete.bash", "BashTool"),
+    "FileSystem": ("max_ai.capabilities.tools.to_delete.file_system", "FileSystem"),
+    "FileSystemTools": ("max_ai.capabilities.tools.to_delete.file_system", "FileSystemTools"),
+    "UserFileSystem": ("max_ai.capabilities.tools.to_delete.file_system", "UserFileSystem"),
 }
 
 if t.TYPE_CHECKING:  # static analyzers see the real symbols
     from ...base.tools import CoreTool
-    from .bash import BashTool
+    from .to_delete.bash import BashTool
     from .decorator import tool
-    from .file_system import FileSystem, FileSystemTools, UserFileSystem
+    from .to_delete.file_system import FileSystem, FileSystemTools, UserFileSystem
     from .function_as_tool import FunctionAsTool
 
 

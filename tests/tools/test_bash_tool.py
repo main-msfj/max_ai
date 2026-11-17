@@ -10,7 +10,7 @@ import pytest
 
 from max_ai.base.tools import ToolContext
 from max_ai.capabilities.executor.local import LocalExecutor
-from max_ai.capabilities.tools.bash import BashTool
+from max_ai.capabilities.tools.to_delete.bash import BashTool
 from max_ai.capabilities.workspace.local import LocalWorkspace
 from max_ai.config import setting
 from max_ai.types.tool_call import ToolCallRecord

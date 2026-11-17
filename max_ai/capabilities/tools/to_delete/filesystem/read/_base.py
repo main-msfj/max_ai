@@ -7,11 +7,11 @@ import shlex
 import typing as t
 from pathlib import Path
 
-from .....base.tools import ToolContext
-from .....config import setting
-from .....core.termination.cancellation import CancellationToken
-from .....types.tool_call import ToolCallRecord, ToolResult
-from .....types.tools import ToolApprovalMode
+from ......base.tools import ToolContext
+from ......config import setting
+from ......core.termination.cancellation import CancellationToken
+from ......types.tool_call import ToolCallRecord, ToolResult
+from ......types.tools import ToolApprovalMode
 from .._base import FileSystem
 
 # Read once from the package, then sent to the environment with every call

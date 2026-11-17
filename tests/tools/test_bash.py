@@ -6,7 +6,7 @@ import pytest
 
 from max_ai.capabilities.sandbox.local import LocalSandbox
 from max_ai.capabilities.skills import LocalSkills
-from max_ai.capabilities.tools.bash_v2 import BashTool
+from max_ai.capabilities.tools.bash import BashTool
 from max_ai.core.tool import ToolDispatcher, ToolHook, ToolRegistry
 from max_ai.types.run_context import RunContext
 from max_ai.types.tool_call import ToolCallRecord

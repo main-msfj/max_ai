@@ -46,9 +46,9 @@ from ..capabilities.stacks import (
 )
 from ..capabilities.stacks.agent_policy_layer import AgentPolicyLayer
 from ..capabilities.tools.ask_user import AskUserTool
-from ..capabilities.tools.bash import BashTool
+from ..capabilities.tools.to_delete.bash import BashTool
 from ..capabilities.tools.call_tool import CallToolTool
-from ..capabilities.tools.file_system import FileSystem
+from ..capabilities.tools.to_delete.file_system import FileSystem
 from ..capabilities.tools.plan import AgentUpdatePlanTool
 from ..capabilities.tools.search_tool import SearchToolsTool
 from ..capabilities.workspace.local import LocalWorkspace

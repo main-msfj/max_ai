@@ -10,8 +10,6 @@ and resumes. The pause is record state: it survives process death.
 import typing as t
 
 from ....base.tools import CoreTool, CoreToolParameters, ToolContext
-from ....core.harness import messages as harness
-from ....core.termination.cancellation import CancellationToken
 from ....types.tool_call import ToolCallRecord, ToolResult
 from ....types.tools import ToolApprovalMode
 
@@ -20,6 +18,15 @@ class AskUserTool(CoreTool):
     """Native framework tool — pause the run to ask the user questions."""
 
     TOOL_NAME: t.ClassVar[str] = "ask_user"
+    DESCRIPTION: t.ClassVar[str] = (
+        "Ask the user 1 to 4 questions in one form and wait for the answers. "
+        "Use it when you need a decision or a detail you cannot work out "
+        "yourself, and put every question you have in the same call."
+    )
+    NOT_ANSWERED: t.ClassVar[str] = (
+        "The user did not answer this question. Do not take this as permission. "
+        "Ask it again only if you still need the answer."
+    )
     waits_for_user = True
     _OPTION_SCHEMA: t.ClassVar[dict[str, t.Any]] = {
         "type": "array",
@@ -49,17 +56,7 @@ class AskUserTool(CoreTool):
     def __init__(self) -> None:
         super().__init__(
             name=self.TOOL_NAME,
-            description=(
-                "Ask the user 1-4 questions and wait for the answers. This is "
-                "the ONLY way to ask the user something mid-task: it pauses "
-                "the run and shows ONE interactive form with every question. "
-                "Use it whenever you need clarification, a decision, or a "
-                "preference that cannot be inferred from context — never ask "
-                "questions in your plain-text reply. Put ALL the questions "
-                "you need right now in a single call (the `questions` list), "
-                "never one call per question: the user answers them together "
-                "and you get every answer in one round."
-            ),
+            description=self.DESCRIPTION,
             approval_mode=ToolApprovalMode.AUTO_APPROVED,
         )
 
@@ -70,7 +67,7 @@ class AskUserTool(CoreTool):
             record.id,
             {
                 "answers": {
-                    q["question"]: answers.get(q["question"], harness.QUESTION_NOT_ANSWERED)
+                    q["question"]: answers.get(q["question"], AskUserTool.NOT_ANSWERED)
                     for q in record.parameters["questions"]
                 }
             },
@@ -144,12 +141,7 @@ class AskUserTool(CoreTool):
             return CoreToolParameters(is_tool_valid=False, msg_error=error)
         return checked
 
-    async def execute(
-        self,
-        tool_request: ToolCallRecord,
-        tool_context: ToolContext | None = None,
-        cancellation_token: CancellationToken | None = None,
-    ) -> ToolResult:
+    async def execute(self, tool_request: ToolCallRecord, tool_ctx: ToolContext) -> ToolResult:
         """Never reached: a person produces this tool's result."""
         return ToolResult.execution_error(
             tool_request.id, f"{self.TOOL_NAME} is answered by a person"

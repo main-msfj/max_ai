@@ -11,17 +11,17 @@ import shlex
 import typing as t
 from pathlib import Path, PurePosixPath
 
-from ....base.tools import CoreTool, ToolContext
-from ....config import setting
-from ....core.ids import short_id
-from ....core.termination import CancellationToken
-from ....types.tool_call import ToolCallRecord, ToolResult
-from ....types.tools import CoreToolParameters, ToolApprovalMode
+from .....base.tools import CoreTool, ToolContext
+from .....config import setting
+from .....core.ids import short_id
+from .....core.termination import CancellationToken
+from .....types.tool_call import ToolCallRecord, ToolResult
+from .....types.tools import CoreToolParameters, ToolApprovalMode
 from . import constant as c
 from ._permissions import command_matches, split_command
 
 if t.TYPE_CHECKING:
-    from ....base.executor import ExecutionSession, ExecutorBase
+    from .....base.executor import ExecutionSession, ExecutorBase
 
 # The script around every command; build_script() puts the values above it.
 _WRAPPER = Path(__file__).with_name("wrapper.sh").read_text()

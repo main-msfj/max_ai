@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ....base.tools import CoreTool
+from .....base.tools import CoreTool
 
 SESSION = "$SESSION/"
 WORKSPACE = "$WORKSPACE/"

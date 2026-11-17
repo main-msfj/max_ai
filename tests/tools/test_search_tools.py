@@ -4,9 +4,11 @@ import pytest
 from pydantic import BaseModel
 
 from max_ai.base.embedding import CoreEmbedding
+from max_ai.base.tools import ToolContext
 from max_ai.capabilities.tools.decorator import tool as as_tool
 from max_ai.capabilities.tools.search_tool import SearchToolsTool
 from max_ai.core.tool.registry import ToolRegistry
+from max_ai.types.run_context import RunContext
 from max_ai.types.tool_call import ToolCallRecord
 
 # Each dimension is one meaning, reached by words of either language.
@@ -61,9 +63,7 @@ async def send_email(to: str) -> str:
 
 
 def searcher(registry: ToolRegistry, embedding: CoreEmbedding | None) -> SearchToolsTool:
-    tool = SearchToolsTool(registry)
-    tool._embedding = embedding  # a fake model, or None for keywords only
-    return tool
+    return SearchToolsTool(registry, embedding)  # a fake model, or None for keywords only
 
 
 def catalog() -> ToolRegistry:
@@ -78,9 +78,8 @@ async def always_loaded(query: str) -> str:
 
 
 async def call(tool: SearchToolsTool, **parameters):
-    return await tool.execute(
-        ToolCallRecord(id="s", tool_name="search_tools", parameters=parameters)
-    )
+    record = ToolCallRecord(id="s", tool_name="search_tools", parameters=parameters)
+    return await tool.execute(record, ToolContext(RunContext(user_id="u")))
 
 
 def names(result) -> list[str]:
@@ -165,3 +164,27 @@ async def test_only_deferred_tools_are_searched_or_listed():
     tool = searcher(catalog(), None)
     assert "always_loaded" not in names(await call(tool, query="search everything"))
     assert "always_loaded" not in (await call(tool, query="pizza")).result["hint"]
+
+
+class CountingEmbedding(MeaningEmbedding):
+    def __init__(self) -> None:
+        super().__init__()
+        self.embedded: list[str] = []
+
+    async def _embed(self, texts):
+        self.embedded += texts
+        return await super()._embed(texts)
+
+
+async def test_each_tool_is_embedded_only_once():
+    model = CountingEmbedding()
+    tool = searcher(catalog(), model)
+    await call(tool, query="internet")
+    await call(tool, query="dormir")
+    assert len(model.embedded) == 4 + 2  # the four deferred tools once, and two queries
+
+
+async def test_a_loaded_tool_asked_by_name_is_not_loaded_again():
+    result = await call(searcher(catalog(), None), names=["always_loaded", "get_weather"])
+    assert names(result) == ["get_weather"]
+    assert "Already loaded, call directly: always_loaded." in result.result["hint"]

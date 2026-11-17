@@ -7,7 +7,7 @@ import os
 import pytest
 
 from max_ai.capabilities.sandbox.local import LocalSandbox
-from max_ai.capabilities.tools.filesystem_v2 import ReadFileTool
+from max_ai.capabilities.tools.filesystem import ReadFileTool
 from max_ai.core.tool import ToolDispatcher, ToolRegistry
 from max_ai.types.run_context import RunContext
 from max_ai.types.tool_call import ToolCallRecord

@@ -124,6 +124,7 @@ class ToolDispatcher:
         batches: list[list[ToolCallRecord]] = []
         previous_read_only = False
         for record in records:
+            self._unwrap(record)
             tool = self.registry.get(record.tool_name)
             read_only = tool is not None and tool.read_only
             if read_only and previous_read_only:
@@ -197,6 +198,7 @@ class ToolDispatcher:
         emit = emit or _silent
         if record.is_consumed:
             return record.result
+        self._unwrap(record)
         # This same call is running right now: that run will answer it.
         if record.id in self._active:
             log.child(tool_call_id=record.id).warning("Tool call dispatched while it runs")
@@ -261,6 +263,17 @@ class ToolDispatcher:
         react = self.hook.after if result.success else self.hook.failed
         result = await react(tool, record, tool_ctx, result)
         return self._finish(record, result, emit)
+
+    def _unwrap(self, record: ToolCallRecord) -> None:
+        """A call through a door (``call_tool``) becomes the call to the real
+        tool, once: checks, permission and hooks only see the real tool."""
+        if record.called_as is not None or record.is_consumed:
+            return
+        tool = self.registry.get(record.tool_name)
+        target = tool.unwrap(record.parameters) if tool is not None else None
+        if target is not None:
+            record.called_as = record.tool_name
+            record.tool_name, record.parameters = target
 
     def _check(self, record: ToolCallRecord) -> CoreTool | ToolResult:
         """The tool this call names, or why the call cannot run."""

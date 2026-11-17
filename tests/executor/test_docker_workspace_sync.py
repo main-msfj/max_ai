@@ -83,7 +83,7 @@ async def test_a_killed_container_is_reported_lost_and_replaced(tmp_path):
 
 async def test_bash_runs_its_script_in_the_container_and_stops_at_the_limit(tmp_path, monkeypatch):
     from max_ai.base.tools import ToolContext
-    from max_ai.capabilities.tools.bash import BashTool
+    from max_ai.capabilities.tools.to_delete.bash import BashTool
     from max_ai.config import setting
     from max_ai.types.tool_call import ToolCallRecord
 

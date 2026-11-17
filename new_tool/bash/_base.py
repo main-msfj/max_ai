@@ -14,8 +14,8 @@ from pathlib import PurePosixPath
 
 from max_ai.base.session_store import validate_id
 from max_ai.base.tools import ToolContext
-from max_ai.capabilities.tools.bash import constant as c
-from max_ai.capabilities.tools.bash._tool import BashTool, build_script, changed_files
+from max_ai.capabilities.tools.to_delete.bash import constant as c
+from max_ai.capabilities.tools.to_delete.bash._tool import BashTool, build_script, changed_files
 from max_ai.config import setting
 from max_ai.core.ids import short_id
 from max_ai.core.termination import CancellationToken

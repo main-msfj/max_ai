@@ -97,7 +97,7 @@ async def test_approval_enter_while_busy(tmp_path, answer):
 
 @pytest.mark.asyncio
 async def test_always_allow_adds_a_rule_to_the_conversation(tmp_path):
-    from max_ai.capabilities.tools.bash import BashTool
+    from max_ai.capabilities.tools.to_delete.bash import BashTool
 
     app = MaxAIApp(SimpleNamespace(name="test", memory=None, skills=None, knowledge=[],
                                    tools=[BashTool()], workspace=SimpleNamespace(base_root=tmp_path)))

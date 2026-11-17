@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from max_ai.base.tools import ToolContext
-from max_ai.capabilities.tools.file_system import FileSystemTools
+from max_ai.capabilities.tools.to_delete.file_system import FileSystemTools
 from max_ai.capabilities.workspace.local import LocalWorkspace, UserFileSystem
 from max_ai.config import setting
 from max_ai.core.tool.dispatcher import ToolDispatcher

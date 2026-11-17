@@ -7,9 +7,8 @@ import typing as t
 
 from ....base.embedding import CoreEmbedding
 from ....base.tools import CoreTool, ToolContext
-from ....core.embeddings import FastEmbedEmbedding, rank
+from ....core.embeddings import rank
 from ....core.ranking import bm25, fuse, words
-from ....core.termination.cancellation import CancellationToken
 from ....core.tool.registry import ToolRegistry
 from ....types.tool_call import ToolCallRecord, ToolResult
 from ....types.tools import ToolApprovalMode
@@ -20,9 +19,9 @@ logger = logging.getLogger(__name__)
 class SearchToolsTool(CoreTool):
     """Look up tools that are not loaded and return their schemas.
 
-    Hybrid search: BM25 finds the exact words ("exa", "fetch"), embeddings
-    find the meaning ("leer una página"), and RRF joins both rankings.
-    Without an embedding model it searches by keywords only."""
+    It searches by keywords (BM25), which finds the exact words ("exa",
+    "fetch"). Give it an ``embedding`` to also search by meaning ("leer una
+    página"); RRF then joins both rankings."""
 
     TOOL_NAME: t.ClassVar[str] = "search_tools"
     LIMIT: t.ClassVar[int] = 5
@@ -36,7 +35,7 @@ class SearchToolsTool(CoreTool):
         "you your its this that their them can one".split()
     )
 
-    def __init__(self, catalog: ToolRegistry) -> None:
+    def __init__(self, catalog: ToolRegistry, embedding: CoreEmbedding | None = None) -> None:
         super().__init__(
             name=self.TOOL_NAME,
             description=self.DESCRIPTION,
@@ -44,7 +43,8 @@ class SearchToolsTool(CoreTool):
             read_only=True,
         )
         self._catalog = catalog
-        self._embedding: CoreEmbedding | None = FastEmbedEmbedding()
+        self._embedding = embedding
+        self._vectors: dict[str, t.Sequence[float]] = {}  # a tool's text -> its vector
 
     @property
     def parameters(self) -> dict[str, t.Any]:
@@ -63,37 +63,40 @@ class SearchToolsTool(CoreTool):
             },
         }
 
-    async def execute(
-        self,
-        tool_request: ToolCallRecord,
-        tool_context: ToolContext | None = None,
-        cancellation_token: CancellationToken | None = None,
-    ) -> ToolResult:
-        names = [str(name) for name in tool_request.parameters.get("names") or []] # type: ignore 
+    async def execute(self, tool_request: ToolCallRecord, tool_ctx: ToolContext) -> ToolResult:
+        names = [str(name) for name in tool_request.parameters.get("names") or []]
         query = str(tool_request.parameters.get("query") or "").strip()
         if not names and not query:
             return ToolResult.execution_error(tool_request.id, "Pass names, a query, or both.")
 
-        found = [tool for name in names if (tool := self._catalog.get(name)) is not None]
-        unknown = [name for name in names if self._catalog.get(name) is None]
+        # 1. By name: only deferred tools are loaded; the rest is told apart below.
+        named = {name: self._catalog.get(name) for name in names}
+        found = [tool for tool in named.values() if tool is not None and tool.deferred]
+        loaded = [name for name, tool in named.items() if tool is not None and not tool.deferred]
+        unknown = [name for name, tool in named.items() if tool is None]
+
+        # 2. By what they do.
         for tool in await self.search(query) if query else []:
             if tool not in found:
                 found.append(tool)
-
         payload: dict[str, t.Any] = {
             "tools": [
-                {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": tool.parameters,
-                }
+                {"name": tool.name, "description": tool.description, "parameters": tool.parameters}
                 for tool in found
             ]
         }
+
+        # 3. Say what went wrong with a name, and what can be loaded.
+        hints: list[str] = []
+        if loaded:
+            hints.append(f"Already loaded, call directly: {', '.join(loaded)}.")
+        if unknown:
+            hints.append(f"No tool named {', '.join(unknown)}.")
         if unknown or not found:
             available = ", ".join(tool.name for tool in self._catalog.deferred_tools()) or "none"
-            missed = f"No tool named {', '.join(unknown)}. " if unknown else ""
-            payload["hint"] = f"{missed}Tools you can load: {available}."
+            hints.append(f"Tools you can load: {available}.")
+        if hints:
+            payload["hint"] = " ".join(hints)
         return ToolResult.success_result(tool_request.id, payload)
 
     async def search(self, query: str) -> list[CoreTool]:
@@ -102,7 +105,7 @@ class SearchToolsTool(CoreTool):
         if not tools:
             return []
 
-        # Applying raking
+        # Keywords always; meaning only with an embedding. RRF joins the rankings.
         rankings = [self._by_keywords(query, tools), await self._by_meaning(query, tools)]
         by_name = {tool.name: tool for tool in tools}
         return [by_name[name] for name in fuse(rankings)[: self.LIMIT]]
@@ -118,14 +121,18 @@ class SearchToolsTool(CoreTool):
         if self._embedding is None:
             return []
 
-        # Extracting Tool Info
+        # 1. Embed the query and only the tools not seen before.
         texts = [f"{tool.name.replace('_', ' ')}: {tool.description}" for tool in tools]
+        new = [text for text in dict.fromkeys(texts) if text not in self._vectors]
         try:
-            vectors = await self._embedding.embed([query, *texts])
+            vectors = await self._embedding.embed([query, *new])
         except Exception:  # not installed or no model download: keywords still work
             logger.warning("search_tools: embeddings unavailable", exc_info=True)
             self._embedding = None
             return []
+        self._vectors.update(zip(new, vectors[1:]))
 
-        best = rank(vectors[0], tools, vectors[1:], limit=self.LIMIT, min_score=self.MIN_SIMILARITY)
+        # 2. The closest tools to the query.
+        known = [self._vectors[text] for text in texts]
+        best = rank(vectors[0], tools, known, limit=self.LIMIT, min_score=self.MIN_SIMILARITY)
         return [tool.name for _, tool in best]

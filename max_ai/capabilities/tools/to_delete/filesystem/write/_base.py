@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import typing as t
 
-from .....base.tools import ToolContext
-from .....core.termination.cancellation import CancellationToken
-from .....types.tool_call import ToolCallRecord, ToolResult
-from .....types.tools import ToolApprovalMode
+from ......base.tools import ToolContext
+from ......core.termination.cancellation import CancellationToken
+from ......types.tool_call import ToolCallRecord, ToolResult
+from ......types.tools import ToolApprovalMode
 from .._base import FileSystem
 
 

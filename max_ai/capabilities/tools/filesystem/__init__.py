@@ -1,8 +1,6 @@
-"""read_file, write_file and edit_file: ``FileSystem.all()`` returns the three."""
+"""File tools that work inside the sandbox."""
+from .edit_file import EditFileTool
+from .read_file import ReadFileTool
+from .write_file import WriteFileTool
 
-from ._base import FileSystem
-from .edit import EditFile
-from .read import ReadFile
-from .write import WriteFile
-
-__all__ = ["FileSystem", "ReadFile", "WriteFile", "EditFile"]
+__all__ = ["EditFileTool", "ReadFileTool", "WriteFileTool"]

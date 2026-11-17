@@ -7,8 +7,8 @@ import pytest
 from max_ai.agents.agent import Agent
 from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
 from max_ai.capabilities.executor.local import LocalExecutor
-from max_ai.capabilities.tools.bash import BashTool
-from max_ai.capabilities.tools.file_system import FileSystemTools
+from max_ai.capabilities.tools.to_delete.bash import BashTool
+from max_ai.capabilities.tools.to_delete.file_system import FileSystemTools
 from max_ai.capabilities.workspace.local import LocalWorkspace
 from max_ai.core.messages import AssistantMessage, ToolCall, ToolMessage
 from max_ai.core.policy import DEFAULT_DENY, Policy
