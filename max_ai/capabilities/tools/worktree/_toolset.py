@@ -12,6 +12,7 @@ from ....types.tool_call import ToolCallRecord, ToolResult
 
 FOLDER = ".worktrees"  # inside the session's workspace, so it stays an allowed folder
 NO_SANDBOX = "This tool needs a sandbox."
+GIT_SECONDS = 120  # a worktree of a large repository takes a while
 
 
 class EnterWorktreeTool(CoreTool):
@@ -19,12 +20,13 @@ class EnterWorktreeTool(CoreTool):
 
     TOOL_NAME: t.ClassVar[str] = "enter_worktree"
     DESCRIPTION: t.ClassVar[str] = (
-        "Create a separate copy of the repository on a new branch and work there, "
-        "so the files of the main folder are not touched. Commands and relative "
-        "paths start in the copy until you call exit_worktree."
+        "For coding work on an existing git project in your working directory: "
+        "makes a copy of it on a new branch, so the project stays untouched until "
+        "the work is ready. Not for a quick script or a one-off file: write those "
+        "in the temporary folder."
     )
     NOT_A_REPOSITORY: t.ClassVar[str] = (
-        "{folder} is not a git repository with a commit; a worktree needs one."
+        "{folder} is not a git repository with a commit of its own."
     )
 
     sandbox = True  # git runs where the files are
@@ -51,18 +53,23 @@ class EnterWorktreeTool(CoreTool):
         box, ctx = tool_ctx.sandbox, tool_ctx.run_context
         if box is None:
             return ToolResult.tool_failure(tool_request.id, NO_SANDBOX)
-        # 1. The repository is the session's workspace; it needs a commit to branch from.
+        # 1. The repository must be the session's workspace itself, with a commit:
+        #    git would otherwise take a repository from a folder above it.
         workspace = self.workspace(box, ctx)
         here = shlex.quote(workspace)
-        found = await box.execute_command(f"cd {here} && git rev-parse --verify HEAD")
-        if found.exit_code != 0:
+        found = await box.execute_command(
+            f"cd {here} && git rev-parse --verify HEAD >/dev/null && git rev-parse --show-toplevel",
+            timeout=GIT_SECONDS,
+        )
+        if found.exit_code != 0 or found.stdout.strip() != workspace:
             text = self.NOT_A_REPOSITORY.format(folder=workspace)
             return ToolResult.tool_failure(tool_request.id, text)
         # 2. Create the worktree on its new branch; git says why when it cannot.
         name = tool_request.parameters["name"]
         target = f"{workspace}/{FOLDER}/{name}"
         made = await box.execute_command(
-            f"cd {here} && git worktree add -b {shlex.quote(name)} {shlex.quote(target)}"
+            f"cd {here} && git worktree add -b {shlex.quote(name)} {shlex.quote(target)}",
+            timeout=GIT_SECONDS,
         )
         if made.exit_code != 0:
             return ToolResult.tool_failure(tool_request.id, (made.stderr or made.stdout).strip())
@@ -83,9 +90,9 @@ class ExitWorktreeTool(CoreTool):
 
     TOOL_NAME: t.ClassVar[str] = "exit_worktree"
     DESCRIPTION: t.ClassVar[str] = (
-        "Leave the worktree and go back to the main folder. 'keep' leaves the "
-        "worktree and its branch; 'remove' deletes the worktree and fails if it "
-        "has changes that are not committed."
+        "Go back to the main folder after enter_worktree. 'keep' leaves the "
+        "worktree and its branch for later; 'remove' deletes the worktree (its "
+        "branch stays) and fails if it has changes not committed."
     )
     NOT_IN_ONE: t.ClassVar[str] = "You are not in a worktree."
 
@@ -124,7 +131,8 @@ class ExitWorktreeTool(CoreTool):
         # 3. Remove only when asked; without --force git refuses to lose changes.
         if tool_request.parameters["action"] == "remove":
             gone = await box.execute_command(
-                f"cd {shlex.quote(workspace)} && git worktree remove {shlex.quote(target)}"
+                f"cd {shlex.quote(workspace)} && git worktree remove {shlex.quote(target)}",
+                timeout=GIT_SECONDS,
             )
             if gone.exit_code != 0:
                 error = (gone.stderr or gone.stdout).strip()

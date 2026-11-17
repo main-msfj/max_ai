@@ -8,7 +8,7 @@ from pathlib import Path, PurePosixPath
 
 from pydantic import BaseModel
 
-from ....base.tools import CoreTool, ToolContext
+from ....base.tools import CoreTool, CoreToolParameters, ToolContext
 from ....core.ids import short_id
 from ....types.tool_call import ToolCallRecord, ToolResult
 
@@ -48,6 +48,14 @@ class BashTool(CoreTool):
     def _from_config(cls, config: BaseModel) -> t.Self:
         return cls()
 
+    def validate_parameters(self, tool_request: ToolCallRecord) -> CoreToolParameters:
+        # A blank command is checked here, not with a schema pattern: providers
+        # that force the schema while the model writes read it as the whole text.
+        checked = super().validate_parameters(tool_request)
+        if checked.is_tool_valid and not tool_request.parameters["command"].strip():
+            return CoreToolParameters(is_tool_valid=False, msg_error="The command is empty.")
+        return checked
+
     @property
     def parameters(self) -> dict[str, t.Any]:
         return {
@@ -55,7 +63,6 @@ class BashTool(CoreTool):
             "properties": {
                 "command": {
                     "type": "string",
-                    "pattern": r"\S",
                     "description": "The command to run.",
                 },
                 "description": {

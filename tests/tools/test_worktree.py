@@ -62,3 +62,16 @@ async def test_a_folder_that_is_not_a_repository_and_exit_outside_a_worktree_say
     assert not entered.success and "not a git repository" in entered.error and ctx.cwd is None
     left = await ExitWorktreeTool().execute(call("exit_worktree", action="keep"), tool_ctx)
     assert not left.success and "not in a worktree" in left.error
+
+
+async def test_a_repository_in_a_folder_above_the_workspace_is_never_touched(tmp_path):
+    # The sandbox lives inside someone's repository: git must not use that one.
+    git = ["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*git, "init", "-q"], check=True)
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "outer"], check=True)
+    (tmp_path / "box").mkdir()
+    tool_ctx, ctx, _ = await session(tmp_path / "box", repository=False)
+    entered = await EnterWorktreeTool().execute(call("enter_worktree", name="x"), tool_ctx)
+    assert not entered.success and ctx.cwd is None
+    branches = subprocess.run([*git, "branch", "--list", "x"], capture_output=True, text=True)
+    assert branches.stdout.strip() == ""  # no branch was made in the outer repository

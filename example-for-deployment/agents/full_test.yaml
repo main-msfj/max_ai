@@ -6,10 +6,10 @@ config:
   client:
     provider: max_ai.capabilities.clients.openrouter.OpenRouterChatCompletionClient
     config:
-      model: deepseek/deepseek-v4-flash
+      model: anthropic/claude-haiku-5.5
       fallback_models:
-      - z-ai/glm-5.3-flash
-      - qwen/qwen3.7-flash
+      - openai/gpt-5.6-luna
+      - qwen/qwen4-max
       app_name: full_test
       config:
         max_output_tokens: 12800
@@ -33,7 +33,7 @@ config:
       skills:
       - openai-spreadsheet
   toolset:
-  - provider: max_ai.capabilities.tools.bash._toolset.BashTool
+  - provider: max_ai.capabilities.tools.bash.BashTool
   mcp:
   - server_id: exa
     approval_mode: auto_approval
