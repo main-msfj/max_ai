@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import typing as t
 
+from pydantic import BaseModel
+
 from ....core.model.llm import ModelConfig
 from ....core.retry import RetryPolicy
+from ....errors.client import ClientError
 from .._chat_completions import ChatCompletionsClient
 from ._model import OpenAIChatCompletionClientConfig
 
@@ -16,8 +19,8 @@ class OpenAIChatCompletionClient(ChatCompletionsClient[OpenAIChatCompletionClien
 
     Thinking: ``ModelConfig(thinking={"reasoning_effort": "low"})``; the
     values are OpenAI's (none, minimal, low, medium, high, xhigh) and depend
-    on the model. Some models refuse tools together with thinking on this
-    endpoint: for them send ``{"reasoning_effort": "none"}``."""
+    on the model. The models in ``NO_TOOLS_WITH_THINKING`` refuse tools
+    together with thinking on this endpoint: that request fails here, unsent."""
 
     component_schema = OpenAIChatCompletionClientConfig
     component_type = "client"
@@ -25,6 +28,19 @@ class OpenAIChatCompletionClient(ChatCompletionsClient[OpenAIChatCompletionClien
 
     PROVIDER_NAME = "OpenAI"
     API_KEY_ENV = "OPENAI_API_KEY"
+    # Asked to OpenAI on 2026-11-17, model by model. Subject to change: OpenAI
+    # moves models between endpoints; a name not listed here is sent as it is.
+    NO_TOOLS_WITH_THINKING: t.ClassVar[frozenset[str]] = frozenset({
+        "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.5",
+        "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra",
+        "gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol", "gpt-6.1-terra",
+    })
+    TOOLS_WITH_THINKING = (
+        "{model} does not take tools together with thinking on OpenAI's Chat "
+        "Completions (reasoning_effort={effort!r}). Set "
+        "thinking={{'reasoning_effort': 'none'}}, or use the model through another "
+        "client, such as OpenRouter. This list of models is subject to change."
+    )
 
     def __init__(
         self,
@@ -45,6 +61,23 @@ class OpenAIChatCompletionClient(ChatCompletionsClient[OpenAIChatCompletionClien
         )
         self.organization = organization
         self.project = project
+
+    def request(
+        self,
+        messages: list[dict[str, t.Any]],
+        tools: list[dict[str, t.Any]],
+        output_format: type[BaseModel] | None,
+        *,
+        stream: bool,
+    ) -> dict[str, t.Any]:
+        """The body of the call; tools with thinking stop here for the listed models."""
+        effort = self.body().get("reasoning_effort")
+        listed = self.base_url is None and self.model in self.NO_TOOLS_WITH_THINKING
+        if tools and listed and effort not in (None, "none"):
+            raise ClientError.invalid_request(
+                self.TOOLS_WITH_THINKING.format(model=self.model, effort=effort)
+            )
+        return super().request(messages, tools, output_format, stream=stream)
 
     def _to_config(self) -> OpenAIChatCompletionClientConfig:
         return OpenAIChatCompletionClientConfig(

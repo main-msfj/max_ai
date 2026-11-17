@@ -182,3 +182,24 @@ def test_without_a_key_it_cannot_be_built(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     with pytest.raises(ValueError, match="OPENAI_API_KEY"):
         OpenAIChatCompletionClient("gpt-test")
+
+
+async def test_tools_with_thinking_stop_before_the_call():
+    thinking = ModelConfig(thinking={"reasoning_effort": "low"})
+    made = client(answer("never"), config=thinking)
+    made.model = "gpt-5.6-luna"
+    with pytest.raises(ClientError, match="gpt-5.6-luna does not take tools together with thinking"):
+        await made.run(HOLA, tools=[WEATHER], retry=RetryPolicy(attempts=5))
+    assert made.sent == []
+    # Without thinking, on another address, or with a model not listed, the call goes out.
+    quiet = client(answer(), config=ModelConfig(thinking={"reasoning_effort": "none"}))
+    other = client(answer(), config=thinking, base_url="https://other.example/v1")
+    quiet.model = other.model = "gpt-5.6-luna"
+    for free in (quiet, other, client(answer(), config=thinking)):
+        assert (await free.run(HOLA, tools=[WEATHER])).message.content == "hi"
+
+
+def test_the_models_limits_are_what_the_developer_sets():
+    assert (ModelConfig().max_context_window, ModelConfig().max_output_tokens) == (128_000, 0)
+    big = ModelConfig(max_context_window=2_000_000, max_output_tokens=100_000)
+    assert (big.max_context_window, big.max_output_tokens) == (2_000_000, 100_000)

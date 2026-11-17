@@ -62,10 +62,10 @@ async def main() -> None:
         # and compaction reserves it in the window.
         max_tokens=32_000,
         app_name="max_ai",
-        # Default window 128K; MAX_CONTEXT_WINDOW changes it (kept within 128K–1M).
+        # Default window 128K; MAX_CONTEXT_WINDOW changes it.
         config=ModelConfig(
             supports_function_calling=True,
-            max_context_window=int(os.getenv("MAX_CONTEXT_WINDOW") or 0),
+            max_context_window=int(os.getenv("MAX_CONTEXT_WINDOW") or 128_000),
         ),
     )
     tracing = configure_langfuse() if os.getenv("LANGFUSE_PUBLIC_KEY") else None

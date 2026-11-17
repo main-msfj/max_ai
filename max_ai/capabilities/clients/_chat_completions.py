@@ -33,7 +33,7 @@ from ...core.messages import (
     ToolMessage,
     UserMessage,
 )
-from ...core.model.llm import ModelConfig, output_token_limit
+from ...core.model.llm import ModelConfig
 from ...core.retry import RetryPolicy
 from ...errors.client import ClientError
 from ...types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
@@ -290,7 +290,7 @@ class ChatCompletionsClient(CoreChatCompletionClient[ConfigT]):
         request: dict[str, t.Any] = {"model": self.model, "messages": messages, "stream": stream}
         if tools:
             request["tools"], request["tool_choice"] = tools, "auto"
-        if limit := output_token_limit(self.config.max_output_tokens):
+        if limit := self.config.max_output_tokens:
             request["max_completion_tokens"] = limit
         if output_format is not None:
             request["response_format"] = self.response_format(output_format)

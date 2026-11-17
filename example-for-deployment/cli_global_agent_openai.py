@@ -54,10 +54,10 @@ async def main() -> None:
         # Room for a whole file in one tool call; 32K is the framework's cap
         # and compaction reserves it in the window.
         max_tokens=32_000,
-        # Default window 128K; MAX_CONTEXT_WINDOW changes it (kept within 128K–1M).
+        # Default window 128K; MAX_CONTEXT_WINDOW changes it.
         config=ModelConfig(
             supports_function_calling=True,
-            max_context_window=int(os.getenv("MAX_CONTEXT_WINDOW") or 0),
+            max_context_window=int(os.getenv("MAX_CONTEXT_WINDOW") or 128_000),
         ),
     )
     tracing = configure_langfuse() if os.getenv("LANGFUSE_PUBLIC_KEY") else None

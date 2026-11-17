@@ -2,36 +2,19 @@
 
 import typing as t
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 from ...config import setting
-
-MIN_CONTEXT_WINDOW = 128_000
-MAX_CONTEXT_WINDOW = 1_000_000
-# Room for a whole file in one reply; with the minimum window it still
-# leaves ~3/4 of it for prompt, messages and compaction.
-MAX_OUTPUT_TOKENS = 32_000
-
-
-def output_token_limit(value: int | None) -> int | None:
-    """``value`` capped at ``MAX_OUTPUT_TOKENS``; ``None``/0 stays unset."""
-    return min(int(value), MAX_OUTPUT_TOKENS) if value else None
 
 
 class ModelConfig(BaseModel):
     """Model Config"""
 
     name: str | None = Field(default=None, description="Official model name")
-    max_context_window: int = Field(
-        default=MIN_CONTEXT_WINDOW,
-        description=(
-            f"Context window in tokens, always within {MIN_CONTEXT_WINDOW:,}–"
-            f"{MAX_CONTEXT_WINDOW:,}: unknown/0 or smaller values become the "
-            "minimum, bigger ones the maximum."
-        ),
-    )
+    # Each model has its own limits: read them in the provider's page and set them.
+    max_context_window: int = Field(default=128_000, gt=0, description="Context window, in tokens.")
     max_output_tokens: int = Field(
-        default=0, description=f"Output limit, capped at {MAX_OUTPUT_TOKENS:,}; 0 = unset.",
+        default=0, ge=0, description="Output limit, in tokens; 0 sends none (the provider's own).",
     )
     # Prices in USD per million tokens; unset = cost unknown (no cost limits).
     input_cost_per_mtok: float | None = Field(default=None, ge=0)
@@ -51,14 +34,3 @@ class ModelConfig(BaseModel):
     )
 
     tokenizer_base: str = Field(default_factory=lambda: setting.default_tokenizer)
-
-    @field_validator("max_context_window", mode="before")
-    @classmethod
-    def _within_bounds(cls, value: object) -> int:
-        window = int(value or 0)
-        return min(MAX_CONTEXT_WINDOW, max(MIN_CONTEXT_WINDOW, window))
-
-    @field_validator("max_output_tokens", mode="before")
-    @classmethod
-    def _output_capped(cls, value: object) -> int:
-        return output_token_limit(int(value or 0)) or 0

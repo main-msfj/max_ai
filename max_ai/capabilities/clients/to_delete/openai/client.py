@@ -35,7 +35,7 @@ from .....core.messages import (
     ToolMessage,
     UserMessage,
 )
-from .....core.model.llm import ModelConfig, output_token_limit
+from .....core.model.llm import ModelConfig
 from .....errors.client import ClientError
 from .....loggers import ScopedLogger
 from .....types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
@@ -98,8 +98,8 @@ class OpenAIChatCompletionClient(
         self.organization = organization
         self.project = project
         self.generation_options: dict[str, t.Any] = dict(kwargs)
-        output_limit = output_token_limit(max_tokens or self.config.max_output_tokens)
-        if output_limit is not None:
+        output_limit = max_tokens or self.config.max_output_tokens
+        if output_limit:
             self.generation_options["max_tokens"] = output_limit
 
         client_kwargs: dict[str, t.Any] = {}
