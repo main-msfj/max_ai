@@ -48,25 +48,14 @@ Knowledge está pendiente ("lo haremos después") y se va a usar. Los demás son
 - `max_ai/core/middleware/__init__.py`
 - `max_ai/core/model/__init__.py`
 
-## 3. CLI: en arreglo
+## 4. Borrar ya: borradores y copias (borrados el 2026-11-17)
 
-Hoy usa el agente viejo; se está pasando al nuevo. No se borra.
+Nadie los importaba, ni el agente viejo.
 
-- `max_ai/cli/__init__.py`
-- `max_ai/cli/app.py`
-- `max_ai/cli/blocks.py`
-- `max_ai/cli/events.py`
-- `max_ai/cli/theme.py`
-- `max_ai/cli/widgets.py`
-
-## 4. Borrar ya: borradores y copias
-
-Nadie los importa, ni el agente viejo.
-
-- `max_ai/base/clients copy.py`
-- `max_ai/base/tools_draft.py`
-- `max_ai/core/tool/dispatcher_draft.py`
-- `max_ai/core/tool/state_draft.py`
+- ~~`max_ai/base/clients copy.py`~~
+- ~~`max_ai/base/tools_draft.py`~~
+- ~~`max_ai/core/tool/dispatcher_draft.py`~~
+- ~~`max_ai/core/tool/state_draft.py`~~
 
 - `max_ai/base/skills_previos.py` **no** va aquí: el agente viejo toma de ahí `CoreSkillRegistry`; se borra junto con él (grupo 6).
 

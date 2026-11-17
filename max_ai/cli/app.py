@@ -1051,7 +1051,7 @@ class MaxAIApp(App[None]):
         keep = self.agent.sandbox is not None and Permissions.can_be_kept(
             record.tool_name, record.parameters
         )
-        rule = Permissions.rule_for(record.tool_name, record.parameters)
+        rule = ", ".join(Permissions.rules_for(record.tool_name, record.parameters))
         options = ["Yes, allow once"]
         if keep:
             options.append(f"Yes, always allow {rule}")
@@ -1092,8 +1092,9 @@ class MaxAIApp(App[None]):
         if not always:
             await self._write_system(f"{name}: approved once", style=SUCCESS)
             return
-        rule = Permissions.rule_for(name, record.parameters)
-        kept.append(rule)
+        rules = Permissions.rules_for(name, record.parameters)
+        kept.extend(rules)
+        rule = ", ".join(rules)
         where = "kept in your setting.json" if saved else "for this call only"
         await self._write_system(f"{name}: always allowed {rule} ({where})", style=SUCCESS)
 

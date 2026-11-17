@@ -1,7 +1,6 @@
 name: max-ai-infra
 
 include:
-  - ./llm/compose.yaml
   - ./capabilities/compose.yaml
   - ./mcp/compose.yaml
   - ./observability/compose.yaml

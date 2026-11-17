@@ -1,0 +1,51 @@
+provider: maxai.agents.Agent
+config:
+  name: Coder
+  description: Writes and fixes code in git repositories, and runs their tests.
+  instructions: You help users with code. Read the code before you change it, keep
+    changes small, and run the tests before you say a task is done. If the project
+    is not a git repository, run git init and commit when a step works. For risky
+    or long changes on an existing project, use enter_worktree.
+  client:
+    provider: max_ai.capabilities.clients.openrouter.OpenRouterChatCompletionClient
+    config:
+      model: google/gemini-4-hydrogen
+      fallback_models:
+      - openai/gpt-5.6-luna
+      - anthropic/claude-haiku-5.5
+      app_name: coding_agent
+      config:
+        max_output_tokens: 12800
+      retry:
+        attempts: 3
+  reasoning:
+    provider: max_ai.capabilities.loop.react.ReactLoop
+    config:
+      compaction:
+        provider: max_ai.capabilities.compaction.summary.SummaryCompaction
+  sandbox:
+    provider: max_ai.capabilities.sandbox.docker.DockerSandbox
+    config:
+      dockerfile: /max_ai/example-for-deployment/coding.Dockerfile
+      networks:
+      - pypi.org
+      - files.pythonhosted.org
+      - github.com
+  memory:
+    read_only: false
+  skills:
+    provider: max_ai.capabilities.skills.local.LocalSkills
+    config:
+      path: /max_ai/example-for-deployment/skills
+      skills:
+      - qr-code
+  toolset:
+  - provider: max_ai.capabilities.tools.bash.BashTool
+  mcp:
+  - server_id: exa
+    approval_mode: auto_approval
+    url: https://mcp.exa.ai/mcp
+    headers_env:
+      x-api-key: EXA_API_KEY
+  middlewares:
+  - provider: max_ai.capabilities.middleware.TracingMiddleware

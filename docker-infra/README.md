@@ -6,13 +6,10 @@ Requiere Docker Engine y Docker Compose 2.20.3 o superior, por el uso de `includ
 docker-infra/
 ├── compose.yaml           # Reúne los grupos
 ├── .env.example           # Imágenes, puertos y credenciales locales
-├── llm/compose.yaml       # Ollama
 ├── capabilities/compose.yaml  # Lo que usan los agentes: MongoDB, Mongo Express,
 │                              # MinIO y Azurite (workspaces)
 ├── observability/compose.yaml # Langfuse y sus dependencias (con su propio MinIO)
 └── mcp/compose.yaml       # DuckDuckGo MCP por stdio
-
-llm-models/ollama/          # Datos de Ollama, fuera de Git
 ```
 
 ## Descargar y levantar
@@ -26,27 +23,13 @@ docker compose --profile mcp pull
 docker compose up -d --wait
 ```
 
-`pull` descarga las imágenes del perfil MCP. `up` inicia MongoDB, Mongo Express, Azurite, MinIO y Ollama; DuckDuckGo se
+`pull` descarga las imágenes del perfil MCP. `up` inicia MongoDB, Mongo Express, Azurite y MinIO; DuckDuckGo se
 inicia desde el cliente MCP con el comando de la sección siguiente. Cada grupo
 tiene su propia red. Los puertos publicados están enlazados a `127.0.0.1`.
 
 Los valores de `.env.example` son para desarrollo local. Puedes cambiar imágenes,
 puertos y credenciales en `docker-infra/.env`. Las etiquetas `latest` permiten
 actualizar con `pull`; para fijar una versión, configura una etiqueta o digest.
-
-## LLM: Ollama
-
-La API queda en `http://localhost:11434`. La configuración inicial usa CPU.
-Los datos de `/root/.ollama` se conservan en `llm-models/ollama/`, en la raíz del
-repositorio, incluso después de eliminar el contenedor.
-
-La imagen del servidor no incluye modelos. Para descargar uno, por ejemplo el
-usado en el quickstart del proyecto:
-
-```bash
-docker compose exec ollama ollama pull qwen3:8b
-docker compose exec ollama ollama list
-```
 
 ## Capabilities: MongoDB
 
@@ -168,21 +151,19 @@ el comando MCP desde otro directorio después de construir la configuración.
 Desde `docker-infra`, puedes administrar cada servicio por separado:
 
 ```bash
-docker compose up -d --wait ollama
 docker compose up -d --wait mongodb
 docker compose up -d --wait mongo-express
 docker compose ps
-docker compose logs -f ollama mongodb mongo-express
+docker compose logs -f mongodb mongo-express
 docker compose down
 ```
 
-`down` conserva los modelos y los volúmenes de MongoDB. Usa siempre el Compose
+`down` conserva los volúmenes de MongoDB. Usa siempre el Compose
 principal para mantener el mismo proyecto y los mismos volúmenes.
 
 ## Referencias
 
 - [Compose include](https://docs.docker.com/compose/how-tos/multiple-compose-files/include/)
-- [Ollama en Docker](https://docs.ollama.com/docker)
 - [Imagen oficial de MongoDB](https://hub.docker.com/_/mongo)
 - [Mongo Express](https://github.com/mongo-express/mongo-express-docker)
 - [DuckDuckGo en el catálogo MCP](https://hub.docker.com/mcp/server/duckduckgo/overview)
@@ -202,7 +183,7 @@ docker compose --profile observability up -d --wait
 ```
 
 - UI: http://localhost:3000 — usuario `admin@maxai.local`, contraseña `maxai-local-ui`.
-- Ollama API: http://localhost:11434/api/tags; Mongo Express: http://localhost:8081.
+- Mongo Express: http://localhost:8081.
 - El primer arranque crea la organización `MaxAI`, el proyecto `max_ai` y sus
   claves (`pk-lf-maxai-local` / `sk-lf-maxai-local`). Cambiarlas en `.env`
   después no cambia las ya creadas.
@@ -213,8 +194,8 @@ Estas direcciones `localhost` corresponden al host de Docker. Dentro del
 devcontainer, Mongo Express y Langfuse también responden en
 `http://localhost:8081` y `http://localhost:3000`, respectivamente, gracias
 a los puentes locales. Las direcciones de servicio siguen disponibles en
-`http://mongo-express:8081`, `http://langfuse-web:3000`,
-`http://minio:9001` y `http://ollama:11434/api/tags` si el contenedor
+`http://mongo-express:8081`, `http://langfuse-web:3000`
+y `http://minio:9001` si el contenedor
 está conectado a las redes de Compose. VS Code reenvía los puertos 8081 y 3000
 del devcontainer al equipo local al abrir o recargar la ventana.
 

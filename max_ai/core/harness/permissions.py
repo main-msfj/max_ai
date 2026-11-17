@@ -25,7 +25,11 @@ class Permissions:
     )
     # What cannot be read safely: a command built while it runs.
     UNREADABLE: t.ClassVar[tuple[str, ...]] = ("$(", "`", "<(")
-    SPLIT: t.ClassVar[str] = r"&&|\|\||;|\||\n"
+    # Separators split commands only outside quotes: ``python3 -c "a\nb"`` is one.
+    PIECES: t.ClassVar[str] = r"""(?P<text>'[^']*'|"(?:\\.|[^"\\])*"|\\.)|(?P<sep>&&|\|\||;|\||\n)"""
+    # The text a heredoc feeds a command is data, not commands.
+    HEREDOC: t.ClassVar[str] = r"<<-?\s*['\"]?(\w+)['\"]?[^\n]*\n.*?\n\s*\1[ \t]*(?=\n|$)"
+    HARMLESS: t.ClassVar[frozenset[str]] = frozenset({"cd"})  # never asked on its own
 
     def __init__(self, rules: Mapping[str, list[str]] | None = None) -> None:
         given = rules or {}
@@ -34,18 +38,42 @@ class Permissions:
         self.deny = list(given.get("deny", []))
 
     def decide(self, tool_name: str, parameters: Mapping[str, t.Any]) -> bool | str | None:
-        """What happens with this call; the strictest rule that matches wins."""
+        """What happens with this call; the strictest rule that matches wins.
+        A command is judged part by part: ``cd x && pytest`` needs pytest allowed."""
         target = str(parameters.get("command") or parameters.get("path") or "")
-        # 1. The user's deny list.
-        if self.matches(self.deny, tool_name, target):
+        parts = self.parts(target) if tool_name == self.BASH else [target]
+        # 1. The user's deny list, for the whole call or any part of it.
+        if any(self.matches(self.deny, tool_name, part) for part in [target, *parts]):
             return False
         # 2. What the harness always asks, and the user's ask list.
-        if self.dangerous(tool_name, target) or self.matches(self.ask, tool_name, target):
+        if self.dangerous(tool_name, target):
             return None
-        # 3. The user's allow list; else the tool's own way.
-        if self.matches(self.allow, tool_name, target):
+        if any(self.matches(self.ask, tool_name, part) for part in [target, *parts]):
+            return None
+        # 3. Every part allowed (a lone cd always is); else the tool's own way.
+        if all(self.harmless(tool_name, part) or self.matches(self.allow, tool_name, part)
+               for part in parts or [target]):
             return True
         return self.DEFAULT
+
+    @staticmethod
+    def parts(command: str) -> list[str]:
+        """The commands joined in ``command``, without the text of its heredocs."""
+        code = re.sub(Permissions.HEREDOC, "", command, flags=re.S)
+        parts: list[str] = []
+        start = 0
+        for found in re.finditer(Permissions.PIECES, code, flags=re.S):
+            if found.group("sep"):
+                parts.append(code[start:found.start()])
+                start = found.end()
+        parts.append(code[start:])
+        return [part.strip() for part in parts if part.strip()]
+
+    @staticmethod
+    def harmless(tool_name: str, part: str) -> bool:
+        """A command that is fine on its own, like changing folder."""
+        words = part.split()
+        return tool_name == Permissions.BASH and bool(words) and words[0] in Permissions.HARMLESS
 
     @staticmethod
     def dangerous(tool_name: str, target: str) -> bool:
@@ -58,9 +86,8 @@ class Permissions:
         if any(mark in target for mark in Permissions.UNREADABLE):
             return True
         # Each part of the command is looked at alone: ``ls && rm x`` has an rm.
-        for part in re.split(Permissions.SPLIT, target):
-            words = part.strip()
-            if any(re.search(pattern, words) for pattern in Permissions.DANGEROUS):
+        for part in Permissions.parts(target):
+            if any(re.search(pattern, part) for pattern in Permissions.DANGEROUS):
                 return True
         return False
 
@@ -76,16 +103,22 @@ class Permissions:
         return False
 
     @staticmethod
-    def rule_for(tool_name: str, parameters: Mapping[str, t.Any]) -> str:
-        """The rule "always allow" keeps: a command by its first word, any
-        other tool whole."""
-        words = str(parameters.get("command") or "").split()
-        if tool_name == Permissions.BASH and words:
-            return f"{tool_name}({words[0]}*)"
-        return tool_name
+    def rules_for(tool_name: str, parameters: Mapping[str, t.Any]) -> list[str]:
+        """The rules "always allow" keeps: one per command of a bash call, by
+        its first word (a lone cd needs none); any other tool whole."""
+        if tool_name != Permissions.BASH:
+            return [tool_name]
+        rules: list[str] = []
+        for part in Permissions.parts(str(parameters.get("command") or "")):
+            rule = f"{tool_name}({part.split()[0]}*)"
+            if not Permissions.harmless(tool_name, part) and rule not in rules:
+                rules.append(rule)
+        return rules
 
     @staticmethod
     def can_be_kept(tool_name: str, parameters: Mapping[str, t.Any]) -> bool:
-        """Whether "always allow" may be offered: never for a dangerous call."""
+        """Whether "always allow" may be offered: never for a dangerous call,
+        nor when there is no rule to keep."""
         target = str(parameters.get("command") or parameters.get("path") or "")
-        return not Permissions.dangerous(tool_name, target)
+        rules = Permissions.rules_for(tool_name, parameters)
+        return bool(rules) and not Permissions.dangerous(tool_name, target)

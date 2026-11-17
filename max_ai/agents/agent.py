@@ -132,6 +132,7 @@ class Agent(ComponentBase[AgentSpec]):
             weakref.WeakValueDictionary()
         )
         self._closed = False
+        self._boxes: dict[str, SandboxCore] = {}  # one sandbox per user, closed by close()
         # close() waits for the runs that are still going.
         self._active = 0
         self._idle = asyncio.Event()
@@ -279,9 +280,8 @@ class Agent(ComponentBase[AgentSpec]):
             return False
         box = self.sandbox.bind(ctx.user_id) if self.sandbox is not None else None
         if box is not None:
-            await box.add_permission(
-                "allow", Permissions.rule_for(record.tool_name, record.parameters)
-            )
+            for rule in Permissions.rules_for(record.tool_name, record.parameters):
+                await box.add_permission("allow", rule)
         return box is not None
 
     async def close(self) -> None:
@@ -293,8 +293,9 @@ class Agent(ComponentBase[AgentSpec]):
         if not first:
             return
         await self._mcp.disconnect_all()
-        if self.sandbox is not None:
-            await self.sandbox.close()
+        # The users' sandboxes, not self.sandbox: that one has no user.
+        for box in self._boxes.values():
+            await box.close()
         await self.client.aclose()
 
     # -------- ONE TURN, STEP BY STEP -----------------------------------------
@@ -352,6 +353,7 @@ class Agent(ComponentBase[AgentSpec]):
             return None
         variables = self.skills.variables() if self.skills is not None else None
         box = self.sandbox.bind(ctx.user_id, variables)
+        self._boxes[ctx.user_id] = box
         await box.prepare()
         if self.skills is not None:
             await self.skills.sync(box)

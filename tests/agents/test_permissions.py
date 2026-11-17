@@ -52,9 +52,21 @@ async def test_a_rule_is_kept_in_the_users_settings_once(tmp_path):
     assert Permissions(await box.permissions()).decide("bash", {"command": "pytest -q"}) is True
 
 
-def test_always_keeps_a_command_by_its_first_word_and_other_tools_whole():
-    assert Permissions.rule_for("bash", {"command": "pytest -q tests/"}) == "bash(pytest*)"
-    assert Permissions.rule_for("write_file", {"path": "notes.md"}) == "write_file"
-    kept = Permissions({"allow": [Permissions.rule_for("bash", {"command": "pytest -q"})]})
-    assert kept.decide("bash", {"command": "pytest tests/x.py"}) is True
-    assert kept.decide("bash", {"command": "pytest && rm x"}) is None  # still asked
+def test_always_keeps_one_rule_per_command_and_a_lone_cd_needs_none():
+    assert Permissions.rules_for("bash", {"command": "pytest -q tests/"}) == ["bash(pytest*)"]
+    assert Permissions.rules_for("write_file", {"path": "notes.md"}) == ["write_file"]
+    command = "cd /box/s && cat >> a.css <<'EOF'\n.qr { x: 1; }\nEOF\nsleep 1; curl -s x | grep -n qr"
+    rules = Permissions.rules_for("bash", {"command": command})
+    assert rules == ["bash(cat*)", "bash(sleep*)", "bash(curl*)", "bash(grep*)"]  # no cd, no CSS
+    kept = Permissions({"allow": rules})
+    assert kept.decide("bash", {"command": command}) is True
+    assert kept.decide("bash", {"command": "cd /box/s && pytest"}) == "default"  # pytest not allowed
+    assert kept.decide("bash", {"command": "cd /box/s"}) is True
+    assert not Permissions.can_be_kept("bash", {"command": "cd /box/s"})  # nothing to keep
+    assert kept.decide("bash", {"command": "cat a && rm x"}) is None  # still asked
+
+
+def test_separators_inside_quotes_do_not_split_the_command():
+    command = "python3 -c \"\nimport csv\nprint('a; b | c')\n\" && head -5 out.csv | wc -l"
+    rules = Permissions.rules_for("bash", {"command": command})
+    assert rules == ["bash(python3*)", "bash(head*)", "bash(wc*)"]
