@@ -1,5 +1,7 @@
 """LocalSandbox: this computer is the sandbox."""
 
+import asyncio
+
 from max_ai.base.sandbox import SandboxCore
 from max_ai.capabilities.sandbox.local import LocalSandbox
 
@@ -31,6 +33,21 @@ async def test_a_command_reads_stdin_and_sees_the_bound_variables(tmp_path):
 async def test_a_command_stops_at_its_timeout(tmp_path):
     result = await LocalSandbox(root=str(tmp_path)).execute_command("sleep 5", timeout=0.2)
     assert result.timed_out and result.exit_code is None
+
+
+async def test_a_cancelled_command_leaves_nothing_running(tmp_path):
+    beat = tmp_path / "beat"
+    loop = f"while true; do date +%s%N > {beat}; sleep 0.05; done"
+    running = asyncio.create_task(
+        LocalSandbox(root=str(tmp_path)).execute_command(f"({loop}) & {loop}", timeout=60)
+    )
+    await asyncio.sleep(0.5)
+    running.cancel()
+    await asyncio.gather(running, return_exceptions=True)
+    await asyncio.sleep(0.3)
+    seen = beat.read_text()
+    await asyncio.sleep(0.3)
+    assert running.cancelled() and beat.read_text() == seen  # nobody writes any more
 
 
 async def test_output_that_is_not_text_does_not_fail(tmp_path):

@@ -11,11 +11,13 @@ from pydantic import BaseModel, Field
 
 from ....base.sandbox import CommandResult, SandboxCore, SandboxError
 from ....base.session_store import validate_id
+from ....core.ids import short_id
 
 HOME = "/home/agent"  # .agent/ goes here, on the user's volume
 TIMED_OUT = (124, 137)  # how `timeout` ends a command it had to stop
 # Read once from the package, then run in the proxy's container.
 PROXY = Path(__file__).with_name("proxy.py").read_text()
+KILL = Path(__file__).with_name("kill.sh").read_text()  # stops a cancelled command
 PROXY_PORT = 3128
 DOCKERFILE = str(Path(__file__).with_name("Dockerfile"))  # ours: python + pypdf
 
@@ -88,11 +90,17 @@ class DockerSandbox(SandboxCore):
         # "-e NAME" takes the value from this call's environment, so the
         # values never show in the process list.
         variables = [arg for name in self.variables for arg in ("-e", name)]
-        code, stdout, stderr = await self._docker(
-            "exec", "-i", *variables, self.name,
-            "timeout", "-k", "2", str(timeout), "bash", "-c", command,
-            stdin=stdin, env={**os.environ, **self.variables},
-        )
+        mark = f"run-{short_id()}"  # an extra argument, only to find the command later
+        try:
+            code, stdout, stderr = await self._docker(
+                "exec", "-i", *variables, self.name,
+                "timeout", "-k", "2", str(timeout), "bash", "-c", command, mark,
+                stdin=stdin, env={**os.environ, **self.variables},
+            )
+        except asyncio.CancelledError:
+            # Stopped from outside: the command would go on inside the container.
+            await asyncio.shield(self._docker("exec", self.name, "bash", "-c", KILL, "_", mark))
+            raise
         timed_out = code in TIMED_OUT
         return CommandResult(stdout, stderr, None if timed_out else code, timed_out=timed_out)
 
@@ -180,7 +188,11 @@ class DockerSandbox(SandboxCore):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await process.communicate(stdin)
+        try:
+            stdout, stderr = await process.communicate(stdin)
+        except asyncio.CancelledError:
+            process.kill()  # do not leave the docker command waiting
+            raise
         # Output is not always text: never fail on it.
         return process.returncode or 0, stdout.decode(errors="replace"), stderr.decode(errors="replace")
 

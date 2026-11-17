@@ -2,6 +2,7 @@
 are skipped without Docker; the ones that reach the internet are
 ``integration``."""
 
+import asyncio
 import shutil
 import subprocess
 
@@ -80,6 +81,18 @@ async def test_a_command_stops_at_its_timeout_and_leaves_nothing_running(docker)
         "sleep 1; grep -l sleep /proc/[0-9]*/comm | wc -l"
     )
     assert left.stdout.strip() == "1"  # only the container's own
+
+
+@needs_docker
+async def test_a_cancelled_command_leaves_nothing_running(docker):
+    sandbox = docker()
+    await sandbox.prepare()
+    running = asyncio.create_task(sandbox.execute_command("sleep 300 & sleep 300", timeout=120))
+    await asyncio.sleep(2)
+    running.cancel()
+    await asyncio.gather(running, return_exceptions=True)
+    left = await sandbox.execute_command("grep -l sleep /proc/[0-9]*/comm | wc -l")
+    assert running.cancelled() and left.stdout.strip() == "1"  # only the container's own
 
 
 @needs_docker

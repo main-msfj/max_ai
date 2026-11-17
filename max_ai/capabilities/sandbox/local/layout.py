@@ -59,6 +59,9 @@ class LocalSandbox(SandboxCore):
             os.killpg(process.pid, signal.SIGKILL)
             stdout, stderr = await process.communicate()
             timed_out = True
+        except asyncio.CancelledError:
+            os.killpg(process.pid, signal.SIGKILL)  # stopped from outside: nothing stays running
+            raise
         # Output is not always text: never fail on it.
         return CommandResult(
             stdout.decode(errors="replace"),
