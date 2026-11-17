@@ -65,14 +65,17 @@ class ReadFileTool(CoreTool):
         first = tool_request.parameters.get("offset", 1)
         limit = min(tool_request.parameters.get("limit", self.MAX_LINES), self.MAX_LINES)
 
-        # 1. Where this session may read: its workspace, its tmp and the skills.
+        # 1. Where this session may read: its workspace, its tmp, the skills and the memory.
         sandbox = tool_ctx.sandbox
         paths = sandbox.session_paths(tool_ctx.session_id)
         start = FilesSeen.start(tool_ctx, paths["workspace"])
         request = {
             "path": path, "cwd": start, "first": first, "limit": limit,
             "width": self.MAX_LINE_CHARS,
-            "allowed": [paths["workspace"], paths["tmp"], str(sandbox.layout.skills)],
+            "allowed": [
+                paths["workspace"], paths["tmp"],
+                str(sandbox.layout.skills), str(sandbox.layout.memory),
+            ],
         }
 
         # 2. The script runs inside the sandbox, where the files and their links are.

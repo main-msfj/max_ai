@@ -26,7 +26,7 @@ from max_ai.base.knowledge import KnowledgeToolMode
 from max_ai.base.memory import MemoryToolMode
 from max_ai.capabilities.context import LocalContextRegistry
 from max_ai.capabilities.knowledge import LocalKnowledgeRegistry
-from max_ai.capabilities.memory import LocalMemoryRegistry
+from max_ai.capabilities.memory.to_delete import LocalMemoryRegistry
 from max_ai.capabilities.skills.local import LocalSkillRegistry
 from max_ai.errors.memory import MemoryError
 from max_ai.types.workspace import WorkspaceDirectory

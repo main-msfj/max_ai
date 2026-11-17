@@ -72,14 +72,15 @@ class EditFileTool(CoreTool):
                 tool_request.id, f"{path}: old_text and new_text are the same."
             )
 
-        # 2. Where this session may write: its workspace and its tmp, not the skills.
+        # 2. Where this session may write: its workspace, its tmp and the memory; not the skills.
         sandbox = tool_ctx.sandbox
         paths = sandbox.session_paths(tool_ctx.session_id)
         start = FilesSeen.start(tool_ctx, paths["workspace"])
         request = {
             "path": path, "cwd": start, "old": old, "new": new,
             "all": tool_request.parameters.get("replace_all", False),
-            "allowed": [paths["workspace"], paths["tmp"]],
+            "allowed": [paths["workspace"], paths["tmp"], str(sandbox.layout.memory)],
+            "memory": str(sandbox.layout.memory), "memory_max": sandbox.layout.MEMORY_FILE_BYTES,
         }
 
         # 3. The request goes on stdin: the texts can be longer than an argument allows.

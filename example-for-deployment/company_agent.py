@@ -17,7 +17,7 @@ from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
 from max_ai.capabilities.executor.modal import ModalExecutor
 from max_ai.capabilities.knowledge import MongoDBKnowledgeRegistry
 from max_ai.capabilities.mcp import HTTPServerConfig
-from max_ai.capabilities.memory import MongoDBMemoryRegistry
+from max_ai.capabilities.memory.to_delete import MongoDBMemoryRegistry
 from max_ai.capabilities.middleware import (
     BudgetMiddleware,
     TracingMiddleware,

@@ -17,7 +17,7 @@ from max_ai.capabilities.mcp import (
     StdioMCPServerConfig,
     serialize_mcp_servers,
 )
-from max_ai.capabilities.memory.mongodb import MongoDBMemoryRegistry
+from max_ai.capabilities.memory.to_delete.mongodb import MongoDBMemoryRegistry
 
 SECRETS = {
     "OPENAI_API_KEY": "sk-openai-SECRET",

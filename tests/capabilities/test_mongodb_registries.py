@@ -9,7 +9,7 @@ import pytest
 
 from max_ai.base.memory import MemoryRecord
 from max_ai.capabilities.knowledge.mongodb import MongoDBKnowledgeRegistry
-from max_ai.capabilities.memory.mongodb import MongoDBMemoryRegistry
+from max_ai.capabilities.memory.to_delete.mongodb import MongoDBMemoryRegistry
 from max_ai.core import KnowledgeBlock
 
 

@@ -6,8 +6,8 @@ import json
 import re
 from pathlib import Path
 
-from ....base.embedding import DEFAULT_EMBEDDING, CoreEmbedding
-from ....base.memory import (
+from .....base.embedding import DEFAULT_EMBEDDING, CoreEmbedding
+from .....base.memory import (
     CoreMemoryRegistry,
     MemoryRecord,
     MemorySearchResult,
@@ -37,7 +37,7 @@ class LocalMemoryRegistry(CoreMemoryRegistry):
     no separate index is maintained.
     """
 
-    component_provider_override = "max_ai.capabilities.memory.local.LocalMemoryRegistry"
+    component_provider_override = "max_ai.capabilities.memory.to_delete.local.LocalMemoryRegistry"
     component_schema = LocalMemoryRegistryConfig
     component_type = "memory"
 

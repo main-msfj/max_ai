@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from max_ai.base.embedding import CoreEmbedding
 from max_ai.capabilities.knowledge.local import LocalKnowledgeRegistry
-from max_ai.capabilities.memory.local import LocalMemoryRegistry
+from max_ai.capabilities.memory.to_delete.local import LocalMemoryRegistry
 from max_ai.core.embeddings import (
     FastEmbedEmbedding,
     OpenAIEmbedding,

@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from ....base.memory import MemoryToolMode
+from .....base.memory import MemoryToolMode
 
 
 class LocalMemoryRegistryConfig(BaseModel):

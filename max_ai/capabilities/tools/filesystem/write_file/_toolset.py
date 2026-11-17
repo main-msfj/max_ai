@@ -58,7 +58,7 @@ class WriteFileTool(CoreTool):
         path = tool_request.parameters["path"]
         content = tool_request.parameters["content"].encode("utf-8")
 
-        # 1. Where this session may write: its workspace and its tmp, not the skills.
+        # 1. Where this session may write: its workspace, its tmp and the memory; not the skills.
         sandbox = tool_ctx.sandbox
         paths = sandbox.session_paths(tool_ctx.session_id)
         seen = tool_ctx.run_context.files_seen
@@ -66,7 +66,8 @@ class WriteFileTool(CoreTool):
         key = FilesSeen.key(start, path)
         request = {
             "path": path, "cwd": start,
-            "allowed": [paths["workspace"], paths["tmp"]],
+            "allowed": [paths["workspace"], paths["tmp"], str(sandbox.layout.memory)],
+            "memory": str(sandbox.layout.memory), "memory_max": sandbox.layout.MEMORY_FILE_BYTES,
             "sha256": hashlib.sha256(content).hexdigest(), "seen": seen.get(key),
         }
 

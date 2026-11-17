@@ -6,15 +6,15 @@ import asyncio
 import os
 from typing import Any
 
-from ....base.embedding import DEFAULT_EMBEDDING, CoreEmbedding
-from ....base.memory import (
+from .....base.embedding import DEFAULT_EMBEDDING, CoreEmbedding
+from .....base.memory import (
     CoreMemoryRegistry,
     MemoryRecord,
     MemorySearchResult,
     MemoryToolMode,
 )
-from ....core.embeddings import rank
-from ...mongodb_vector import MongoVectorIndex
+from .....core.embeddings import rank
+from ....mongodb_vector import MongoVectorIndex
 from ._model import MongoDBMemoryRegistryConfig
 
 
@@ -23,7 +23,7 @@ class MongoDBMemoryRegistry(CoreMemoryRegistry):
 
     component_schema = MongoDBMemoryRegistryConfig
     component_type = "memory"
-    component_provider_override = "max_ai.capabilities.memory.mongodb.MongoDBMemoryRegistry"
+    component_provider_override = "max_ai.capabilities.memory.to_delete.mongodb.MongoDBMemoryRegistry"
 
     def __init__(
         self,

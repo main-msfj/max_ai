@@ -19,7 +19,7 @@ from max_ai.capabilities.clients.to_delete.openai.client import OpenAIChatComple
 from max_ai.capabilities.compaction import SummaryCompaction
 from max_ai.capabilities.completion_gate import RuntimeCompletionGate, RuntimeGateConfig
 from max_ai.capabilities.mcp import HTTPServerConfig
-from max_ai.capabilities.memory import LocalMemoryRegistry
+from max_ai.capabilities.memory.to_delete import LocalMemoryRegistry
 from max_ai.capabilities.reasoning.guards import RepetitionGuard
 from max_ai.capabilities.reasoning.react import ReactLoop
 from max_ai.capabilities.tools.decorator import tool

@@ -64,7 +64,8 @@ class BashTool(CoreTool):
         # 1. The folders of this session, and where the last command ended.
         sandbox, ctx = tool_ctx.sandbox, tool_ctx.run_context
         paths = sandbox.session_paths(tool_ctx.session_id)
-        allowed = [paths["workspace"], paths["tmp"], str(sandbox.layout.skills)]
+        layout = sandbox.layout
+        allowed = [paths["workspace"], paths["tmp"], str(layout.skills), str(layout.memory)]
         mark = f"__cwd_{short_id()}__"
         log = f"{paths['tmp']}/tool_results/{short_id()}.log"
         values = {

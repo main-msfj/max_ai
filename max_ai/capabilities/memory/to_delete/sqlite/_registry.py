@@ -14,14 +14,14 @@ import threading
 import typing as t
 from pathlib import Path
 
-from ....base.embedding import DEFAULT_EMBEDDING, CoreEmbedding
-from ....base.memory import (
+from .....base.embedding import DEFAULT_EMBEDDING, CoreEmbedding
+from .....base.memory import (
     CoreMemoryRegistry,
     MemoryRecord,
     MemorySearchResult,
     MemoryToolMode,
 )
-from ....core.embeddings import pack_vector, rank, unpack_vector
+from .....core.embeddings import pack_vector, rank, unpack_vector
 from ._model import SQLiteMemoryRegistryConfig
 
 _SCHEMA = """
@@ -46,7 +46,7 @@ class SQLiteMemoryRegistry(CoreMemoryRegistry):
 
     component_schema = SQLiteMemoryRegistryConfig
     component_type = "memory"
-    component_provider_override = "max_ai.capabilities.memory.sqlite.SQLiteMemoryRegistry"
+    component_provider_override = "max_ai.capabilities.memory.to_delete.sqlite.SQLiteMemoryRegistry"
 
     # Search looks at the user's most recent memories from other sessions.
     search_candidates: t.ClassVar[int] = 2000

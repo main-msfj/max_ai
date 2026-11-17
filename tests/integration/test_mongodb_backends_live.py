@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 
 from max_ai.capabilities.knowledge.mongodb import MongoDBKnowledgeRegistry
-from max_ai.capabilities.memory.mongodb import MongoDBMemoryRegistry
+from max_ai.capabilities.memory.to_delete.mongodb import MongoDBMemoryRegistry
 from max_ai.core import KnowledgeBlock
 
 pytestmark = [pytest.mark.integration, pytest.mark.skipif(

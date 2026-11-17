@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from max_ai.base.embedding import CoreEmbedding
 from max_ai.base.memory import MemoryToolMode
 from max_ai.capabilities.knowledge.sqlite import SQLiteKnowledgeRegistry
-from max_ai.capabilities.memory.sqlite import SQLiteMemoryRegistry
+from max_ai.capabilities.memory.to_delete.sqlite import SQLiteMemoryRegistry
 from max_ai.core import KnowledgeBlock
 from max_ai.core.embeddings import FastEmbedEmbedding
 

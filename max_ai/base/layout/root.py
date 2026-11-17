@@ -22,6 +22,7 @@ class Layout:
 
     FOLDER: t.ClassVar[str] = ".agent"
     SETTINGS: t.ClassVar[str] = "setting.json"
+    MEMORY_FILE_BYTES: t.ClassVar[int] = 100_000  # the most a memory file holds
 
     def __init__(self, base: str | PurePosixPath) -> None:
         self.root = PurePosixPath(base) / self.FOLDER
@@ -43,6 +44,11 @@ class Layout:
         return self.root / "tmp"
 
     @property
+    def memory(self) -> PurePosixPath:
+        """What the user's agent remembers between sessions: one file per fact."""
+        return self.root / "memory"
+
+    @property
     def lock(self) -> PurePosixPath:
         """Held while a skill is installed: one install at a time."""
         return self.root / ".lock"
@@ -51,7 +57,7 @@ class Layout:
         """What ``SCRIPT`` needs to create ``.agent/``: the folders, and the
         settings file with its first content."""
         return {
-            "folders": [str(self.skills), str(self.workspace), str(self.tmp)],
+            "folders": [str(self.skills), str(self.workspace), str(self.tmp), str(self.memory)],
             "settings": str(self.settings),
             "content": {"skills": {}},
         }

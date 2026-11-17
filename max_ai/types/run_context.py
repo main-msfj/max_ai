@@ -59,6 +59,7 @@ class RunContext(BaseModel):
     cwd: str | None = None  # where bash ended, when not the workspace
     files_seen: dict[str, str] = Field(default_factory=dict)  # file path -> sha256 the model saw
     todos: list[Todo] = Field(default_factory=list)  # the agent's list of things to do
+    memory_index: str | None = None  # the memory index the model saw; renewed after compaction
     inbox: list[str] = Field(
         default_factory=list,
         description=(

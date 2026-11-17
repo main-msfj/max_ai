@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 
 from max_ai.agents import Agent
-from max_ai.capabilities.memory import LocalMemoryRegistry
-from max_ai.capabilities.memory.mongodb import MongoDBMemoryRegistry
+from max_ai.capabilities.memory.to_delete import LocalMemoryRegistry
+from max_ai.capabilities.memory.to_delete.mongodb import MongoDBMemoryRegistry
 from max_ai.capabilities.workspace.local import LocalWorkspace
 from max_ai.core.messages import AssistantMessage, ToolCall
 from max_ai.core.model.llm import ModelConfig

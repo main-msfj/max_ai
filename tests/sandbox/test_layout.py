@@ -20,7 +20,9 @@ def test_building_a_layout_creates_nothing(tmp_path):
 
 def test_the_skeleton_names_the_folders_and_the_first_settings():
     skeleton = Layout("/x").skeleton()
-    assert skeleton["folders"] == ["/x/.agent/skills", "/x/.agent/workspace", "/x/.agent/tmp"]
+    assert skeleton["folders"] == [
+        "/x/.agent/skills", "/x/.agent/workspace", "/x/.agent/tmp", "/x/.agent/memory",
+    ]
     assert skeleton["settings"] == "/x/.agent/setting.json"
     assert skeleton["content"] == {"skills": {}}
 

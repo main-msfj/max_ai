@@ -23,6 +23,9 @@ def write(request, content):
         raise ValueError("it is outside the folders you can write")
     if os.path.isdir(file):
         raise ValueError("it is a folder, not a file")
+    if inside(file, [request["memory"]]) and len(content) > request["memory_max"]:
+        kb = request["memory_max"] // 1000
+        raise ValueError(f"a memory file holds at most {kb} kB; split it into smaller files")
 
     # 3. An existing file is replaced only if the model saw it as it is now.
     existed = os.path.exists(file)

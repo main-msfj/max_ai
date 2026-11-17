@@ -54,6 +54,9 @@ def edit(request):
 
     # 5. Write beside the file and swap, so a cut write leaves no half file.
     edited = content.replace(old, new).encode("utf-8")
+    if inside(file, [request["memory"]]) and len(edited) > request["memory_max"]:
+        kb = request["memory_max"] // 1000
+        raise ValueError(f"a memory file holds at most {kb} kB; split it into smaller files")
     partial = file + ".partial"
     with open(partial, "wb") as handle:
         handle.write(edited)

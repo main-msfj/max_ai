@@ -31,7 +31,7 @@ from max_ai.base.memory import MemoryToolMode
 from max_ai.capabilities.clients.openrouter import OpenRouterChatCompletionClient
 from max_ai.capabilities.compaction import SummaryCompaction
 from max_ai.capabilities.knowledge.local import LocalKnowledgeRegistry
-from max_ai.capabilities.memory.local import LocalMemoryRegistry
+from max_ai.capabilities.memory.to_delete.local import LocalMemoryRegistry
 from max_ai.capabilities.middleware import TracingMiddleware, configure_langfuse
 from max_ai.capabilities.session_store import LocalSessionStore
 from max_ai.capabilities.skills.github import GithubSkillRegistry

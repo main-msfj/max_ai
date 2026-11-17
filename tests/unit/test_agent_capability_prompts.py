@@ -9,7 +9,7 @@ from max_ai.base.memory import MemoryToolMode
 from max_ai.capabilities.executor.docker import DockerExecutor
 from max_ai.capabilities.executor.modal import ModalExecutor
 from max_ai.capabilities.knowledge.local import LocalKnowledgeRegistry
-from max_ai.capabilities.memory.local import LocalMemoryRegistry
+from max_ai.capabilities.memory.to_delete.local import LocalMemoryRegistry
 from max_ai.capabilities.skills.local import LocalSkillRegistry
 from max_ai.capabilities.stacks import (
     AgentPolicyLayer,

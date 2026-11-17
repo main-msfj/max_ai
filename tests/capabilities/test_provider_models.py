@@ -10,9 +10,9 @@ import pytest
 @pytest.mark.parametrize(
     ("module", "implementation", "config", "values"),
     [
-        ("memory.local", "LocalMemoryRegistry", "LocalMemoryRegistryConfig",
+        ("memory.to_delete.local", "LocalMemoryRegistry", "LocalMemoryRegistryConfig",
          {"user_id": "u", "session_id": "s", "base_path": "/tmp"}),
-        ("memory.mongodb", "MongoDBMemoryRegistry", "MongoDBMemoryRegistryConfig",
+        ("memory.to_delete.mongodb", "MongoDBMemoryRegistry", "MongoDBMemoryRegistryConfig",
          {"user_id": "u", "session_id": "s"}),
         ("knowledge.local", "LocalKnowledgeRegistry", "LocalKnowledgeRegistryConfig",
          {"name": "docs", "description": "Docs", "base_path": "/tmp"}),
@@ -49,7 +49,7 @@ def test_executor_components_restore_from_serialized_config():
 
 
 def test_sqlite_memory_config_is_serializable_without_loading_runtime():
-    from max_ai.capabilities.memory.sqlite import SQLiteMemoryRegistryConfig
+    from max_ai.capabilities.memory.to_delete.sqlite import SQLiteMemoryRegistryConfig
 
     config = SQLiteMemoryRegistryConfig(user_id="u", base_path="/tmp")
     assert SQLiteMemoryRegistryConfig.model_validate_json(config.model_dump_json()) == config

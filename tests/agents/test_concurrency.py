@@ -8,7 +8,7 @@ import time
 
 from max_ai.agents import Agent
 from max_ai.base.tools import ToolContext
-from max_ai.capabilities.memory import LocalMemoryRegistry
+from max_ai.capabilities.memory.to_delete import LocalMemoryRegistry
 from max_ai.capabilities.tools.function_as_tool import FunctionAsTool
 from max_ai.capabilities.workspace.local import LocalWorkspace
 from max_ai.core.event_type import ToolCallResponseEvent
