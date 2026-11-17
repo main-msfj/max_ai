@@ -248,6 +248,14 @@ class ReasoningCompleteEvent(ReasoningEvent):
     total_iterations: int = Field(..., description="How many iterations were executed")
 
 
+class LoopNoticeEvent(ReasoningEvent):
+    """A rule of the loop corrected the model or ended the turn."""
+
+    EVENT_TYPE = "loop_notice"
+    kind: str = Field(..., description="The rule: empty_answer, repetition, near_limit...")
+    message: str = Field(default="", description="What the model was told, if anything")
+
+
 class LastMessageResponseEvent(ReasoningEvent):
     """The model responded with no tool calls — this response is the
     proposed end of the turn, about to be checked by the completion gate."""

@@ -56,6 +56,9 @@ class ChatCompletionChunk(BaseModel):
     tool_call_chunk: dict[str, t.Any] | None = Field(default=None)
     usage: Usage | None = Field(default=None, description="Token usage statistics")
     structured_output: BaseModel | None = Field(default=None)
+    message: AssistantMessage | None = Field(
+        default=None, description="The whole answer, on the final chunk.",
+    )
     finish_reason: str | None = Field(
         default=None, description="Why the model stopped, on the final chunk (e.g. 'length').",
     )

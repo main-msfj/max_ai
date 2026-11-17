@@ -171,6 +171,9 @@ class ChatCompletionsClient(CoreChatCompletionClient[ConfigT]):
         if isinstance(error, APITimeoutError):
             return ClientError.request_timeout(0)
         if isinstance(error, BadRequestError):
+            text = str(error).lower()
+            if "context_length" in text or "context length" in text or "context window" in text:
+                return ClientError.token_limit_exceeded()
             return ClientError.invalid_request(str(error))
         if isinstance(error, APIError):
             return ClientError.api_error(
@@ -222,6 +225,7 @@ class ChatCompletionsClient(CoreChatCompletionClient[ConfigT]):
         start = time.monotonic()
         request = self.request(messages, tools, output_format, stream=True)
         text: list[str] = []
+        thoughts: list[str] = []
         calls: dict[int, dict[str, t.Any]] = {}  # a tool call arrives in pieces, by its index
         usage, finish = Usage(), None
 
@@ -240,6 +244,7 @@ class ChatCompletionsClient(CoreChatCompletionClient[ConfigT]):
 
             # 2. Thinking and text go out as they arrive.
             if thought := self.thinking(delta):
+                thoughts.append(thought)
                 yield ChatCompletionChunk(content="", thinking=thought, is_complete=False)
             if piece := self.get(delta, "content"):
                 text.append(piece)
@@ -256,20 +261,27 @@ class ChatCompletionsClient(CoreChatCompletionClient[ConfigT]):
                 call["arguments"] += self.get(function, "arguments") or ""
 
         # 4. Each whole tool call, then the closing piece with the usage.
-        whole = [call for _, call in sorted(calls.items()) if call["name"]]
+        whole: list[dict[str, t.Any]] = [
+            {
+                "id": call["id"] or short_id(),
+                "function": {"name": call["name"], "arguments": call["arguments"]},
+            }
+            for _, call in sorted(calls.items())
+            if call["name"]
+        ]
         for call in whole:
-            yield ChatCompletionChunk(
-                content="", is_complete=False,
-                tool_call_chunk={
-                    "id": call["id"] or short_id(),
-                    "function": {"name": call["name"], "arguments": call["arguments"]},
-                },
-            )
+            yield ChatCompletionChunk(content="", is_complete=False, tool_call_chunk=call)
         usage.duration_ms = int((time.monotonic() - start) * 1000)
         usage.llm_calls, usage.tool_calls = 1, len(whole)
+        content = "".join(text)
+        structured = self.structured(content, output_format)
         yield ChatCompletionChunk(
             content="", is_complete=True, usage=usage, finish_reason=finish,
-            structured_output=self.structured("".join(text), output_format),
+            structured_output=structured,
+            message=AssistantMessage(
+                source="llm", content=content, thinking="".join(thoughts) or None,
+                tool_calls=self.tool_calls(whole), structured_output=structured,
+            ),
         )
 
     async def call(self, request: dict[str, t.Any]) -> t.Any:
