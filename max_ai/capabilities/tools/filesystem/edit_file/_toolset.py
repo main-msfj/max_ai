@@ -75,11 +75,12 @@ class EditFileTool(CoreTool):
         # 2. Where this session may write: its workspace, its tmp and the memory; not the skills.
         sandbox = tool_ctx.sandbox
         paths = sandbox.session_paths(tool_ctx.session_id)
-        start = FilesSeen.start(tool_ctx, paths["workspace"])
+        allowed = [paths["workspace"], paths["tmp"], str(sandbox.layout.memory)]
+        start = FilesSeen.write_start(tool_ctx, paths["workspace"], allowed)
         request = {
             "path": path, "cwd": start, "old": old, "new": new,
             "all": tool_request.parameters.get("replace_all", False),
-            "allowed": [paths["workspace"], paths["tmp"], str(sandbox.layout.memory)],
+            "allowed": allowed,
             "memory": str(sandbox.layout.memory), "memory_max": sandbox.layout.MEMORY_FILE_BYTES,
         }
 

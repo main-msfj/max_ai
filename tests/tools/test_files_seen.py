@@ -74,10 +74,25 @@ async def test_relative_paths_start_where_bash_ended(sandbox, ctx, workspace):
     assert f"{workspace}/repo/src/app.py" in ctx.files_seen
 
 
-async def test_a_path_outside_says_where_it_resolved_and_where_to_write(sandbox):
+async def test_from_a_skill_folder_a_relative_path_is_written_in_the_workspace(sandbox):
     ctx = RunContext(user_id="user-1", session_id="s1", cwd=str(sandbox.layout.skills))
-    record = ToolCallRecord(tool_name="write_file", parameters={"path": "notes.md", "content": "x"})
+    tools = ToolDispatcher(ToolRegistry([WriteFileTool(), EditFileTool()]), sandbox)
+    workspace = Path(sandbox.session_paths("s1")["workspace"])
+    write = ToolCallRecord(tool_name="write_file", parameters={"path": "notes.md", "content": "one\n"})
+    assert (await tools.dispatch(write, ctx)).success
+    edit = ToolCallRecord(
+        tool_name="edit_file", parameters={"path": "notes.md", "old_text": "one", "new_text": "two"}
+    )
+    assert (await tools.dispatch(edit, ctx)).success
+    assert (workspace / "notes.md").read_text() == "two\n"
+    assert not Path(str(sandbox.layout.skills), "notes.md").exists()
+
+
+async def test_a_path_outside_says_where_it_resolved_and_where_to_write(sandbox):
+    ctx = RunContext(user_id="user-1", session_id="s1")
+    path = f"{sandbox.layout.skills}/notes.md"
+    record = ToolCallRecord(tool_name="write_file", parameters={"path": path, "content": "x"})
     result = await ToolDispatcher(ToolRegistry([WriteFileTool()]), sandbox).dispatch(record, ctx)
     workspace = sandbox.session_paths("s1")["workspace"]
-    assert not result.success and f"resolves to {sandbox.layout.skills}/notes.md" in result.error
+    assert not result.success and f"resolves to {path}" in result.error
     assert workspace in result.error and "use a full path inside one of them" in result.error
