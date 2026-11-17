@@ -3,7 +3,7 @@
 import httpx
 import pytest
 
-from max_ai.capabilities.clients.to_delete.openai import OpenAIChatCompletionClient
+from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
 from max_ai.core.retry import RetryPolicy, rate_limited, retry_after
 from max_ai.errors.client import ClientError
 
@@ -70,12 +70,12 @@ def test_openai_errors_carry_status_and_retry_after():
     limited = RateLimitError("slow down", body=None, response=httpx.Response(
         429, headers={"retry-after": "7"}, request=request,
     ))
-    error = OpenAIChatCompletionClient._map_openai_error(limited)
+    error = OpenAIChatCompletionClient(model="m", api_key="x").map_error(limited)
     assert (error.kind, error.status, error.retry_after) == ("rate_limit", 429, 7.0)
 
     missing = NotFoundError("no such model", body=None, response=httpx.Response(
         404, request=request,
     ))
-    error = OpenAIChatCompletionClient._map_openai_error(missing)
+    error = OpenAIChatCompletionClient(model="m", api_key="x").map_error(missing)
     assert (error.kind, error.status) == ("api_error", 404)
     assert not error.transient

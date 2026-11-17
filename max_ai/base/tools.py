@@ -12,7 +12,8 @@ from abc import ABC, abstractmethod
 from jsonschema import Draft202012Validator, ValidationError
 from pydantic import BaseModel
 
-from ..core.termination import CancellationToken
+from ..core.cancellation import CancellationToken
+from ..errors.tools import ToolDefinitionError
 from ..types.run_context import RunContext
 from ..types.tool_call import ToolCallRecord, ToolResult
 from ..types.tools import (
@@ -220,6 +221,3 @@ class CoreTool(ComponentBase[BaseModel], ABC):
             f"description='{self.description}'>"
         )
 
-
-class ToolDefinitionError(ValueError):
-    """A tool was built with a name or a description that cannot be used."""

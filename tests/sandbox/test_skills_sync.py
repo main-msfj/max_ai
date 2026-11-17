@@ -12,6 +12,7 @@ from max_ai.capabilities.skills.github import GitHubSkills
 from max_ai.capabilities.skills.local import LocalSkills
 
 from .test_docker_sandbox import needs_docker
+from .test_github_skills import synced
 
 REPOSITORY = "https://github.com/anthropics/skills/tree/main/skills"
 ENV = {"NAME_IN_SKILL": "NAME_IN_MY_ENV"}
@@ -90,6 +91,6 @@ async def test_local_skills(sandbox, local_skills, tmp_path, request):
 @pytest.mark.parametrize("sandbox", SANDBOXES, indirect=True)
 async def test_github_skills(sandbox, github_skills, request):
     sandbox = await start(sandbox, github_skills, request)
-    assert await github_skills.sync(sandbox) == ["brand-guidelines", "internal-comms"]
+    assert await synced(github_skills, sandbox) == ["brand-guidelines", "internal-comms"]
     await check(sandbox, github_skills)
     assert await github_skills.sync(sandbox) == []

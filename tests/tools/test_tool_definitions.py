@@ -3,24 +3,25 @@ An MCP tool keeps the name its server gave it."""
 
 import pytest
 
-from max_ai.base.tools import ToolDefinitionError
 from max_ai.capabilities.mcp.tool import MCPTool
 from max_ai.capabilities.tools.ask_user import AskUserTool
-from max_ai.capabilities.tools.to_delete.bash import BashTool
+from max_ai.capabilities.tools.bash import BashTool
+from max_ai.capabilities.tools.call_tool import CallToolTool
 from max_ai.capabilities.tools.decorator import tool
-from max_ai.capabilities.tools.to_delete.file_system import FileSystemTools
-from max_ai.capabilities.tools.plan import AgentUpdatePlanTool
+from max_ai.capabilities.tools.filesystem import EditFileTool, ReadFileTool, WriteFileTool
 from max_ai.capabilities.tools.search_tool import SearchToolsTool
+from max_ai.capabilities.tools.skill import ReadSkillTool
+from max_ai.capabilities.tools.todos import WriteTodosTool
 from max_ai.core.tool.registry import ToolRegistry
+from max_ai.errors.tools import ToolDefinitionError
 from max_ai.types.tools import ToolKind
 
 
-def test_every_max_ai_tool_builds(tmp_path):
-    AskUserTool()
-    AgentUpdatePlanTool()
-    BashTool()
+def test_every_max_ai_tool_builds():
+    for made in (AskUserTool, BashTool, ReadFileTool, WriteFileTool, EditFileTool, ReadSkillTool, WriteTodosTool):
+        made()
     SearchToolsTool(ToolRegistry())
-    FileSystemTools(tmp_path).tools
+    CallToolTool(ToolRegistry())
 
 
 def test_a_name_that_is_not_snake_case_is_refused():

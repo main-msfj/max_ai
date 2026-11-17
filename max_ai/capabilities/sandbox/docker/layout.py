@@ -9,9 +9,10 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from ....base.sandbox import CommandResult, SandboxCore, SandboxError
+from ....base.sandbox import CommandResult, SandboxCore
 from ....base.session_store import validate_id
 from ....core.ids import short_id
+from ....errors.sandbox import SandboxError
 
 HOME = "/home/agent"  # .agent/ goes here, on the user's volume
 TIMED_OUT = (124, 137)  # how `timeout` ends a command it had to stop

@@ -19,6 +19,10 @@ from ..types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
 from ..types.run_context import RunContext
 from ..types.tools import CoreToolDefinition
 from .component import ComponentBase, ConfigT
+from .middleware import ModelCall
+
+if t.TYPE_CHECKING:
+    from ..core.middleware.chain import MiddlewareChain
 
 # Told before each wait: the try that failed (from 1), its error, seconds to wait.
 OnRetry = t.Callable[[int, BaseException, float], t.Any]
@@ -66,20 +70,32 @@ class CoreChatCompletionClient(ComponentBase[ConfigT], ABC):
         *,
         retry: RetryPolicy | None = None,
         on_retry: OnRetry | None = None,
+        ctx: RunContext | None = None,
+        middleware: MiddlewareChain | None = None,
     ) -> ChatCompletionResult:
         """One answer for ``messages``. A passing failure (rate limit, timeout,
-        5xx) is tried again; ``retry`` given here wins over the client's own."""
-        api_messages, api_tools = self._request(messages, tools)
+        5xx) is tried again; ``retry`` given here wins over the client's own.
+        With ``middleware``, each middleware sees the call and its answer."""
 
-        async def call() -> ChatCompletionResult:
-            try:
-                return await self.complete(api_messages, api_tools, output_format)
-            except Exception as error:
-                raise self.map_error(error) from error
+        # 1. The call itself, as the middlewares left it.
+        async def action(call: ModelCall) -> ChatCompletionResult:
+            api_messages, api_tools = self._request(call.messages, call.tools)
 
-        return await retrying(
-            call, policy=retry or self.retry, transient=self.transient, on_retry=on_retry
-        )
+            async def once() -> ChatCompletionResult:
+                try:
+                    return await self.complete(api_messages, api_tools, call.output_format)
+                except Exception as error:
+                    raise self.map_error(error) from error
+
+            return await retrying(
+                once, policy=retry or self.retry, transient=self.transient, on_retry=on_retry
+            )
+
+        # 2. The middlewares around it, when there are.
+        call = ModelCall(messages, list(tools or []), output_format, self.model, self.config)
+        if middleware and ctx is not None:
+            return await middleware.model(ctx, call, action)
+        return await action(call)
 
     async def stream(
         self,
@@ -89,15 +105,30 @@ class CoreChatCompletionClient(ComponentBase[ConfigT], ABC):
         *,
         retry: RetryPolicy | None = None,
         on_retry: OnRetry | None = None,
+        ctx: RunContext | None = None,
+        middleware: MiddlewareChain | None = None,
     ) -> t.AsyncGenerator[ChatCompletionChunk, None]:
         """The answer for ``messages``, piece by piece. It is tried again only
-        while nothing has come out: after that the caller decides."""
-        api_messages, api_tools = self._request(messages, tools)
+        while nothing has come out: after that the caller decides. With
+        ``middleware``, each middleware sees it line by line."""
+        call = ModelCall(messages, list(tools or []), output_format, self.model, self.config)
+        if middleware and ctx is not None:
+            pieces = middleware.stream(ctx, call, lambda given: self._attempts(given, retry, on_retry))
+        else:
+            pieces = self._attempts(call, retry, on_retry)
+        async for chunk in pieces:
+            yield chunk
+
+    async def _attempts(
+        self, call: ModelCall, retry: RetryPolicy | None, on_retry: OnRetry | None
+    ) -> t.AsyncGenerator[ChatCompletionChunk, None]:
+        """The streamed call, tried again while nothing has come out."""
+        api_messages, api_tools = self._request(call.messages, call.tools)
         policy = retry or self.retry
         for attempt in range(policy.attempts):
             started = False
             try:
-                async for chunk in self.complete_stream(api_messages, api_tools, output_format):
+                async for chunk in self.complete_stream(api_messages, api_tools, call.output_format):
                     started = True
                     yield chunk
                 return

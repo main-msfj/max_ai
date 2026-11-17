@@ -79,10 +79,10 @@ def _type_to_provider_str(cls: type) -> str:
 
 
 KNOWN_PROVIDERS: dict[str, str] = {
-    "OpenAIChatCompletionClient": "max_ai.capabilities.clients.to_delete.openai.client.OpenAIChatCompletionClient",
-    "maxai.llm.OpenAIChatCompletionClient": "max_ai.capabilities.clients.to_delete.openai.client.OpenAIChatCompletionClient",
-    "OpenRouterChatCompletionClient": "max_ai.capabilities.clients.to_delete.openrouter.client.OpenRouterChatCompletionClient",
-    "maxai.llm.OpenRouterChatCompletionClient": "max_ai.capabilities.clients.to_delete.openrouter.client.OpenRouterChatCompletionClient",
+    "OpenAIChatCompletionClient": "max_ai.capabilities.clients.openai.OpenAIChatCompletionClient",
+    "maxai.llm.OpenAIChatCompletionClient": "max_ai.capabilities.clients.openai.OpenAIChatCompletionClient",
+    "OpenRouterChatCompletionClient": "max_ai.capabilities.clients.openrouter.OpenRouterChatCompletionClient",
+    "maxai.llm.OpenRouterChatCompletionClient": "max_ai.capabilities.clients.openrouter.OpenRouterChatCompletionClient",
     "maxai.stacks.AgentPolicyLayer": "max_ai.capabilities.stacks.agent_policy_layer.AgentPolicyLayer",
     "maxai.stacks.TaskAnalysisLayer": "max_ai.capabilities.stacks.task_analysis_layer.TaskAnalysisLayer",
     "maxai.stacks.RenderingLayer": "max_ai.capabilities.stacks.rendering_layer.RenderingLayer",
@@ -90,11 +90,10 @@ KNOWN_PROVIDERS: dict[str, str] = {
     "maxai.stacks.KnowledgeLayer": "max_ai.capabilities.stacks.knowledge_layer.KnowledgeLayer",
     "maxai.stacks.MemoryFilesLayer": "max_ai.capabilities.stacks.memory_files_layer.MemoryFilesLayer",
     "maxai.agents.Agent": "max_ai.agents.agent.Agent",
-    "maxai.agents.AgentOld": "max_ai.agents.agent_old.Agent",
     "maxai.completion.RuntimeCompletionGate": "max_ai.capabilities.completion_gate.gate.RuntimeCompletionGate",
     "maxai.session_store.LocalSessionStore": "max_ai.capabilities.session_store.local._store.LocalSessionStore",
-    "maxai.compaction.SummaryCompaction": "max_ai.capabilities.compaction.to_delete.summary._strategy.SummaryCompaction",
-    "maxai.compaction.SlidingWindowCompaction": "max_ai.capabilities.compaction.to_delete.window._strategy.SlidingWindowCompaction",
+    "maxai.compaction.SummaryCompaction": "max_ai.capabilities.compaction.summary.SummaryCompaction",
+    "maxai.compaction.SlidingWindowCompaction": "max_ai.base.compaction.WindowCompaction",
 }
 
 

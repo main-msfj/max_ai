@@ -3,40 +3,44 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from max_ai.agents import Agent
+from max_ai.capabilities.clients.openrouter import OpenRouterChatCompletionClient
+from max_ai.capabilities.sandbox.local import LocalSandbox
 from max_ai.capabilities.session_store import LocalSessionStore
-from max_ai.capabilities.workspace.local import LocalWorkspace
 from max_ai.cli.app import MaxAIApp
 from max_ai.cli.blocks import AssistantBlock, PastSummaryBlock, QuestionForm, UserBlock
 from max_ai.core.messages import AssistantMessage, UserMessage
-from max_ai.core.model.llm import ModelConfig
 from max_ai.types.completions import ChatCompletionChunk, Usage
 from max_ai.types.run_context import RunContext
+from max_ai.types.summary import Summary
 
 
-class EchoLLM:
+class EchoLLM(OpenRouterChatCompletionClient):
     """Streams back ``re: <last user message>``."""
 
-    model = "fake"
+    def __init__(self) -> None:
+        super().__init__(model="fake", api_key="x")
 
-    def __init__(self):
-        self.config = ModelConfig()
-        self.generation_options = {"max_tokens": 100}
-
-    async def run(self, *, ctx, prompts, tools=None, output_format=None, stream=False, **kwargs):
-        last = next(m.text() for m in reversed(ctx.messages) if m.role == "user")
-
-        async def gen():
-            yield ChatCompletionChunk(content=f"re: {last}", is_complete=False)
-            yield ChatCompletionChunk(content="", is_complete=True, usage=Usage(tokens_input=10))
-        return gen()
+    async def complete_stream(self, messages, tools, output_format):  # type: ignore[override]
+        last = next(m["content"] for m in reversed(messages) if m["role"] == "user")
+        text = last if isinstance(last, str) else "".join(part.get("text", "") for part in last)
+        reply = f"re: {text}"
+        yield ChatCompletionChunk(content=reply, is_complete=False)
+        yield ChatCompletionChunk(content="", is_complete=True, usage=Usage(tokens_input=10),
+                                  message=AssistantMessage(source="llm", content=reply), finish_reason="stop")
 
 
-def make_agent(tmp_path: Path) -> Agent:
-    return Agent(name="demo", description="d", instructions="i", client=EchoLLM(),
-                 workspace=LocalWorkspace(root=tmp_path / "work"))
+@asynccontextmanager
+async def make_agent(tmp_path: Path) -> AsyncIterator[Agent]:
+    agent = Agent("demo", "d", "i", EchoLLM(), sandbox=LocalSandbox(str(tmp_path / "work")))
+    try:
+        yield agent
+    finally:
+        await agent.close()
 
 
 async def idle(app, pilot, timeout: float = 10) -> None:
@@ -150,14 +154,14 @@ async def test_a_compacted_session_shows_its_summary_on_resume(tmp_path):
     store = LocalSessionStore(tmp_path / "sessions")
     ctx = RunContext(user_id="marvin", session_id="long", messages=[
         UserMessage(source="marvin", content="último pedido")])
-    ctx.compaction.compactions, ctx.compaction.archived_messages = 2, 40
+    ctx.summary = Summary(goal="armar un scraper")
     await store.save(ctx)
     async with make_agent(tmp_path) as agent:
         app = MaxAIApp(agent, store=store, user_id="marvin", session_id="long")
         async with app.run_test() as pilot:
             await pilot.pause(0.3)
             block = app.query_one(PastSummaryBlock)
-            assert "40 messages" in block._header().plain
+            assert "summarized" in block._header().plain and "armar un scraper" in block.summary
 
 
 async def test_without_a_store_nothing_is_saved(tmp_path):

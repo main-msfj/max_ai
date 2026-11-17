@@ -11,7 +11,7 @@ from mcp.client.extension import ClaimContext, ClientExtension, ResultClaim
 from mcp_types import CallToolResult, RequestParams, Result
 from pydantic import BaseModel, ConfigDict, Field
 
-from ...errors.mcp import MCPToolError
+from ...errors.mcp import MCPTaskRunning
 
 
 class MCPTask(BaseModel):
@@ -22,15 +22,6 @@ class MCPTask(BaseModel):
     tool_name: str
     tool_call_id: str = ""
     expires_at: float | None = None  # time.time() when the server drops the result
-
-
-class MCPTaskRunning(MCPToolError):
-    """The call became a task that did not end within the wait."""
-
-    def __init__(self, task_id: str, ttl_ms: int | None) -> None:
-        super().__init__(f"Task {task_id} is still running.")
-        self.task_id = task_id
-        self.expires_at = None if ttl_ms is None else time.time() + ttl_ms / 1000
 
 
 class TaskState(Result):

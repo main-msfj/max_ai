@@ -14,8 +14,6 @@ from ..core.ids import short_id
 from ..core.messages import Message
 from ..core.tool.state import ToolState
 from .chat_history import ChatHistory
-
-# from .runtime import RuntimeState
 from .context import Context
 from .summary import Summary
 from .todos import Todo
@@ -31,18 +29,8 @@ class RunContext(BaseModel):
     messages: list[Message] = Field(default_factory=list) # type: ignore
     message_history: ChatHistory = Field(default_factory=ChatHistory)
     tool_state: ToolState = Field(default_factory=ToolState)
-    # Not used by the new tools; only the old agent reads it. Deleted with it.
-    # runtime_state: RuntimeState = Field(default_factory=RuntimeState)
     plan: AgentPlan | None = Field(default=None)
     compaction: CompactionState = Field(default_factory=CompactionState)
-    # Not used by the new tools; only the old agent reads it. Deleted with it.
-    # file_reads: dict[str, tuple[int, int]] = Field(
-    #     default_factory=dict,
-    #     description=(
-    #         "Files the model has read, as workspace path → (mtime_ns, size). "
-    #         "Overwriting, editing or deleting a file needs a matching entry."
-    #     ),
-    # )
     completion_state: dict[str, dict[str, JsonValue]] = Field(
         default_factory=dict,
         description=(
@@ -50,6 +38,7 @@ class RunContext(BaseModel):
             "reset when a new task starts, preserved across pause/resume."
         ),
     )
+    middleware_state: dict[str, dict[str, JsonValue]] = Field(default_factory=dict)  # each middleware's own state, by class name
     mcp_tasks: dict[str, dict[str, JsonValue]] = Field(default_factory=dict)  # MCP tasks still running, by task id
     cwd: str | None = None  # where bash ended, when not the workspace
     files_seen: dict[str, str] = Field(default_factory=dict)  # file path -> sha256 the model saw

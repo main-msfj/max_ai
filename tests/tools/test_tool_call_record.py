@@ -5,8 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from max_ai.core.primitives import FailureReason, ToolCallStatus
-from max_ai.types.tool_call import ToolCallRecord, ToolResult
+from max_ai.types.tool_call import FailureReason, ToolCallRecord, ToolCallStatus, ToolResult
 
 
 def make_record(**overrides) -> ToolCallRecord:

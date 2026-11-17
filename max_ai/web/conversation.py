@@ -49,6 +49,7 @@ class Conversation:
         self.context = ctx
         self.html: Html = host.html
         self.view = TurnView(host.html, self.sid)
+        self.view.folder = host.workspace.folder(self.sid)
         self.spans = SpanProjector()
         self.listeners: set[asyncio.Queue[Fragment]] = set()  # One queue per open page
         self.task: asyncio.Task[None] | None = None  # The turn that runs
@@ -188,24 +189,19 @@ class Conversation:
         if record is None or record.is_consumed or self.busy:
             return
         self.publish(self.html.delete(f"req-{record_id}"))
-        name = record.tool_name
+        # The card's diamond says how it went: no note in the chat, unless the rule was lost.
         if choice == "deny":
             record.reject()
-            self.publish(self._note(f"{name}: denied", "error"))
         else:
             always = choice == "always"
             try:
-                saved = await agent.approve(ctx, record_id, always=always)
-            except Exception as error:  # noqa: BLE001 — the setting.json write failed
-                self.publish(self._note(f"{name}: approved once; the rule was not kept: {error}", "warn"))
+                await agent.approve(ctx, record_id, always=always)
+            except Exception as error:  # noqa: BLE001 — the rule could not be written
+                self.publish(self._note(f"Approved once; the rule was not kept: {error}", "warn"))
             else:
-                kept = Permissions.rules_for(name, record.parameters) if always else []
+                kept = Permissions.rules_for(record.tool_name, record.parameters) if always else []
                 if kept:
-                    self.host.commands.rules = None  # the shield shows the new rule
-                where = " (kept in your setting.json)" if saved else ""
-                rule = f": always allowed {', '.join(kept)}{where}" if always else ": approved once"
-                self.publish(self._note(f"{name}{rule}", "ok"))
-                if kept:
+                    self.host.commands.rules = None  # the Permissions tab shows the new rule
                     await self._approve_covered(kept)
         self._go_on()
 
@@ -224,10 +220,7 @@ class Conversation:
         for record in list(self.context.tool_state.records.values()):
             if record.is_pending_approval and rules.decide(record.tool_name, record.parameters) is True:
                 await self.host.agent.approve(self.context, record.id)
-                self.publish(
-                    self.html.delete(f"req-{record.id}"),
-                    self._note(f"{record.tool_name}: approved (always allowed)", "ok"),
-                )
+                self.publish(self.html.delete(f"req-{record.id}"))
 
     def _go_on(self) -> None:
         if not self.waiting and not self.busy:

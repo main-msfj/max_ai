@@ -11,8 +11,18 @@
 
   document.addEventListener("scroll", (e) => {
     const s = $("scroller");
-    if (e.target === s) follow = s.scrollHeight - s.scrollTop - s.clientHeight < 80;
+    if (e.target === s && s.scrollHeight - s.scrollTop - s.clientHeight < 40) follow = true;
   }, true);
+  // Any move up lets the user read: the answer being written no longer pulls them down.
+  document.addEventListener("wheel", (e) => { if (e.deltaY < 0 && e.target.closest?.("#scroller")) follow = false; }, { passive: true });
+  document.addEventListener("keydown", (e) => { if (["PageUp", "ArrowUp", "Home"].includes(e.key) && !e.target.matches?.("textarea, input")) follow = false; });
+  let touchY = 0;
+  document.addEventListener("touchstart", (e) => { touchY = e.touches[0].clientY; }, { passive: true });
+  document.addEventListener("touchmove", (e) => { if (e.touches[0].clientY > touchY) follow = false; }, { passive: true });
+  document.addEventListener("mousedown", (e) => {
+    const s = $("scroller");  // dragging the scrollbar
+    if (s && e.target === s && e.offsetX > s.clientWidth) follow = false;
+  });
 
   // Every swap the server sends may grow the chat: keep the end in view.
   const settle = () => {
@@ -32,27 +42,40 @@
     for (const b of document.querySelectorAll("[data-open]")) b.classList.toggle("on", b.dataset.open === tab);
     store("maxai.side", tab || "");
     if (tab === "files") htmx.trigger($("tree"), "refresh");
+    if (tab === "rules") htmx.trigger($("rules"), "refresh");
     if (tab === "trace") htmx.ajax("GET", $("trace").getAttribute("hx-get"), { target: "#trace", swap: "outerHTML" });
   };
   const toggleSide = (tab) => openSide(window.maxaiTab === tab ? "" : tab);
 
   // Folders stay open when the tree is drawn again.
   const openDirs = new Set();
-  const openRows = new Set();  // the same for the rows of the Trajectory
+  // The Trajectory is drawn again as the turn runs: turns keep the state the
+  // user gave them, and the row shown in the drawer stays marked.
+  const turnState = new Map();  // turn id → open
+  let shownSpan = "";
   document.addEventListener("toggle", (e) => {
     const el = e.target;
     if (el.matches?.("details.dir")) el.open ? openDirs.add(el.dataset.path) : openDirs.delete(el.dataset.path);
-    if (el.matches?.(".ti details")) el.open ? openRows.add(el.dataset.id) : openRows.delete(el.dataset.id);
+    if (el.matches?.("details.wf-turn")) turnState.set(el.dataset.id, el.open);
   }, true);
   document.addEventListener("htmx:afterSettle", () => {
-    for (const row of document.querySelectorAll("#trace .ti details")) if (openRows.has(row.dataset.id)) row.open = true;
+    for (const turn of document.querySelectorAll("#trace details.wf-turn")) {
+      if (turnState.has(turn.dataset.id)) turn.open = turnState.get(turn.dataset.id);
+    }
+    for (const row of document.querySelectorAll("#trace .wf-row")) row.classList.toggle("selected", row.dataset.id === shownSpan);
   });
+  const closeDetail = () => {
+    shownSpan = "";
+    $("span-detail").classList.remove("on");
+    for (const row of document.querySelectorAll(".wf-row.selected")) row.classList.remove("selected");
+  };
   document.addEventListener("htmx:afterSwap", (e) => {
     if (e.target.id === "tree") {
       for (const dir of e.target.querySelectorAll("details.dir")) dir.open = openDirs.has(dir.dataset.path);
     }
     if (e.target.id === "file-view") e.target.closest(".files-tab").classList.add("viewing");
     if (e.target.id === "panel") { $("panel").hidden = false; }
+    if (e.target.id === "span-detail") e.target.classList.toggle("on", !!e.target.innerHTML.trim());
   });
 
   // ---------- the composer ----------
@@ -190,6 +213,7 @@
   const page = {
     "/files": () => openSide("files"),
     "/trace": () => openSide("trace"),
+    "/permissions": () => openSide("rules"),
     "/new": () => (location.href = "/new"),
     "/clear": () => (location.href = "/new"),
     "/thinking": () => {
@@ -242,6 +266,7 @@
     // 3. Esc closes the panel, else stops the turn.
     if (e.key === "Escape") {
       if (!$("panel").hidden) return closePanel();
+      if ($("span-detail").classList.contains("on")) return closeDetail();
       if (document.body.classList.contains("busy")) htmx.ajax("POST", `/s/${sid()}/stop`, { swap: "none" });
     }
     if ((e.ctrlKey || e.metaKey) && e.key === "b") { e.preventDefault(); toggleSide("files"); }
@@ -258,6 +283,63 @@
     setTimeout(() => { if (document.activeElement !== box()) closeMenu(); }, 150);
   });
 
+  // ---------- ask_user: one question at a time, like the CLI ----------
+  const goStep = (form, to) => {
+    const steps = [...form.querySelectorAll(".q-step")];
+    to = Math.max(0, Math.min(to, steps.length - 1));
+    form.dataset.step = to;
+    steps.forEach((st, i) => (st.hidden = i !== to));
+    form.querySelectorAll(".q-tab").forEach((tab, i) => {
+      tab.classList.toggle("on", i === to);
+      const st = steps[i];
+      tab.classList.toggle("done", !!(st.querySelector("input:checked") || st.querySelector(".other").value.trim()));
+    });
+    const last = to === steps.length - 1;
+    form.querySelector("[data-back]")?.toggleAttribute("hidden", to === 0);
+    form.querySelector("[data-next]")?.toggleAttribute("hidden", last);
+    form.querySelector(".q-send").hidden = !last;
+    const count = form.querySelector(".q-count b");
+    if (count) count.textContent = to + 1;
+  };
+  document.addEventListener("change", (e) => {
+    const form = e.target.closest?.("form.questions");
+    if (!form) return;
+    const step = Number(form.dataset.step || 0);
+    // One choice answers a single question: on to the next.
+    const single = e.target.type === "radio" && !e.target.closest(".q-step").dataset.multi;
+    goStep(form, single ? step + 1 : step);
+  });
+  document.addEventListener("keydown", (e) => {
+    const form = e.target.closest?.("form.questions") || (document.activeElement === document.body && document.querySelector("form.questions"));
+    if (!form || e.target.matches?.("textarea, input.other")) return;
+    const step = form.querySelectorAll(".q-step")[Number(form.dataset.step || 0)];
+    const n = Number(e.key);
+    if (n >= 1 && n <= 9) {
+      const option = step.querySelectorAll(".option input")[n - 1];
+      if (option) { option.checked = option.type === "radio" ? true : !option.checked; option.dispatchEvent(new Event("change", { bubbles: true })); }
+    }
+    if (e.key === "ArrowRight") goStep(form, Number(form.dataset.step) + 1);
+    if (e.key === "ArrowLeft") goStep(form, Number(form.dataset.step) - 1);
+  });
+
+  // ---------- a file the answer names opens in Files ----------
+  const fileFor = (text, list) => list.find((p) => p === text || p.endsWith("/" + text));
+  const markFiles = async () => {
+    const codes = [...document.querySelectorAll(".md :not(pre) > code:not(.is-file)")];
+    if (!codes.length) return;
+    const list = await getFiles().catch(() => []);
+    for (const code of codes) {
+      const path = fileFor(code.textContent.trim().replace(/^\.\//, ""), list);
+      if (path) { code.classList.add("is-file"); code.dataset.path = path; code.title = "Open " + path; }
+    }
+  };
+  let markTimer = 0;
+  document.addEventListener("htmx:oobAfterSwap", () => { clearTimeout(markTimer); markTimer = setTimeout(markFiles, 600); });
+  const openFile = (path) => {
+    openSide("files");
+    htmx.ajax("GET", `/s/${sid()}/file?path=${encodeURIComponent(path)}`, { target: "#file-view", swap: "innerHTML" });
+  };
+
   // The turn's timer.
   setInterval(() => {
     for (const el of document.querySelectorAll("[data-since]")) {
@@ -273,6 +355,18 @@
     if (on("#side-close")) openSide("");
     if (on("#files-refresh")) { files.at = 0; htmx.trigger($("tree"), "refresh"); }
     if (on("[data-close-panel]")) closePanel();
+    if (on("[data-close-detail]")) closeDetail();
+    if (on("code.is-file")) openFile(on("code.is-file").dataset.path);
+    const qform = on("form.questions");
+    if (qform && on("[data-go]")) goStep(qform, Number(on("[data-go]").dataset.go));
+    if (qform && on("[data-next]")) goStep(qform, Number(qform.dataset.step) + 1);
+    if (qform && on("[data-back]")) goStep(qform, Number(qform.dataset.step) - 1);
+    const row = on(".wf-row");
+    if (row) {
+      shownSpan = row.dataset.id;
+      for (const r of document.querySelectorAll(".wf-row.selected")) r.classList.remove("selected");
+      row.classList.add("selected");
+    }
     if (on("[data-insert]")) toggleMenu(on("[data-insert]").dataset.insert);
     if (on("[data-command]")) showPanel(on("[data-command]").dataset.command);
     if (on("[data-file-back]")) on(".files-tab").classList.remove("viewing");
@@ -298,8 +392,9 @@
     settle();
     if (stored("maxai.thinking") === "hidden") document.body.classList.add("hide-thinking");
     const side = stored("maxai.side");
-    if (side === "files" || side === "trace") openSide(side);
+    if (["files", "trace", "rules"].includes(side)) openSide(side);
     getCommands().catch(() => {});
-    fetch(`/s/${sid()}/command?name=/permissions`).catch(() => {});  // so the shield opens at once
+    markFiles();
+    fetch(`/s/${sid()}/rules`).catch(() => {});  // so the Permissions tab opens at once
   });
 })();

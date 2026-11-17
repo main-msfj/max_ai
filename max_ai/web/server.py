@@ -4,9 +4,12 @@ and the few POSTs the page sends (a message, stop, approvals, answers)."""
 from __future__ import annotations
 
 import asyncio
+import mimetypes
+import posixpath
 import typing as t
 import webbrowser
 from datetime import UTC, datetime
+from urllib.parse import quote
 
 from markupsafe import escape
 from starlette.applications import Starlette
@@ -57,10 +60,13 @@ class WebHost:
             Route("/s/{sid}/approve/{rid}", self.approve, methods=["POST"]),
             Route("/s/{sid}/answer/{rid}", self.answer, methods=["POST"]),
             Route("/s/{sid}/trace", self.trace),
+            Route("/s/{sid}/span/{span_id}", self.span),
             Route("/s/{sid}/menu", self.menu),
             Route("/s/{sid}/command", self.command),
             Route("/s/{sid}/files", self.files),
             Route("/s/{sid}/file", self.file),
+            Route("/s/{sid}/download", self.download),
+            Route("/s/{sid}/rules", self.rules, methods=["GET", "POST"]),
             Mount("/static", StaticFiles(directory=HERE / "static"), name="static"),
         ])
 
@@ -101,7 +107,7 @@ class WebHost:
     async def page(self, request: Request) -> Response:
         conversation = await self.conversation(request.path_params["sid"])
         ctx = conversation.context
-        history = History.render(self.html, ctx)
+        history = History.render(self.html, ctx, self.workspace.folder(conversation.sid))
         if not conversation.busy:
             history += Requests.cards(self.html, conversation.sid, ctx, self.agent.sandbox is not None)
         first = next((m.text() for m in ctx.messages if m.role == "user"), "")
@@ -156,7 +162,15 @@ class WebHost:
 
     async def trace(self, request: Request) -> Response:
         conversation = await self.conversation(request.path_params["sid"])
-        return HTMLResponse(Trace.render(self.html, conversation.sid, conversation.spans))
+        folder = self.workspace.folder(conversation.sid)
+        return HTMLResponse(Trace.render(self.html, conversation.sid, conversation.spans, folder))
+
+    async def span(self, request: Request) -> Response:
+        conversation = await self.conversation(request.path_params["sid"])
+        span = conversation.spans.spans.get(request.path_params["span_id"])
+        if span is None:
+            return HTMLResponse("")
+        return HTMLResponse(Trace.detail(self.html, span, self.workspace.folder(conversation.sid)))
 
     # -------- COMMANDS AND FILES -----------------------------------------------------------
     async def menu(self, _request: Request) -> Response:
@@ -190,7 +204,36 @@ class WebHost:
             content = await self.workspace.read(sid, path)
         except Exception as error:  # noqa: BLE001 — the sandbox may be down
             content = {"error": str(error)}
-        return HTMLResponse(Files.view(self.html, path, content))
+        return HTMLResponse(Files.view(self.html, sid, path, content))
+
+    async def download(self, request: Request) -> Response:
+        """One file of the workspace, as an attachment."""
+        sid, path = request.path_params["sid"], request.query_params.get("path", "")
+        try:
+            data = await self.workspace.download(sid, path)
+        except Exception as error:  # noqa: BLE001 — not a file, too big, or the sandbox is down
+            return Response(f"Could not download {path}: {error}", status_code=404, media_type="text/plain")
+        name = posixpath.basename(path)
+        kind = mimetypes.guess_type(name)[0] or "application/octet-stream"
+        disposition = f"attachment; filename*=UTF-8''{quote(name)}"
+        return Response(data, media_type=kind, headers={"Content-Disposition": disposition})
+
+    async def rules(self, request: Request) -> Response:
+        """The Permissions tab; a POST adds or takes out one rule first."""
+        error = ""
+        if request.method == "POST":
+            form = await request.form()
+            error = await self.commands.change_rule(
+                str(form.get("action") or "add"), str(form.get("kind") or ""), str(form.get("rule") or ""),
+            )
+        lists: dict[str, list[str]] = {}
+        if self.agent.sandbox is not None:
+            try:
+                lists = await self.commands.permissions()
+            except Exception as failed:  # noqa: BLE001 — the sandbox may be down
+                error = error or f"Could not read the rules: {failed}"
+        has_rules = self.agent.sandbox is not None
+        return HTMLResponse(str(self.html.parts.rules(request.path_params["sid"], lists, has_rules, error)))
 
     # -------- WHAT THE PAGE SENDS -----------------------------------------------------------
     async def send(self, request: Request) -> Response:

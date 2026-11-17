@@ -3,10 +3,21 @@
 import httpx
 import pytest
 
-from max_ai.base.skills import SkillError
 from max_ai.capabilities.sandbox.local import LocalSandbox
 from max_ai.capabilities.skills.github import GitHubSkills
 from max_ai.capabilities.skills.github.skills import parse
+from max_ai.errors.skills import SkillError
+
+
+async def synced(skills, sandbox) -> list[str]:
+    """A live sync; GitHub's limit without a token skips the test, it is not a bug."""
+    try:
+        return await skills.sync(sandbox)
+    except SkillError as error:
+        if "rate limit" in str(error):
+            pytest.skip("GitHub rate limit: set GITHUB_TOKEN to run it")
+        raise
+
 
 SKILL = b"---\nname: pdf\ndescription: Work with pdf files\n---\n"
 
@@ -97,6 +108,6 @@ def test_the_token_is_read_from_its_variable_and_never_serialized(monkeypatch):
 @pytest.mark.integration
 async def test_a_real_public_repository(tmp_path, sandbox):
     skills = GitHubSkills("https://github.com/anthropics/skills/tree/main/skills", ["brand-guidelines"])
-    assert await skills.sync(sandbox) == ["brand-guidelines"]
+    assert await synced(skills, sandbox) == ["brand-guidelines"]
     assert (tmp_path / ".agent/skills/brand-guidelines/SKILL.md").is_file()
     assert "brand-guidelines" in await skills.blocks(sandbox)

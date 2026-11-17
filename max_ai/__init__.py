@@ -34,10 +34,10 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "AgentResponse": ("max_ai.types.agent_response", "AgentResponse"),
     "FunctionAsTool": ("max_ai.capabilities.tools.function_as_tool", "FunctionAsTool"),
     "OpenAIChatCompletionClient": (
-        "max_ai.capabilities.clients.to_delete.openai", "OpenAIChatCompletionClient",
+        "max_ai.capabilities.clients.openai", "OpenAIChatCompletionClient",
     ),
     "OpenRouterChatCompletionClient": (
-        "max_ai.capabilities.clients.to_delete.openrouter", "OpenRouterChatCompletionClient",
+        "max_ai.capabilities.clients.openrouter", "OpenRouterChatCompletionClient",
     ),
     "RunContext": ("max_ai.types.run_context", "RunContext"),
     "ToolApprovalMode": ("max_ai.types.tools", "ToolApprovalMode"),
@@ -46,8 +46,8 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
 
 if t.TYPE_CHECKING:  # static analyzers see the real symbols
     from .agents import Agent
-    from .capabilities.clients.to_delete.openai import OpenAIChatCompletionClient
-    from .capabilities.clients.to_delete.openrouter import OpenRouterChatCompletionClient
+    from .capabilities.clients.openai import OpenAIChatCompletionClient
+    from .capabilities.clients.openrouter import OpenRouterChatCompletionClient
     from .capabilities.tools.decorator import tool
     from .capabilities.tools.function_as_tool import FunctionAsTool
     from .types.agent_response import AgentResponse

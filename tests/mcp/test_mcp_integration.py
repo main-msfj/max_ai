@@ -23,11 +23,9 @@ from max_ai.capabilities.mcp import (
     MCPResourceTool,
     MCPTool,
     StdioMCPServerConfig,
-    create_mcp_tools,
     deserialize_mcp_servers,
     serialize_mcp_servers,
 )
-from max_ai.config import setting
 from max_ai.errors.mcp import MCPConnectionLost, MCPServerConfigError
 from max_ai.types.tool_call import ToolCallRecord
 from max_ai.types.tools import ToolApprovalMode
@@ -161,18 +159,6 @@ async def test_mcp_resource_tool_reads_text_resource() -> None:
     assert result.result == "resource body"
     assert result.metadata["resource_uri"] == "file:///tmp/readme.md"
     assert manager.resource_calls[0][0] == "docs"
-
-
-@pytest.mark.asyncio
-async def test_create_mcp_tools_can_register_without_connecting() -> None:
-    manager, tools = await create_mcp_tools(
-        [StdioMCPServerConfig(server_id="fs", command="npx", args=["server"])],
-        auto_connect=False,
-    )
-
-    assert isinstance(manager, MCPClientManager)
-    assert manager.server_ids == ["fs"]
-    assert tools == []
 
 
 @pytest.mark.asyncio

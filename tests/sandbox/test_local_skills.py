@@ -4,9 +4,9 @@ import json
 
 import pytest
 
-from max_ai.base.skills import SkillError
 from max_ai.capabilities.sandbox.local import LocalSandbox
 from max_ai.capabilities.skills.local import LocalSkills
+from max_ai.errors.skills import SkillError
 
 
 @pytest.fixture

@@ -1,1 +1,0 @@
-"""MCP prompts (none yet)."""

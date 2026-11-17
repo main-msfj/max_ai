@@ -37,6 +37,9 @@ from .clients import CoreChatCompletionClient
 from .compaction import CoreCompaction, WindowCompaction
 from .component import ComponentBase, ConfigT
 
+if t.TYPE_CHECKING:
+    from ..core.middleware.chain import MiddlewareChain
+
 AnyClient = CoreChatCompletionClient[t.Any]
 
 
@@ -272,7 +275,10 @@ class CoreLoop(ComponentBase[ConfigT], ABC):
         # 3. The call: piece by piece, or whole.
         message, usage, finish = None, Usage(), None
         if stream:
-            pieces = client.stream(messages, tools, output_format, retry=retry, on_retry=on_retry)
+            pieces = client.stream(
+                messages, tools, output_format, retry=retry, on_retry=on_retry,
+                ctx=ctx, middleware=dispatcher.middleware,
+            )
             async for chunk in pieces:
                 for event in self.drain(retries):
                     yield event
@@ -283,7 +289,10 @@ class CoreLoop(ComponentBase[ConfigT], ABC):
                 if chunk.is_complete:
                     message, usage, finish = chunk.message, chunk.usage or usage, chunk.finish_reason
         else:
-            result = await client.run(messages, tools, output_format, retry=retry, on_retry=on_retry)
+            result = await client.run(
+                messages, tools, output_format, retry=retry, on_retry=on_retry,
+                ctx=ctx, middleware=dispatcher.middleware,
+            )
             message, usage, finish = result.message, result.usage, result.finish_reason
         for event in self.drain(retries):
             yield event
@@ -538,6 +547,7 @@ class CoreLoop(ComponentBase[ConfigT], ABC):
         state: LoopState,
         output_format: type[BaseModel],
         retry: RetryPolicy | None = None,
+        middleware: MiddlewareChain | None = None,
     ) -> t.AsyncGenerator[CoreEvent]:
         """The model's final answer in ``output_format``, left in
         ``state.message.structured_output``. One call more, without tools;
@@ -550,7 +560,9 @@ class CoreLoop(ComponentBase[ConfigT], ABC):
         for last in (False, True):
             # 1. Ask for the answer in the format.
             yield ModelCallEvent(source=self.SOURCE, model=client.model, input_messages=asked)
-            result = await client.run(asked, None, output_format, retry=retry)
+            result = await client.run(
+                asked, None, output_format, retry=retry, ctx=ctx, middleware=middleware
+            )
             state.usage = state.usage + result.usage
             text = result.message.text()
             yield ModelResponseEvent(source=self.SOURCE, response=text, usage=result.usage)

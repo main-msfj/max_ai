@@ -1,10 +1,33 @@
 import typing as t
 from datetime import datetime, timezone
+from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..core.ids import short_id
-from ..core.primitives import FailureReason, ToolCallStatus
+
+# -------- ENUMS -----------------------------------------------------------
+
+
+class FailureReason(str, Enum):
+    """Categorized reason for a ToolResult failure."""
+
+    CANCELLED_BEFORE_START = "cancelled_before_start"
+    CANCELLED_DURING_EXECUTION = "cancelled_during_execution"
+    INVALID_PARAMETERS = "invalid_parameters"
+    EXECUTION_ERROR = "execution_error"
+    TIMEOUT = "timeout"
+    APPROVAL_DENIED = "approval_denied"
+
+
+class ToolCallStatus(str, Enum):
+    PENDING_APPROVAL = "pending_approval"
+    APPROVED = "approved"
+    AUTO_APPROVED = "auto_approved"
+    REJECTED = "rejected"
+    INPUT_NEEDED = "input_needed"
+    EXECUTING = "executing"
+    CONSUMED = "consumed"
 
 
 # -------- TOOL RESULT -----------------------------------------------------------

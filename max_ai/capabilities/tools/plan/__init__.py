@@ -1,28 +1,9 @@
-"""Plan data model and the native update_plan tool.
+"""Plan data model: ``AgentPlan`` and ``PlanStep``, kept in ``RunContext.plan``.
 
-``AgentPlan``/``PlanStep`` are re-exported eagerly: a pure Pydantic model
-that ``core.event_type`` and ``types.run_context``
-import directly, so keep this eager import free of anything heavier.
-
-``AgentUpdatePlanTool`` is exported lazily: it imports ``core.event_type``,
-which imports this package, so loading it eagerly would close the cycle.
-It reads/writes ``RunContext.plan`` through
-``ToolContext.deps["run_context"]`` and emits ``PlanningEvent`` itself.
+A pure Pydantic model that ``core.event_type`` and ``types.run_context``
+import directly, so it imports nothing heavier.
 """
-
-import importlib
-import typing as t
 
 from ._model import AgentPlan, PlanStep
 
-__all__ = ["AgentPlan", "PlanStep", "AgentUpdatePlanTool"]
-
-if t.TYPE_CHECKING:  # static analyzers see the real symbols
-    from ._agent_tool import AgentUpdatePlanTool
-
-
-def __getattr__(name: str) -> t.Any:
-    """Resolve a lazily exported attribute."""
-    if name == "AgentUpdatePlanTool":
-        return importlib.import_module(f"{__name__}._agent_tool").AgentUpdatePlanTool
-    raise AttributeError(name)
+__all__ = ["AgentPlan", "PlanStep"]

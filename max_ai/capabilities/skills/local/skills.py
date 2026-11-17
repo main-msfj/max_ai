@@ -10,7 +10,8 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from ....base.session_store import validate_id
-from ....base.skills import SkillError, SkillsCore
+from ....base.skills import SkillsCore
+from ....errors.skills import SkillError
 
 
 class LocalSkillsConfig(BaseModel):

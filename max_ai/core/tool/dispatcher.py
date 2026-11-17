@@ -9,10 +9,10 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Iterable
 
-from ...base.middleware import MiddlewareContext, ToolRequest
 from ...base.tools import CoreTool, ToolContext
 from ...loggers import ScopedLogger
 from ...types.tool_call import ToolCallRecord, ToolResult
+from ..cancellation import CancellationToken
 from ..event_type import (
     CoreEvent,
     ToolApprovalEvent,
@@ -22,7 +22,6 @@ from ..event_type import (
     UserInputRequestEvent,
 )
 from ..messages import ToolMessage
-from ..termination import CancellationToken
 from .hook import ToolHook
 from .registry import ToolRegistry
 
@@ -52,7 +51,7 @@ class ToolDispatcher:
     tools that work on the host.
 
     ``hook`` is asked at the four moments of a call: before, permission,
-    after and failed. ``middleware`` watches what the tools answer. A call
+    after and failed. ``middleware`` sees every call and what it answers. A call
     that waits for a person returns None: the application answers with
     ``record.approve()`` / ``record.reject()`` and dispatches it again.
     """
@@ -216,7 +215,15 @@ class ToolDispatcher:
             return record.result
         self._active.add(record.id)
         try:
-            return await self._dispatch(record, ctx, emit, cancellation_token)
+            # Every call passes through the middlewares, whatever happens to it.
+            if self.middleware:
+                result = await self.middleware.tool(
+                    ctx, record, lambda given: self._dispatch(given, ctx, emit, cancellation_token)
+                )
+            else:
+                result = await self._dispatch(record, ctx, emit, cancellation_token)
+            # The record closes with what the middlewares left: that is kept and shown.
+            return None if result is None else self._finish(record, result, emit)
         finally:
             self._active.discard(record.id)
 
@@ -237,32 +244,31 @@ class ToolDispatcher:
         )
         if record.is_rejected:
             reason = record.approval_reason or "User declined approval"
-            return self._finish(record, ToolResult.approval_denied(record.id, reason), emit)
+            return ToolResult.approval_denied(record.id, reason)
         if cancellation_token is not None and cancellation_token.is_cancelled():
-            return self._finish(record, ToolResult.cancelled_before_start(record.id), emit)
+            return ToolResult.cancelled_before_start(record.id)
 
         # Can this call run at all?
         tool = self._check(record)
         if isinstance(tool, ToolResult):
-            return self._finish(record, tool, emit)
+            return tool
         tool_ctx = ToolContext(ctx, self.sandbox, emit, dict(self.deps), cancellation_token)
 
         # 1. before: the hook may stop the call here.
         if (answered := await self.hook.before(tool, record, tool_ctx)) is not None:
-            return self._finish(record, answered, emit)
+            return answered
 
         # 2. permission: run it, deny it, or wait for the user.
         ready = await self._permission(tool, record, tool_ctx, emit)
         if isinstance(ready, ToolResult):
-            return self._finish(record, ready, emit)
+            return ready
         if not ready:
             return None
 
         # 3 and 4. Run it; the hook sees how it went.
         result = await self._execute(tool, record, tool_ctx, emit, cancellation_token)
         react = self.hook.after if result.success else self.hook.failed
-        result = await react(tool, record, tool_ctx, result)
-        return self._finish(record, result, emit)
+        return await react(tool, record, tool_ctx, result)
 
     def _unwrap(self, record: ToolCallRecord) -> None:
         """A call through a door (``call_tool``) becomes the call to the real
@@ -346,17 +352,8 @@ class ToolDispatcher:
         emit: Emit,
         cancellation_token: CancellationToken | None,
     ) -> ToolResult:
-        """Run the tool, with the middleware around it. Only calls that
-        passed ``before`` and ``permission`` get here."""
-        # Middleware sees the call about to run; it may answer for it.
-        chain = self.middleware
-        mw = request = None
-        if chain:
-            mw = MiddlewareContext(ctx=tool_ctx.run_context, agent=self.source, emit=emit)
-            request = ToolRequest(record=record)
-            if (blocked := await chain.tool_request(mw, request)) is not None:
-                return blocked
-
+        """Run the tool. Only calls that passed ``before`` and ``permission``
+        get here."""
         async def invoke() -> object:
             # object: a user's tool may return anything; checked below.
             if record.result is not None:  # a person already produced it
@@ -383,8 +380,6 @@ class ToolDispatcher:
             raise
         except Exception as error:
             result = ToolResult.execution_error(record.id, str(error))
-        if chain and mw is not None and request is not None:
-            result = await chain.tool_response(mw, request, result)
         return result
 
     def _finish(self, record: ToolCallRecord, result: ToolResult, emit: Emit) -> ToolResult:

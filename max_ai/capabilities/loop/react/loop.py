@@ -17,6 +17,7 @@ from ....core.event_type import (
 )
 from ....core.retry import RetryPolicy
 from ....core.tool import ToolDispatcher
+from ....errors.middleware import StopRun
 from ....types.run_context import RunContext
 from ....types.tool_call import ToolCallRecord
 from ._model import ReactLoopConfig
@@ -151,11 +152,14 @@ class ReactLoop(CoreLoop[ReactLoopConfig]):
             # 9. The final answer, in the format asked: one call more, without tools.
             if answered and output_format is not None:
                 async for event in self.format_answer(
-                    ctx, prompt, client, state, output_format, retry
+                    ctx, prompt, client, state, output_format, retry, dispatcher.middleware
                 ):
                     yield event
+        except StopRun as error:
+            # 10. A middleware ended the turn: it ends clean, with its message.
+            yield self.end(ctx, state, Stop(reason=error.finish_reason, answer=error.message))
         except Exception as error:
-            # 10. The turn failed: the hook may answer for the agent, or the error goes up.
+            # 11. The turn failed: the hook may answer for the agent, or the error goes up.
             stop = await hook.on_error(ctx, state, error)
             if stop is None:
                 state.finish_reason = "error"

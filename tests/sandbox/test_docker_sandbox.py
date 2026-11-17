@@ -8,8 +8,9 @@ import subprocess
 
 import pytest
 
-from max_ai.base.sandbox import SandboxCore, SandboxError
+from max_ai.base.sandbox import SandboxCore
 from max_ai.capabilities.sandbox.docker import DockerSandbox
+from max_ai.errors.sandbox import SandboxError
 
 
 def _docker_runs() -> bool:

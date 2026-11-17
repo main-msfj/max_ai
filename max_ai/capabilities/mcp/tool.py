@@ -25,6 +25,7 @@ from ...base.tools import CoreTool, ToolContext
 from ...core.event_type import MCPProgressEvent
 from ...errors.mcp import (
     MCPConnectionLost,
+    MCPTaskRunning,
     MCPToolContentError,
     MCPToolError,
     MCPToolExecutionError,
@@ -32,7 +33,7 @@ from ...errors.mcp import (
 from ...loggers import ScopedLogger
 from ...types.tool_call import ToolCallRecord, ToolFile, ToolResult
 from ...types.tools import ToolApprovalMode, ToolKind
-from .task import MCPTask, MCPTaskRunning
+from .task import MCPTask
 
 if t.TYPE_CHECKING:
     from .client_manager import MCPClientManager

@@ -3,10 +3,8 @@
 import logging
 import os
 import typing as t
-from collections.abc import Sequence
 
 from ...base.loop import LoopHook, LoopState
-from ...base.middleware import CoreMiddleware, MiddlewareContext, ToolRequest
 from ...base.sandbox import SandboxCore
 from ...base.tools import CoreTool, ToolContext
 from ...capabilities.mcp import MCPClientManager
@@ -73,8 +71,8 @@ class HarnessLoopHook(LoopHook):
 
 
 class HarnessToolHook(ToolHook):
-    """Around each tool: a read-only memory is not written, and the
-    middlewares (tracing among them) see the call and its result."""
+    """Around each tool: a read-only memory is not written, and the user's
+    rules decide the permission."""
 
     WRITERS: t.ClassVar[frozenset[str]] = frozenset({"write_file", "edit_file"})
     MEMORY_READ_ONLY: t.ClassVar[str] = (
@@ -84,13 +82,11 @@ class HarnessToolHook(ToolHook):
     def __init__(
         self,
         *,
-        middlewares: Sequence[CoreMiddleware] = (),
         memory: Memory | None = None,
         agent: str = "",
         permissions: Permissions | None = None,  # the user's rules, read from setting.json
     ) -> None:
         self.permissions = permissions or Permissions()
-        self.middlewares = list(middlewares)
         self.memory = memory
         self.agent = agent
 
@@ -101,16 +97,6 @@ class HarnessToolHook(ToolHook):
         path = self.memory_path(record, tool_ctx)
         if path is not None and self.memory is not None and self.memory.read_only:
             return ToolResult.tool_failure(record.id, self.MEMORY_READ_ONLY.format(path=path))
-        # 2. A middleware may answer in the tool's place; one that fails is skipped.
-        context, request = self.context(tool_ctx), ToolRequest(record=record)
-        for middleware in self.middlewares:
-            try:
-                answer = await middleware.on_tool_request(context, request)
-            except Exception:
-                logger.exception("Middleware %s failed before a tool", type(middleware).__name__)
-                continue
-            if answer is not None:
-                return answer
         return await super().before(tool, record, tool_ctx)
 
     async def permission(
@@ -121,36 +107,6 @@ class HarnessToolHook(ToolHook):
         if isinstance(decision, str):
             return await super().permission(tool, record, tool_ctx)
         return decision
-
-    async def after(
-        self, tool: CoreTool, record: ToolCallRecord, tool_ctx: ToolContext, result: ToolResult
-    ) -> ToolResult:
-        result = await self.tell(record, tool_ctx, result)
-        return await super().after(tool, record, tool_ctx, result)
-
-    async def failed(
-        self, tool: CoreTool, record: ToolCallRecord, tool_ctx: ToolContext, result: ToolResult
-    ) -> ToolResult:
-        result = await self.tell(record, tool_ctx, result)
-        return await super().failed(tool, record, tool_ctx, result)
-
-    async def tell(
-        self, record: ToolCallRecord, tool_ctx: ToolContext, result: ToolResult
-    ) -> ToolResult:
-        """Each middleware sees the result, last one first; one that fails is skipped."""
-        context, request = self.context(tool_ctx), ToolRequest(record=record)
-        for middleware in reversed(self.middlewares):
-            try:
-                result = await middleware.on_tool_response(context, request, result)
-            except Exception:
-                logger.exception("Middleware %s failed after a tool", type(middleware).__name__)
-        return result
-
-    def context(self, tool_ctx: ToolContext) -> MiddlewareContext:
-        made = MiddlewareContext(ctx=tool_ctx.run_context, agent=self.agent)
-        if tool_ctx.emit_event is not None:
-            made.emit = tool_ctx.emit_event
-        return made
 
     @staticmethod
     def memory_path(record: ToolCallRecord, tool_ctx: ToolContext) -> str | None:

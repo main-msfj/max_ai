@@ -16,7 +16,7 @@ from ..base.completion_gate import CompletionBase
 from ..base.component import ComponentBase
 from ..base.knowledge import CoreKnowledgeRegistry
 from ..base.layer import CoreLayer
-from ..base.loop import CoreLoop, LoopState
+from ..base.loop import CoreLoop, LoopState, Stop
 from ..base.middleware import CoreMiddleware
 from ..base.sandbox import SandboxCore
 from ..base.skills import SkillsCore
@@ -51,9 +51,11 @@ from ..core.event_type import CoreEvent, ModelRetryEvent, ModelStreamChunkEvent
 from ..core.harness.hooks import HarnessLoopHook, HarnessToolHook
 from ..core.harness.permissions import Permissions
 from ..core.harness.rules import Harness
+from ..core.middleware.chain import MiddlewareChain
 from ..core.model.agent import AgentSpec
 from ..core.model.json_schema import model_from_schema, schema_of
 from ..core.tool import ToolDispatcher, ToolRegistry
+from ..errors.middleware import StopRun
 from ..types.run_context import RunContext
 
 AnyClient = CoreChatCompletionClient[t.Any]
@@ -215,7 +217,8 @@ class Agent(ComponentBase[AgentSpec]):
         if self.sandbox is not None:
             Harness.sandbox_rules()
         # 3. What the harness adds: tracing and its own tools.
-        self.middlewares = Harness.middleware_rules(self.middlewares)
+        self.middlewares = Harness.middleware_rules(self.middlewares, self.name)
+        self._chain = MiddlewareChain(self.middlewares)
         self.tools = Harness.tool_combination(self.toolset, self.sandbox, self.skills)
 
     # -------- WHAT THE APPLICATION CALLS -------------------------------------
@@ -336,14 +339,21 @@ class Agent(ComponentBase[AgentSpec]):
             Harness.tools_total_rules(registry.tokens(counter))
             Harness.prompt_rules(counter.count_text(prompt), self.client.config.max_context_window)
             self.reasoning.measure(ctx, prompt, self.client, dispatcher)
-            # 6. The turn.
+            # 6. The turn, with the middlewares around every event.
             events = self.reasoning.run(
                 ctx, prompt, self.client, dispatcher, stream=stream, hook=loop_hook,
                 state=state, output_format=self.output_format,
                 retry=Harness.retry_rules(self.client.retry),
             )
-            async for event in events:
-                yield event
+            try:
+                async for event in self._chain.turn(ctx, lambda: events):
+                    yield event
+            except StopRun as error:
+                # Ended before the loop took the task: it is not kept for the next turn.
+                ctx.inbox.clear()
+                yield self.reasoning.end(
+                    ctx, state, Stop(reason=error.finish_reason, answer=error.message)
+                )
 
     def _lock(self, ctx: RunContext) -> asyncio.Lock:
         """The lock of this user's session; made the first time it is asked for."""
@@ -390,10 +400,10 @@ class Agent(ComponentBase[AgentSpec]):
     async def _dispatcher(self, registry: ToolRegistry, box: SandboxCore | None) -> ToolDispatcher:
         """Who runs the tools of a run, watched by the harness's hook with the user's rules."""
         rules = Permissions(await box.permissions()) if box is not None else None
-        hook = HarnessToolHook(
-            middlewares=self.middlewares, memory=self.memory, agent=self.name, permissions=rules
+        hook = HarnessToolHook(memory=self.memory, agent=self.name, permissions=rules)
+        return ToolDispatcher(
+            registry, box, hook=hook, middleware=self._chain, timeout=setting.tool_timeout_seconds
         )
-        return ToolDispatcher(registry, box, hook=hook, timeout=setting.tool_timeout_seconds)
 
     async def _prompt(self, ctx: RunContext, box: SandboxCore | None, registry: ToolRegistry) -> str:
         """The system prompt: the native layers always, then the developer's,

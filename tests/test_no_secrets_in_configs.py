@@ -7,17 +7,16 @@ import json
 
 import pytest
 
-from max_ai.capabilities.clients import (
-    OpenAIChatCompletionClient,
-    OpenRouterChatCompletionClient,
-)
+from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
+from max_ai.capabilities.clients.openrouter import OpenRouterChatCompletionClient
 from max_ai.capabilities.knowledge.mongodb import MongoDBKnowledgeRegistry
 from max_ai.capabilities.mcp import (
     HTTPServerConfig,
     StdioMCPServerConfig,
     serialize_mcp_servers,
 )
-from max_ai.capabilities.memory.to_delete.mongodb import MongoDBMemoryRegistry
+from max_ai.capabilities.sandbox.local.layout import LocalSandbox
+from max_ai.capabilities.session_store import MongoDBSessionStore
 
 SECRETS = {
     "OPENAI_API_KEY": "sk-openai-SECRET",
@@ -42,7 +41,7 @@ def assert_clean(payload: str) -> None:
     lambda: OpenAIChatCompletionClient(model="m"),
     lambda: OpenAIChatCompletionClient(model="m", api_key="sk-literal-SECRET"),
     lambda: OpenRouterChatCompletionClient(model="m:free"),
-    lambda: MongoDBMemoryRegistry(),
+    lambda: MongoDBSessionStore(),
     lambda: MongoDBKnowledgeRegistry(name="docs", description="d"),
 ])
 def test_components_store_env_var_names(component):
@@ -51,8 +50,8 @@ def test_components_store_env_var_names(component):
     assert_clean(payload)
     restored = type(instance).deserialize(json.loads(payload))  # still usable
     key = getattr(restored, "api_key", None)
-    if key is not None:
-        assert key.get_secret_value() in SECRETS.values()
+    if key is not None:  # read back from the env var: a str or a SecretStr
+        assert getattr(key, "get_secret_value", lambda: key)() in SECRETS.values()
 
 
 def test_mcp_servers_store_env_var_names():
@@ -63,3 +62,8 @@ def test_mcp_servers_store_env_var_names():
                              env_from={"API_KEY": "MCP_KEY"}),
     ])
     assert_clean(payload)
+
+
+def test_a_bound_sandbox_never_serializes_its_variables(tmp_path):
+    box = LocalSandbox(root=str(tmp_path)).bind("alice", {"GITHUB_TOKEN": "gh-SECRET"})
+    assert_clean(box.serialize().model_dump_json())

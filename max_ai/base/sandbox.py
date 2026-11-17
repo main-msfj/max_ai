@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pydantic import BaseModel
 
 from ..config import setting
+from ..errors.sandbox import SandboxError
 from .component import ComponentBase
 from .layout import SCRIPT, Layout
 from .session_store import validate_id
@@ -31,10 +32,6 @@ class CommandResult:
     stderr: str
     exit_code: int | None
     timed_out: bool = False
-
-
-class SandboxError(RuntimeError):
-    """The harness could not do its own work inside the sandbox."""
 
 
 class SandboxCore(ComponentBase[BaseModel], ABC):
@@ -124,6 +121,13 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
         """Keep ``rule`` in the ``kind`` list (allow, ask or deny) of ``setting.json``."""
         await self._run(
             "permit", settings=str(self.layout.settings), lock=str(self.layout.lock),
+            kind=kind, rule=rule,
+        )
+
+    async def remove_permission(self, kind: str, rule: str) -> None:
+        """Take ``rule`` out of the ``kind`` list (allow, ask or deny) of ``setting.json``."""
+        await self._run(
+            "unpermit", settings=str(self.layout.settings), lock=str(self.layout.lock),
             kind=kind, rule=rule,
         )
 

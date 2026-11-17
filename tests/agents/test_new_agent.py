@@ -100,7 +100,7 @@ async def test_the_agent_runs_a_turn_with_its_tools_in_a_sandbox(tmp_path):
     ]
     seen = []
 
-    async def model(messages, tools=None, output_format=None, *, retry=None, on_retry=None):
+    async def model(messages, tools=None, output_format=None, **options):
         seen.append((messages, [tool.name for tool in tools or []]))
         message = answers.pop(0)
         reason = "tool_calls" if message.tool_calls else "stop"
@@ -133,7 +133,7 @@ async def test_close_waits_for_a_run_that_is_still_going():
 
     started, release = asyncio.Event(), asyncio.Event()
 
-    async def model(messages, tools=None, output_format=None, *, retry=None, on_retry=None):
+    async def model(messages, tools=None, output_format=None, **options):
         started.set()
         await release.wait()
         message = AssistantMessage(source="m", content="Done.")
@@ -157,7 +157,7 @@ async def test_run_stream_gives_only_the_text_as_it_is_written():
     from max_ai.core.messages import AssistantMessage
     from max_ai.types.completions import ChatCompletionChunk, Usage
 
-    async def model(messages, tools=None, output_format=None, *, retry=None, on_retry=None):
+    async def model(messages, tools=None, output_format=None, **options):
         for piece in ("Hel", "lo"):
             yield ChatCompletionChunk(content=piece, model="m", is_complete=False)
         message = AssistantMessage(source="m", content="Hello")

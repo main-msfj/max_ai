@@ -115,6 +115,17 @@ def permit(request):
     return {}
 
 
+def unpermit(request):
+    """Take one rule out of a list of ``permissions``."""
+    with locked(request["lock"]):
+        current = read_settings(request["settings"])
+        rules = current.get("permissions", {}).get(request["kind"], [])
+        if request["rule"] in rules:
+            rules.remove(request["rule"])
+            write_settings(request["settings"], current)
+    return {}
+
+
 def upload(request):
     full = inside(request["folder"], request["path"])
     os.makedirs(os.path.dirname(full), exist_ok=True)
@@ -197,7 +208,7 @@ def sweep(folder):
 
 
 OPERATIONS = {"create": create, "settings": settings, "upload": upload, "install": install,
-              "permit": permit}
+              "permit": permit, "unpermit": unpermit}
 
 
 def main():

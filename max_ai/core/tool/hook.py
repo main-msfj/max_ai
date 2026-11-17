@@ -7,7 +7,7 @@ import mimetypes
 import re
 import typing as t
 
-from ...base.sandbox import SandboxError
+from ...errors.sandbox import SandboxError
 from ...types.tool_call import ToolCallRecord, ToolResult
 from ...types.tools import ToolApprovalMode
 

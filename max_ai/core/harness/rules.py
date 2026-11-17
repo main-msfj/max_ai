@@ -12,15 +12,12 @@ from ...base.sandbox import SandboxCore
 from ...base.skills import SkillsCore
 from ...base.tools import CoreTool
 from ...config import setting
+from ...errors.harness import HarnessError
 from ..model.llm import ModelConfig
 from ..retry import RetryPolicy
 from ..tokenizer import TokenCounter
 
 logger = logging.getLogger(__name__)
-
-
-class HarnessError(ValueError):
-    """An agent that breaks a rule of the harness; the text says how to fix it."""
 
 
 class Harness:
@@ -174,14 +171,19 @@ class Harness:
         return tools + [tool for tool in ours if tool.name not in names]
 
     @classmethod
-    def middleware_rules(cls, middlewares: Sequence[CoreMiddleware]) -> list[CoreMiddleware]:
-        """Tracing is always there: the one given, or ours."""
+    def middleware_rules(
+        cls, middlewares: Sequence[CoreMiddleware], agent: str = "agent"
+    ) -> list[CoreMiddleware]:
+        """Tracing is always there, first: the one given, or ours. It names
+        its traces after ``agent``."""
         from ...capabilities.middleware.tracing import TracingMiddleware
 
         given = list(middlewares)
-        if any(isinstance(item, TracingMiddleware) for item in given):
-            return given
-        return [TracingMiddleware(), *given]
+        tracing = next((item for item in given if isinstance(item, TracingMiddleware)), None)
+        if tracing is None:
+            tracing = TracingMiddleware()
+        tracing.agent = agent
+        return [tracing, *(item for item in given if item is not tracing)]
 
     @classmethod
     def compaction_rules(cls) -> CoreCompaction[t.Any]:

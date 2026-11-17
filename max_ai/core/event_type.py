@@ -12,7 +12,6 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..capabilities.tools.plan import AgentPlan
 from ..types.completions import Usage
 from ..types.todos import Todo
 from ..types.tool_call import ToolResult
@@ -178,14 +177,6 @@ class LoopNoticeEvent(ReasoningEvent):
     EVENT_TYPE = "loop_notice"
     kind: str = Field(..., description="The rule: empty_answer, repetition, near_limit...")
     message: str = Field(default="", description="What the model was told, if anything")
-
-
-class PlanningEvent(ReasoningEvent):
-    """Event emitted when a plan is generated."""
-
-    EVENT_TYPE = "planning"
-    phase: t.Literal["start", "complete", "failed", "skipped", "progress"]
-    plan: AgentPlan | None = Field(default=None)
 
 
 class UserInputRequestEvent(ReasoningEvent):

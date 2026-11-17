@@ -18,17 +18,3 @@ class ChatHistoryError(Exception):
         return cls(
             f"message_history[{index}] is {actual_type.__name__}, expected CoreMessage."
         )
-
-
-# -------- EXTERNAL -----------------------------------------------------------
-class RetrievalContextError(Exception):
-    def __init__(self, message: str | None):
-        self.message = message
-        super().__init__(message)
-
-    @classmethod
-    def wrong_input(cls, index: int):
-        return cls(
-            f"query_knowledge[{index}] is a raw dict. "
-            "Use RetrievalContext.load_from() instead."
-        )

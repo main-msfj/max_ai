@@ -10,8 +10,8 @@ import tarfile
 import pytest
 
 from max_ai.base.layout import SCRIPT
-from max_ai.base.sandbox import SandboxError
 from max_ai.capabilities.sandbox.local import LocalSandbox
+from max_ai.errors.sandbox import SandboxError
 
 
 @pytest.fixture

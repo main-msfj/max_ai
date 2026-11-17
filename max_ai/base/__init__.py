@@ -7,22 +7,15 @@ clients, capabilities, tools, middleware, and runtime services.
 from .capability import CoreAgentCapabilities
 from .completion_gate import (
     CompletionBase,
-    CompletionCheck,
     CompletionDecision,
 )
 from .component import Component, ComponentBase, CoreLifecycleComponent, allow_providers
 from .knowledge import CoreKnowledgeRegistry
 from .layer import CoreLayer
-from .middleware import (
-    CoreMiddleware,
-    MiddlewareContext,
-    ModelRequest,
-    StopRun,
-    ToolRequest,
-)
+from .middleware import CoreMiddleware, ModelCall
 from .quota_store import CoreQuotaStore
 from .session_store import CoreSessionStore
-from .tools import CoreTool, ToolContext, ToolDefinitionError
+from .tools import CoreTool, ToolContext
 
 __all__ = [
     "CoreLayer",
@@ -32,18 +25,13 @@ __all__ = [
     "CoreLifecycleComponent",
     "CoreAgentCapabilities",
     "CoreMiddleware",
-    "MiddlewareContext",
-    "ModelRequest",
-    "StopRun",
-    "ToolRequest",
+    "ModelCall",
     "CoreQuotaStore",
     "CoreSessionStore",
     "CoreTool",
-    "ToolDefinitionError",
     "CoreKnowledgeRegistry",
     "ToolContext",
     "CompletionBase",
-    "CompletionCheck",
     "CompletionDecision",
 ]
 

@@ -16,7 +16,7 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from markdown_it import MarkdownIt
-from markupsafe import escape
+from markupsafe import Markup, escape
 from pygments import highlight
 from pygments.formatters import HtmlFormatter
 from pygments.lexer import Lexer
@@ -66,6 +66,9 @@ class Html:
         self.markdown.enable(["table", "strikethrough"])
         self.markdown.add_render_rule("fence", self._fence)
         self.markdown.add_render_rule("code_block", self._fence)
+        # A wide table scrolls on its own, sideways; the chat still scrolls down over it.
+        self.markdown.add_render_rule("table_open", lambda *_: '<div class="table-wrap"><table>\n')
+        self.markdown.add_render_rule("table_close", lambda *_: "</table></div>\n")
         self.code_css = HtmlFormatter(style=self.CODE_STYLE).get_style_defs(".code")
 
     def page(self, **values: t.Any) -> str:
@@ -138,11 +141,15 @@ class ToolCard:
     output: str = ""
 
     @classmethod
-    def start(cls, call_id: str, name: str, parameters: dict[str, t.Any]) -> ToolCard:
+    def start(cls, call_id: str, name: str, parameters: dict[str, t.Any], folder: str = "") -> ToolCard:
+        """``folder`` (the session's) is cut from the paths shown: they read from it."""
         is_bash = name == BASH
+        summary = tool_summary(name, parameters)
+        if folder:
+            summary = summary.replace(folder.rstrip("/") + "/", "")
         return cls(
             id=call_id, name="Bash" if is_bash else name,
-            summary=tool_summary(name, parameters), kind=cls.kind_of(parameters),
+            summary=summary, kind=cls.kind_of(parameters),
             command=str(parameters.get("command") or "") if is_bash else "",
         )
 
@@ -194,6 +201,7 @@ class TurnView:
         self.dirty = False  # Text arrived that is not drawn yet
         self.drawn_at = 0.0
         self.cards: dict[str, ToolCard] = {}  # Running tools by call id
+        self.folder = ""  # The session's folder, cut from the paths of the cards
 
     def event(self, event: CoreEvent) -> list[str]:
         """The fragments one event of the run adds or changes."""
@@ -240,7 +248,7 @@ class TurnView:
             out = self.finish()
             if event.tool_name in (ASK_USER, WRITE_TODOS):
                 return out
-            card = ToolCard.start(event.tool_call_id, event.tool_name, event.parameters)
+            card = ToolCard.start(event.tool_call_id, event.tool_name, event.parameters, self.folder)
             # A call that waited for approval is announced again: its card is reused.
             seen = card.id in self.cards
             self.cards[card.id] = card
@@ -358,7 +366,7 @@ class History:
     """A saved conversation drawn again from its messages (no model calls)."""
 
     @staticmethod
-    def render(html: Html, ctx: RunContext) -> str:
+    def render(html: Html, ctx: RunContext, folder: str = "") -> str:
         parts = html.parts
         results = {m.tool_call_id: m for m in ctx.messages if isinstance(m, ToolMessage)}
         out: list[str] = []
@@ -377,7 +385,7 @@ class History:
             for call in message.tool_calls:
                 if call.tool_name in (ASK_USER, WRITE_TODOS):
                     continue
-                card = ToolCard.start(call.id, call.tool_name, call.parameters)
+                card = ToolCard.start(call.id, call.tool_name, call.parameters, folder)
                 done = results.get(call.id)
                 if done is None:
                     card.state, card.meta = "cancelled", "no result"
@@ -415,11 +423,11 @@ class Files:
         return ordered(root)
 
     @staticmethod
-    def view(html: Html, path: str, content: dict[str, t.Any]) -> str:
+    def view(html: Html, sid: str, path: str, content: dict[str, t.Any]) -> str:
         if "error" in content:
             body = f'<div class="empty">{escape(content["error"])}</div>'
         elif content.get("binary"):
-            body = '<div class="empty">A binary file: it is not shown.</div>'
+            body = '<div class="empty big">This file cannot be shown here.<br>Download it to open it.</div>'
         else:
             try:
                 lexer = get_lexer_for_filename(path, stripnl=False)
@@ -429,7 +437,7 @@ class Files:
             if content.get("cut"):
                 body += f'<div class="empty">Only the first {Workspace.MAX_READ // 1000} kB are shown.</div>'
         size = Files.size(int(content.get("size", 0)))
-        return str(html.parts.file_view(path, size, body))
+        return str(html.parts.file_view(sid, path, size, body))
 
     @staticmethod
     def size(size: int) -> str:
@@ -439,72 +447,117 @@ class Files:
 
 
 class Trace:
-    """The Trajectory tab: one card per turn, newest first, with its model
-    calls and tools on a timeline; a row opens to show what went in and out."""
+    """The Trajectory tab: each turn as a waterfall. A time scale on top, one
+    thin row per model call or tool with its bar where it ran; a row opens its
+    detail in a drawer below."""
 
-    MAX_DETAIL = 4000  # Characters of input or output shown in a row
-
-    @staticmethod
-    def render(html: Html, sid: str, spans: SpanProjector) -> str:
-        return str(html.parts.trace(sid, Trace.data(spans)))
+    MAX_DETAIL = 6000  # Characters of input or output the drawer shows
+    STEPS = (0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600)  # Seconds between ticks
 
     @staticmethod
-    def data(spans: SpanProjector) -> list[dict[str, t.Any]]:
+    def render(html: Html, sid: str, spans: SpanProjector, folder: str = "") -> str:
+        return str(html.parts.trace(sid, Trace.data(spans, folder)))
+
+    @staticmethod
+    def data(spans: SpanProjector, folder: str = "") -> list[dict[str, t.Any]]:
+        """``folder`` (the session's) is cut from the paths shown."""
         now = datetime.now(timezone.utc)
         turns: list[dict[str, t.Any]] = []
         for turn in reversed(spans.turns()):
-            # 1. The calls of the turn in the order they started; steps are only grouping.
+            # 1. The calls of the turn in the order they started; steps only group them.
             calls = sorted(
                 (s for s in spans.children(turn.id, deep=True) if s.kind != "step"),
                 key=lambda s: s.started_at,
             )
             total = max(((turn.ended_at or now) - turn.started_at).total_seconds(), 0.001)
-            rows = [Trace._row(span, turn.started_at, total, now) for span in calls]
 
-            # 2. What the turn cost.
+            # 2. The scale: at most five ticks, on round seconds.
+            step = next((x for x in Trace.STEPS if total / x <= 5), Trace.STEPS[-1])
+            ticks = [
+                {"at": round(i * step / total * 100, 2), "label": Trace._tick(i * step)}
+                for i in range(1, int(total / step) + 1)
+                if i * step / total <= 0.97
+            ]
+
+            # 3. What the turn cost.
             models = [s for s in calls if s.kind == "model"]
             tools = sum(1 for s in calls if s.kind == "tool")
             tokens = sum(s.usage.tokens_input + s.usage.tokens_output for s in models if s.usage)
-            stats = [f"{len(models)} model call{'s' if len(models) != 1 else ''}",
-                     f"{tools} tool{'s' if tools != 1 else ''}"]
+            meta = [Trace._seconds(turn.duration_ms, turn.status),
+                    f"{len(models)} model · {tools} tool{'s' if tools != 1 else ''}"]
             if tokens:
-                stats.append(f"{Trace._k(tokens)} tokens")
+                meta.append(f"{Trace._k(tokens)} tok")
             turns.append({
                 "id": turn.id, "title": Trace._title(turn.name), "status": turn.status,
-                "dur": Trace._seconds(turn.duration_ms, turn.status), "stats": " · ".join(stats),
-                "rows": rows,
+                "meta": " · ".join(meta), "ticks": ticks, "tick": round(step / total * 100, 3),
+                "rows": [Trace._row(span, turn.started_at, total, now, folder) for span in calls],
             })
         return turns
 
     @staticmethod
-    def _row(span: Span, start: datetime, total: float, now: datetime) -> dict[str, t.Any]:
-        """One call: its name, a line under it, and its bar inside the turn."""
-        left = (span.started_at - start).total_seconds() / total * 100
+    def _row(span: Span, start: datetime, total: float, now: datetime, folder: str) -> dict[str, t.Any]:
+        """One call: its name, a short line, and its bar inside the turn."""
+        left = min((span.started_at - start).total_seconds() / total * 100, 99.0)
         seconds = ((span.ended_at or now) - span.started_at).total_seconds()
-        width = max(seconds / total * 100, 1.5)
+        width = min(max(seconds / total * 100, 0.8), 100 - left)
         ttft = span.ttft_ms / 1000 / seconds * 100 if span.ttft_ms and seconds else 0.0
-        if span.kind == "model":
-            name, sub = span.name.split("/")[-1], []
-            if span.ttft_ms is not None:
-                sub.append(f"first token {Trace._seconds(span.ttft_ms, 'ok')}")
-            if span.usage is not None:
-                sub.append(f"↑ {Trace._k(span.usage.tokens_input)} ↓ {Trace._k(span.usage.tokens_output)}")
-            line, shown_input = " · ".join(sub), ""
-        elif span.kind == "tool":
-            params = span.input if isinstance(span.input, dict) else {}
-            name = "Bash" if span.name == BASH else span.name
-            line = tool_summary(span.name, t.cast("dict[str, t.Any]", params))
-            shown_input = Trace._text(span.input)
-        else:
-            name, line, shown_input = "Compaction", f"{Trace._text(span.input)} tokens before", ""
         return {
-            "id": span.id, "kind": span.kind, "status": span.status, "name": name, "line": line,
+            "id": span.id, "kind": span.kind, "status": span.status,
+            "name": Trace._name(span), "line": Trace._line(span, folder),
             "dur": Trace._seconds(span.duration_ms, span.status),
-            "left": round(min(left, 98.5), 2), "width": round(min(width, 100 - min(left, 98.5)), 2),
-            "ttft": round(min(ttft, 100.0), 1),
-            "input": shown_input[: Trace.MAX_DETAIL],
-            "output": Trace._text(span.output)[: Trace.MAX_DETAIL],
+            "left": round(left, 2), "width": round(width, 2), "ttft": round(min(ttft, 100.0), 1),
         }
+
+    @staticmethod
+    def detail(html: Html, span: Span, folder: str = "") -> str:
+        """The drawer of one call: its numbers, then what went out and in."""
+        facts: list[str] = [Trace._seconds(span.duration_ms, span.status)]
+        if span.ttft_ms is not None:
+            facts.append(f"first token {Trace._seconds(span.ttft_ms, 'ok')}")
+        if span.usage is not None:
+            facts.append(f"↑ {span.usage.tokens_input:,} ↓ {span.usage.tokens_output:,}")
+            if span.usage.tokens_cached:
+                facts.append(f"{span.usage.tokens_cached:,} cached")
+        if span.retries:
+            facts.append(f"{span.retries} retr{'y' if span.retries == 1 else 'ies'}")
+        if span.kind == "model" and isinstance(span.input, int) and span.input:
+            facts.append(f"{span.input} messages in")
+        facts.append(span.started_at.astimezone().strftime("%H:%M:%S"))
+        shown_input = "" if span.kind == "model" else Trace._text(span.input)
+        output = Trace._text(span.output)[: Trace.MAX_DETAIL]
+        return str(html.parts.span_detail({
+            "kind": span.kind, "status": span.status, "name": Trace._name(span),
+            "line": Trace._line(span, folder), "facts": facts, "input": shown_input[: Trace.MAX_DETAIL],
+            # What the model wrote reads as the chat shows it; a tool's output stays as it came.
+            "output": output if span.kind != "model" else "",
+            "answer": Markup(html.md(output)) if span.kind == "model" and output else "",
+        }))
+
+    @staticmethod
+    def _name(span: Span) -> str:
+        if span.kind == "model":
+            return span.name.split("/")[-1]
+        if span.kind == "compaction":
+            return "compaction"
+        return "Bash" if span.name == BASH else span.name
+
+    @staticmethod
+    def _line(span: Span, folder: str = "") -> str:
+        if span.kind == "tool":
+            params = span.input if isinstance(span.input, dict) else {}
+            line = tool_summary(span.name, t.cast("dict[str, t.Any]", params))
+            return line.replace(folder.rstrip("/") + "/", "") if folder else line
+        if span.kind == "model" and span.usage is not None:
+            return f"↑ {Trace._k(span.usage.tokens_input)} ↓ {Trace._k(span.usage.tokens_output)}"
+        if span.kind == "compaction" and span.input:
+            return f"{Trace._text(span.input)} tokens before"
+        return ""
+
+    @staticmethod
+    def _tick(seconds: float) -> str:
+        if seconds >= 60:
+            return f"{seconds / 60:g}m"
+        return f"{seconds:g}s"
 
     @staticmethod
     def _title(name: str) -> str:

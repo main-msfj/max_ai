@@ -9,9 +9,10 @@ from mcp.types import CallToolResult, TextContent
 from max_ai.capabilities.mcp import client_manager as cm
 from max_ai.capabilities.mcp._model import HTTPServerConfig
 from max_ai.capabilities.mcp.client_manager import MCPClientManager
-from max_ai.capabilities.mcp.task import MCPTaskRunning, TaskState
+from max_ai.capabilities.mcp.task import TaskState
 from max_ai.capabilities.mcp.tool import TASK_RUNNING, MCPTool
 from max_ai.core.tool import ToolDispatcher, ToolRegistry
+from max_ai.errors.mcp import MCPTaskRunning
 from max_ai.types.run_context import RunContext
 from max_ai.types.tool_call import ToolCallRecord
 from max_ai.types.tools import ToolApprovalMode

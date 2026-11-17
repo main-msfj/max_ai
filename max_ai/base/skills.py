@@ -9,12 +9,9 @@ from abc import ABC, abstractmethod
 
 from pydantic import BaseModel
 
+from ..errors.skills import SkillError
 from .component import ComponentBase
 from .sandbox import SandboxCore
-
-
-class SkillError(Exception):
-    pass
 
 
 class SkillsCore(ComponentBase[BaseModel], ABC):

@@ -23,3 +23,7 @@ class ToolRegistryError(Exception):
     @classmethod
     def duplicate_name(cls, name: str) -> "ToolRegistryError":
         return cls(f"Duplicate tool name: {name!r}", "duplicate_name")
+
+
+class ToolDefinitionError(ValueError):
+    """A tool was built with a name or a description that cannot be used."""

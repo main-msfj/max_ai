@@ -19,14 +19,14 @@ import pytest
 from dotenv import load_dotenv
 
 from max_ai.agents import Agent
-from max_ai.capabilities.clients.to_delete.openai import OpenAIChatCompletionClient
-from max_ai.capabilities.clients.to_delete.openrouter import OpenRouterChatCompletionClient
-from max_ai.capabilities.reasoning.guards import LoopGuard
-from max_ai.capabilities.reasoning.react import ReactLoop
+from max_ai.base.loop import LoopState
+from max_ai.base.middleware import CoreMiddleware
+from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
+from max_ai.capabilities.clients.openrouter import OpenRouterChatCompletionClient
 from max_ai.capabilities.tools.function_as_tool import FunctionAsTool
 from max_ai.core.event_type import ModelCallEvent, ModelRetryEvent
 from max_ai.core.messages import AssistantMessage
-from max_ai.types.agent_response import AgentResponse
+from max_ai.types.run_context import RunContext
 from max_ai.types.tools import ToolApprovalMode
 
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
@@ -53,12 +53,15 @@ WORD = "PINEAPPLE"
 LIMIT_SECONDS = 240
 
 
-class SteerOnce(LoopGuard):
-    """Steers after the first tool round only."""
+class SteerOnce(CoreMiddleware):
+    """After the first tool, the user writes once more while the turn runs."""
 
-    def after_tool_round(self, ctx, state, guard_ctx):
-        rounds = sum(isinstance(m, AssistantMessage) and bool(m.tool_calls) for m in ctx.messages)
-        return f"End your final answer with the word {WORD}." if rounds == 1 else None
+    async def tool(self, ctx, record, call_next):
+        result = await call_next(record)
+        if not self.state(ctx).get("steered"):
+            self.state(ctx)["steered"] = True
+            ctx.inbox.append(f"End your final answer with the word {WORD}.")
+        return result
 
 
 def get_weather(city: str) -> str:
@@ -71,19 +74,18 @@ async def test_the_model_follows_steering(provider, model):
     key, client_cls = CLIENTS[provider]
     if not os.getenv(key):
         pytest.skip(f"{key} not set")
-    middlewares = []
+    middlewares: list[CoreMiddleware] = [SteerOnce()]
     if os.getenv("LANGFUSE_PUBLIC_KEY"):
         from max_ai.capabilities.middleware import TracingMiddleware, configure_langfuse
         configure_langfuse()
-        middlewares = [TracingMiddleware()]
+        middlewares.append(TracingMiddleware())
     agent = Agent(
-        name="steering_probe", description="Reports the weather.",
-        instructions="Use get_weather for weather questions, then answer in one sentence.",
-        client=client_cls(model=model, max_tokens=4_000),
+        "steering_probe", "Reports the weather.",
+        "Use get_weather for weather questions, then answer in one sentence.",
+        client_cls(model=model),
         toolset=[FunctionAsTool(func=get_weather, name="get_weather",
                                 description="Get the current weather for a city.",
                                 approval_mode=ToolApprovalMode.AUTO_APPROVED)],
-        reasoning=ReactLoop(guards=[SteerOnce()]),
         middlewares=middlewares,
     )
     started = time.monotonic()
@@ -91,22 +93,21 @@ async def test_the_model_follows_steering(provider, model):
     def say(text):
         print(f"  {time.monotonic() - started:5.0f}s {text}", flush=True)
 
+    ctx, state = RunContext(user_id="u", session_id="steering"), LoopState()
+
     async def run():
-        async for item in agent.run_stream_events(task="What is the weather in Tokyo?"):
+        async for item in agent.run_stream_events("What is the weather in Tokyo?", ctx, state=state):
             if isinstance(item, ModelCallEvent):
                 say("calling the model")
             elif isinstance(item, ModelRetryEvent):
                 say(f"retry in {item.delay:.0f}s ({item.reason}, try {item.attempt + 1}/{item.max_attempts})")
-            elif isinstance(item, AgentResponse):
-                return item
-        raise RuntimeError("no response")
 
     print(flush=True)
-    async with agent:
-        response = await asyncio.wait_for(run(), LIMIT_SECONDS)
-    answer = next((m.text() for m in reversed(response.context.messages)
+    await asyncio.wait_for(run(), LIMIT_SECONDS)
+    await agent.close()
+    answer = next((m.text() for m in reversed(ctx.messages)
                    if isinstance(m, AssistantMessage) and m.text().strip()), "")
-    print(f"\n{model} {response.finish_reason}: {answer[-120:]!r}")
-    assert response.finish_reason == "stop", response.finish_reason
+    print(f"\n{model} {state.finish_reason}: {answer[-120:]!r}")
+    assert state.finish_reason == "stop", state.finish_reason
     assert "22" in answer, "lost the user's question"
     assert WORD in answer.upper(), "ignored the steering"

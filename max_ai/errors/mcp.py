@@ -1,5 +1,7 @@
 """Errors for MCP integration."""
 
+import time
+
 
 class MCPError(Exception):
     """Base exception for MCP integration errors."""
@@ -39,3 +41,12 @@ class MCPConnectionLost(MCPError, ConnectionError):
     The request may or may not have run on the server: only read-only calls
     are sent again (after reconnecting); others go back to the model.
     """
+
+
+class MCPTaskRunning(MCPToolError):
+    """The call became a task that did not end within the wait."""
+
+    def __init__(self, task_id: str, ttl_ms: int | None) -> None:
+        super().__init__(f"Task {task_id} is still running.")
+        self.task_id = task_id
+        self.expires_at = None if ttl_ms is None else time.time() + ttl_ms / 1000

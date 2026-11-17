@@ -49,12 +49,14 @@ class Model:
 
     def _next(self, messages, tools):
         self.sent.append(([m.role for m in messages], [t.name for t in tools or []]))
-        reply = self.replies[len(self.sent) - 1]
+        if not self.replies:
+            return says("")
+        reply = self.replies[min(len(self.sent) - 1, len(self.replies) - 1)]
         if isinstance(reply, Exception):
             raise reply
         return reply
 
-    async def run(self, messages, tools=None, output_format=None, *, retry=None, on_retry=None):
+    async def run(self, messages, tools=None, output_format=None, *, retry=None, on_retry=None, **options):
         message = self._next(messages, tools)
         if on_retry and len(self.sent) == 1:
             on_retry(1, TimeoutError("slow"), 0.5)
@@ -62,7 +64,7 @@ class Model:
         usage = Usage(llm_calls=1, tokens_input=10, tokens_output=2)
         return ChatCompletionResult(message=message, usage=usage, model=self.model, finish_reason=reason)
 
-    async def stream(self, messages, tools=None, output_format=None, *, retry=None, on_retry=None):
+    async def stream(self, messages, tools=None, output_format=None, *, retry=None, on_retry=None, **options):
         message = self._next(messages, tools)
         for word in (message.content or "").split():
             yield ChatCompletionChunk(content=word, is_complete=False)

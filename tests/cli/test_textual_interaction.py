@@ -1,32 +1,37 @@
 """Real key/button interactions with the Textual CLI."""
 
 import asyncio
-from types import SimpleNamespace
 
 import pytest
 from textual.widgets import Static, TextArea
 
+from max_ai.agents import Agent
+from max_ai.base.loop import LoopState
+from max_ai.capabilities.sandbox.local import LocalSandbox
 from max_ai.capabilities.tools.ask_user import AskUserTool
 from max_ai.cli.app import MaxAIApp
-from max_ai.cli.events import event_line
 from max_ai.cli.widgets import InfoPanel
 from max_ai.core.event_type import (
-    BashFinishedEvent,
-    FileReadEvent,
     ModelResponseEvent,
     ModelRetryEvent,
 )
 from max_ai.core.harness import messages as harness
 from max_ai.core.messages import AssistantMessage, ToolCall, UserMessage
-from max_ai.types.agent_response import AgentResponse
 from max_ai.types.completions import Usage
 from max_ai.types.run_context import RunContext
 from max_ai.types.tool_call import ToolCallRecord
+from tests.cli.test_sessions import EchoLLM
 
 
-def make_app(tmp_path):
-    return MaxAIApp(SimpleNamespace(name="test", memory=None, skills=None, knowledge=[],
-                                   workspace=SimpleNamespace(base_root=tmp_path)))
+async def _resolve(app, ctx):
+    """The calls of ``ctx`` wait for the user: the app asks them."""
+    app.context = ctx
+    return await app._resolve_requests()
+
+
+def make_app(tmp_path, tools=()):
+    agent = Agent("test", "d", "i", EchoLLM(), toolset=list(tools), sandbox=LocalSandbox(str(tmp_path / "work")))
+    return MaxAIApp(agent)
 
 
 @pytest.mark.asyncio
@@ -50,7 +55,7 @@ async def test_enter_submits_and_busy_draft_is_preserved(tmp_path):
 async def test_enter_during_a_model_turn_sends_to_the_inbox(tmp_path):
     app = make_app(tmp_path)
     async with app.run_test() as pilot:
-        app._busy, app._cancel = True, object()
+        app._busy, app._job = True, object()
         prompt = app.query_one(TextArea)
         prompt.text = "also this"
         await pilot.press("enter")
@@ -65,16 +70,19 @@ async def test_messages_left_in_the_inbox_start_the_next_turn(tmp_path):
     app = make_app(tmp_path)
     tasks = []
 
-    async def turn(task):
+    async def run_once(task):
         tasks.append(task)
+        # The first run ends with messages still in the inbox; the second reads them.
         if len(tasks) == 1:
             app.context.inbox += ["one", "two"]
+        else:
+            app.context.inbox.clear()
+        return LoopState(finish_reason="stop")
 
-    app._turn = turn
+    app._run_once = run_once
     async with app.run_test():
         await app._run_turn("first").wait()
-    assert tasks == ["first", "one\n\ntwo"]
-    assert app.context.inbox == []
+    assert tasks == ["first", None]
 
 
 @pytest.mark.asyncio
@@ -84,10 +92,10 @@ async def test_approval_enter_while_busy(tmp_path, answer):
     ctx = RunContext()
     record = ToolCallRecord(id="a", tool_name="send_email", parameters={})
     ctx.tool_state.add(record)
-    response = AgentResponse(source="test", context=ctx, usage=Usage(), finish_reason="approval_needed")
+    response = ctx
     async with app.run_test() as pilot:
         app._busy = True
-        worker = asyncio.create_task(app._resolve_requests(response))
+        worker = asyncio.create_task(_resolve(app, response))
         await pilot.pause()
         app.query_one(TextArea).text = answer
         await pilot.press("enter")
@@ -96,41 +104,36 @@ async def test_approval_enter_while_busy(tmp_path, answer):
 
 
 @pytest.mark.asyncio
-async def test_always_allow_adds_a_rule_to_the_conversation(tmp_path):
-    from max_ai.capabilities.tools.to_delete.bash import BashTool
+async def test_always_allow_keeps_the_rule_in_the_sandbox(tmp_path):
+    from max_ai.capabilities.tools.bash import BashTool
 
-    app = MaxAIApp(SimpleNamespace(name="test", memory=None, skills=None, knowledge=[],
-                                   tools=[BashTool()], workspace=SimpleNamespace(base_root=tmp_path)))
-    ctx = RunContext()
-
-    def pending(record_id, command):
-        record = ToolCallRecord(id=record_id, tool_name="bash",
-                                parameters={"command": command, "description": "d"})
+    app = make_app(tmp_path, [BashTool()])
+    ctx = RunContext(user_id="u")
+    records = [ToolCallRecord(id=i, tool_name="bash", parameters={"command": c, "description": "d"})
+               for i, c in (("a", "npm install left-pad"), ("b", "npm test"), ("c", "rm notes.txt"))]
+    for record in records:
         ctx.tool_state.add(record)
-        return record, AgentResponse(source="test", context=ctx, usage=Usage(),
-                                     finish_reason="approval_needed")
+    first, second, other = records
+    (tmp_path / "work").mkdir()
+    await app.agent.sandbox.bind("u").prepare()  # a run would have done it
 
     async with app.run_test() as pilot:
         app._busy = True
-        first, response = pending("a", "npm install left-pad")
-        worker = asyncio.create_task(app._resolve_requests(response))
+        worker = asyncio.create_task(_resolve(app, ctx))
         await pilot.pause()
-        await pilot.press("2")  # Yes, always allow bash(npm:*)
-        await asyncio.wait_for(worker, 2)
-        # The rule lives in the RunContext, so it is saved with the session.
-        assert not first.is_pending_approval and ctx.allowed_rules == ["bash(npm:*)"]
-
-        # Another npm command is covered; anything else still asks.
-        second, response = pending("b", "npm test")
-        await asyncio.wait_for(app._resolve_requests(response), 2)
-        assert not second.is_pending_approval
-        other, response = pending("c", "rm notes.txt")
-        worker = asyncio.create_task(app._resolve_requests(response))
-        await pilot.pause()
+        await pilot.press("2")  # Yes, always allow bash(npm*)
+        for _ in range(40):  # the rule is written to setting.json first
+            await pilot.pause(0.05)
+            if other.is_pending_approval and not second.is_pending_approval:
+                break
+        # The next npm call is covered; rm still asks, with no "always".
+        assert not first.is_pending_approval and not second.is_pending_approval
         assert not worker.done() and other.is_pending_approval
-        await pilot.press("3")
+        await pilot.press("2")  # No, deny
         await asyncio.wait_for(worker, 2)
-        assert not other.is_pending_approval
+        assert not other.is_pending_approval and other.status.value != "approved"
+    allowed = (await app.agent.sandbox.bind("u").permissions())["allow"]
+    assert "bash(npm*)" in allowed
 
 
 def _ask(text: str, options: list[str]) -> dict:
@@ -144,10 +147,10 @@ async def test_question_button_and_token_events(tmp_path):
     record = ToolCallRecord(id="q", tool_name=AskUserTool.TOOL_NAME, parameters=_ask("Format?", ["CSV", "JSON"]))
     record.await_user_input()
     ctx.tool_state.add(record)
-    response = AgentResponse(source="test", context=ctx, usage=Usage(), finish_reason="input_needed")
+    response = ctx
     async with app.run_test(size=(120, 45)) as pilot:
         app._busy = True
-        worker = asyncio.create_task(app._resolve_requests(response))
+        worker = asyncio.create_task(_resolve(app, response))
         await pilot.pause()
         await pilot.press("enter")  # question form: enter picks the highlighted option
         await asyncio.wait_for(worker, 2)
@@ -157,14 +160,7 @@ async def test_question_button_and_token_events(tmp_path):
         assert app._tokens_input == 20
         assert app._tokens_output == 6
         usage = str(app.query_one("#usage", Static).render())
-        assert "in 20 · out 6 · cached 4" in usage
-
-
-def test_runtime_event_lines():
-    bash = event_line(BashFinishedEvent(source="test", tool_call_id="b", exit_code=0, duration_ms=12))
-    skill = event_line(FileReadEvent(source="test", tool_call_id="s", path="skills/demo/SKILL.md", root_dir="/tmp", content_hash="abc"))
-    assert "bash finished" in bash.plain
-    assert "skills/demo/SKILL.md" in skill.plain
+        assert "↑ 20 ↓ 6 · cached 4" in usage
 
 
 def test_tool_summaries_stay_on_one_short_line():
@@ -182,34 +178,42 @@ def _notes(app):
 
 
 @pytest.mark.asyncio
-async def test_mcp_servers_are_listed_at_start_and_with_slash_mcp(tmp_path):
+async def test_mcp_servers_are_listed_at_start_and_with_slash_mcp(tmp_path, monkeypatch):
+    from mcp import Client
+    from mcp.server import MCPServer
+
+    from max_ai.capabilities.mcp import StdioMCPServerConfig
+    from max_ai.capabilities.mcp import client_manager as module
     from max_ai.types.tools import ToolApprovalMode
 
-    tools = [
-        SimpleNamespace(name="acme_hr_send_email", server_id="acme_hr", description="d",
-                        approval_mode=ToolApprovalMode.ASK_APPROVED),
-        SimpleNamespace(name="acme_hr_calculate", server_id="acme_hr", description="d",
-                        approval_mode=ToolApprovalMode.AUTO_APPROVED),
-        SimpleNamespace(name="acme_hr_read_resource", server_id="acme_hr", description="d",
-                        available_resources=[SimpleNamespace(uri="acme://guides/parking")],
-                        resource_templates=[]),
-        SimpleNamespace(name="bash", description="d"),
-    ]
-    app = MaxAIApp(SimpleNamespace(name="test", memory=None, skills=None, knowledge=[], tools=tools,
-                                   workspace=SimpleNamespace(base_root=tmp_path)))
+    server = MCPServer("acme_hr")
+
+    @server.tool()
+    async def send_email(to: str) -> str:
+        return to
+
+    @server.tool()
+    async def calculate(a: int) -> int:
+        return a
+
+    monkeypatch.setattr(module, "create_mcp_client", lambda config, extensions=None: Client(server))
+    config = StdioMCPServerConfig(server_id="acme_hr", command="unused", tool_approval_modes={
+        "send_email": ToolApprovalMode.ASK_APPROVED, "calculate": ToolApprovalMode.AUTO_APPROVED})
+    agent = Agent("test", "d", "i", EchoLLM(), mcp=[config], sandbox=LocalSandbox(str(tmp_path / "work")))
+    app = MaxAIApp(agent)
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert any("acme_hr (2 tools, 1 resources)" in note for note in _notes(app))
+        assert any("acme_hr" in note for note in _notes(app))
         await app._run_command("/mcp")
         await pilot.pause()
         # The listing opens in a panel above the composer, not in the transcript.
         panel = app.query_one(InfoPanel)
         assert panel.display
         listing = panel.body
-        assert "send_email" in listing and "asks approval" in listing
-        assert "acme://guides/parking" in listing and "bash" not in listing
+        assert "send_email" in listing and "asks approval" in listing and "calculate" in listing
         await pilot.press("escape")
         assert not panel.display
+    await agent.close()
 
 
 @pytest.mark.asyncio
@@ -233,7 +237,7 @@ def _question_response(*questions: tuple[str, list[str]]):
         record.await_user_input()
         ctx.tool_state.add(record)
         records.append(record)
-    return records, AgentResponse(source="test", context=ctx, usage=Usage(), finish_reason="input_needed")
+    return records, ctx
 
 
 @pytest.mark.asyncio
@@ -242,7 +246,7 @@ async def test_a_number_key_picks_the_option(tmp_path):
     (record,), response = _question_response(("Format?", ["CSV", "JSON", "XML"]))
     async with app.run_test(size=(120, 45)) as pilot:
         app._busy = True
-        worker = asyncio.create_task(app._resolve_requests(response))
+        worker = asyncio.create_task(_resolve(app, response))
         await pilot.pause()
         await pilot.press("2")  # no enter needed
         await asyncio.wait_for(worker, 2)
@@ -259,7 +263,7 @@ async def test_other_is_typed_inside_the_question_box(tmp_path):
     (record,), response = _question_response(("Format?", ["CSV", "JSON"]))
     async with app.run_test(size=(120, 45)) as pilot:
         app._busy = True
-        worker = asyncio.create_task(app._resolve_requests(response))
+        worker = asyncio.create_task(_resolve(app, response))
         await pilot.pause()
         await pilot.press("3")  # "Other"
         await pilot.pause()
@@ -285,7 +289,7 @@ def _multi_select_response():
     record.await_user_input()
     ctx = RunContext()
     ctx.tool_state.add(record)
-    return record, AgentResponse(source="test", context=ctx, usage=Usage(), finish_reason="input_needed")
+    return record, ctx
 
 
 async def _press(pilot, *keys):
@@ -302,7 +306,7 @@ async def test_multi_select_toggles_and_confirms_on_submit(tmp_path):
     record, response = _multi_select_response()
     async with app.run_test(size=(120, 45)) as pilot:
         app._busy = True
-        worker = asyncio.create_task(app._resolve_requests(response))
+        worker = asyncio.create_task(_resolve(app, response))
         await pilot.pause()
         await _press(pilot, "1", "2", "1")  # the last one takes "a" back
         form = app.query_one(QuestionForm)
@@ -322,7 +326,7 @@ async def test_multi_select_other_adds_to_the_selection(tmp_path):
     record, response = _multi_select_response()
     async with app.run_test(size=(120, 45)) as pilot:
         app._busy = True
-        worker = asyncio.create_task(app._resolve_requests(response))
+        worker = asyncio.create_task(_resolve(app, response))
         await pilot.pause()
         await _press(pilot, "1", "4")  # "Other"
         await pilot.press(*"mine", "enter")
@@ -338,7 +342,7 @@ async def test_multi_select_with_nothing_marked_is_not_answered(tmp_path):
     record, response = _multi_select_response()
     async with app.run_test(size=(120, 45)) as pilot:
         app._busy = True
-        worker = asyncio.create_task(app._resolve_requests(response))
+        worker = asyncio.create_task(_resolve(app, response))
         await pilot.pause()
         await _press(pilot, "right", "enter")
         await asyncio.wait_for(worker, 2)
@@ -350,18 +354,16 @@ async def test_esc_keeps_what_the_turn_already_did(tmp_path):
     app = make_app(tmp_path)
     started = asyncio.Event()
 
-    async def turn(task):
-        ctx = app._ensure_context()
+    async def run_stream_events(task, ctx, **options):
         ctx.messages.append(UserMessage(source="u", content=task))
         ctx.messages.append(AssistantMessage(source="a", content="", tool_calls=[
             ToolCall(id="p", tool_name="pay", parameters={})]))
         ctx.tool_state.add(ToolCallRecord(id="p", tool_name="pay", parameters={}))
         started.set()
-        forever = asyncio.ensure_future(asyncio.Event().wait())
-        app._cancel.link_future(forever)
-        await forever
+        await asyncio.Event().wait()  # runs until esc
+        yield  # pragma: no cover
 
-    app._turn = turn
+    app.agent.run_stream_events = run_stream_events
     async with app.run_test() as pilot:
         app._run_turn("hola")
         await asyncio.wait_for(started.wait(), 2)
@@ -386,10 +388,10 @@ async def test_submit_accepts_unanswered_questions(tmp_path):
     record = ToolCallRecord(id="q", tool_name=AskUserTool.TOOL_NAME, parameters=params)
     record.await_user_input()
     ctx.tool_state.add(record)
-    response = AgentResponse(source="test", context=ctx, usage=Usage(), finish_reason="input_needed")
+    response = ctx
     async with app.run_test(size=(120, 45)) as pilot:
         app._busy = True
-        worker = asyncio.create_task(app._resolve_requests(response))
+        worker = asyncio.create_task(_resolve(app, response))
         await pilot.pause()
         await pilot.press("1")  # answers A?, moves on to B?
         await pilot.pause()
@@ -407,28 +409,14 @@ async def test_a_number_key_answers_an_approval(tmp_path):
     ctx = RunContext()
     record = ToolCallRecord(id="a", tool_name="send_email", parameters={})
     ctx.tool_state.add(record)
-    response = AgentResponse(source="test", context=ctx, usage=Usage(), finish_reason="approval_needed")
+    response = ctx
     async with app.run_test() as pilot:
         app._busy = True
-        worker = asyncio.create_task(app._resolve_requests(response))
+        worker = asyncio.create_task(_resolve(app, response))
         await pilot.pause()
-        await pilot.press("2")  # unknown tool: no "always", so 2 is "No, deny"
+        await pilot.press("1")  # Yes, allow once
         await asyncio.wait_for(worker, 2)
-        assert not record.is_pending_approval and record.status.value != "approved"
-
-
-@pytest.mark.asyncio
-async def test_the_turn_summary_shows_the_gate(tmp_path):
-    from max_ai.base.completion_gate import CompletionDecision
-
-    app = make_app(tmp_path)
-    async with app.run_test() as pilot:
-        done = AgentResponse(source="test", context=RunContext(), usage=Usage(), finish_reason="stop",
-                             completion=CompletionDecision(status="completed"))
-        app._gate_retries = ["plan still open"]
-        await app._write_turn_summary(done)
-        await pilot.pause()
-        assert "gate ✓ after 1 fix" in _notes(app)[-1]
+        assert not record.is_pending_approval and record.status.value == "approved"
 
 
 @pytest.mark.asyncio

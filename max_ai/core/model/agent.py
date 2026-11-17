@@ -21,12 +21,10 @@ class AgentSpec(BaseModel):
     instructions: str
     client: dict[str, t.Any]
     reasoning: dict[str, t.Any] | None = None
-    workspace: dict[str, t.Any] | None = None
     sandbox: dict[str, t.Any] | None = None
     memory: dict[str, t.Any] | None = None
     skills: dict[str, t.Any] | None = None
     knowledge: list[dict[str, t.Any]] = Field(default_factory=list)
-    compaction: dict[str, t.Any] | None = None
     toolset: list[dict[str, t.Any]] = Field(default_factory=list)
     mcp: list[StdioMCPServerConfig | HTTPServerConfig] = Field(default_factory=list)
     gates: list[dict[str, t.Any]] = Field(

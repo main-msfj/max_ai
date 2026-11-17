@@ -11,8 +11,9 @@ from max_ai.capabilities.stacks.custom_layer import CustomLayer
 from max_ai.capabilities.tools.bash import BashTool
 from max_ai.capabilities.tools.decorator import tool as as_tool
 from max_ai.config import Settings, setting
-from max_ai.core.harness.rules import Harness, HarnessError
+from max_ai.core.harness.rules import Harness
 from max_ai.core.model.llm import ModelConfig
+from max_ai.errors.harness import HarnessError
 
 
 def weather(city: str) -> str:

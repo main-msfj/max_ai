@@ -11,7 +11,8 @@ import httpx
 from pydantic import BaseModel, Field, SecretStr
 
 from ....base.session_store import validate_id
-from ....base.skills import SkillError, SkillsCore
+from ....base.skills import SkillsCore
+from ....errors.skills import SkillError
 
 API = "https://api.github.com"
 TOKEN_ENV = "GITHUB_TOKEN"  # where the token is looked for when it is not passed

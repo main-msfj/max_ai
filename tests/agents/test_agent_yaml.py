@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from max_ai.agents import Agent
-from max_ai.capabilities.clients.to_delete.openai.client import OpenAIChatCompletionClient
+from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
 from tests.agents.test_agent_serialization import full_agent
 
 
@@ -27,7 +27,7 @@ def test_the_compact_form_rebuilds_the_same_agent(tmp_path, fmt):
     agent = full_agent(tmp_path)
     text = getattr(agent, f"to_{fmt}")()
     assert stored(getattr(Agent, f"from_{fmt}")(text)) == stored(agent)
-    assert "component_type" not in text and "plan_must_close: false" in agent.to_yaml()
+    assert "component_type" not in text and "max_iterations: 12" in agent.to_yaml()
 
 
 def test_a_hand_written_yaml_needs_only_what_differs(tmp_path):
@@ -43,8 +43,8 @@ config:
   client:
     provider: maxai.llm.OpenAIChatCompletionClient
     config: {{model: gpt-4o-mini}}
-  workspace:
-    provider: max_ai.capabilities.workspace.local.LocalWorkspace
+  sandbox:
+    provider: max_ai.capabilities.sandbox.local.LocalSandbox
     config: {{root: {tmp_path}}}
 """)
     agent = Agent.from_yaml(Path(path))
@@ -54,7 +54,6 @@ config:
 
 
 def test_full_keeps_everything(tmp_path):
-    agent = Agent(name="a", description="d", instructions="i",
-                  client=OpenAIChatCompletionClient(model="gpt-4o-mini"))
+    agent = Agent("a", "d", "i", OpenAIChatCompletionClient(model="gpt-4o-mini"))
     assert agent.to_dict(full=True) == stored(agent)
     assert len(agent.to_yaml(full=True)) > 2 * len(agent.to_yaml())

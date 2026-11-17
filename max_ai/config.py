@@ -49,31 +49,41 @@ class Settings(BaseSettings):
     # -------- HARNESS ----------------------------------------------------------
     harness_tool_description_max_tokens: int = Field(default=100, ge=1)
     harness_tools_max_tokens: int = Field(
-        default=20_000, ge=1, validation_alias="HARNESS_TOOLS_MAX_TOKENS",
+        default=20_000,
+        ge=1,
+        validation_alias="HARNESS_TOOLS_MAX_TOKENS",
         description="Most all the loaded tools together may take in a request.",
     )
     harness_prompt_min_tokens: int = Field(
         default=2000, ge=0, description="Below this the provider's cache is not used well."
     )
     harness_prompt_max_share: float = Field(
-        default=0.10, gt=0, le=1, validation_alias="HARNESS_PROMPT_MAX_SHARE",
+        default=0.10,
+        gt=0,
+        le=1,
+        validation_alias="HARNESS_PROMPT_MAX_SHARE",
         description="Most of the context window the prompt may take.",
     )
     harness_custom_prompt_max_tokens: int = Field(
-        default=1500, ge=1, validation_alias="HARNESS_CUSTOM_PROMPT_MAX_TOKENS",
+        default=1500,
+        ge=1,
+        validation_alias="HARNESS_CUSTOM_PROMPT_MAX_TOKENS",
         description="Most the developer's own prompt layers may take; more belongs in a skill.",
     )
     harness_instructions_max_tokens: int = Field(default=100, ge=1)
     harness_description_max_tokens: int = Field(default=100, ge=1)
     harness_retry_attempts: int = Field(
-        default=3, ge=1, validation_alias="HARNESS_RETRY_ATTEMPTS",
+        default=3,
+        ge=1,
+        validation_alias="HARNESS_RETRY_ATTEMPTS",
         description="Tries in total for one model call: the first one plus its retries.",
     )
     harness_sandbox_seconds: float = Field(
         default=600, gt=0, description="How long a sandbox lives; no tool may run longer."
     )
     summary_model: str = Field(
-        default="", description="OpenRouter model that writes the summaries; empty: the agent's own."
+        default="",
+        description="OpenRouter model that writes the summaries; empty: the agent's own.",
     )
 
     # -------- COMPACTION -------------------------------------------------------

@@ -42,7 +42,7 @@ def test_file_tools_follow_the_rules_and_the_settings_are_always_asked():
     assert Permissions.can_be_kept("bash", {"command": "ls"})
 
 
-async def test_a_rule_is_kept_in_the_users_settings_once(tmp_path):
+async def test_a_rule_is_kept_once_and_can_be_taken_out(tmp_path):
     box = LocalSandbox(str(tmp_path)).bind("u")
     await box.prepare()
     assert await box.permissions() == {}
@@ -50,6 +50,9 @@ async def test_a_rule_is_kept_in_the_users_settings_once(tmp_path):
     await box.add_permission("allow", "bash(pytest*)")
     assert await box.permissions() == {"allow": ["bash(pytest*)"]}
     assert Permissions(await box.permissions()).decide("bash", {"command": "pytest -q"}) is True
+    await box.remove_permission("allow", "bash(pytest*)")
+    await box.remove_permission("deny", "bash(rm*)")  # not there: nothing changes
+    assert await box.permissions() == {"allow": []}
 
 
 def test_always_keeps_one_rule_per_command_and_a_lone_cd_needs_none():

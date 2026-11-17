@@ -33,6 +33,9 @@ architecture.md
 a-harness-max-ai/
 ai-harness-research/
 
-# Local state produced by deployment examples
-example-for-deployment/local/
-example-for-deployment/data/outbox/
+# Deployment examples and review reports: kept on disk, not in git
+example-for-deployment/
+report/
+new_tools.md
+resumen.md
+unused_files.md

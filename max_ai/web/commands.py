@@ -3,15 +3,19 @@ something answer with a panel; the page does the rest on its own (``where``)."""
 
 from __future__ import annotations
 
+import re
 import time
 import typing as t
 
 from ..base.tools import CoreTool
 from ..capabilities.mcp.tool import MCPTool
+from ..core.harness.permissions import Permissions
 
 if t.TYPE_CHECKING:
     from .conversation import Conversation
     from .server import WebHost
+
+RULE = re.compile(r"[\w.-]+(\(.+\))?")  # tool, or tool(pattern)
 
 # name → (what it does, where it runs: "panel" on the server, "page" in the browser)
 COMMANDS: dict[str, tuple[str, str]] = {
@@ -20,7 +24,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
     "/mcp": ("list the MCP servers with their tools", "panel"),
     "/skills": ("list the agent's skills", "panel"),
     "/session": ("this conversation's id and folder", "panel"),
-    "/permissions": ("the sandbox and your allow, ask and deny rules", "panel"),
+    "/permissions": ("see and change what runs without asking", "page"),
     "/resume": ("pick a saved conversation", "panel"),
     "/files": ("open the workspace files", "page"),
     "/trace": ("open the Trajectory: model calls and tools", "page"),
@@ -83,8 +87,6 @@ class Commands:
                 {"name": "saved", "text": "yes" if store is not None else "no store: nothing is saved"},
                 {"name": "messages", "text": str(len(conversation.context.messages))},
             ]
-        if name == "/permissions":
-            return "Permissions", await self._permission_rows()
         if name == "/resume":
             return "Resume", await self._session_rows()
         return "Unknown command", [{"text": f"{name} is not a command. Try /help."}]
@@ -129,26 +131,6 @@ class Commands:
             rows += [self._tool_row(tool, tool.name.removeprefix(sid + "_")) for tool in mine]
         return rows
 
-    async def _permission_rows(self) -> list[dict[str, t.Any]]:
-        """Where commands run, and the rules of the user's setting.json."""
-        sandbox = self.host.agent.sandbox
-        rows: list[dict[str, t.Any]] = [{"name": "sandbox", "text": self.host.sandbox_label()}]
-        if sandbox is None:
-            return rows + [{"text": "Without a sandbox there is no setting.json: each tool asks as it is built to."}]
-        box = sandbox.bind(self.host.user_id)
-        rows.append({"name": "settings", "text": str(box.layout.settings)})
-        try:
-            rules = await self.permissions()
-        except Exception as error:  # noqa: BLE001 — the sandbox may be down
-            return rows + [{"text": f"Could not read the rules: {error}"}]
-        for kind, meaning in (("allow", "run without asking"), ("ask", "always asked"), ("deny", "never run")):
-            found = rules.get(kind, [])
-            rows.append({"group": f"{kind} · {meaning}"})
-            rows += [{"name": rule, "text": ""} for rule in found] or [{"text": "none"}]
-        rows.append({"group": "Always asked, whatever the rules say"})
-        rows.append({"text": "rm, sudo, git push --force, git reset --hard, kill, eval, commands built with $( ) or backticks, and setting.json itself."})
-        return rows
-
     async def permissions(self) -> dict[str, list[str]]:
         """The rules of setting.json, read again after ``RULES_FOR`` seconds or
         when "always allow" keeps one (``self.rules = None``)."""
@@ -165,6 +147,26 @@ class Commands:
             rules = await box.permissions()
         self.rules = (time.monotonic(), rules)
         return rules
+
+    async def change_rule(self, action: str, kind: str, rule: str) -> str:
+        """Add or take out one rule; an error message when it cannot be done."""
+        sandbox = self.host.agent.sandbox
+        rule = rule.strip()
+        if sandbox is None:
+            return "This agent has no sandbox: there are no rules to change."
+        if kind not in Permissions.KINDS or not RULE.fullmatch(rule):
+            return "A rule is a tool name, or a tool with a pattern: bash(npm test*)."
+        box = sandbox.bind(self.host.user_id)
+        try:
+            if action == "add":
+                await box.add_permission(kind, rule)
+            else:
+                await box.remove_permission(kind, rule)
+        except Exception as error:  # noqa: BLE001 — shown in the tab
+            return f"Could not change it: {error}"
+        finally:
+            self.rules = None
+        return ""
 
     async def _session_rows(self) -> list[dict[str, t.Any]]:
         store = self.host.store
