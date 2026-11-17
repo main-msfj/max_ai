@@ -21,7 +21,11 @@ def edit(request):
     # 1. Resolve the path from the working directory, links included.
     file = os.path.realpath(os.path.join(request["cwd"], request["path"]))
     if not inside(file, request["allowed"]):
-        raise ValueError("it is outside the folders you can write")
+        folders = ", ".join(request["allowed"])
+        raise ValueError(
+            f"it resolves to {file}, which is outside the folders you can write "
+            f"({folders}); use a full path inside one of them"
+        )
     if not os.path.exists(file):
         raise ValueError("it does not exist; create it with the tool that writes files")
     if os.path.isdir(file):

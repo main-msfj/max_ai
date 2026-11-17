@@ -72,3 +72,12 @@ async def test_relative_paths_start_where_bash_ended(sandbox, ctx, workspace):
     assert (workspace / "repo/src/new.py").exists()
     assert (workspace / "repo/src/app.py").read_text() == "print(2)\n"
     assert f"{workspace}/repo/src/app.py" in ctx.files_seen
+
+
+async def test_a_path_outside_says_where_it_resolved_and_where_to_write(sandbox):
+    ctx = RunContext(user_id="user-1", session_id="s1", cwd=str(sandbox.layout.skills))
+    record = ToolCallRecord(tool_name="write_file", parameters={"path": "notes.md", "content": "x"})
+    result = await ToolDispatcher(ToolRegistry([WriteFileTool()]), sandbox).dispatch(record, ctx)
+    workspace = sandbox.session_paths("s1")["workspace"]
+    assert not result.success and f"resolves to {sandbox.layout.skills}/notes.md" in result.error
+    assert workspace in result.error and "use a full path inside one of them" in result.error

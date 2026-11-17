@@ -20,7 +20,11 @@ def write(request, content):
     # 2. Resolve the path from the working directory, links included.
     file = os.path.realpath(os.path.join(request["cwd"], request["path"]))
     if not inside(file, request["allowed"]):
-        raise ValueError("it is outside the folders you can write")
+        folders = ", ".join(request["allowed"])
+        raise ValueError(
+            f"it resolves to {file}, which is outside the folders you can write "
+            f"({folders}); use a full path inside one of them"
+        )
     if os.path.isdir(file):
         raise ValueError("it is a folder, not a file")
     if inside(file, [request["memory"]]) and len(content) > request["memory_max"]:

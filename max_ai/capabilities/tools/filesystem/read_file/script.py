@@ -57,7 +57,11 @@ def read(request):
     # 1. Resolve the path from the working directory, links included.
     file = os.path.realpath(os.path.join(request["cwd"], request["path"]))
     if not inside(file, request["allowed"]):
-        raise ValueError("it is outside the folders you can read")
+        folders = ", ".join(request["allowed"])
+        raise ValueError(
+            f"it resolves to {file}, which is outside the folders you can read "
+            f"({folders}); use a full path inside one of them"
+        )
     if not os.path.exists(file):
         raise ValueError("it does not exist")
     if os.path.isdir(file):
