@@ -14,6 +14,7 @@ from ...capabilities.memory import Memory
 from ...types.run_context import RunContext
 from ...types.tool_call import ToolCallRecord, ToolResult
 from ..tool.hook import ToolHook
+from .permissions import Permissions
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +100,9 @@ class HarnessToolHook(ToolHook):
         middlewares: Sequence[CoreMiddleware] = (),
         memory: Memory | None = None,
         agent: str = "",
+        permissions: Permissions | None = None,  # the user's rules, read from setting.json
     ) -> None:
+        self.permissions = permissions or Permissions()
         self.middlewares = list(middlewares)
         self.memory = memory
         self.agent = agent
@@ -122,6 +125,15 @@ class HarnessToolHook(ToolHook):
             if answer is not None:
                 return answer
         return await super().before(tool, record, tool_ctx)
+
+    async def permission(
+        self, tool: CoreTool, record: ToolCallRecord, tool_ctx: ToolContext
+    ) -> bool | None:
+        # The rules decide first; without one, the tool's own approval mode.
+        decision = self.permissions.decide(record.tool_name, record.parameters)
+        if isinstance(decision, str):
+            return await super().permission(tool, record, tool_ctx)
+        return decision
 
     async def after(
         self, tool: CoreTool, record: ToolCallRecord, tool_ctx: ToolContext, result: ToolResult

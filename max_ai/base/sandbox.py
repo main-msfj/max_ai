@@ -115,6 +115,18 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
         installed = await self.installed_skills()
         return [name for name, key in wanted.items() if installed.get(name, {}).get("key") != key]
 
+    async def permissions(self) -> dict[str, list[str]]:
+        """The user's rules in ``setting.json``: ``allow``, ``ask`` and ``deny``."""
+        answer = await self._run("settings", settings=str(self.layout.settings))
+        return answer["settings"].get("permissions", {})
+
+    async def add_permission(self, kind: str, rule: str) -> None:
+        """Keep ``rule`` in the ``kind`` list (allow, ask or deny) of ``setting.json``."""
+        await self._run(
+            "permit", settings=str(self.layout.settings), lock=str(self.layout.lock),
+            kind=kind, rule=rule,
+        )
+
     async def installed_skills(self) -> dict[str, dict[str, str]]:
         """What ``setting.json`` says is installed: name → its ``key`` and
         ``description``."""

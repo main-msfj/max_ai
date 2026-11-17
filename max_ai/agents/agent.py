@@ -49,6 +49,7 @@ from ..capabilities.tools.skill import ReadSkillTool
 from ..config import setting
 from ..core.event_type import CoreEvent
 from ..core.harness.hooks import HarnessLoopHook, HarnessToolHook, SaveContext
+from ..core.harness.permissions import Permissions
 from ..core.harness.rules import Harness
 from ..core.model.agent import AgentSpec
 from ..core.model.json_schema import model_from_schema, schema_of
@@ -244,8 +245,10 @@ class Agent(ComponentBase[AgentSpec]):
             registry = await self._registry()
             Harness.tools_total_rules(registry.tokens(self.reasoning.compaction.counter))
             loop_hook = HarnessLoopHook(memory=self.memory, sandbox=box, save=save, mcp=self._mcp)
+            rules = Permissions(await box.permissions()) if box is not None else None
             tool_hook = HarnessToolHook(
-                middlewares=self.middlewares, memory=self.memory, agent=self.name
+                middlewares=self.middlewares, memory=self.memory, agent=self.name,
+                permissions=rules,
             )
             dispatcher = ToolDispatcher(
                 registry, box, hook=tool_hook, timeout=setting.tool_timeout_seconds

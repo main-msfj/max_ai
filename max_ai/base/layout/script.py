@@ -104,6 +104,17 @@ def settings(request):
     return {"settings": read_settings(request["settings"])}
 
 
+def permit(request):
+    """Add one rule to a list of ``permissions``; the same rule is kept once."""
+    with locked(request["lock"]):
+        current = read_settings(request["settings"])
+        rules = current.setdefault("permissions", {}).setdefault(request["kind"], [])
+        if request["rule"] not in rules:
+            rules.append(request["rule"])
+            write_settings(request["settings"], current)
+    return {}
+
+
 def upload(request):
     full = inside(request["folder"], request["path"])
     os.makedirs(os.path.dirname(full), exist_ok=True)
@@ -185,7 +196,8 @@ def sweep(folder):
                 shutil.rmtree(leftover) if os.path.isdir(leftover) else os.unlink(leftover)
 
 
-OPERATIONS = {"create": create, "settings": settings, "upload": upload, "install": install}
+OPERATIONS = {"create": create, "settings": settings, "upload": upload, "install": install,
+              "permit": permit}
 
 
 def main():
