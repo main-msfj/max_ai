@@ -14,6 +14,6 @@ class OpenAIChatCompletionClientConfig(BaseModel):
     base_url: str | None = None
     organization: str | None = None
     project: str | None = None
-    options: dict[str, t.Any] = Field(default_factory=dict)  # sent as they are in each request
+    options: dict[str, t.Any] = Field(default_factory=dict[str, t.Any])  # sent as they are in each request
     config: ModelConfig | None = None
     retry: RetryPolicy | None = None

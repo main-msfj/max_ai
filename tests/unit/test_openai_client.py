@@ -80,14 +80,14 @@ async def test_the_request_carries_messages_tools_and_the_models_limits():
     assert sent["messages"][3] == {"role": "tool", "tool_call_id": "c1", "content": "sunny"}
     assert sent["tools"][0]["function"]["name"] == "weather" and sent["tool_choice"] == "auto"
     assert sent["max_completion_tokens"] == 500 and sent["stream"] is False
-    assert "reasoning_effort" not in sent  # no thinking given: the provider's default
+    assert "extra_body" not in sent  # no thinking given: the provider's default
 
 
 async def test_thinking_and_options_reach_the_request_as_they_are():
     config = ModelConfig(thinking={"reasoning_effort": "low"})
     made = client(answer(), config=config, options={"temperature": 0.2})
     await made.run(HOLA)
-    assert made.sent[0]["reasoning_effort"] == "low" and made.sent[0]["temperature"] == 0.2
+    assert made.sent[0]["extra_body"] == {"reasoning_effort": "low", "temperature": 0.2}
 
 
 async def test_the_answer_is_read_with_its_tool_calls_and_usage():
