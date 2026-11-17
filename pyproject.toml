@@ -25,7 +25,6 @@ dependencies = [
     "jinja2>=3.1.6",
     "jsonschema>=4.26.0",
     "mcp>=2.2,<3",
-    "ollama>=0.6.1",
     "openai>=2.32.0",
     "opentelemetry-api>=1.41.0",
     "pydantic>=2.13.3",
@@ -66,7 +65,7 @@ select = ["E4", "E7", "E9", "F", "I"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
-    "integration: tests that require external services (e.g. a running Ollama server)",
+    "integration: tests that require external services (e.g. a live model or an MCP server)",
 ]
 
 [dependency-groups]

@@ -18,9 +18,6 @@ def output_token_limit(value: int | None) -> int | None:
     return min(int(value), MAX_OUTPUT_TOKENS) if value else None
 
 
-Effort = t.Literal["off", "low", "medium", "high"]  # how much the model thinks
-
-
 class ModelConfig(BaseModel):
     """Model Config"""
 
@@ -45,8 +42,12 @@ class ModelConfig(BaseModel):
     supports_audio: bool = Field(default=False)
     supports_function_calling: bool = Field(default=True)
     supports_thinking: bool = Field(default=False)
-    effort: Effort | None = Field(
-        default=None, description="How much the model thinks; None leaves the provider's default."
+    thinking: dict[str, t.Any] | None = Field(
+        default=None,
+        description=(
+            "The provider's own fields that set how the model thinks, sent as they are "
+            "in each request, e.g. {'reasoning_effort': 'low'}. None sends nothing."
+        ),
     )
 
     tokenizer_base: str = Field(default_factory=lambda: setting.default_tokenizer)

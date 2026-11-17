@@ -12,22 +12,25 @@ from email.utils import parsedate_to_datetime
 from pydantic import BaseModel
 
 from ..core.messages import Message
-from ..core.model.llm import Effort, ModelConfig
+from ..core.model.llm import ModelConfig
 from ..core.retry import RetryPolicy, rate_limited, retrying
 from ..errors.client import ClientError
 from ..types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
 from ..types.run_context import RunContext
-from ..types.stacks import PromptCtx
 from ..types.tools import CoreToolDefinition
-from .component import ComponentBase
+from .component import ComponentBase, ConfigT
 
 # Told before each wait: the try that failed (from 1), its error, seconds to wait.
 OnRetry = t.Callable[[int, BaseException, float], t.Any]
 
 
-class CoreChatCompletionClient(ComponentBase[BaseModel], ABC):
+class CoreChatCompletionClient(ComponentBase[ConfigT], ABC):
     """One provider's chat endpoint. Subclasses say how that provider wants
-    its messages, tools and thinking, and make the call."""
+    its messages and tools, and make the call. How the model thinks is
+    ``config.thinking``: the provider's own fields, sent as they are.
+
+    A subclass names its config: ``CoreChatCompletionClient[MyConfig]``. That
+    is what lets ``_to_config`` and ``_from_config`` use ``MyConfig``."""
 
     API_KEY_ENV: t.ClassVar[str | None] = None  # env var with the key; configs store this name
     RETRY: t.ClassVar[RetryPolicy] = RetryPolicy(attempts=3)  # when none is given
@@ -70,7 +73,7 @@ class CoreChatCompletionClient(ComponentBase[BaseModel], ABC):
 
         async def call() -> ChatCompletionResult:
             try:
-                return await self.complete(api_messages, api_tools, output_format, self.config.effort)
+                return await self.complete(api_messages, api_tools, output_format)
             except Exception as error:
                 raise self.map_error(error) from error
 
@@ -94,9 +97,7 @@ class CoreChatCompletionClient(ComponentBase[BaseModel], ABC):
         for attempt in range(policy.attempts):
             started = False
             try:
-                async for chunk in self.complete_stream(
-                    api_messages, api_tools, output_format, self.config.effort
-                ):
+                async for chunk in self.complete_stream(api_messages, api_tools, output_format):
                     started = True
                     yield chunk
                 return
@@ -148,9 +149,9 @@ class CoreChatCompletionClient(ComponentBase[BaseModel], ABC):
 
     # -------- EACH PROVIDER ----------------------------------------------------------
     @abstractmethod
-    def format_messages(self, ctx: RunContext, prompts: PromptCtx) -> list[Message]:
-        """The conversation to send: the prompt layers and ctx's messages, in
-        this provider's order."""
+    def format_messages(self, ctx: RunContext, prompts: str) -> list[Message]:
+        """The conversation to send: the system prompt (what ``PromptBuilder``
+        built) and ctx's messages, in this provider's order."""
 
     @abstractmethod
     def build_api_messages(self, messages: list[Message]) -> list[dict[str, t.Any]]:
@@ -159,10 +160,6 @@ class CoreChatCompletionClient(ComponentBase[BaseModel], ABC):
     @abstractmethod
     def build_tool_schema(self, tools: list[CoreToolDefinition]) -> list[dict[str, t.Any]]:
         """``tools`` in the provider's format."""
-
-    @abstractmethod
-    def build_thinking(self, effort: Effort | None) -> dict[str, t.Any]:
-        """The request fields that ask this provider for ``effort``."""
 
     @abstractmethod
     def map_error(self, error: Exception) -> ClientError:
@@ -179,7 +176,6 @@ class CoreChatCompletionClient(ComponentBase[BaseModel], ABC):
         messages: list[dict[str, t.Any]],
         tools: list[dict[str, t.Any]],
         output_format: type[BaseModel] | None,
-        effort: Effort | None,
     ) -> ChatCompletionResult:
         """Make the call and return the whole answer."""
 
@@ -189,6 +185,5 @@ class CoreChatCompletionClient(ComponentBase[BaseModel], ABC):
         messages: list[dict[str, t.Any]],
         tools: list[dict[str, t.Any]],
         output_format: type[BaseModel] | None,
-        effort: Effort | None,
     ) -> t.AsyncGenerator[ChatCompletionChunk, None]:
         """Make the call and yield the answer as it arrives."""

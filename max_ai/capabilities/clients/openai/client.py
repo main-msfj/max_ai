@@ -1,4 +1,4 @@
-"""OpenAI Chat Completions client implementation."""
+"""OpenAI through its Chat Completions endpoint."""
 
 from __future__ import annotations
 
@@ -18,17 +18,14 @@ from openai import (
     DefaultAsyncHttpxClient,
     RateLimitError,
 )
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel
 
-from ....base.clients_old import CoreChatCompletionClient
-from ....base.component import Component
+from ....base.clients import CoreChatCompletionClient
 from ....core.ids import short_id
 from ....core.messages import (
     AssistantMessage,
-    AudioPart,
-    CoreMessage,
-    FilePart,
     ImagePart,
+    Message,
     SystemMessage,
     TextPart,
     ToolCall,
@@ -36,545 +33,357 @@ from ....core.messages import (
     UserMessage,
 )
 from ....core.model.llm import ModelConfig, output_token_limit
+from ....core.retry import RetryPolicy
 from ....errors.client import ClientError
-from ....loggers import ScopedLogger
 from ....types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
 from ....types.run_context import RunContext
-from ....types.stacks import PromptCtx
-from ..ollama._schema import clean_json_schema
+from ....types.tools import CoreToolDefinition
 from ._model import OpenAIChatCompletionClientConfig
 
-if t.TYPE_CHECKING:
-    from ....base.tools import CoreTool
-
 logger = logging.getLogger(__name__)
-log = ScopedLogger(logger, scope=["OpenAIChatCompletionClient"])
 
 
-class OpenAIChatCompletionClient(
-    Component[OpenAIChatCompletionClientConfig],
-    CoreChatCompletionClient,
-):
-    """OpenAI implementation of ``CoreChatCompletionClient``.
+class OpenAIChatCompletionClient(CoreChatCompletionClient[OpenAIChatCompletionClientConfig]):
+    """OpenAI, or any service that speaks its Chat Completions format
+    (give its ``base_url``).
 
-    Uses the official async OpenAI Python SDK and the Chat Completions
-    endpoint. The OpenAI docs describe Chat Completions as accepting a
-    conversation ``messages`` list plus optional ``tools`` for function
-    calling; this adapter maps MaxAI's provider-neutral messages and
-    tools onto that shape.
-    """
+    Thinking: ``ModelConfig(thinking={"reasoning_effort": "low"})``; the
+    values are OpenAI's (none, minimal, low, medium, high, xhigh) and depend
+    on the model. Some models refuse tools together with thinking on this
+    endpoint: for them send ``{"reasoning_effort": "none"}``."""
 
     component_schema = OpenAIChatCompletionClientConfig
     component_type = "client"
-    component_provider_override = "maxai.llm.OpenAIChatCompletionClient"
+    component_provider_override = "max_ai.capabilities.clients.openai.OpenAIChatCompletionClient"
 
-    DEFAULT_BASE_URL = "https://api.openai.com/v1"
-    PROVIDER_NAME = "OpenAI"
+    PROVIDER_NAME: t.ClassVar[str] = "OpenAI"
     API_KEY_ENV = "OPENAI_API_KEY"
-    SYSTEM_LAYER_SEPARATOR = "\n\n"
-    SYSTEM_SOURCE = "system"
 
     def __init__(
         self,
         model: str,
-        api_key: str | SecretStr | None = None,
+        api_key: str | None = None,
         base_url: str | None = None,
         organization: str | None = None,
         project: str | None = None,
         config: ModelConfig | None = None,
-        max_tokens: int | None = None,
+        *,
+        options: dict[str, t.Any] | None = None,  # temperature, top_p...: sent as they are
+        retry: RetryPolicy | None = None,
         api_key_env: str | None = None,
-        **kwargs: t.Any,
     ) -> None:
-        super().__init__(
-            model=model, api_key=api_key, config=config, api_key_env=api_key_env, **kwargs,
-        )
+        super().__init__(model, api_key, config, retry=retry, api_key_env=api_key_env)
         if self.api_key is None:
             raise ValueError(
-                f"{self.PROVIDER_NAME} needs an API key: pass api_key or set "
-                f"${self.api_key_env}."
+                f"{self.PROVIDER_NAME} needs an API key: pass api_key or set ${self.api_key_env}."
             )
         self.base_url = base_url
         self.organization = organization
         self.project = project
-        self.generation_options: dict[str, t.Any] = dict(kwargs)
-        output_limit = output_token_limit(max_tokens or self.config.max_output_tokens)
-        if output_limit is not None:
-            self.generation_options["max_tokens"] = output_limit
-
-        client_kwargs: dict[str, t.Any] = {}
-        if self.api_key is not None:
-            client_kwargs["api_key"] = self.api_key.get_secret_value()
-        if base_url is not None:
-            client_kwargs["base_url"] = base_url
-        if organization is not None:
-            client_kwargs["organization"] = organization
-        if project is not None:
-            client_kwargs["project"] = project
-        # The reasoning loop owns retries; the SDK's own would multiply them.
-        client_kwargs["max_retries"] = 0
-        self.client = AsyncOpenAI(**client_kwargs)
+        self.options = dict(options or {})
+        # The SDK never retries: the base class does, with its policy.
+        self.client = AsyncOpenAI(
+            api_key=self.api_key, base_url=base_url, organization=organization,
+            project=project, max_retries=0,
+        )
 
     async def aclose(self) -> None:
         await self.client.close()
-        # Same options on a fresh pool, which connects only when used.
         self.client = self.client.copy(http_client=DefaultAsyncHttpxClient())
 
     def _to_config(self) -> OpenAIChatCompletionClientConfig:
         return OpenAIChatCompletionClientConfig(
-            model=self.model,
-            api_key_env=self.api_key_env,
-            base_url=self.base_url,
-            organization=self.organization,
-            project=self.project,
-            options=self.generation_options,
-            config=self.config.model_copy(),
+            model=self.model, api_key_env=self.api_key_env, base_url=self.base_url,
+            organization=self.organization, project=self.project, options=self.options,
+            config=self.config.model_copy(), retry=self.retry,
         )
 
     @classmethod
-    def _from_config(
-        cls,
-        config: OpenAIChatCompletionClientConfig,
-    ) -> "OpenAIChatCompletionClient":
+    def _from_config(cls, config: OpenAIChatCompletionClientConfig) -> t.Self:
         return cls(
-            model=config.model,
-            api_key_env=config.api_key_env,
-            base_url=config.base_url,
-            organization=config.organization,
-            project=config.project,
-            config=config.config,
-            **config.options,
+            model=config.model, base_url=config.base_url, organization=config.organization,
+            project=config.project, config=config.config, options=config.options,
+            retry=config.retry, api_key_env=config.api_key_env,
         )
 
-    def _extract_thinking(self, message_or_delta: t.Any) -> str | None:
-        """Reasoning text on a message/delta. Chat Completions has none;
-        OpenAI-compatible gateways that expose it override this."""
-        return None
+    # -------- MESSAGES ---------------------------------------------------------------
+    def format_messages(self, ctx: RunContext, prompts: str) -> list[Message]:
+        """The system prompt first, then the conversation."""
+        system = [SystemMessage(source="system", content=prompts)] if prompts.strip() else []
+        return [*system, *ctx.messages]
 
-    def build_tool_schema(self, tools: list["CoreTool"]) -> list[dict[str, t.Any]]:
-        if not tools:
-            return []
-        return [self._tool_to_openai_schema(tool) for tool in tools]
+    def build_api_messages(self, messages: list[Message]) -> list[dict[str, t.Any]]:
+        return [self.message(message) for message in messages]
 
-    def _tool_to_openai_schema(self, tool: "CoreTool") -> dict[str, t.Any]:
-        return {
-            "type": "function",
-            "function": {
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": clean_json_schema(tool.parameters),
-            },
-        }
+    def message(self, message: Message) -> dict[str, t.Any]:
+        """One message in OpenAI's format."""
+        if isinstance(message, SystemMessage):
+            return {"role": "system", "content": message.text()}
+        if isinstance(message, UserMessage):
+            return {"role": "user", "content": self.user_content(message)}
+        if isinstance(message, ToolMessage):
+            return {"role": "tool", "tool_call_id": message.tool_call_id, "content": message.text()}
+        if isinstance(message, AssistantMessage):
+            said: dict[str, t.Any] = {"role": "assistant", "content": message.text()}
+            if message.tool_calls:
+                said["tool_calls"] = [
+                    {
+                        "id": call.id,
+                        "type": "function",
+                        "function": {"name": call.tool_name, "arguments": json.dumps(call.parameters)},
+                    }
+                    for call in message.tool_calls
+                ]
+            return said
+        raise ClientError.unsupported_feature(f"message type {type(message).__name__}", self.model)
+
+    def user_content(self, message: UserMessage) -> str | list[dict[str, t.Any]]:
+        """Plain text as it is; text and images as a list of parts."""
+        if isinstance(message.content, str):
+            return message.content
+        parts: list[dict[str, t.Any]] = []
+        for part in message.content:
+            if isinstance(part, TextPart):
+                parts.append({"type": "text", "text": part.text})
+            elif isinstance(part, ImagePart) and self.config.supports_vision:
+                parts.append({"type": "image_url", "image_url": {"url": self.image_url(part)}})
+            else:
+                kind = "vision" if isinstance(part, ImagePart) else type(part).__name__
+                raise ClientError.unsupported_feature(kind, self.model)
+        return parts
+
+    @staticmethod
+    def image_url(part: ImagePart) -> str:
+        """The image's address, or the image itself as a data URL."""
+        if part.url is not None:
+            return part.url
+        assert part.data is not None
+        return f"data:{part.mime_type};base64,{base64.b64encode(part.data).decode()}"
+
+    # -------- TOOLS, USAGE, ERRORS -----------------------------------------------------
+    def build_tool_schema(self, tools: list[CoreToolDefinition]) -> list[dict[str, t.Any]]:
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters,
+                },
+            }
+            for tool in tools
+        ]
 
     def normalize_usage_stats(self, usage: t.Any) -> Usage:
         if usage is None:
             return Usage()
-        prompt_tokens = int(self._get(usage, "prompt_tokens", 0) or 0)
-        completion_tokens = int(self._get(usage, "completion_tokens", 0) or 0)
-        cached = 0
-        prompt_details = self._get(usage, "prompt_tokens_details", None)
-        if prompt_details is not None:
-            cached = int(self._get(prompt_details, "cached_tokens", 0) or 0)
+        details = self.get(usage, "prompt_tokens_details")
         return Usage(
-            tokens_input=prompt_tokens,
-            tokens_output=completion_tokens,
-            tokens_cached=cached,
+            tokens_input=int(self.get(usage, "prompt_tokens") or 0),
+            tokens_output=int(self.get(usage, "completion_tokens") or 0),
+            tokens_cached=int(self.get(details, "cached_tokens") or 0),
         )
 
-    def format_messages(self, ctx: RunContext, prompts: PromptCtx) -> list[CoreMessage]:
-        messages: list[CoreMessage] = []
-        system_content = self._build_system_content(prompts)
-        if system_content:
-            messages.append(SystemMessage(source=self.SYSTEM_SOURCE, content=system_content))
-        messages.extend(ctx.message_history.iter_messages())
-        messages.extend(ctx.messages)
-        return messages
+    def map_error(self, error: Exception) -> ClientError:
+        if isinstance(error, ClientError):
+            return error
+        if isinstance(error, AuthenticationError):
+            return ClientError.authentication_failed(str(error))
+        if isinstance(error, RateLimitError):
+            headers = getattr(getattr(error, "response", None), "headers", None)
+            return ClientError.rate_limit_exceeded(self.retry_after(headers))
+        if isinstance(error, APITimeoutError):
+            return ClientError.request_timeout(0)
+        if isinstance(error, BadRequestError):
+            return ClientError.invalid_request(str(error))
+        if isinstance(error, APIError):
+            return ClientError.api_error(
+                provider=self.PROVIDER_NAME, status=getattr(error, "status_code", None),
+                detail=str(error),
+            )
+        return ClientError.unexpected(provider=self.PROVIDER_NAME, detail=str(error))
 
-    def _build_system_content(self, prompts: PromptCtx) -> str:
-        chunks: list[str] = []
-        for rendered in prompts.rendered_layers.values():
-            if rendered and rendered.strip():
-                chunks.append(rendered.strip())
-        return self.SYSTEM_LAYER_SEPARATOR.join(chunks)
-
-    def build_api_messages(self, messages: list[CoreMessage]) -> list[dict[str, t.Any]]:
-        return [self._message_to_dict(message) for message in messages]
-
-    def _message_to_dict(self, msg: CoreMessage) -> dict[str, t.Any]:
-        if isinstance(msg, SystemMessage):
-            return {"role": "system", "content": msg.text()}
-        if isinstance(msg, UserMessage):
-            return self._user_to_dict(msg)
-        if isinstance(msg, AssistantMessage):
-            return self._assistant_to_dict(msg)
-        if isinstance(msg, ToolMessage):
-            return self._tool_to_dict(msg)
-        raise ClientError.unsupported_feature(
-            feature=f"message type {type(msg).__name__}",
-            model=self.model,
-        )
-
-    def _user_to_dict(self, msg: UserMessage) -> dict[str, t.Any]:
-        if isinstance(msg.content, str):
-            return {"role": "user", "content": msg.content}
-
-        content: list[dict[str, t.Any]] = []
-        for part in msg.content:
-            if isinstance(part, TextPart):
-                content.append({"type": "text", "text": part.text})
-            elif isinstance(part, ImagePart):
-                if not self.config.supports_vision:
-                    raise ClientError.unsupported_feature("vision", self.model)
-                content.append({
-                    "type": "image_url",
-                    "image_url": {"url": self._image_url(part)},
-                })
-            elif isinstance(part, AudioPart):
-                raise ClientError.unsupported_feature("audio input", self.model)
-            elif isinstance(part, FilePart):
-                raise ClientError.unsupported_feature("file input", self.model)
-        return {"role": "user", "content": content}
-
-    def _assistant_to_dict(self, msg: AssistantMessage) -> dict[str, t.Any]:
-        out: dict[str, t.Any] = {"role": "assistant", "content": msg.text()}
-        if msg.tool_calls:
-            out["tool_calls"] = [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {
-                        "name": tc.tool_name,
-                        "arguments": json.dumps(tc.parameters),
-                    },
-                }
-                for tc in msg.tool_calls
-            ]
-        return out
-
-    @staticmethod
-    def _tool_to_dict(msg: ToolMessage) -> dict[str, t.Any]:
-        return {
-            "role": "tool",
-            "tool_call_id": msg.tool_call_id,
-            "content": msg.text(),
-        }
-
-    @staticmethod
-    def _image_url(part: ImagePart) -> str:
-        if part.url is not None:
-            return part.url
-        assert part.data is not None
-        encoded = base64.b64encode(part.data).decode("utf-8")
-        return f"data:{part.mime_type};base64,{encoded}"
-
+    # -------- THE CALL ---------------------------------------------------------------
     async def complete(
         self,
         messages: list[dict[str, t.Any]],
-        tools: list[dict[str, t.Any]] | None,
-        output_format: t.Type[BaseModel] | None,
-        **kwargs: t.Any,
+        tools: list[dict[str, t.Any]],
+        output_format: type[BaseModel] | None,
     ) -> ChatCompletionResult:
-        try:
-            start = time.monotonic()
-            request = self._build_request(
-                messages=messages,
-                tools=tools,
-                output_format=output_format,
-                stream=False,
-                **kwargs,
-            )
-            response = await self.client.chat.completions.create(**request)
-            duration_ms = int((time.monotonic() - start) * 1000)
-            return self._parse_response(response, output_format, duration_ms)
-        except Exception as exc:  # noqa: BLE001
-            raise self._map_openai_error(exc) from exc
+        start = time.monotonic()
+        request = self.request(messages, tools, output_format, stream=False)
+        response = await self.call(request)
 
-    async def stream(
-        self,
-        messages: list[dict[str, t.Any]],
-        tools: list[dict[str, t.Any]] | None,
-        output_format: t.Type[BaseModel] | None,
-        **kwargs: t.Any,
-    ) -> t.AsyncGenerator[ChatCompletionChunk, None]:
-        try:
-            start = time.monotonic()
-            request = self._build_request(
-                messages=messages,
-                tools=tools,
-                output_format=output_format,
-                stream=True,
-                **kwargs,
-            )
-            raw_stream = await self.client.chat.completions.create(**request)
-            async for chunk in self._iter_chunks(raw_stream, output_format, start):
-                yield chunk
-        except Exception as exc:  # noqa: BLE001
-            raise self._map_openai_error(exc) from exc
+        # 1. The first choice is the answer.
+        choices: list[t.Any] = self.get(response, "choices") or []
+        if not choices:
+            raise ClientError.invalid_response("Response contained no choices.")
+        message = self.get(choices[0], "message")
+        content = self.get(message, "content") or ""
+        calls = self.tool_calls(self.get(message, "tool_calls") or [])
 
-    def _build_request(
-        self,
-        *,
-        messages: list[dict[str, t.Any]],
-        tools: list[dict[str, t.Any]] | None,
-        output_format: t.Type[BaseModel] | None,
-        stream: bool,
-        **kwargs: t.Any,
-    ) -> dict[str, t.Any]:
-        request: dict[str, t.Any] = {
-            "model": self.model,
-            "messages": messages,
-            "stream": stream,
-        }
-        if tools:
-            request["tools"] = tools
-            request["tool_choice"] = kwargs.pop("tool_choice", "auto")
-        options = {**self.generation_options, **kwargs}
-        max_tokens = options.pop("max_tokens", None)
-        if max_tokens is not None:
-            request["max_completion_tokens"] = max_tokens
-        if output_format is not None:
-            request["response_format"] = self._response_format(output_format)
-        if stream:
-            stream_options = options.pop("stream_options", {}) or {}
-            stream_options.setdefault("include_usage", True)
-            request["stream_options"] = stream_options
-        request.update(options)
-        return request
-
-    def _response_format(self, output_format: t.Type[BaseModel]) -> dict[str, t.Any]:
-        return {
-            "type": "json_schema",
-            "json_schema": {
-                "name": self._schema_name(output_format),
-                "schema": self._strict_json_schema(output_format.model_json_schema()),
-                "strict": True,
-            },
-        }
-
-    def _strict_json_schema(self, schema: dict[str, t.Any]) -> dict[str, t.Any]:
-        def visit(node: t.Any) -> t.Any:
-            if isinstance(node, list):
-                return [visit(item) for item in node]
-            if not isinstance(node, dict):
-                return node
-
-            cleaned = {key: visit(value) for key, value in node.items() if key != "default"}
-            properties = cleaned.get("properties")
-            if cleaned.get("type") == "object" or isinstance(properties, dict):
-                cleaned["additionalProperties"] = False
-                if isinstance(properties, dict):
-                    cleaned["required"] = list(properties.keys())
-            return cleaned
-
-        return t.cast(dict[str, t.Any], visit(schema))
-
-    @staticmethod
-    def _schema_name(output_format: t.Type[BaseModel]) -> str:
-        name = re.sub(r"[^a-zA-Z0-9_-]", "_", output_format.__name__)
-        return name[:64] or "structured_output"
-
-    def _parse_response(
-        self,
-        response: t.Any,
-        output_format: t.Type[BaseModel] | None,
-        duration_ms: int,
-    ) -> ChatCompletionResult:
-        choice = self._first_choice(response)
-        message = self._get(choice, "message")
-        content = self._get(message, "content", "") or ""
-        tool_calls = self._parse_tool_calls(self._get(message, "tool_calls", None) or [])
-        structured_output = self._parse_structured_output(content, output_format)
-        usage = self.normalize_usage_stats(self._get(response, "usage", None))
-        usage.duration_ms = duration_ms
-        usage.llm_calls = 1
-        usage.tool_calls = len(tool_calls)
+        # 2. How much it cost.
+        usage = self.normalize_usage_stats(self.get(response, "usage"))
+        usage.duration_ms = int((time.monotonic() - start) * 1000)
+        usage.llm_calls, usage.tool_calls = 1, len(calls)
         return ChatCompletionResult(
             message=AssistantMessage(
-                source="llm",
-                content=content,
-                thinking=self._extract_thinking(message),
-                tool_calls=tool_calls,
-                structured_output=structured_output,
+                source="llm", content=content, thinking=self.thinking(message), tool_calls=calls,
+                structured_output=self.structured(content, output_format),
             ),
             usage=usage,
-            model=self._get(response, "model", self.model) or self.model,
-            finish_reason=self._get(choice, "finish_reason", "stop") or "stop",
+            model=self.get(response, "model") or self.model,
+            finish_reason=self.get(choices[0], "finish_reason") or "stop",
         )
 
-    async def _iter_chunks(
+    async def complete_stream(
         self,
-        raw_stream: t.AsyncIterator[t.Any],
-        output_format: t.Type[BaseModel] | None,
-        start_time: float,
+        messages: list[dict[str, t.Any]],
+        tools: list[dict[str, t.Any]],
+        output_format: type[BaseModel] | None,
     ) -> t.AsyncGenerator[ChatCompletionChunk, None]:
-        content_parts: list[str] = []
-        tool_parts: dict[int, dict[str, t.Any]] = {}
-        final_usage = Usage()
-        finish_reason: str | None = None
+        start = time.monotonic()
+        request = self.request(messages, tools, output_format, stream=True)
+        text: list[str] = []
+        calls: dict[int, dict[str, t.Any]] = {}  # a tool call arrives in pieces, by its index
+        usage, finish = Usage(), None
 
-        async for chunk in raw_stream:
-            usage = self._get(chunk, "usage", None)
-            if usage is not None:
-                final_usage = self.normalize_usage_stats(usage)
-
-            choices = self._get(chunk, "choices", []) or []
+        async for chunk in await self.call(request):
+            # 1. The usage comes alone, in the last piece.
+            if (counted := self.get(chunk, "usage")) is not None:
+                usage = self.normalize_usage_stats(counted)
+            choices: list[t.Any] = self.get(chunk, "choices") or []
             if not choices:
                 continue
-
-            choice = choices[0]
-            finish_reason = self._get(choice, "finish_reason", None) or finish_reason
-            delta = self._get(choice, "delta", None)
+            finish = self.get(choices[0], "finish_reason") or finish
+            delta = self.get(choices[0], "delta")
             if delta is None:
                 continue
 
-            delta_thinking = self._extract_thinking(delta)
-            if delta_thinking:
-                yield ChatCompletionChunk(content="", thinking=delta_thinking, is_complete=False)
+            # 2. Thinking and text go out as they arrive.
+            if thought := self.thinking(delta):
+                yield ChatCompletionChunk(content="", thinking=thought, is_complete=False)
+            if piece := self.get(delta, "content"):
+                text.append(piece)
+                yield ChatCompletionChunk(content=piece, is_complete=False)
 
-            delta_content = self._get(delta, "content", None)
-            if delta_content:
-                content_parts.append(delta_content)
-                yield ChatCompletionChunk(content=delta_content, is_complete=False)
+            # 3. Tool calls are put together until the end.
+            raw_calls: list[t.Any] = self.get(delta, "tool_calls") or []
+            for raw in raw_calls:
+                index = int(self.get(raw, "index") or 0)
+                call = calls.setdefault(index, {"id": None, "name": None, "arguments": ""})
+                call["id"] = self.get(raw, "id") or call["id"]
+                function = self.get(raw, "function")
+                call["name"] = self.get(function, "name") or call["name"]
+                call["arguments"] += self.get(function, "arguments") or ""
 
-            for raw_tool in self._get(delta, "tool_calls", None) or []:
-                index = int(self._get(raw_tool, "index", 0) or 0)
-                state = tool_parts.setdefault(
-                    index,
-                    {"id": None, "name": None, "arguments": []},
-                )
-                tool_id = self._get(raw_tool, "id", None)
-                if tool_id:
-                    state["id"] = tool_id
-                fn = self._get(raw_tool, "function", None)
-                if fn is not None:
-                    name = self._get(fn, "name", None)
-                    if name:
-                        state["name"] = name
-                    arguments = self._get(fn, "arguments", None)
-                    if arguments:
-                        state["arguments"].append(arguments)
-
-        for index in sorted(tool_parts):
-            state = tool_parts[index]
-            name = state.get("name")
-            if not name:
-                continue
-            call_id = state.get("id") or short_id()
-            arguments = "".join(state.get("arguments") or [])
+        # 4. Each whole tool call, then the closing piece with the usage.
+        whole = [call for _, call in sorted(calls.items()) if call["name"]]
+        for call in whole:
             yield ChatCompletionChunk(
-                content="",
-                is_complete=False,
+                content="", is_complete=False,
                 tool_call_chunk={
-                    "id": call_id,
-                    "function": {
-                        "name": name,
-                        "arguments": arguments,
-                    },
+                    "id": call["id"] or short_id(),
+                    "function": {"name": call["name"], "arguments": call["arguments"]},
                 },
             )
-
-        structured_output = self._parse_structured_output(
-            "".join(content_parts),
-            output_format,
-        )
-        duration_ms = int((time.monotonic() - start_time) * 1000)
-        final_usage.duration_ms = duration_ms
-        final_usage.llm_calls = 1
-        final_usage.tool_calls = len(tool_parts)
+        usage.duration_ms = int((time.monotonic() - start) * 1000)
+        usage.llm_calls, usage.tool_calls = 1, len(whole)
         yield ChatCompletionChunk(
-            content="",
-            is_complete=True,
-            usage=final_usage,
-            structured_output=structured_output,
-            finish_reason=finish_reason,
+            content="", is_complete=True, usage=usage, finish_reason=finish,
+            structured_output=self.structured("".join(text), output_format),
         )
 
-    def _parse_tool_calls(self, raw_tool_calls: t.Any) -> list[ToolCall]:
-        parsed: list[ToolCall] = []
-        for raw in raw_tool_calls or []:
-            tool_id = self._get(raw, "id", None)
-            fn = self._get(raw, "function", None)
-            if fn is None:
-                continue
-            name = self._get(fn, "name", None)
+    async def call(self, request: dict[str, t.Any]) -> t.Any:
+        """The SDK call. Any: its typed overloads cannot be chosen from a dictionary."""
+        create: t.Any = self.client.chat.completions.create
+        return await create(**request)
+
+    def request(
+        self,
+        messages: list[dict[str, t.Any]],
+        tools: list[dict[str, t.Any]],
+        output_format: type[BaseModel] | None,
+        *,
+        stream: bool,
+    ) -> dict[str, t.Any]:
+        """The body of the call. ``config.thinking`` and ``options`` go last, as
+        they are, so they can replace anything."""
+        request: dict[str, t.Any] = {"model": self.model, "messages": messages, "stream": stream}
+        if tools:
+            request["tools"], request["tool_choice"] = tools, "auto"
+        if limit := output_token_limit(self.config.max_output_tokens):
+            request["max_completion_tokens"] = limit
+        if output_format is not None:
+            request["response_format"] = self.response_format(output_format)
+        if stream:
+            request["stream_options"] = {"include_usage": True}
+        return {**request, **(self.config.thinking or {}), **self.options}
+
+    # -------- READING THE ANSWER -------------------------------------------------------
+    def thinking(self, message: t.Any) -> str | None:
+        """The thinking text of a message or a piece. OpenAI does not send it."""
+        return None
+
+    def tool_calls(self, raw_calls: list[t.Any]) -> list[ToolCall]:
+        """The tool calls of an answer. Arguments that are not JSON are kept
+        with a mark, so the model is told and can fix them."""
+        calls: list[ToolCall] = []
+        for raw in raw_calls:
+            function = self.get(raw, "function")
+            name = self.get(function, "name")
             if not name:
                 continue
-            arguments = self._get(fn, "arguments", "") or ""
+            arguments: str = self.get(function, "arguments") or ""
+            parameters: dict[str, t.Any]
             try:
-                params = json.loads(arguments) if isinstance(arguments, str) and arguments else {}
+                parameters = json.loads(arguments) if arguments else {}
             except json.JSONDecodeError:
-                params = {"raw_error_content": arguments, "parsing_error": True}
-            payload: dict[str, t.Any] = {
-                "tool_name": name,
-                "parameters": params,
-            }
-            if tool_id:
-                payload["id"] = tool_id
-            parsed.append(ToolCall(**payload))
-        return parsed
+                parameters = {"raw_error_content": arguments, "parsing_error": True}
+            given: dict[str, str] = {"id": identifier} if (identifier := self.get(raw, "id")) else {}
+            calls.append(ToolCall(tool_name=name, parameters=parameters, **given))
+        return calls
 
-    def _parse_structured_output(
-        self,
-        content: str,
-        output_format: t.Type[BaseModel] | None,
-    ) -> BaseModel | None:
+    @staticmethod
+    def structured(content: str, output_format: type[BaseModel] | None) -> BaseModel | None:
+        """``content`` as ``output_format``, or None when it does not fit."""
         if output_format is None or not content:
             return None
         try:
             return output_format.model_validate_json(content)
-        except Exception:
-            log.warning(
-                "Failed to parse structured output",
-                output_format_name=output_format.__name__,
-            )
+        except ValueError:
+            logger.warning("The answer does not fit %s", output_format.__name__)
             return None
-
-    @staticmethod
-    def _first_choice(response: t.Any) -> t.Any:
-        choices = OpenAIChatCompletionClient._get(response, "choices", None) or []
-        if not choices:
-            raise ClientError.invalid_response("Response contained no choices.")
-        return choices[0]
-
-    @staticmethod
-    def _get(obj: t.Any, key: str, default: t.Any = None) -> t.Any:
-        if isinstance(obj, dict):
-            return obj.get(key, default)
-        return getattr(obj, key, default)
-
-    @staticmethod
-    def _retry_after(response: t.Any) -> float | None:
-        """Seconds from ``retry-after-ms`` / ``retry-after`` (seconds only)."""
-        headers = getattr(response, "headers", None)
-        if headers is None:
-            return None
-        for name, scale in (("retry-after-ms", 1000.0), ("retry-after", 1.0)):
-            try:
-                seconds = float(headers.get(name)) / scale
-            except (TypeError, ValueError):
-                continue
-            if seconds >= 0:
-                return seconds
-        return None
 
     @classmethod
-    def _map_openai_error(cls, exc: Exception) -> ClientError:
-        if isinstance(exc, ClientError):
-            return exc
-        if isinstance(exc, AuthenticationError):
-            return ClientError.authentication_failed(str(exc))
-        if isinstance(exc, RateLimitError):
-            return ClientError.rate_limit_exceeded(
-                cls._retry_after(getattr(exc, "response", None))
-            )
-        if isinstance(exc, APITimeoutError):
-            return ClientError.request_timeout(0)
-        if isinstance(exc, BadRequestError):
-            return ClientError.invalid_request(str(exc))
-        if isinstance(exc, APIError):
-            return ClientError.api_error(
-                provider=cls.PROVIDER_NAME,
-                status=getattr(exc, "status_code", None),
-                detail=str(exc),
-            )
-        return ClientError.unexpected(provider=cls.PROVIDER_NAME, detail=str(exc))
+    def response_format(cls, output_format: type[BaseModel]) -> dict[str, t.Any]:
+        """Ask for JSON that follows ``output_format`` exactly."""
+        name = re.sub(r"[^a-zA-Z0-9_-]", "_", output_format.__name__)[:64] or "structured_output"
+        schema = cls.strict(output_format.model_json_schema())
+        return {"type": "json_schema", "json_schema": {"name": name, "schema": schema, "strict": True}}
+
+    @classmethod
+    def strict(cls, node: t.Any) -> t.Any:
+        """A JSON schema as strict mode wants it: no defaults, every property
+        required, no extra properties."""
+        if isinstance(node, list):
+            return [cls.strict(item) for item in t.cast("list[t.Any]", node)]
+        if not isinstance(node, dict):
+            return node
+        schema = t.cast("dict[str, t.Any]", node)
+        cleaned: dict[str, t.Any] = {
+            key: cls.strict(value) for key, value in schema.items() if key != "default"
+        }
+        properties: t.Any = cleaned.get("properties")
+        if cleaned.get("type") == "object" or isinstance(properties, dict):
+            cleaned["additionalProperties"] = False
+            if isinstance(properties, dict):
+                cleaned["required"] = list(t.cast("dict[str, t.Any]", properties))
+        return cleaned
+
+    @staticmethod
+    def get(source: t.Any, key: str) -> t.Any:
+        """A field of an SDK object or of a plain dictionary."""
+        if isinstance(source, dict):
+            return t.cast("dict[str, t.Any]", source).get(key)
+        return getattr(source, key, None)

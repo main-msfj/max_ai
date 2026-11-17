@@ -4,7 +4,7 @@ import typing as t
 
 from pydantic import BaseModel, Field
 
-from ....core.model.llm import ModelConfig
+from .....core.model.llm import ModelConfig
 
 
 class OpenRouterChatCompletionClientConfig(BaseModel):

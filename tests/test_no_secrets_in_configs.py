@@ -8,7 +8,6 @@ import json
 import pytest
 
 from max_ai.capabilities.clients import (
-    OllamaChatCompletionClient,
     OpenAIChatCompletionClient,
     OpenRouterChatCompletionClient,
 )
@@ -23,7 +22,6 @@ from max_ai.capabilities.memory.mongodb import MongoDBMemoryRegistry
 SECRETS = {
     "OPENAI_API_KEY": "sk-openai-SECRET",
     "OPENROUTER_API_KEY": "sk-or-SECRET",
-    "OLLAMA_API_KEY": "ollama-SECRET",
     "MONGODB_URI": "mongodb://user:pw-SECRET@host/",
     "MCP_TOKEN": "mcp-token-SECRET",
     "MCP_KEY": "mcp-key-SECRET",
@@ -44,7 +42,6 @@ def assert_clean(payload: str) -> None:
     lambda: OpenAIChatCompletionClient(model="m"),
     lambda: OpenAIChatCompletionClient(model="m", api_key="sk-literal-SECRET"),
     lambda: OpenRouterChatCompletionClient(model="m:free"),
-    lambda: OllamaChatCompletionClient(model="m"),
     lambda: MongoDBMemoryRegistry(),
     lambda: MongoDBKnowledgeRegistry(name="docs", description="d"),
 ])

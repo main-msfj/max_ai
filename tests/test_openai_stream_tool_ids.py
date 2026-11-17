@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
+from max_ai.capabilities.clients.to_delete.openai import OpenAIChatCompletionClient
 
 
 def response(tool_call: dict) -> list[dict]:

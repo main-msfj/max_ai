@@ -19,8 +19,8 @@ import pytest
 from dotenv import load_dotenv
 
 from max_ai.agents import Agent
-from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
-from max_ai.capabilities.clients.openrouter import OpenRouterChatCompletionClient
+from max_ai.capabilities.clients.to_delete.openai import OpenAIChatCompletionClient
+from max_ai.capabilities.clients.to_delete.openrouter import OpenRouterChatCompletionClient
 from max_ai.capabilities.reasoning.guards import LoopGuard
 from max_ai.capabilities.reasoning.react import ReactLoop
 from max_ai.capabilities.tools.function_as_tool import FunctionAsTool

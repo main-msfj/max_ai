@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from max_ai.agents.agent import Agent
-from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
+from max_ai.capabilities.clients.to_delete.openai import OpenAIChatCompletionClient
 from max_ai.capabilities.executor.local import LocalExecutor
 from max_ai.capabilities.tools.to_delete.bash import BashTool
 from max_ai.capabilities.tools.to_delete.file_system import FileSystemTools

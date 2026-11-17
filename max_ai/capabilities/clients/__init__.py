@@ -1,10 +1,8 @@
 """Module providing capability implementations and supporting utilities."""
-from .ollama import OllamaChatCompletionClient
-from .openai import OpenAIChatCompletionClient
-from .openrouter import OpenRouterChatCompletionClient
+from .to_delete.openai import OpenAIChatCompletionClient
+from .to_delete.openrouter import OpenRouterChatCompletionClient
 
 __all__ = [
-    "OllamaChatCompletionClient",
     "OpenAIChatCompletionClient",
     "OpenRouterChatCompletionClient",
 ]

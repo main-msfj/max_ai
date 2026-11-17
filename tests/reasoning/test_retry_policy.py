@@ -3,7 +3,7 @@
 import httpx
 import pytest
 
-from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
+from max_ai.capabilities.clients.to_delete.openai import OpenAIChatCompletionClient
 from max_ai.core.retry import RetryPolicy, rate_limited, retry_after
 from max_ai.errors.client import ClientError
 

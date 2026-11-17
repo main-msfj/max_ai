@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from max_ai.agents import Agent
-from max_ai.capabilities.clients.openai.client import OpenAIChatCompletionClient
+from max_ai.capabilities.clients.to_delete.openai.client import OpenAIChatCompletionClient
 from tests.agents.test_agent_serialization import full_agent
 
 

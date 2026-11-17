@@ -4,8 +4,7 @@ connections, and the client stays usable afterwards."""
 from __future__ import annotations
 
 from max_ai.agents import Agent
-from max_ai.capabilities.clients.ollama.client import OllamaChatCompletionClient
-from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
+from max_ai.capabilities.clients.to_delete.openai import OpenAIChatCompletionClient
 from max_ai.capabilities.workspace.local import LocalWorkspace
 
 
@@ -33,9 +32,3 @@ async def test_an_agents_own_client_closes_with_it(tmp_path):
         pass
     assert pool.is_closed()
 
-
-async def test_ollama_releases_its_pool_and_stays_usable():
-    client = OllamaChatCompletionClient(model="qwen3:4b")
-    pool = client.client._client
-    await client.aclose()
-    assert pool.is_closed and not client.client._client.is_closed

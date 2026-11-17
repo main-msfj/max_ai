@@ -250,6 +250,6 @@ def test_middlewares_travel_with_the_agent(tmp_path, monkeypatch):
 
 
 def _openai(monkeypatch):
-    from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
+    from max_ai.capabilities.clients.to_delete.openai import OpenAIChatCompletionClient
     monkeypatch.setenv("OPENAI_API_KEY", "x")
     return OpenAIChatCompletionClient(model="gpt-4o-mini")

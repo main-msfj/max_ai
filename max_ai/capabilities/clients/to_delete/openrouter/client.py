@@ -8,9 +8,9 @@ import typing as t
 import httpx
 from pydantic import BaseModel, SecretStr
 
-from ....core.model.llm import ModelConfig
-from ....errors.client import ClientError
-from ....types.completions import ChatCompletionChunk, ChatCompletionResult
+from .....core.model.llm import ModelConfig
+from .....errors.client import ClientError
+from .....types.completions import ChatCompletionChunk, ChatCompletionResult
 from ..openai.client import OpenAIChatCompletionClient
 from ._model import OpenRouterChatCompletionClientConfig
 

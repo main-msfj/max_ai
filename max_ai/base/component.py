@@ -79,13 +79,10 @@ def _type_to_provider_str(cls: type) -> str:
 
 
 KNOWN_PROVIDERS: dict[str, str] = {
-    "ollama": "max_ai.capabilities.clients.ollama.client.OllamaChatCompletionClient",
-    "OllamaChatCompletionClient": "max_ai.capabilities.clients.ollama.client.OllamaChatCompletionClient",
-    "maxai.llm.OllamaChatCompletionClient": "max_ai.capabilities.clients.ollama.client.OllamaChatCompletionClient",
-    "OpenAIChatCompletionClient": "max_ai.capabilities.clients.openai.client.OpenAIChatCompletionClient",
-    "maxai.llm.OpenAIChatCompletionClient": "max_ai.capabilities.clients.openai.client.OpenAIChatCompletionClient",
-    "OpenRouterChatCompletionClient": "max_ai.capabilities.clients.openrouter.client.OpenRouterChatCompletionClient",
-    "maxai.llm.OpenRouterChatCompletionClient": "max_ai.capabilities.clients.openrouter.client.OpenRouterChatCompletionClient",
+    "OpenAIChatCompletionClient": "max_ai.capabilities.clients.to_delete.openai.client.OpenAIChatCompletionClient",
+    "maxai.llm.OpenAIChatCompletionClient": "max_ai.capabilities.clients.to_delete.openai.client.OpenAIChatCompletionClient",
+    "OpenRouterChatCompletionClient": "max_ai.capabilities.clients.to_delete.openrouter.client.OpenRouterChatCompletionClient",
+    "maxai.llm.OpenRouterChatCompletionClient": "max_ai.capabilities.clients.to_delete.openrouter.client.OpenRouterChatCompletionClient",
     "maxai.stacks.AgentPolicyLayer": "max_ai.capabilities.stacks.agent_policy_layer.AgentPolicyLayer",
     "maxai.stacks.TaskAnalysisLayer": "max_ai.capabilities.stacks.task_analysis_layer.TaskAnalysisLayer",
     "maxai.stacks.RenderingLayer": "max_ai.capabilities.stacks.rendering_layer.RenderingLayer",

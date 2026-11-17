@@ -26,9 +26,6 @@ class Echo(CoreChatCompletionClient):
     def build_tool_schema(self, tools):
         return [{"name": tool.name} for tool in tools]
 
-    def build_thinking(self, effort):
-        return {} if effort is None else {"think": effort}
-
     def normalize_usage_stats(self, usage):
         return Usage()
 
@@ -45,13 +42,13 @@ class Echo(CoreChatCompletionClient):
         if self.failures:
             raise self.failures.pop(0)
 
-    async def complete(self, messages, tools, output_format, effort):
+    async def complete(self, messages, tools, output_format):
         self.fail_if_told()
-        self.sent = {"messages": messages, "tools": tools, **self.build_thinking(effort)}
+        self.sent = {"messages": messages, "tools": tools, **(self.config.thinking or {})}
         said = AssistantMessage(source="echo", content=messages[-1]["content"])
         return ChatCompletionResult(message=said, usage=Usage(), model=self.model, finish_reason="stop")
 
-    async def complete_stream(self, messages, tools, output_format, effort):
+    async def complete_stream(self, messages, tools, output_format):
         self.fail_if_told()
         for word in messages[-1]["content"].split():
             yield ChatCompletionChunk(content=word, is_complete=False)
@@ -88,8 +85,8 @@ async def test_it_streams_the_answer_piece_by_piece():
     assert [chunk.content async for chunk in chunks] == ["uno", "dos", "tres"]
 
 
-async def test_the_effort_comes_from_the_model_config():
-    client = Echo("echo-1", config=ModelConfig(supports_thinking=True, effort="high"))
+async def test_thinking_comes_from_the_model_config_as_it_is():
+    client = Echo("echo-1", config=ModelConfig(thinking={"think": "high"}))
     await client.run([UserMessage(source="u", content="hola")])
     assert client.sent["think"] == "high"
     plain = Echo("echo-1")

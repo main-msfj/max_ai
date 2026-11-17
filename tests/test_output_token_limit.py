@@ -1,6 +1,6 @@
 """Output is capped at 32K and compaction always reserves it in the window."""
 
-from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
+from max_ai.capabilities.clients.to_delete.openai import OpenAIChatCompletionClient
 from max_ai.core.compaction.budget import (
     client_max_output_tokens,
     live_message_capacity_tokens,
