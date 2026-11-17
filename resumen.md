@@ -1,6 +1,6 @@
 # Lo que queda por hacer
 
-Rama `feat/workspace-new-approach`, último commit `f4b410d` (2026-11-17).
+Rama `feat/workspace-new-approach`, último commit `209deed` (2026-11-17).
 
 ## Dónde estamos
 
@@ -9,25 +9,27 @@ Rama `feat/workspace-new-approach`, último commit `f4b410d` (2026-11-17).
 - `max_ai/core/harness/rules.py` tiene la clase `Harness` con las reglas; los números viven en `max_ai/config.py` (`harness_*`, `summary_model`).
 - Loop (`base/loop.py`), compaction (`base/compaction.py`) y conteo de tokens (`ToolRegistry.tokens`, `PromptBuilder.tokens`, `CoreLoop.measure`) están hechos y probados con tests.
 
-## Hecho el 2026-11-17 (sin commit)
+## Hecho el 2026-11-17 (subido, último commit `209deed`)
 
-- `hooks.py`: `HarnessLoopHook` (índice de memoria tras compactar, guardar `ctx` tras cada tanda de tools, tareas de MCP como notas) y `HarnessToolHook` (memoria de solo lectura no se escribe; los middlewares ven cada tool).
-- `agent.py` ya corre: `run`, `run_stream_events`, `close`, candado por sesión, MCP conectado una vez, sandbox por usuario con skills, prompt armado y revisado por `Harness.prompt_rules`, `loop.measure()` antes del modelo, compaction con resumen por defecto.
-- `run` devuelve el `LoopState` (respuesta en `state.message`, motivo en `state.finish_reason`).
+- `hooks.py`: `HarnessLoopHook` (índice de memoria tras compactar, guardar `ctx` tras cada tanda de tools, tareas de MCP como notas) y `HarnessToolHook` (memoria de solo lectura, middlewares alrededor de las tools, permisos).
+- `agent.py` ya corre: `run` (devuelve `LoopState`), `run_stream_events`, `close` (espera a las corridas vivas), candado por sesión, MCP conectado una vez, sandbox por usuario con skills.
+- Prompt: capas nativas siempre (`AgentPolicyLayer` con name, description e instructions; `TaskAnalysisLayer`, `RenderingLayer`, `ToolsLayer`, `SessionLayer`), más `WorkspaceLayer`, `SkillsLayer`, `MemoryFilesLayer` (nueva) y `KnowledgeLayer` según las piezas; en `STANDARD_ORDER`.
+- Reglas nuevas: tope de 20 000 tokens para todas las tools (`harness_tools_max_tokens`), prompt revisado en cada corrida.
+- Permisos (`core/harness/permissions.py`): reglas `allow` / `ask` / `deny` del usuario en `.agent/setting.json`; lista fija del harness que siempre pregunta (`rm`, `sudo`, `git push --force`, `| sh`, `$(...)`, tocar `setting.json`); `sandbox.add_permission` guarda una regla.
 
 ## Siguiente, en orden
 
-1. **Prueba en vivo** del agente nuevo con OpenRouter (pedir permiso antes); solo se probó con un modelo falso.
-2. **Prompt**: hoy es `instructions` + capas del developer + textos del harness en `Agent._prompt`. Falta decidir si entran las capas estándar (`STANDARD_ORDER`).
-3. **`run_stream`** (solo texto) y un tipo de respuesta nuevo si `LoopState` no alcanza (`AgentResponse` es del viejo).
-4. Middlewares: solo se llaman alrededor de las tools; faltan inicio y fin de corrida y alrededor del modelo, así que el trazado queda incompleto.
-5. Cambiar `max_ai.agents.Agent` al nuevo y borrar lo viejo: `agent_old.py`, `compaction_old.py`, `clients_old.py`, `reasoning.py`, carpetas `to_delete/`, y los campos `workspace`, `executor`, `compaction`, `policy` de `AgentSpec`.
+1. **Prueba en vivo** del agente nuevo con OpenRouter: script en el scratchpad (`live_agent.py`), revisar su resultado.
+2. Conectar "aprobar siempre" de la aplicación con `sandbox.add_permission` (`Permissions.can_be_kept` dice si se puede ofrecer).
+3. Middlewares: solo se llaman alrededor de las tools; faltan inicio y fin de corrida y alrededor del modelo, así que el trazado queda incompleto.
+4. Bash puede escribir en `memory/` aunque sea de solo lectura; el hook solo frena `write_file` y `edit_file`.
+5. `run_stream` de solo texto.
+6. Cambiar `max_ai.agents.Agent` al nuevo y borrar lo viejo: `agent_old.py`, `compaction_old.py`, `clients_old.py`, `reasoning.py`, carpetas `to_delete/`, y los campos `workspace`, `executor`, `compaction`, `policy` de `AgentSpec`.
 
 ## Sin conectar todavía
 
 - `knowledge` y `gates` se aceptan y se guardan; nada los usa.
-- Bash puede escribir en `memory/` aunque sea de solo lectura; el hook solo frena `write_file` y `edit_file`.
-- `close()` no espera a las corridas activas.
+- Los permisos detectan por texto: un `rm` dentro de un script no se ve. Sin sandbox solo aplica la lista fija.
 
 ## Puntos a revisar
 
