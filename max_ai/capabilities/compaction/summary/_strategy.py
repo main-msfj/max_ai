@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pydantic import JsonValue
 
-from ....base.clients import CoreChatCompletionClient
+from ....base.clients_old import CoreChatCompletionClient
 from ....base.compaction import CoreCompaction
 from ....core.compaction import (
     CompactionOutput,

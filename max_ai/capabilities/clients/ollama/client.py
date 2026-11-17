@@ -17,7 +17,7 @@ import typing as t
 from ollama import AsyncClient, ChatResponse, ResponseError
 from pydantic import BaseModel, SecretStr
 
-from ....base.clients import CoreChatCompletionClient
+from ....base.clients_old import CoreChatCompletionClient
 from ....base.component import Component
 from ....core.messages import (
     AssistantMessage,

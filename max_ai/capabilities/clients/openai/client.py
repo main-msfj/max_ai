@@ -20,7 +20,7 @@ from openai import (
 )
 from pydantic import BaseModel, SecretStr
 
-from ....base.clients import CoreChatCompletionClient
+from ....base.clients_old import CoreChatCompletionClient
 from ....base.component import Component
 from ....core.ids import short_id
 from ....core.messages import (

@@ -1,5 +1,7 @@
 """What an LLM model supports, shared by every chat completion client."""
 
+import typing as t
+
 from pydantic import BaseModel, Field, field_validator
 
 from ...config import setting
@@ -14,6 +16,9 @@ MAX_OUTPUT_TOKENS = 32_000
 def output_token_limit(value: int | None) -> int | None:
     """``value`` capped at ``MAX_OUTPUT_TOKENS``; ``None``/0 stays unset."""
     return min(int(value), MAX_OUTPUT_TOKENS) if value else None
+
+
+Effort = t.Literal["off", "low", "medium", "high"]  # how much the model thinks
 
 
 class ModelConfig(BaseModel):
@@ -40,6 +45,9 @@ class ModelConfig(BaseModel):
     supports_audio: bool = Field(default=False)
     supports_function_calling: bool = Field(default=True)
     supports_thinking: bool = Field(default=False)
+    effort: Effort | None = Field(
+        default=None, description="How much the model thinks; None leaves the provider's default."
+    )
 
     tokenizer_base: str = Field(default_factory=lambda: setting.default_tokenizer)
 

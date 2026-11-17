@@ -64,7 +64,7 @@ from ..types.chat_history import ChatHistory
 from ..types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
 from ..types.run_context import RunContext
 from ..types.stacks import PromptCtx
-from .clients import CoreChatCompletionClient
+from .clients_old import CoreChatCompletionClient
 from .completion_gate import CompletionDecision
 from .component import ComponentBase
 from .middleware import MiddlewareContext, ModelRequest

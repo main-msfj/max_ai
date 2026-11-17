@@ -36,7 +36,7 @@ from ..types.stacks import PromptCtx
 from .component import ComponentBase
 
 if t.TYPE_CHECKING:
-    from .clients import CoreChatCompletionClient
+    from .clients_old import CoreChatCompletionClient
     from .memory import CoreMemoryRegistry
 
 logger = logging.getLogger(__name__)
@@ -454,7 +454,7 @@ class CoreCompaction(ComponentBase[CompactionConfig], ABC):
         t.Self
             The reconstructed compaction strategy.
         """
-        from .clients import CoreChatCompletionClient
+        from .clients_old import CoreChatCompletionClient
 
         client = (
             CoreChatCompletionClient.deserialize(config.client)

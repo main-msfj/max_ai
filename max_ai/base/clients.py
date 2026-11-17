@@ -1,328 +1,194 @@
-"""
-Core contract for chat completion clients.
-
-A client wraps a single LLM provider's chat-completion endpoint
-(Ollama, Anthropic, OpenAI, etc.) and exposes a normalized interface
-the agent can use without knowing the provider's quirks.
-
-What varies by provider — and lives in concrete subclasses:
-  - How rendered prompt layers are arranged into the message list
-    (some put everything in a system field, some interleave).
-  - The wire format of messages, tools, and tool calls.
-  - The shape of the usage / token-count payload.
-  - The streaming chunk format.
-  - Reasoning / "thinking" extraction (some surface it as a separate
-    field, others embed it in the content with tags).
-  - The actual HTTP/API call (``complete`` / ``stream``).
-
-What stays the same — and is the framework's contract:
-  - ``run()`` is the public entry point.
-  - ``ChatCompletionResult`` and ``ChatCompletionChunk`` are the
-    normalized return types.
-  - ``Usage`` is the normalized token / call statistics object.
-  - Tool inputs are ``CoreTool`` instances; the client converts to
-    provider-native schema internally.
-"""
+"""Contract of a chat completion client: one provider behind the same interface."""
 
 from __future__ import annotations
 
+import asyncio
 import os
 import typing as t
 from abc import ABC, abstractmethod
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel
 
-from ..core.blocks import CoreMessage
-from ..core.model.llm import ModelConfig
+from ..core.messages import Message
+from ..core.model.llm import Effort, ModelConfig
+from ..core.retry import RetryPolicy, rate_limited, retrying
 from ..errors.client import ClientError
 from ..types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
+from ..types.run_context import RunContext
 from ..types.stacks import PromptCtx
+from ..types.tools import CoreToolDefinition
 from .component import ComponentBase
-from .tools import CoreTool
 
-if t.TYPE_CHECKING:
-    from ..types.run_context import RunContext
-
-T = t.TypeVar("T")
+# Told before each wait: the try that failed (from 1), its error, seconds to wait.
+OnRetry = t.Callable[[int, BaseException, float], t.Any]
 
 
 class CoreChatCompletionClient(ComponentBase[BaseModel], ABC):
-    """Abstract base class for all MaxAI chat completion clients.
+    """One provider's chat endpoint. Subclasses say how that provider wants
+    its messages, tools and thinking, and make the call."""
 
-    Subclasses implement six abstract methods that cover the
-    provider-specific surface area. ``run()`` is concrete and shared:
-    it validates inputs, runs the conversion pipeline, and dispatches
-    to ``complete`` or ``stream`` based on the ``stream`` flag.
-    """
-
-    # -------- CONSTRUCTION -----------------------------------------------------------
-    # Env var holding the key. Serialized configs store this name, never
-    # the key itself, so an agent's JSON can live in a database safely.
-    API_KEY_ENV: t.ClassVar[str | None] = None
+    API_KEY_ENV: t.ClassVar[str | None] = None  # env var with the key; configs store this name
+    RETRY: t.ClassVar[RetryPolicy] = RetryPolicy(attempts=3)  # when none is given
 
     def __init__(
         self,
         model: str,
-        api_key: str | SecretStr | None = None,
+        api_key: str | None = None,
         config: ModelConfig | None = None,
         *,
+        retry: RetryPolicy | None = None,
         api_key_env: str | None = None,
-        **kwargs: t.Any,
     ) -> None:
-        """Initialize a client instance.
+        self.model = model
+        self.config = config or ModelConfig()
+        self.retry = retry or self.RETRY
 
-        Args:
-            model: The provider-specific model identifier
-                (e.g. ``"qwen3:4b"``, ``"claude-opus-4"``,
-                ``"gpt-4o"``).
-            api_key: Authentication key for code-built clients. When
-                ``None`` it is read from ``api_key_env``.
-            api_key_env: Env var holding the key (default
-                ``API_KEY_ENV``). This name is what gets serialized.
-            config: Model capabilities and defaults. If None, an
-                empty ``ModelConfig`` is used. The ``run()`` method
-                consults ``config.supports_function_calling`` to
-                decide whether to allow tool calls.
-            **kwargs: Provider-specific defaults (e.g. ``temperature``,
-                ``top_p``). Concrete clients pull what they need.
-        """
-        self.model: str = self._require_type(model, str, "model")
-        self.api_key_env: str | None = api_key_env or self.API_KEY_ENV
+        # The key: given by hand, or read from the variable. Never stored in a config.
+        self.api_key_env = api_key_env or self.API_KEY_ENV
         if api_key is None and self.api_key_env:
             api_key = os.getenv(self.api_key_env) or None
-        self.api_key: SecretStr | None = self._resolve_api_key(api_key)
-        self.config: ModelConfig = self._require_type(
-            config or ModelConfig(), ModelConfig, "config"
-        )
-
-    @staticmethod
-    def _require_type(value: t.Any, expected: type[T], field: str) -> T:
-        """
-        Validate a value against an expected Python type.
-
-        Parameters
-        ----------
-        value : t.Any
-            Value to validate.
-        expected : type[T]
-            Expected Python type.
-        field : str
-            Field name used to describe a validation error.
-
-        Returns
-        -------
-        T
-            The input value after it passes type validation.
-        """
-        if not isinstance(value, expected):
-            raise TypeError(
-                f"{field} must be {expected.__name__}, got {type(value).__name__}"
-            )
-        return value
-
-    @staticmethod
-    def _resolve_api_key(key: str | SecretStr | None) -> SecretStr | None:
-        """Normalize an API key argument to ``SecretStr | None``."""
-        if key is None:
-            return None
-        return key if isinstance(key, SecretStr) else SecretStr(key)
-
-    # -------- LIFECYCLE -----------------------------------------------------------
-    # Agents using this client; agents can share one.
-    _users: int = 0
-
-    def attach(self) -> None:
-        """An agent starts using this client."""
-        self._users += 1
-
-    async def detach(self) -> None:
-        """An agent is done with this client; the last one closes it."""
-        self._users = max(0, self._users - 1)
-        if self._users == 0:
-            await self.aclose()
+        self.api_key = api_key
 
     async def aclose(self) -> None:
-        """Close open connections. The client stays usable: a later call
-        opens new ones. Clients that keep a connection pool override it."""
+        """Close open connections; a later call opens new ones."""
 
-    # -------- PUBLIC ENTRY POINT -----------------------------------------------------------
+    # -------- PUBLIC -----------------------------------------------------------------
     async def run(
         self,
-        ctx: RunContext,
-        prompts: PromptCtx,
-        tools: list["CoreTool"] | None = None,
-        output_format: t.Type[BaseModel] | None = None,
-        stream: bool = False,
-        **kwargs: t.Any,
-    ) -> t.Union[ChatCompletionResult, t.AsyncGenerator[ChatCompletionChunk, None]]:
-        """Execute a chat completion request.
+        messages: list[Message],
+        tools: list[CoreToolDefinition] | None = None,
+        output_format: type[BaseModel] | None = None,
+        *,
+        retry: RetryPolicy | None = None,
+        on_retry: OnRetry | None = None,
+    ) -> ChatCompletionResult:
+        """One answer for ``messages``. A passing failure (rate limit, timeout,
+        5xx) is tried again; ``retry`` given here wins over the client's own."""
+        api_messages, api_tools = self._request(messages, tools)
 
-        Pipeline:
-          1. Validate that tools, if any, are supported by the model.
-          2. ``format_messages`` — combine ``ctx`` (chat history,
-             user message) and ``prompts.rendered_layers`` into the
-             provider-agnostic ``list[CoreMessage]``.
-          3. ``build_api_messages`` — convert to the provider's wire
-             format (``list[dict]``).
-          4. ``build_tool_schema`` — convert ``CoreTool`` instances
-             to the provider's tool schema (``list[dict]``).
-          5. Dispatch to ``complete`` or ``stream``.
+        async def call() -> ChatCompletionResult:
+            try:
+                return await self.complete(api_messages, api_tools, output_format, self.config.effort)
+            except Exception as error:
+                raise self.map_error(error) from error
 
-        Args:
-            ctx: Per-turn runtime state (chat history, user message,
-                anything else carried across the turn).
-            prompts: Rendered prompt layers from ``agent.prepare()``.
-            tools: Tools the LLM may call this turn. ``None`` or empty
-                disables tool calling for the request.
-            output_format: Optional Pydantic model for structured
-                output. Concrete clients map this to their provider's
-                JSON-mode / response-format mechanism.
-            stream: If True, returns an async generator of chunks.
-            **kwargs: Provider-specific per-call overrides
-                (``temperature``, ``cache_control``, etc.).
+        return await retrying(
+            call, policy=retry or self.retry, transient=self.transient, on_retry=on_retry
+        )
 
-        Returns:
-            ``ChatCompletionResult`` when ``stream=False``,
-            ``AsyncGenerator[ChatCompletionChunk, None]`` otherwise.
+    async def stream(
+        self,
+        messages: list[Message],
+        tools: list[CoreToolDefinition] | None = None,
+        output_format: type[BaseModel] | None = None,
+        *,
+        retry: RetryPolicy | None = None,
+        on_retry: OnRetry | None = None,
+    ) -> t.AsyncGenerator[ChatCompletionChunk, None]:
+        """The answer for ``messages``, piece by piece. It is tried again only
+        while nothing has come out: after that the caller decides."""
+        api_messages, api_tools = self._request(messages, tools)
+        policy = retry or self.retry
+        for attempt in range(policy.attempts):
+            started = False
+            try:
+                async for chunk in self.complete_stream(
+                    api_messages, api_tools, output_format, self.config.effort
+                ):
+                    started = True
+                    yield chunk
+                return
+            except Exception as raw:
+                error = self.map_error(raw)
+                # 1. Text already went out: repeating would show it twice.
+                last = attempt + 1 >= policy.attempts
+                if started or last or not self.transient(error):
+                    raise error from raw
+                # 2. Wait what the provider asked for, or the policy's step.
+                wait = policy.delay(attempt, error.retry_after, rate_limited=rate_limited(error))
+                if on_retry is not None:
+                    on_retry(attempt + 1, error, wait)
+                await asyncio.sleep(wait)
 
-        Raises:
-            ClientError: If tools are passed but the model's
-                ``ModelConfig.supports_function_calling`` is False.
-        """
+    @staticmethod
+    def transient(error: BaseException) -> bool:
+        """Calling again may work."""
+        return bool(getattr(error, "transient", False))
+
+    @staticmethod
+    def retry_after(headers: t.Mapping[str, str] | None) -> float | None:
+        """Seconds the provider asked to wait, from the standard headers. A
+        provider that says it another way overrides this."""
+        if headers is None:
+            return None
+        # 1. A number: milliseconds or seconds.
+        for name, scale in (("retry-after-ms", 1000.0), ("retry-after", 1.0)):
+            try:
+                seconds = float(headers.get(name, "")) / scale
+            except ValueError:
+                continue
+            if seconds >= 0:
+                return seconds
+        # 2. A date: wait until then.
+        try:
+            until = parsedate_to_datetime(headers.get("retry-after", ""))
+        except (TypeError, ValueError):
+            return None
+        return max(0.0, (until - datetime.now(timezone.utc)).total_seconds())
+
+    def _request(
+        self, messages: list[Message], tools: list[CoreToolDefinition] | None
+    ) -> tuple[list[dict[str, t.Any]], list[dict[str, t.Any]]]:
+        """Messages and tools in the provider's format."""
         if tools and not self.config.supports_function_calling:
-            raise ClientError.tools_not_supported(
-                model=self.model, tool_count=len(tools)
-            )
+            raise ClientError.tools_not_supported(model=self.model, tool_count=len(tools))
+        return self.build_api_messages(messages), self.build_tool_schema(tools or [])
 
-        messages = self.format_messages(ctx, prompts)
-        api_messages = self.build_api_messages(messages)
-        tool_schema = self.build_tool_schema(tools or [])
-        if stream:
-            # Return the async generator directly — caller iterates with `async for`.
-            return self.stream(api_messages, tool_schema, output_format, **kwargs)
-
-        return await self.complete(api_messages, tool_schema, output_format, **kwargs)
-
-    # -------- ABSTRACT — MESSAGE ASSEMBLY -----------------------------------------------------------
+    # -------- EACH PROVIDER ----------------------------------------------------------
     @abstractmethod
-    def format_messages(
-        self, ctx: "RunContext", prompts: PromptCtx
-    ) -> list[CoreMessage]:
-        """Assemble the full message list for the LLM call.
-
-        Each provider arranges ``prompts.rendered_layers`` differently:
-
-        - Anthropic-style: collapse all layers into a single system
-          field, then chat history and user message as messages.
-        - OpenAI-style: similar, but the system prompt goes as the
-          first message with ``role="system"``.
-        - Ollama: model-dependent; usually OpenAI-style.
-
-        Args:
-            ctx: Per-turn runtime state.
-            prompts: Rendered prompt layers (system content) plus
-                whatever metadata the provider needs.
-
-        Returns:
-            Provider-agnostic ``list[CoreMessage]`` in the order the
-            provider expects: typically system first, then chat
-            history, then the current user message.
-        """
-        ...
+    def format_messages(self, ctx: RunContext, prompts: PromptCtx) -> list[Message]:
+        """The conversation to send: the prompt layers and ctx's messages, in
+        this provider's order."""
 
     @abstractmethod
-    def build_api_messages(self, messages: list[CoreMessage]) -> list[dict[str, t.Any]]:
-        """Convert ``CoreMessage`` instances to the provider's wire format.
+    def build_api_messages(self, messages: list[Message]) -> list[dict[str, t.Any]]:
+        """``messages`` in the provider's format."""
 
-        Args:
-            messages: The output of ``format_messages``.
-
-        Returns:
-            A list of dicts ready to be sent to the provider's API.
-        """
-        ...
-
-    # -------- ABSTRACT — TOOL SCHEMA -----------------------------------------------------------
     @abstractmethod
-    def build_tool_schema(self, tools: list["CoreTool"]) -> list[dict[str, t.Any]]:
-        """Convert ``CoreTool`` instances to the provider's tool schema.
+    def build_tool_schema(self, tools: list[CoreToolDefinition]) -> list[dict[str, t.Any]]:
+        """``tools`` in the provider's format."""
 
-        Each provider has its own schema (Anthropic: ``input_schema``,
-        OpenAI: ``parameters`` with ``type=function``, Ollama:
-        OpenAI-style). The conversion includes turning each tool's
-        Pydantic input model into JSON Schema and wrapping it as the
-        provider expects.
+    @abstractmethod
+    def build_thinking(self, effort: Effort | None) -> dict[str, t.Any]:
+        """The request fields that ask this provider for ``effort``."""
 
-        Args:
-            tools: The ``CoreTool`` list passed to ``run()``. May be
-                empty.
+    @abstractmethod
+    def map_error(self, error: Exception) -> ClientError:
+        """The provider's error as a ``ClientError``: what happened, whether
+        trying again may work, and how long the provider asked to wait."""
 
-        Returns:
-            A list of provider-native tool schemas. Empty when
-            ``tools`` is empty.
-        """
-        ...
-
-    # -------- ABSTRACT — USAGE -----------------------------------------------------------
     @abstractmethod
     def normalize_usage_stats(self, usage: t.Any) -> Usage:
-        """Normalize the provider's usage payload into framework ``Usage``.
+        """The provider's token counts as ``Usage``."""
 
-        Each provider exposes token counts under different field names
-        (Anthropic: ``input_tokens`` / ``output_tokens``, OpenAI:
-        ``prompt_tokens`` / ``completion_tokens``, Ollama:
-        ``prompt_eval_count`` / ``eval_count``).
-
-        Args:
-            usage: Whatever the provider returned. Type varies.
-
-        Returns:
-            A populated ``Usage`` instance.
-        """
-        ...
-
-    # -------- ABSTRACT — API CALLS -----------------------------------------------------------
     @abstractmethod
     async def complete(
         self,
         messages: list[dict[str, t.Any]],
-        tools: list[dict[str, t.Any]] | None,
-        output_format: t.Type[BaseModel] | None,
-        **kwargs: t.Any,
+        tools: list[dict[str, t.Any]],
+        output_format: type[BaseModel] | None,
+        effort: Effort | None,
     ) -> ChatCompletionResult:
-        """Execute a single (non-streaming) chat completion call.
-
-        Args:
-            messages: Provider-native message list (output of
-                ``build_api_messages``).
-            tools: Provider-native tool schemas (output of
-                ``build_tool_schema``). May be empty or None.
-            output_format: Optional structured-output model.
-            **kwargs: Provider-specific per-call options.
-
-        Returns:
-            A normalized ``ChatCompletionResult``.
-        """
-        ...
+        """Make the call and return the whole answer."""
 
     @abstractmethod
-    async def stream(
+    def complete_stream(
         self,
         messages: list[dict[str, t.Any]],
-        tools: list[dict[str, t.Any]] | None,
-        output_format: t.Type[BaseModel] | None,
-        **kwargs: t.Any,
+        tools: list[dict[str, t.Any]],
+        output_format: type[BaseModel] | None,
+        effort: Effort | None,
     ) -> t.AsyncGenerator[ChatCompletionChunk, None]:
-        """Execute a streaming chat completion call.
-
-        Args:
-            messages: Provider-native message list.
-            tools: Provider-native tool schemas.
-            output_format: Optional structured-output model.
-            **kwargs: Provider-specific per-call options.
-
-        Yields:
-            ``ChatCompletionChunk`` instances. The final chunk has
-            ``is_complete=True`` and carries the cumulative ``usage``.
-        """
-        ...
+        """Make the call and yield the answer as it arrives."""
