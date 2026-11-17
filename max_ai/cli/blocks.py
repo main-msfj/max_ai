@@ -2,32 +2,45 @@
 
 from __future__ import annotations
 
-import json
 import re
 import time
 import typing as t
-from pathlib import Path
 
 from rich.text import Text
 from textual import events
 from textual.containers import Horizontal, Vertical
+from textual.content import Content
 from textual.message import Message
 from textual.widgets import Input, Markdown, Static
-from textual.widgets._markdown import MarkdownStream
+from textual.widgets._markdown import MarkdownFence, MarkdownStream
 
+from ..core.tool.display import (  # noqa: F401 — the CLI's app imports them from here
+    BASH,
+    _first_line,  # pyright: ignore[reportPrivateUsage]
+    exit_code,
+    result_text,
+    tool_summary,
+)
 from ..types.todos import Todo
 from ..types.tool_call import ToolResult
 from .theme import (
     BORDER,
+    BORDER_SUBTLE,
+    CODE,
+    COMMAND,
     DIM,
     ELEMENT,
     ERROR,
     LOGO,
+    MODEL,
     MUTED,
+    PATH,
     PRIMARY,
     SUCCESS,
+    SYSTEM,
     TEXT,
     WARNING,
+    gradient,
 )
 
 # Neutral text and surfaces; PRIMARY only for accents (glyphs, spinner,
@@ -40,26 +53,24 @@ def _plural(count: int, word: str) -> str:
 
 
 class WelcomeBox(Static):
-    """Session banner: the MAX-AI logo, then agent, model and workspace."""
+    """Session banner: the MAX-AI logo, then agent and model."""
 
     DEFAULT_CSS = """
     WelcomeBox { width: 1fr; height: auto; margin: 2 0 1 0; content-align: center top; text-align: center; }
     """
 
-    def __init__(self, agent_name: str, model: str, workspace: Path) -> None:
+    def __init__(self, agent_name: str, model: str) -> None:
         body = Text(justify="center")
         for left, right in LOGO:
-            body.append(left, style=MUTED)
-            body.append(right + "\n", style=f"bold {TEXT}")
+            body.append_text(gradient(left + right))
+            body.append("\n")
         body.append(f"\n{agent_name}", style=f"bold {PRIMARY}")
-        body.append(f" · {model}\n", style=MUTED)
-        body.append(f"{workspace}\n\n", style=DIM)
-        body.append("/help", style=f"bold {TEXT}")
-        body.append(" commands · ", style=DIM)
-        body.append("esc", style=f"bold {TEXT}")
-        body.append(" interrupt · ", style=DIM)
-        body.append("ctrl+t", style=f"bold {TEXT}")
-        body.append(" thinking", style=DIM)
+        body.append(" · ", style=DIM)
+        body.append(f"{model}\n\n", style=MODEL)
+        for key, what in (("/help", "commands"), ("esc", "interrupt"), ("ctrl+t", "thinking"),
+                          ("ctrl+b", "files")):
+            body.append(key, style=f"bold {PRIMARY}")
+            body.append(f" {what}   ", style=DIM)
         super().__init__(body)
 
 
@@ -72,8 +83,9 @@ class UserBlock(Static):
     """
 
     def __init__(self, text: str) -> None:
-        body = Text("❯ ", style=f"bold {PRIMARY}")
-        body.append(text)
+        body = Text()
+        body.append("❯ ", style=f"bold {PRIMARY}")
+        body.append(text, style=f"bold {TEXT}")
         super().__init__(body)
 
 
@@ -88,6 +100,34 @@ class NoteLine(Static):
         super().__init__(Text(text, style=style) if isinstance(text, str) else text)
 
 
+class NumberedFence(MarkdownFence):
+    """A code block with its line numbers in a dim gutter (one-liners stay bare)."""
+
+    @classmethod
+    def highlight(
+        cls, code: str, language: str, ansi: bool = False, dark: bool = False
+    ) -> Content:
+        highlighted = super().highlight(code, language, ansi, dark)
+        lines = highlighted.split("\n")
+        # The fence's closing newline is not a line of code.
+        if len(lines) > 1 and not lines[-1].plain:
+            lines = lines[:-1]
+        if len(lines) < 2:
+            return highlighted
+        width = len(str(len(lines)))
+        numbered = [
+            Content.assemble((f"{number:>{width}}  ", DIM), line)
+            for number, line in enumerate(lines, 1)
+        ]
+        return Content("\n").join(numbered)
+
+
+class CodeMarkdown(Markdown):
+    """Markdown whose code blocks show line numbers."""
+
+    BLOCKS = {**Markdown.BLOCKS, "fence": NumberedFence, "code_block": NumberedFence}
+
+
 class AssistantBlock(Horizontal):
     """``✦`` + streamed Markdown. Streaming goes through MarkdownStream so a long
     answer isn't re-parsed from scratch on every chunk."""
@@ -96,6 +136,12 @@ class AssistantBlock(Horizontal):
     AssistantBlock {{ height: auto; margin: 1 0 0 0; }}
     AssistantBlock > .bullet {{ width: 2; color: {PRIMARY}; }}
     AssistantBlock > Markdown {{ width: 1fr; margin: 0; padding: 0; background: transparent; }}
+    AssistantBlock Markdown MarkdownBlock:dark > .code_inline {{ background: transparent; color: {CODE}; }}
+    AssistantBlock Markdown MarkdownBlock > .strong {{ color: {TEXT}; text-style: bold; }}
+    AssistantBlock MarkdownBullet {{ color: {PRIMARY}; }}
+    AssistantBlock Markdown > MarkdownBlock:first-child {{ margin-top: 0; }}
+    AssistantBlock MarkdownH1, AssistantBlock MarkdownH2 {{ color: {PRIMARY}; background: transparent; }}
+    AssistantBlock MarkdownH3, AssistantBlock MarkdownH4 {{ color: {SYSTEM}; background: transparent; }}
     """
 
     def __init__(self) -> None:
@@ -105,7 +151,7 @@ class AssistantBlock(Horizontal):
 
     def compose(self):
         yield Static("✦", classes="bullet")
-        yield Markdown("")
+        yield CodeMarkdown("")
 
     async def write(self, chunk: str) -> None:
         self.text += chunk
@@ -183,6 +229,8 @@ class ThinkingBlock(FoldBlock):
     """
 
     DEFAULT_CSS = f"""
+    ThinkingBlock {{ border: none; border-left: outer {BORDER_SUBTLE}; padding: 0 1; }}
+    ThinkingBlock:hover {{ border: none; border-left: outer {PRIMARY}; }}
     ThinkingBlock > .body {{ color: {MUTED}; text-style: italic; max-height: 12; }}
     """
 
@@ -198,13 +246,14 @@ class ThinkingBlock(FoldBlock):
         return self.done
 
     def _header(self) -> Text:
-        header = Text("◈ ", style=PRIMARY)
+        header = Text()
+        header.append("◈ ", style=PRIMARY)
         if not self.done:
             header.append("Thinking…", style="italic")
             return header
         words = len(self.text.split())
         took = f"{self._elapsed:.0f}s" if self._elapsed >= 1 else "<1s"
-        header.append(f"Thought for {took}", style=f"bold {MUTED}")
+        header.append(f"Thought for {took}", style=f"italic {MUTED}")
         header.append(f" · {_plural(words, 'word')}", style="dim")
         return self._fold_hint(header)
 
@@ -278,8 +327,8 @@ def context_bar(used: int, maximum: int, cells: int = 10) -> Text:
     ratio = min(1.0, used / maximum) if maximum > 0 else 0.0
     color = ERROR if ratio >= 0.85 else WARNING if ratio >= 0.6 else SUCCESS
     filled = round(ratio * cells)
-    bar = Text("▓" * filled, style=color)
-    bar.append("░" * (cells - filled), style=BORDER)
+    bar = Text("━" * filled, style=color)
+    bar.append("━" * (cells - filled), style=BORDER_SUBTLE)
     bar.append(f" {_k(used)} / {_k(maximum)}", style=color)
     return bar
 
@@ -752,70 +801,14 @@ class QuestionForm(Vertical):
         return out
 
 
-BASH = "bash"
-# The bash tool's answer starts with this line; the rest is what it printed.
-_EXIT_LINE = re.compile(r"^exit code: (-?\d+|None)\n?")
-
-
-def tool_summary(tool_name: str, parameters: dict[str, t.Any]) -> str:
-    """The one argument that says what the call does, not the whole payload.
-    A bash call is named by its ``description``, else by its command."""
-    if tool_name == BASH and str(parameters.get("description") or "").strip():
-        return _first_line(str(parameters["description"]))
-    for key in ("command", "file_path", "path", "pattern", "query", "url", "city", "to"):
-        if key in parameters:
-            return _first_line(str(parameters[key]))
-    parts = [f"{k}={v}" for k, v in parameters.items() if k != "description"]
-    return _first_line(", ".join(parts))
-
-
-def _first_line(text: str, limit: int = 100) -> str:
-    """A whole script becomes ``cat > x.py << 'EOF' … (+214 lines)``."""
-    lines = text.strip().splitlines() or [""]
-    first = lines[0] if len(lines[0]) <= limit else lines[0][: limit - 1] + "…"
-    return f"{first} … (+{len(lines) - 1} lines)" if len(lines) > 1 else first
-
-
-def exit_code(result: ToolResult | None) -> int | None:
-    """The exit code a command reported: in a dict, or on bash's first line."""
-    value = result.result if result is not None else None
-    if isinstance(value, dict):
-        code = t.cast("dict[str, t.Any]", value).get("exit_code")
-        return code if isinstance(code, int) else None
-    if isinstance(value, str) and (found := _EXIT_LINE.match(value)):
-        return None if found.group(1) == "None" else int(found.group(1))
-    return None
-
-
-def result_text(result: ToolResult) -> str:
-    if not result.success:
-        return result.error or "failed"
-    value = result.result
-    if isinstance(value, dict):
-        fields = t.cast("dict[str, t.Any]", value)
-        if "output" in fields and "exit_code" in fields:
-            return str(fields["output"]).rstrip() or "(no output)"
-        if "stdout" in fields or "stderr" in fields:
-            out = str(fields.get("stdout") or "").rstrip()
-            err = str(fields.get("stderr") or "").rstrip()
-            return "\n".join(part for part in (out, err) if part) or "(no output)"
-    if isinstance(value, str):
-        # Bash says its exit code first: the summary line shows it instead.
-        return _EXIT_LINE.sub("", value, count=1).rstrip() or "(no output)"
-    try:
-        return json.dumps(t.cast("object", value), indent=2, ensure_ascii=False, default=str)
-    except TypeError:
-        return str(t.cast("object", value))
-
-
 _INTERRUPTED = "interrupted"
 
 
 class ToolBlock(Vertical):
     """``◆ name(arg)`` then ``╰─ summary``. Output folds; click to expand.
 
-    A bash call reads ``◆ Bash  description``, then ``IN`` with the command
-    and ``OUT`` with what it printed. State lives on the block and
+    A bash call reads ``◆ Bash  description``, then ``$ command`` and
+    ``╰─`` with what it printed. State lives on the block and
     ``_redraw`` draws from it, so updates that land before the children are
     mounted (the spinner tick, a fast result) are drawn on mount.
     """
@@ -866,43 +859,57 @@ class ToolBlock(Vertical):
         return found.first(Static) if found else None
 
     def _title(self) -> Text:
+        dot = Text()
         if self.result is None:
-            dot = Text(SPINNER[self._frame % len(SPINNER)] + " ", style=f"bold {PRIMARY}")
+            dot.append(SPINNER[self._frame % len(SPINNER)] + " ", style=f"bold {PRIMARY}")
         elif self._interrupted:
-            dot = Text("◇ ", style=f"bold {DIM}")
+            dot.append("◇ ", style=f"bold {DIM}")
         elif self.result.success and exit_code(self.result) in (None, 0):
-            dot = Text("◆ ", style=f"bold {SUCCESS}")
+            dot.append("◆ ", style=f"bold {SUCCESS}")
         else:
-            dot = Text("◆ ", style=f"bold {ERROR}")
+            dot.append("◆ ", style=f"bold {ERROR}")
         summary = tool_summary(self.tool_name, self.parameters)
         if len(summary) > 90:
             summary = summary[:87] + "…"
         # Bash: its description is the title; the command goes on the IN line.
         if self.is_bash:
-            dot.append("Bash", style="bold")
+            dot.append("Bash", style=f"bold {TEXT}")
             if summary:
-                dot.append(f"  {summary}", style=TEXT)
+                dot.append(f"  {summary}", style=MUTED)
             return dot
-        dot.append(self.tool_name, style="bold")
+        dot.append(self.tool_name, style=f"bold {TEXT}")
         if summary:
-            dot.append(f"({summary})", style=MUTED)
+            dot.append(" ")
+            dot.append(summary, style=self._argument_color(self.parameters))
         return dot
 
+    @staticmethod
+    def _argument_color(parameters: dict[str, t.Any]) -> str:
+        """Paths orange, commands amber, searches blue: the argument says what it is."""
+        if any(key in parameters for key in ("file_path", "path")):
+            return PATH
+        if "command" in parameters:
+            return COMMAND
+        if any(key in parameters for key in ("pattern", "query", "url")):
+            return SYSTEM
+        return MUTED
+
     def _input(self) -> Text:
-        """``IN  command``: the whole command once expanded, its first line before."""
+        """``$ command``: the whole command once expanded, its first line before."""
         if not self.is_bash:
             return Text()
         command = str(self.parameters.get("command") or "")
         shown = command.strip() if self.has_class("-expanded") else _first_line(command)
-        line = Text("IN   ", style=f"bold {DIM}")
-        line.append(shown.replace("\n", "\n     "), style=MUTED)
+        line = Text()
+        line.append("$ ", style=f"bold {DIM}")
+        line.append(shown.replace("\n", "\n  "), style=COMMAND)
         return line
 
     def _summary_line(self) -> Text:
         if self.result is None:
             if self._waiting:
                 return Text("╰─ Waiting for approval…", style=WARNING)
-            return Text("╰─ Running…", style="dim")
+            return Text("╰─ Running…", style=f"italic {DIM}")
         summary = self._summary.copy()
         hint = "▾ click to collapse" if self.has_class("-expanded") else "▸ click to expand"
         summary.append(f"   {hint}", style="dim")
@@ -940,9 +947,8 @@ class ToolBlock(Vertical):
         text = result_text(self.result)
         lines = text.count("\n") + 1
         ms = self.result.duration_ms
-        summary = Text("╰─ ", style="dim")
-        if self.is_bash:
-            summary.append("OUT  ", style=f"bold {DIM}")
+        summary = Text()
+        summary.append("╰─ ", style=BORDER)
         if self._interrupted:
             summary.append("cancelled", style=MUTED)
         elif not self.result.success:
@@ -951,9 +957,9 @@ class ToolBlock(Vertical):
             code = exit_code(self.result)
             if code not in (None, 0):
                 summary.append(f"exit {code} · ", style=ERROR)
-            summary.append(_plural(lines, "line"))
+            summary.append(_plural(lines, "line"), style=MUTED)
             if ms is not None:
-                summary.append(f" · {ms}ms", style="dim")
+                summary.append(f" · {ms}ms", style=DIM)
         self._summary = summary
         if len(text) > self.MAX_OUTPUT:
             text = text[: self.MAX_OUTPUT] + f"\n… ({len(text) - self.MAX_OUTPUT:,} more chars)"

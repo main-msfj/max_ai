@@ -16,8 +16,8 @@ stack of widgets, not a text log, so every piece of a turn stays live:
 - **Send while it works**: `enter` during a turn adds your message to it; the
   model reads it on its next call (after the running tool, or right after the
   answer it was writing). `/commands` and `!shell` wait for the turn to end.
-- **Bash** calls read `◆ Bash  <description>`, then `IN` with the command
-  and `╰─ OUT` with what it printed (click to expand).
+- **Bash** calls read `◆ Bash  <description>`, then `$ command` and
+  `╰─` with what it printed (click to expand).
 - **Todos** (`write_todos`) is a list under `● Todos 2/5 · current item`;
   consecutive updates refresh the same box.
 - **Questions** (`ask_user`): every pending question shows in ONE form —

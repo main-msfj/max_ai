@@ -84,14 +84,17 @@ from .theme import (
     DIM,
     ELEMENT,
     ERROR,
+    MODEL,
     MUTED,
     PANEL,
     PRIMARY,
     SUCCESS,
+    SYSTEM,
     TEXT,
     WARNING,
+    shimmer,
 )
-from .widgets import CommandMenu, InfoPanel, PromptEditor
+from .widgets import CommandMenu, FileTree, InfoPanel, PromptEditor
 
 COMMANDS = {
     "/help": "show commands and shortcuts",
@@ -140,11 +143,18 @@ class MaxAIApp(App[None]):
     CSS = f"""
     Screen {{ background: {BACKGROUND}; }}
     #body {{ height: 1fr; }}
-    #sidebar {{ width: 34; background: {PANEL}; border-right: solid {BORDER_SUBTLE}; padding: 0 1; display: none; }}
-    .sidebar-toggle {{ height: 1; width: 1fr; margin-top: 1; padding: 0; border: none; background: {PANEL}; color: {TEXT}; text-align: left; }}
-    #workspace-files, #skill-files {{ height: 1fr; background: {PANEL}; border: none; color: {TEXT}; }}
+    #sidebar {{ width: 30; background: {PANEL}; border-right: tall {BORDER_SUBTLE}; padding: 1 1 0 1; display: none; }}
+    .sidebar-toggle {{ height: 1; min-width: 0; width: 1fr; margin: 0; padding: 0; border: none; background: {PANEL}; color: {DIM}; text-style: bold; text-align: left; content-align: left middle; }}
+    .sidebar-toggle:hover, .sidebar-toggle:focus {{ background: {PANEL}; color: {TEXT}; text-style: bold; }}
+    #skills-toggle {{ margin-top: 1; }}
+    #workspace-files, #skill-files {{ height: 1fr; background: {PANEL}; border: none; color: {MUTED}; padding: 0; scrollbar-size: 0 0; }}
+    DirectoryTree > .tree--cursor, DirectoryTree:focus > .tree--cursor {{ background: {ELEMENT}; color: {TEXT}; text-style: none; }}
+    DirectoryTree > .tree--highlight, DirectoryTree > .tree--highlight-line {{ background: {ELEMENT}; }}
+    DirectoryTree > .tree--guides {{ color: {BORDER_SUBTLE}; }}
+    DirectoryTree > .directory-tree--folder {{ color: {TEXT}; text-style: none; }}
+    DirectoryTree > .directory-tree--extension, DirectoryTree > .directory-tree--file {{ color: {MUTED}; text-style: none; }}
     #main {{ width: 1fr; padding: 0 1; }}
-    #transcript {{ height: 1fr; background: {BACKGROUND}; scrollbar-size: 1 1; padding: 0 1; }}
+    #transcript {{ height: 1fr; background: {BACKGROUND}; scrollbar-size: 1 1; padding: 0 1; scrollbar-background: {BACKGROUND}; scrollbar-background-hover: {BACKGROUND}; scrollbar-background-active: {BACKGROUND}; scrollbar-color: {ELEMENT}; scrollbar-color-hover: {PRIMARY}; scrollbar-color-active: {PRIMARY}; }}
     #request-card {{ height: auto; display: none; border: round {PRIMARY}; padding: 0 1; margin: 1 0 0 0; }}
     #request-detail {{ height: auto; color: {TEXT}; margin-bottom: 1; }}
     #decisions {{ height: auto; display: none; }}
@@ -218,9 +228,9 @@ class MaxAIApp(App[None]):
         with Horizontal(id="body"):
             with Vertical(id="sidebar"):
                 yield Button("▾ WORKSPACE", id="workspace-toggle", classes="sidebar-toggle")
-                yield DirectoryTree(str(self.workspace_root), id="workspace-files")
+                yield self._tree(self.workspace_root, "workspace-files")
                 yield Button("▾ SKILLS", id="skills-toggle", classes="sidebar-toggle")
-                yield DirectoryTree(str(self.skills_root), id="skill-files")
+                yield self._tree(self.skills_root, "skill-files")
             with Vertical(id="main"):
                 yield Transcript(id="transcript")
                 with Vertical(id="request-card"):
@@ -237,14 +247,23 @@ class MaxAIApp(App[None]):
                 yield CommandMenu(id="menu")
                 yield Static("", id="usage")
 
+    @staticmethod
+    def _tree(root: Path, tree_id: str) -> DirectoryTree:
+        """A file tree that shows what is inside ``root``, not the folder itself."""
+        tree = FileTree(str(root), id=tree_id)
+        tree.show_root = False
+        return tree
+
     async def on_mount(self) -> None:
         # 1. The banner, and the MCP servers the agent was given.
         self.query_one("#prompt", TextArea).focus()
-        await self._mount(WelcomeBox(self._agent_name, self.agent.client.model, self.workspace_root))
+        await self._mount(WelcomeBox(self._agent_name, self.agent.client.model))
         servers = [server.server_id for server in self.agent.mcp]
         if servers:
-            line = Text("MCP ", style="bold")
-            line.append(" · ".join(servers), style=MUTED)
+            line = Text()
+            line.append("◇ ", style=SYSTEM)
+            line.append("mcp ", style=f"bold {SYSTEM}")
+            line.append(" · ".join(servers), style=TEXT)
             line.append("  /mcp for details", style=DIM)
             await self._mount(NoteLine(line))
         if self.agent.sandbox is not None and not self._is_local:
@@ -327,7 +346,10 @@ class MaxAIApp(App[None]):
             transcript.scroll_end(animate=False)
 
     async def _write_system(self, message: str, style: str = DIM) -> None:
-        await self._mount(NoteLine(f"• {message}", style=style))
+        line = Text()
+        line.append("◇ ", style=SYSTEM if style == DIM else style)
+        line.append(message, style=style)
+        await self._mount(NoteLine(line))
 
     async def _write_user(self, value: str) -> None:
         await self._mount(UserBlock(value))
@@ -369,11 +391,14 @@ class MaxAIApp(App[None]):
             line.append(f"({retry.reason.replace('_', ' ')}, try {retry.attempt + 1}"
                         f"/{retry.max_attempts}) ", style=MUTED)
         else:
-            line = Text(f"{SPINNER[self._frame % len(SPINNER)]} ", style=f"bold {PRIMARY}")
-            line.append("Thinking… ", style=f"bold {TEXT}")
-        line.append(f"({elapsed}s · ↓ {self._turn_tokens:,} tokens · ", style=MUTED)
+            line = Text()
+            line.append(f"{SPINNER[self._frame % len(SPINNER)]} ", style=f"bold {PRIMARY}")
+            line.append_text(shimmer("Thinking…", self._frame))
+            line.append(" ")
+        line.append(f"{elapsed}s", style=TEXT)
+        line.append(f" · ↓ {self._turn_tokens:,} tokens · ", style=DIM)
         line.append("esc", style=f"bold {MUTED}")
-        line.append(" to interrupt)", style=MUTED)
+        line.append(" to interrupt", style=DIM)
         status.update(line)
 
     def _refresh_usage(self) -> None:
@@ -382,8 +407,10 @@ class MaxAIApp(App[None]):
         line = Text()
         if self.verbose:
             line.append("verbose · ", style=PRIMARY)
-        line.append(f"{self._agent_name} · in {_k(self._tokens_input)} · out {_k(self._tokens_output)}",
-                    style=DIM)
+        line.append(self._agent_name, style=f"bold {PRIMARY}")
+        line.append(" · ", style=DIM)
+        line.append(self.agent.client.model, style=MODEL)
+        line.append(f" · ↑ {_k(self._tokens_input)} ↓ {_k(self._tokens_output)}", style=MUTED)
         if self._tokens_cached:
             line.append(f" · cached {_k(self._tokens_cached)}", style=DIM)
         # 2. The window as the last model call shared it out.

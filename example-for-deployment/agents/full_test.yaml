@@ -6,9 +6,9 @@ config:
   client:
     provider: max_ai.capabilities.clients.openrouter.OpenRouterChatCompletionClient
     config:
-      model: anthropic/claude-haiku-5.5
+      model: openai/gpt-5.6-luna
       fallback_models:
-      - openai/gpt-5.6-luna
+      - anthropic/claude-haiku-5.5
       - qwen/qwen4-max
       app_name: full_test
       config:

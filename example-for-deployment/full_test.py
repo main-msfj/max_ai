@@ -25,8 +25,8 @@ ROOT = HERE / "full_test_box"  # the sandbox: files, skills, memory and setting.
 
 # Cheap paid OpenRouter models (free ones hang), with fallbacks.
 _client: dict[str, t.Any] = {
-    "model": "anthropic/claude-haiku-5.5",
-    "fallback_models": ["openai/gpt-5.6-luna", "qwen/qwen4-max"],
+    "model": "openai/gpt-5.6-luna",
+    "fallback_models": ["anthropic/claude-haiku-5.5", "qwen/qwen4-max"],
     "app_name": "full_test",
 }
 
