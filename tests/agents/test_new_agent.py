@@ -144,3 +144,21 @@ async def test_close_waits_for_a_run_that_is_still_going():
     release.set()
     assert (await running).message.text() == "Done."
     await closing
+
+
+async def test_run_stream_gives_only_the_text_as_it_is_written():
+    from max_ai.core.messages import AssistantMessage
+    from max_ai.types.completions import ChatCompletionChunk, Usage
+
+    async def model(messages, tools=None, output_format=None, *, retry=None, on_retry=None):
+        for piece in ("Hel", "lo"):
+            yield ChatCompletionChunk(content=piece, model="m", is_complete=False)
+        message = AssistantMessage(source="m", content="Hello")
+        yield ChatCompletionChunk(
+            content="", model="m", finish_reason="stop", usage=Usage(), message=message,
+            is_complete=True,
+        )
+
+    made = agent()
+    made.client.stream = model
+    assert [text async for text in made.run_stream("hi")] == ["Hel", "lo"]

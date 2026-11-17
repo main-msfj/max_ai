@@ -47,7 +47,7 @@ from ..capabilities.tools.call_tool import CallToolTool
 from ..capabilities.tools.search_tool import SearchToolsTool
 from ..capabilities.tools.skill import ReadSkillTool
 from ..config import setting
-from ..core.event_type import CoreEvent
+from ..core.event_type import CoreEvent, ModelRetryEvent, ModelStreamChunkEvent
 from ..core.harness.hooks import HarnessLoopHook, HarnessToolHook, SaveContext
 from ..core.harness.permissions import Permissions
 from ..core.harness.rules import Harness
@@ -80,6 +80,7 @@ class Agent(ComponentBase[AgentSpec]):
     )
     COMPONENT_HINT: t.ClassVar[str] = "give it a component_schema, _to_config and _from_config."
     CLOSED: t.ClassVar[str] = "The agent is closed"
+    STREAM_RESTARTED: t.ClassVar[str] = "\n\n[connection lost; the answer starts again below]\n\n"
 
     def __init__(
         self,
@@ -281,6 +282,23 @@ class Agent(ComponentBase[AgentSpec]):
         async for _ in self.run_stream_events(task, ctx, state=state, save=save):
             pass
         return state
+
+    async def run_stream(
+        self,
+        task: str | None = None,
+        ctx: RunContext | None = None,
+        *,
+        state: LoopState | None = None,
+        save: SaveContext | None = None,
+    ) -> AsyncGenerator[str]:
+        """Run one turn and give out only the text of the answer, as the model writes it."""
+        events = self.run_stream_events(task, ctx, state=state, stream=True, save=save)
+        async for event in events:
+            if isinstance(event, ModelStreamChunkEvent) and event.chunk:
+                yield event.chunk
+            # Text already given cannot be taken back: say that it starts again.
+            elif isinstance(event, ModelRetryEvent) and event.discard_partial:
+                yield self.STREAM_RESTARTED
 
     async def close(self) -> None:
         """Refuse new runs, wait for the ones still going, then release the
