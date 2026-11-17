@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-from max_ai.agents.agent import Agent
+from max_ai.agents.agent_old import Agent
 from max_ai.capabilities.tools.function_as_tool import FunctionAsTool
 from max_ai.capabilities.workspace.local import LocalWorkspace
 from max_ai.core.messages import AssistantMessage, ToolCall, UserMessage

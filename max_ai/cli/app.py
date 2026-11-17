@@ -24,7 +24,7 @@ from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import Button, DirectoryTree, OptionList, Static, TextArea
 
-from ..agents.agent import Agent
+from ..agents.agent_old import Agent
 from ..base.session_store import CoreSessionStore
 from ..capabilities.tools.ask_user import AskUserTool
 from ..core.compaction import client_max_output_tokens, live_message_threshold_tokens
@@ -243,7 +243,7 @@ class MaxAIApp(App[None]):
                 await self._write_system(f"Could not load skills: {error}", style=ERROR)
         executor = getattr(self.agent, "executor", None)
         if self._skills and executor is not None and not executor.runs_commands:
-            from ..agents.agent import COMMANDS_OFF
+            from ..agents.agent_old import COMMANDS_OFF
 
             await self._write_system(COMMANDS_OFF, style=WARNING)
         servers = self._mcp_servers()

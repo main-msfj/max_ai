@@ -92,6 +92,7 @@ KNOWN_PROVIDERS: dict[str, str] = {
     "maxai.stacks.MemoryLayer": "max_ai.capabilities.stacks.memory_layer.MemoryLayer",
     "maxai.stacks.SessionStateLayer": "max_ai.capabilities.stacks.session_state_layer.SessionStateLayer",
     "maxai.agents.Agent": "max_ai.agents.agent.Agent",
+    "maxai.agents.AgentOld": "max_ai.agents.agent_old.Agent",
     "maxai.completion.RuntimeCompletionGate": "max_ai.capabilities.completion_gate.gate.RuntimeCompletionGate",
     "maxai.reasoning.ReactLoop": "max_ai.capabilities.reasoning.react.loop.ReactLoop",
     "maxai.guards.SchemaRetryGuard": "max_ai.capabilities.reasoning.guards.SchemaRetryGuard",

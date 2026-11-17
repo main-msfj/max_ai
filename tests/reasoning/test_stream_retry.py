@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from max_ai.agents.agent import STREAM_RESTARTED, Agent
+from max_ai.agents.agent_old import STREAM_RESTARTED, Agent
 from max_ai.capabilities.workspace.local import LocalWorkspace
 from max_ai.core.event_type import ModelRetryEvent, ModelStreamChunkEvent
 from max_ai.core.retry import RetryPolicy

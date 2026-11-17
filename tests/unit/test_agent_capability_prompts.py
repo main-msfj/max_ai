@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from max_ai.agents.agent import Agent
+from max_ai.agents.agent_old import Agent
 from max_ai.base.memory import MemoryToolMode
 from max_ai.capabilities.executor.docker import DockerExecutor
 from max_ai.capabilities.executor.modal import ModalExecutor

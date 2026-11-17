@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-from max_ai.agents.agent import Agent
+from max_ai.agents.agent_old import Agent
 from max_ai.base.completion_gate import CompletionBase, CompletionDecision
 from max_ai.capabilities.workspace.local import LocalWorkspace
 from max_ai.core.messages import (

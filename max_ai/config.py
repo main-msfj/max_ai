@@ -46,6 +46,28 @@ class Settings(BaseSettings):
     tool_description_min_tokens: int = Field(default=5, ge=1)
     tool_description_max_tokens: int = Field(default=150, ge=1)
 
+    # -------- HARNESS ----------------------------------------------------------
+    harness_tool_description_max_tokens: int = Field(default=100, ge=1)
+    harness_prompt_min_tokens: int = Field(
+        default=2000, ge=0, description="Below this the provider's cache is not used well."
+    )
+    harness_prompt_max_share: float = Field(
+        default=0.10, gt=0, le=1, validation_alias="HARNESS_PROMPT_MAX_SHARE",
+        description="Most of the context window the prompt may take.",
+    )
+    harness_custom_prompt_max_tokens: int = Field(
+        default=1500, ge=1, validation_alias="HARNESS_CUSTOM_PROMPT_MAX_TOKENS",
+        description="Most the developer's own prompt layers may take; more belongs in a skill.",
+    )
+    harness_instructions_max_tokens: int = Field(default=100, ge=1)
+    harness_description_max_tokens: int = Field(default=100, ge=1)
+    harness_sandbox_seconds: float = Field(
+        default=600, gt=0, description="How long a sandbox lives; no tool may run longer."
+    )
+    summary_model: str = Field(
+        default="", description="OpenRouter model that writes the summaries; empty: the agent's own."
+    )
+
     # -------- COMPACTION -------------------------------------------------------
     compaction_prompt_budget_tokens: int = Field(default=6000, gt=0)
     compaction_summary_budget_tokens: int = Field(default=2000, gt=0)
