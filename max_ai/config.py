@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     )
     harness_instructions_max_tokens: int = Field(default=100, ge=1)
     harness_description_max_tokens: int = Field(default=100, ge=1)
+    harness_retry_attempts: int = Field(
+        default=3, ge=1, validation_alias="HARNESS_RETRY_ATTEMPTS",
+        description="Tries in total for one model call: the first one plus its retries.",
+    )
     harness_sandbox_seconds: float = Field(
         default=600, gt=0, description="How long a sandbox lives; no tool may run longer."
     )

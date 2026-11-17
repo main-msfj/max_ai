@@ -48,7 +48,7 @@ from ..capabilities.tools.search_tool import SearchToolsTool
 from ..capabilities.tools.skill import ReadSkillTool
 from ..config import setting
 from ..core.event_type import CoreEvent, ModelRetryEvent, ModelStreamChunkEvent
-from ..core.harness.hooks import HarnessLoopHook, HarnessToolHook, SaveContext
+from ..core.harness.hooks import HarnessLoopHook, HarnessToolHook
 from ..core.harness.permissions import Permissions
 from ..core.harness.rules import Harness
 from ..core.model.agent import AgentSpec
@@ -137,6 +137,65 @@ class Agent(ComponentBase[AgentSpec]):
         self._idle = asyncio.Event()
         self._idle.set()
 
+    # -------- CHECKS WHEN IT IS BUILT ----------------------------------------
+
+    def _validate(self) -> None:
+        """Every piece must come from its Core class; the error names the one that does not."""
+        self._validate_directives()
+        self._validate_capabilities()
+        self._validate_runtime()
+
+    def _validate_directives(self) -> None:
+        """Who the agent is and how it answers: name, description, instructions, output format."""
+        # 1. The three texts.
+        for what in ("name", "description", "instructions"):
+            if not isinstance(getattr(self, what), str):
+                raise TypeError(f"{what} must be text")
+        if not self.name.strip():
+            raise ValueError("name cannot be empty")
+        # 2. The answer's format is a class, not an object.
+        form = t.cast("object", self.output_format)
+        if form is not None and not (isinstance(form, type) and issubclass(form, BaseModel)):
+            raise TypeError("output_format must be a pydantic BaseModel class")
+
+    def _validate_capabilities(self) -> None:
+        """What the agent can do: tools, MCP, memory, knowledge, skills and prompt layers."""
+        # 1. The ones that are a single object.
+        if self.memory is not None:
+            self._check(self.memory, Memory, "memory")
+        if self.skills is not None:
+            self._check(self.skills, SkillsCore, "skills")
+        # 2. The ones that are a list: each element is checked.
+        lists: tuple[tuple[Sequence[object], type, str], ...] = (
+            (self.toolset, CoreTool, "toolset"),
+            (self.mcp, MCPServerConfig, "mcp"),
+            (self.knowledge, CoreKnowledgeRegistry, "knowledge"),
+            (self.prompt_layers, CoreLayer, "prompt_layers"),
+        )
+        for values, kind, what in lists:
+            for value in values:
+                self._check(value, kind, what)
+
+    def _validate_runtime(self) -> None:
+        """What runs the agent: client, loop, middlewares, gates and sandbox."""
+        # 1. The model and the loop are always there.
+        self._check(self.client, CoreChatCompletionClient, "client")
+        self._check(self.reasoning, CoreLoop, "reasoning")
+        # 2. The sandbox is optional; middlewares and gates are lists.
+        if self.sandbox is not None:
+            self._check(self.sandbox, SandboxCore, "sandbox")
+        for value in self.middlewares:
+            self._check(value, CoreMiddleware, "middlewares")
+        for value in self.gates:
+            self._check(value, CompletionBase, "gates")
+
+    @staticmethod
+    def _check(value: object, kind: type, what: str) -> None:
+        """Raise when ``value`` is not a ``kind``, saying what was given."""
+        if not isinstance(value, kind):
+            given = type(value).__name__
+            raise TypeError(f"{what} must be a {kind.__name__}; got {given}")
+
     def _run_harness_validation(self) -> None:
         """Apply the harness's rules: an error names the rule that is broken."""
         # 1. The texts and the tools the developer wrote.
@@ -152,134 +211,17 @@ class Agent(ComponentBase[AgentSpec]):
         self.middlewares = Harness.middleware_rules(self.middlewares)
         self.tools = Harness.tool_combination(self.toolset, self.sandbox, self.skills)
 
-    def _validate(self) -> None:
-        """Every piece must come from its Core class; the error names the one that does not."""
-        # 1. The texts that identify the agent.
-        for what in ("name", "description", "instructions"):
-            if not isinstance(getattr(self, what), str):
-                raise TypeError(f"{what} must be text")
-        if not self.name.strip():
-            raise ValueError("name cannot be empty")
-        # 2. The pieces that are one object; only client and reasoning are required.
-        self._check(self.client, CoreChatCompletionClient, "client")
-        self._check(self.reasoning, CoreLoop, "reasoning")
-        if self.memory is not None:
-            self._check(self.memory, Memory, "memory")
-        if self.skills is not None:
-            self._check(self.skills, SkillsCore, "skills")
-        if self.sandbox is not None:
-            self._check(self.sandbox, SandboxCore, "sandbox")
-        # 3. The pieces that are a list: each element is checked.
-        lists: tuple[tuple[Sequence[object], type, str], ...] = (
-            (self.toolset, CoreTool, "toolset"),
-            (self.mcp, MCPServerConfig, "mcp"),
-            (self.knowledge, CoreKnowledgeRegistry, "knowledge"),
-            (self.middlewares, CoreMiddleware, "middlewares"),
-            (self.gates, CompletionBase, "gates"),
-            (self.prompt_layers, CoreLayer, "prompt_layers"),
-        )
-        for values, kind, what in lists:
-            for value in values:
-                self._check(value, kind, what)
-        # 4. The answer's format is a class, not an object.
-        form = t.cast("object", self.output_format)
-        if form is not None and not (isinstance(form, type) and issubclass(form, BaseModel)):
-            raise TypeError("output_format must be a pydantic BaseModel class")
-
-    # -------- RUN ----------------------------------------------------------------
-    async def run_stream_events(
-        self,
-        task: str | None = None,
-        ctx: RunContext | None = None,
-        *,
-        state: LoopState | None = None,
-        stream: bool = False,
-        save: SaveContext | None = None,
-    ) -> AsyncGenerator[CoreEvent]:
-        """Run one turn and give out what happens. ``task`` is what the user
-        says now; None goes on with ``ctx`` (an approval was answered).
-        ``state`` is filled with how the turn ended; ``save`` is called with
-        ``ctx`` after each batch of tools."""
-        if self._closed:
-            raise RuntimeError(self.CLOSED)
-        # A run that started is counted until it ends, so close() can wait for it.
-        self._active += 1
-        self._idle.clear()
-        try:
-            async for item in self._turn(task, ctx, state or LoopState(), stream, save):
-                yield item
-        finally:
-            self._active -= 1
-            if self._active == 0:
-                self._idle.set()
-
-    async def _turn(
-        self,
-        task: str | None,
-        ctx: RunContext | None,
-        state: LoopState,
-        stream: bool,
-        save: SaveContext | None,
-    ) -> AsyncGenerator[CoreEvent]:
-        """One turn over ``ctx``."""
-        ctx = ctx if ctx is not None else RunContext()
-        ctx.session_id = ctx.session_id or ctx.run_id
-        # 1. Messages of one session wait for each other; other sessions overlap.
-        key = (ctx.user_id, ctx.session_id)
-        lock = self._locks.get(key)
-        if lock is None:
-            lock = self._locks[key] = asyncio.Lock()
-        async with lock:
-            # 2. What the user says enters as steering: the loop puts it in the
-            #    conversation and closes a question left without answer.
-            if task is not None:
-                ctx.inbox.append(task)
-            # 3. The user's sandbox, with the skills installed.
-            box = None
-            if self.sandbox is not None:
-                variables = self.skills.variables() if self.skills is not None else None
-                box = self.sandbox.bind(ctx.user_id, variables)
-                await box.prepare()
-                if self.skills is not None:
-                    await self.skills.sync(box)
-            # 4. The tools and the hooks of the harness for this run.
-            registry = await self._registry()
-            Harness.tools_total_rules(registry.tokens(self.reasoning.compaction.counter))
-            loop_hook = HarnessLoopHook(memory=self.memory, sandbox=box, save=save, mcp=self._mcp)
-            rules = Permissions(await box.permissions()) if box is not None else None
-            tool_hook = HarnessToolHook(
-                middlewares=self.middlewares, memory=self.memory, agent=self.name,
-                permissions=rules,
-            )
-            dispatcher = ToolDispatcher(
-                registry, box, hook=tool_hook, timeout=setting.tool_timeout_seconds
-            )
-            # 5. The prompt, checked by the harness; the window is known before the model.
-            if ctx.memory_index is None:
-                await loop_hook.refresh_memory(ctx)
-            prompt = await self._prompt(ctx, box, registry)
-            counter = self.reasoning.compaction.counter
-            Harness.prompt_rules(counter.count_text(prompt), self.client.config.max_context_window)
-            self.reasoning.measure(ctx, prompt, self.client, dispatcher)
-            # 6. The turn.
-            events = self.reasoning.run(
-                ctx, prompt, self.client, dispatcher, stream=stream, hook=loop_hook,
-                state=state, output_format=self.output_format,
-            )
-            async for event in events:
-                yield event
+    # -------- WHAT THE APPLICATION CALLS -------------------------------------
 
     async def run(
         self,
         task: str | None = None,
         ctx: RunContext | None = None,
-        *,
-        save: SaveContext | None = None,
     ) -> LoopState:
         """Run one turn to its end. The answer is ``state.message``, why it
         ended ``state.finish_reason``; the conversation stays in ``ctx``."""
         state = LoopState()
-        async for _ in self.run_stream_events(task, ctx, state=state, save=save):
+        async for _ in self.run_stream_events(task, ctx, state=state):
             pass
         return state
 
@@ -289,16 +231,58 @@ class Agent(ComponentBase[AgentSpec]):
         ctx: RunContext | None = None,
         *,
         state: LoopState | None = None,
-        save: SaveContext | None = None,
     ) -> AsyncGenerator[str]:
         """Run one turn and give out only the text of the answer, as the model writes it."""
-        events = self.run_stream_events(task, ctx, state=state, stream=True, save=save)
+        events = self.run_stream_events(task, ctx, state=state, stream=True)
         async for event in events:
             if isinstance(event, ModelStreamChunkEvent) and event.chunk:
                 yield event.chunk
             # Text already given cannot be taken back: say that it starts again.
             elif isinstance(event, ModelRetryEvent) and event.discard_partial:
                 yield self.STREAM_RESTARTED
+
+    async def run_stream_events(
+        self,
+        task: str | None = None,
+        ctx: RunContext | None = None,
+        *,
+        state: LoopState | None = None,
+        stream: bool = False,
+    ) -> AsyncGenerator[CoreEvent]:
+        """Run one turn and give out what happens. ``task`` is what the user
+        says now; None goes on with ``ctx`` (an approval was answered).
+        ``state`` is filled with how the turn ended;"""
+        if self._closed:
+            raise RuntimeError(self.CLOSED)
+        # A run that started is counted until it ends, so close() can wait for it.
+        self._active += 1
+        self._idle.clear()
+        try:
+            async for item in self._turn(task, ctx, state or LoopState(), stream):
+                yield item
+        finally:
+            self._active -= 1
+            if self._active == 0:
+                self._idle.set()
+
+    async def approve(self, ctx: RunContext, call_id: str, *, always: bool = False) -> bool:
+        """Approve a call that waits for the user; call ``run(None, ctx)``
+        after. ``always`` keeps a rule in the user's settings so it is not
+        asked again; a dangerous call is approved this once only. Whether a
+        rule was kept."""
+        # 1. Approve this call.
+        record = ctx.tool_state.records[call_id]
+        record.approve()
+        # 2. Keep the rule, unless the harness always asks for this call.
+        kept = always and self.sandbox is not None
+        if not kept or not Permissions.can_be_kept(record.tool_name, record.parameters):
+            return False
+        box = self.sandbox.bind(ctx.user_id) if self.sandbox is not None else None
+        if box is not None:
+            await box.add_permission(
+                "allow", Permissions.rule_for(record.tool_name, record.parameters)
+            )
+        return box is not None
 
     async def close(self) -> None:
         """Refuse new runs, wait for the ones still going, then release the
@@ -312,6 +296,66 @@ class Agent(ComponentBase[AgentSpec]):
         if self.sandbox is not None:
             await self.sandbox.close()
         await self.client.aclose()
+
+    # -------- ONE TURN, STEP BY STEP -----------------------------------------
+
+    async def _turn(
+        self,
+        task: str | None,
+        ctx: RunContext | None,
+        state: LoopState,
+        stream: bool,
+    ) -> AsyncGenerator[CoreEvent]:
+        """One turn over ``ctx``: each step below is one small method."""
+        ctx = ctx if ctx is not None else RunContext()
+        ctx.session_id = ctx.session_id or ctx.run_id
+        # 1. Messages of one session wait for each other; other sessions overlap.
+        async with self._lock(ctx):
+            # 2. What the user says enters as steering: the loop puts it in the
+            #    conversation and closes a question left without answer.
+            if task is not None:
+                ctx.inbox.append(task)
+            # 3. Where the tools run, which tools there are and who watches them.
+            box = await self._sandbox(ctx)
+            registry = await self._registry()
+            dispatcher = await self._dispatcher(registry, box)
+            loop_hook = HarnessLoopHook(memory=self.memory, sandbox=box, mcp=self._mcp)
+            # 4. The prompt, with the memory as it is now.
+            if ctx.memory_index is None:
+                await loop_hook.refresh_memory(ctx)
+            prompt = await self._prompt(ctx, box, registry)
+            # 5. The harness's limits, and the window known before the model.
+            counter = self.reasoning.compaction.counter
+            Harness.tools_total_rules(registry.tokens(counter))
+            Harness.prompt_rules(counter.count_text(prompt), self.client.config.max_context_window)
+            self.reasoning.measure(ctx, prompt, self.client, dispatcher)
+            # 6. The turn.
+            events = self.reasoning.run(
+                ctx, prompt, self.client, dispatcher, stream=stream, hook=loop_hook,
+                state=state, output_format=self.output_format,
+                retry=Harness.retry_rules(self.client.retry),
+            )
+            async for event in events:
+                yield event
+
+    def _lock(self, ctx: RunContext) -> asyncio.Lock:
+        """The lock of this user's session; made the first time it is asked for."""
+        key = (ctx.user_id, ctx.session_id or ctx.run_id)
+        lock = self._locks.get(key)
+        if lock is None:
+            lock = self._locks[key] = asyncio.Lock()
+        return lock
+
+    async def _sandbox(self, ctx: RunContext) -> SandboxCore | None:
+        """The user's sandbox, ready and with the skills installed; None without one."""
+        if self.sandbox is None:
+            return None
+        variables = self.skills.variables() if self.skills is not None else None
+        box = self.sandbox.bind(ctx.user_id, variables)
+        await box.prepare()
+        if self.skills is not None:
+            await self.skills.sync(box)
+        return box
 
     async def _registry(self) -> ToolRegistry:
         """The tools of a run: the agent's, the MCP servers' and what reaches them."""
@@ -334,6 +378,14 @@ class Agent(ComponentBase[AgentSpec]):
                 if registry.get(extra.name) is None:
                     registry.register(extra)
         return registry
+
+    async def _dispatcher(self, registry: ToolRegistry, box: SandboxCore | None) -> ToolDispatcher:
+        """Who runs the tools of a run, watched by the harness's hook with the user's rules."""
+        rules = Permissions(await box.permissions()) if box is not None else None
+        hook = HarnessToolHook(
+            middlewares=self.middlewares, memory=self.memory, agent=self.name, permissions=rules
+        )
+        return ToolDispatcher(registry, box, hook=hook, timeout=setting.tool_timeout_seconds)
 
     async def _prompt(self, ctx: RunContext, box: SandboxCore | None, registry: ToolRegistry) -> str:
         """The system prompt: the native layers always, then the developer's,
@@ -368,28 +420,7 @@ class Agent(ComponentBase[AgentSpec]):
         builder = PromptBuilder([*layers, *self.prompt_layers], registry, order=STANDARD_ORDER)
         return builder.build(variables)
 
-    # -------- CHECKS AND STORAGE -------------------------------------------------
-    @staticmethod
-    def _check(value: object, kind: type, what: str) -> None:
-        """Raise when ``value`` is not a ``kind``, saying what was given."""
-        if not isinstance(value, kind):
-            given = type(value).__name__
-            raise TypeError(f"{what} must be a {kind.__name__}; got {given}")
-
-    @staticmethod
-    def _dump(component: ComponentBase[t.Any], what: str) -> dict[str, t.Any]:
-        """A component as storable data; a clear error when it cannot be stored."""
-        try:
-            return component.serialize().model_dump(exclude_none=True)
-        except (NotImplementedError, AttributeError, TypeError) as error:
-            name = getattr(component, "name", None) or type(component).__name__
-            hint = Agent.TOOL_HINT if what == "tool" else Agent.COMPONENT_HINT
-            raise TypeError(Agent.NOT_STORABLE.format(what=what, name=name, hint=hint)) from error
-
-    @staticmethod
-    def _load(data: dict[str, t.Any] | None) -> t.Any:
-        """The component stored in ``data``; None when nothing was stored."""
-        return ComponentBase[t.Any].deserialize(data) if data is not None else None
+    # -------- STORED AND BUILT AGAIN -----------------------------------------
 
     def _to_config(self) -> AgentSpec:
         dump = self._dump
@@ -435,3 +466,18 @@ class Agent(ComponentBase[AgentSpec]):
             prompt_layers=[load(layer) for layer in config.prompt_layers],
             sandbox=load(config.sandbox),
         )
+
+    @staticmethod
+    def _dump(component: ComponentBase[t.Any], what: str) -> dict[str, t.Any]:
+        """A component as storable data; a clear error when it cannot be stored."""
+        try:
+            return component.serialize().model_dump(exclude_none=True)
+        except (NotImplementedError, AttributeError, TypeError) as error:
+            name = getattr(component, "name", None) or type(component).__name__
+            hint = Agent.TOOL_HINT if what == "tool" else Agent.COMPONENT_HINT
+            raise TypeError(Agent.NOT_STORABLE.format(what=what, name=name, hint=hint)) from error
+
+    @staticmethod
+    def _load(data: dict[str, t.Any] | None) -> t.Any:
+        """The component stored in ``data``; None when nothing was stored."""
+        return ComponentBase[t.Any].deserialize(data) if data is not None else None

@@ -88,7 +88,7 @@ async def test_the_agent_runs_a_turn_with_its_tools_in_a_sandbox(tmp_path):
         ]),
         AssistantMessage(source="m", content="Written."),
     ]
-    seen, saved = [], []
+    seen = []
 
     async def model(messages, tools=None, output_format=None, *, retry=None, on_retry=None):
         seen.append((messages, [tool.name for tool in tools or []]))
@@ -96,13 +96,10 @@ async def test_the_agent_runs_a_turn_with_its_tools_in_a_sandbox(tmp_path):
         reason = "tool_calls" if message.tool_calls else "stop"
         return ChatCompletionResult(message=message, finish_reason=reason, usage=Usage(), model="m")
 
-    async def save(ctx):
-        saved.append(len(ctx.messages))
-
     made = agent(sandbox=LocalSandbox(str(tmp_path)), memory=Memory())
     made.client.run = model
     ctx = RunContext(user_id="u", session_id="s")
-    state = await made.run("Write hi to notes.md", ctx, save=save)
+    state = await made.run("Write hi to notes.md", ctx)
     assert state.finish_reason == "stop" and state.message.text() == "Written."
     assert (tmp_path / ".agent" / "workspace" / "s" / "notes.md").read_text() == "hi"
     system, tools = str(seen[0][0][0].content), seen[0][1]
@@ -112,7 +109,7 @@ async def test_the_agent_runs_a_turn_with_its_tools_in_a_sandbox(tmp_path):
     assert system.index("<WORKSPACE>") < system.index("<MEMORY>")  # memory is its own layer
     assert str(tmp_path / ".agent" / "workspace" / "s") in system
     assert set(tools) >= {"ask_user", "write_todos", "read_file", "write_file", "edit_file"}
-    assert saved and ctx.context is not None and ctx.context.tools > 0
+    assert ctx.context is not None and ctx.context.tools > 0
     await made.close()
     with pytest.raises(RuntimeError, match="closed"):
         await made.run("again", ctx)

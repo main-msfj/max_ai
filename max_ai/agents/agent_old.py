@@ -27,7 +27,7 @@ from ..base.memory import CoreMemoryRegistry
 from ..base.middleware import CoreMiddleware, MiddlewareContext, StopRun
 from ..base.reasoning import BaseReasoning
 from ..base.sandbox import SandboxCore
-from ..base.skills import CoreSkillRegistry
+from ..base.skills_previos import CoreSkillRegistry
 from ..base.tools import CoreTool, ToolContext
 from ..base.workspace import WorkspaceBase
 from ..capabilities.completion_gate import RuntimeCompletionGate

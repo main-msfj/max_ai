@@ -50,3 +50,11 @@ async def test_a_rule_is_kept_in_the_users_settings_once(tmp_path):
     await box.add_permission("allow", "bash(pytest*)")
     assert await box.permissions() == {"allow": ["bash(pytest*)"]}
     assert Permissions(await box.permissions()).decide("bash", {"command": "pytest -q"}) is True
+
+
+def test_always_keeps_a_command_by_its_first_word_and_other_tools_whole():
+    assert Permissions.rule_for("bash", {"command": "pytest -q tests/"}) == "bash(pytest*)"
+    assert Permissions.rule_for("write_file", {"path": "notes.md"}) == "write_file"
+    kept = Permissions({"allow": [Permissions.rule_for("bash", {"command": "pytest -q"})]})
+    assert kept.decide("bash", {"command": "pytest tests/x.py"}) is True
+    assert kept.decide("bash", {"command": "pytest && rm x"}) is None  # still asked

@@ -9,11 +9,13 @@ import typing as t
 from pathlib import Path
 
 from rich.text import Text
+from textual import events
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.widgets import Input, Markdown, Static
 from textual.widgets._markdown import MarkdownStream
 
+from ..types.todos import Todo
 from ..types.tool_call import ToolResult
 from .theme import (
     BORDER,
@@ -224,51 +226,50 @@ class ThinkingBlock(FoldBlock):
         self.collapse()
 
 
-_PLAN_STYLES = {
-    "done": ("☒", f"{DIM} strike"),
-    "active": ("▶", f"bold {PRIMARY}"),
-    "failed": ("✗", ERROR),
-    "pending": ("☐", TEXT),
+_TODO_STYLES = {
+    "done": ("◆", f"{DIM} strike"),
+    "in_progress": ("◈", f"bold {PRIMARY}"),
+    "pending": ("◇", TEXT),
 }
 
 
-class PlanBlock(FoldBlock):
-    """The agent's plan as a checklist under ``⎿``. An older plan shrinks to
-    its progress line when a newer one comes."""
+class TodoBlock(FoldBlock):
+    """The agent's list of things to do (``write_todos``) under ``⎿``. An
+    older list shrinks to its progress line when a newer one comes."""
 
     DEFAULT_CSS = """
-    PlanBlock, PlanBlock:hover { border: none; padding: 0; }
-    PlanBlock > .body { max-height: 100; }
+    TodoBlock, TodoBlock:hover { border: none; padding: 0; }
+    TodoBlock > .body { max-height: 100; }
     """
     foldable = False
 
-    def __init__(self, plan: t.Any) -> None:
+    def __init__(self, todos: list[Todo]) -> None:
         super().__init__()
-        self.plan = plan
+        self.todos = list(todos)
 
-    def update_plan(self, plan: t.Any) -> None:
-        self.plan = plan
+    def update_todos(self, todos: list[Todo]) -> None:
+        self.todos = list(todos)
         self.refresh_block()
 
     def _header(self) -> Text:
-        steps = list(self.plan.steps)
-        done = sum(step.status == "done" for step in steps)
+        done = sum(todo.status == "done" for todo in self.todos)
         header = Text("● ", style=f"bold {PRIMARY}")
-        header.append(f"Plan {done}/{len(steps)}", style=f"bold {TEXT}")
-        current = next((s for s in steps if s.status == "active"), None)
-        current = current or next((s for s in steps if s.status == "pending"), None)
-        if done == len(steps) and steps:
+        header.append(f"Todos {done}/{len(self.todos)}", style=f"bold {TEXT}")
+        # The item in progress, else the first one still pending.
+        current = next((x for x in self.todos if x.status == "in_progress"), None)
+        current = current or next((x for x in self.todos if x.status == "pending"), None)
+        if self.todos and done == len(self.todos):
             header.append(" · all done", style=SUCCESS)
         elif current is not None:
-            header.append(f" · {current.description[:60]}", style=MUTED)
+            header.append(f" · {current.content[:60]}", style=MUTED)
         return self._fold_hint(header)
 
     def _body(self) -> Text:
         body = Text()
-        for index, step in enumerate(self.plan.steps):
-            icon, style = _PLAN_STYLES.get(step.status, ("·", ""))
+        for index, todo in enumerate(self.todos):
+            icon, style = _TODO_STYLES.get(todo.status, ("·", ""))
             body.append("  ⎿  " if index == 0 else "\n     ", style=DIM)
-            body.append(f"{icon} {step.description}", style=style)
+            body.append(f"{icon} {todo.content}", style=style)
         return body
 
 
@@ -328,13 +329,13 @@ class CompactionBlock(FoldBlock):
             header.append(f" · {self.failed[:80]} · continuing uncompacted", style=MUTED)
             return header
         event = self.event
-        left = len(event.old_messages)
+        kept = _plural(event.kept_message_count, "message")
         if event.pruned_only:
             header.append("Trimmed old tool output", style=f"bold {TEXT}")
         elif event.summary:
-            header.append(f"Compacted · {_plural(left, 'message')} → summary", style=f"bold {TEXT}")
+            header.append(f"Compacted · {kept} kept, the rest → summary", style=f"bold {TEXT}")
         else:
-            header.append(f"Window slid · {_plural(left, 'message')} out", style=f"bold {TEXT}")
+            header.append(f"Window slid · {kept} kept", style=f"bold {TEXT}")
         header.append(f" · {_k(event.tokens_before)} → {_k(event.tokens_after)} tokens", style=MUTED)
         return self._fold_hint(header)
 
@@ -354,9 +355,9 @@ class PastSummaryBlock(FoldBlock):
     PastSummaryBlock > .body {{ color: {MUTED}; max-height: 14; }}
     """
 
-    def __init__(self, archived: int, summary: str | None) -> None:
+    def __init__(self, summary: str | None) -> None:
         super().__init__()
-        self.archived, self.summary = archived, (summary or "").strip()
+        self.summary = (summary or "").strip()
 
     @property
     def foldable(self) -> bool:  # type: ignore[override]
@@ -364,8 +365,7 @@ class PastSummaryBlock(FoldBlock):
 
     def _header(self) -> Text:
         header = Text("◇ ", style=f"bold {PRIMARY}")
-        header.append(f"Earlier conversation summarized · {_plural(self.archived, 'message')}",
-                      style=f"bold {MUTED}")
+        header.append("Earlier messages were summarized", style=f"bold {MUTED}")
         return self._fold_hint(header)
 
     def _body(self) -> Text:
@@ -417,7 +417,7 @@ class OptionRow(Static):
         self.question = question
         self.index = index
 
-    def on_click(self, event) -> None:
+    def on_click(self, event: events.Click) -> None:
         event.stop()
         form = self.parent
         if isinstance(form, QuestionForm):
@@ -752,8 +752,16 @@ class QuestionForm(Vertical):
         return out
 
 
+BASH = "bash"
+# The bash tool's answer starts with this line; the rest is what it printed.
+_EXIT_LINE = re.compile(r"^exit code: (-?\d+|None)\n?")
+
+
 def tool_summary(tool_name: str, parameters: dict[str, t.Any]) -> str:
-    """The one argument that says what the call does, not the whole payload."""
+    """The one argument that says what the call does, not the whole payload.
+    A bash call is named by its ``description``, else by its command."""
+    if tool_name == BASH and str(parameters.get("description") or "").strip():
+        return _first_line(str(parameters["description"]))
     for key in ("command", "file_path", "path", "pattern", "query", "url", "city", "to"):
         if key in parameters:
             return _first_line(str(parameters[key]))
@@ -768,22 +776,36 @@ def _first_line(text: str, limit: int = 100) -> str:
     return f"{first} … (+{len(lines) - 1} lines)" if len(lines) > 1 else first
 
 
+def exit_code(result: ToolResult | None) -> int | None:
+    """The exit code a command reported: in a dict, or on bash's first line."""
+    value = result.result if result is not None else None
+    if isinstance(value, dict):
+        code = t.cast("dict[str, t.Any]", value).get("exit_code")
+        return code if isinstance(code, int) else None
+    if isinstance(value, str) and (found := _EXIT_LINE.match(value)):
+        return None if found.group(1) == "None" else int(found.group(1))
+    return None
+
+
 def result_text(result: ToolResult) -> str:
     if not result.success:
         return result.error or "failed"
     value = result.result
-    if isinstance(value, dict) and "output" in value and "exit_code" in value:
-        return str(value["output"]).rstrip() or "(no output)"
-    if isinstance(value, dict) and ("stdout" in value or "stderr" in value):
-        out = str(value.get("stdout") or "").rstrip()
-        err = str(value.get("stderr") or "").rstrip()
-        return "\n".join(part for part in (out, err) if part) or "(no output)"
+    if isinstance(value, dict):
+        fields = t.cast("dict[str, t.Any]", value)
+        if "output" in fields and "exit_code" in fields:
+            return str(fields["output"]).rstrip() or "(no output)"
+        if "stdout" in fields or "stderr" in fields:
+            out = str(fields.get("stdout") or "").rstrip()
+            err = str(fields.get("stderr") or "").rstrip()
+            return "\n".join(part for part in (out, err) if part) or "(no output)"
     if isinstance(value, str):
-        return value or "(empty)"
+        # Bash says its exit code first: the summary line shows it instead.
+        return _EXIT_LINE.sub("", value, count=1).rstrip() or "(no output)"
     try:
-        return json.dumps(value, indent=2, ensure_ascii=False, default=str)
+        return json.dumps(t.cast("object", value), indent=2, ensure_ascii=False, default=str)
     except TypeError:
-        return str(value)
+        return str(t.cast("object", value))
 
 
 _INTERRUPTED = "interrupted"
@@ -792,14 +814,16 @@ _INTERRUPTED = "interrupted"
 class ToolBlock(Vertical):
     """``◆ name(arg)`` then ``╰─ summary``. Output folds; click to expand.
 
-    State lives on the block and ``_redraw`` redraws from it, so updates
-    that land before the children are mounted (the spinner tick, a fast
-    result) are kept and drawn on mount instead of failing.
+    A bash call reads ``◆ Bash  description``, then ``IN`` with the command
+    and ``OUT`` with what it printed. State lives on the block and
+    ``_redraw`` draws from it, so updates that land before the children are
+    mounted (the spinner tick, a fast result) are drawn on mount.
     """
 
     DEFAULT_CSS = f"""
     ToolBlock {{ height: auto; margin: 1 0 0 0; }}
     ToolBlock:hover > .summary {{ color: {TEXT}; }}
+    ToolBlock > .input {{ color: {MUTED}; padding-left: 2; max-height: 20; overflow-y: auto; }}
     ToolBlock > .summary {{ color: {MUTED}; padding-left: 2; }}
     ToolBlock > .output {{
         display: none; color: {TEXT}; padding: 0 1; margin-left: 5;
@@ -822,6 +846,7 @@ class ToolBlock(Vertical):
 
     def compose(self):
         yield Static(classes="title")
+        yield Static(classes="input")
         yield Static(classes="summary")
         yield Static(classes="output")
 
@@ -832,6 +857,10 @@ class ToolBlock(Vertical):
     def running(self) -> bool:
         return self.result is None
 
+    @property
+    def is_bash(self) -> bool:
+        return self.tool_name == BASH
+
     def _part(self, name: str) -> Static | None:
         found = self.query(f".{name}")
         return found.first(Static) if found else None
@@ -841,17 +870,33 @@ class ToolBlock(Vertical):
             dot = Text(SPINNER[self._frame % len(SPINNER)] + " ", style=f"bold {PRIMARY}")
         elif self._interrupted:
             dot = Text("◇ ", style=f"bold {DIM}")
-        elif self.result.success and not self._nonzero_exit():
+        elif self.result.success and exit_code(self.result) in (None, 0):
             dot = Text("◆ ", style=f"bold {SUCCESS}")
         else:
             dot = Text("◆ ", style=f"bold {ERROR}")
-        dot.append(self.tool_name, style="bold")
         summary = tool_summary(self.tool_name, self.parameters)
+        if len(summary) > 90:
+            summary = summary[:87] + "…"
+        # Bash: its description is the title; the command goes on the IN line.
+        if self.is_bash:
+            dot.append("Bash", style="bold")
+            if summary:
+                dot.append(f"  {summary}", style=TEXT)
+            return dot
+        dot.append(self.tool_name, style="bold")
         if summary:
-            if len(summary) > 90:
-                summary = summary[:87] + "…"
             dot.append(f"({summary})", style=MUTED)
         return dot
+
+    def _input(self) -> Text:
+        """``IN  command``: the whole command once expanded, its first line before."""
+        if not self.is_bash:
+            return Text()
+        command = str(self.parameters.get("command") or "")
+        shown = command.strip() if self.has_class("-expanded") else _first_line(command)
+        line = Text("IN   ", style=f"bold {DIM}")
+        line.append(shown.replace("\n", "\n     "), style=MUTED)
+        return line
 
     def _summary_line(self) -> Text:
         if self.result is None:
@@ -865,15 +910,14 @@ class ToolBlock(Vertical):
 
     def _redraw(self) -> None:
         title, summary, output = self._part("title"), self._part("summary"), self._part("output")
-        if title is None or summary is None or output is None:
+        given = self._part("input")
+        if title is None or summary is None or output is None or given is None:
             return
         title.update(self._title())
+        given.display = self.is_bash
+        given.update(self._input())
         summary.update(self._summary_line())
         output.update(Text(self._output))
-
-    def _nonzero_exit(self) -> bool:
-        value = self.result.result if self.result else None
-        return isinstance(value, dict) and value.get("exit_code") not in (None, 0)
 
     def set_waiting(self, waiting: bool) -> None:
         self._waiting = waiting
@@ -897,12 +941,14 @@ class ToolBlock(Vertical):
         lines = text.count("\n") + 1
         ms = self.result.duration_ms
         summary = Text("╰─ ", style="dim")
+        if self.is_bash:
+            summary.append("OUT  ", style=f"bold {DIM}")
         if self._interrupted:
             summary.append("cancelled", style=MUTED)
         elif not self.result.success:
             summary.append(f"Error: {text.splitlines()[0][:120] if text else 'failed'}", style=ERROR)
         else:
-            code = self.result.result.get("exit_code") if isinstance(self.result.result, dict) else None
+            code = exit_code(self.result)
             if code not in (None, 0):
                 summary.append(f"exit {code} · ", style=ERROR)
             summary.append(_plural(lines, "line"))

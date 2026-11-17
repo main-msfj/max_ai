@@ -19,12 +19,11 @@ Rama `feat/workspace-new-approach`, último commit `209deed` (2026-11-17).
 
 ## Siguiente, en orden
 
-1. **Prueba en vivo** del agente nuevo con OpenRouter: script en el scratchpad (`live_agent.py`), revisar su resultado.
-2. Conectar "aprobar siempre" de la aplicación con `sandbox.add_permission` (`Permissions.can_be_kept` dice si se puede ofrecer).
-3. Middlewares: solo se llaman alrededor de las tools; faltan inicio y fin de corrida y alrededor del modelo, así que el trazado queda incompleto.
-4. Bash puede escribir en `memory/` aunque sea de solo lectura; el hook solo frena `write_file` y `edit_file`.
-5. `run_stream` de solo texto.
-6. Cambiar `max_ai.agents.Agent` al nuevo y borrar lo viejo: `agent_old.py`, `compaction_old.py`, `clients_old.py`, `reasoning.py`, carpetas `to_delete/`, y los campos `workspace`, `executor`, `compaction`, `policy` de `AgentSpec`.
+1. **Middlewares (decidido: opción B)**: cambiar la firma de `CoreMiddleware` para que reciba `ctx` y `LoopState` en vez de `AgentResponse` y `ModelRequest`, y ajustar `TracingMiddleware`, `LoggingMiddleware` y `BudgetMiddleware`. Llamarlos en: `Agent._turn` (inicio, fin y error de corrida), `HarnessLoopHook.before_model` / `after_model` (modelo) y `run_stream_events` (trozos). Hoy solo ven las tools. **Sin empezar.**
+2. Probar en vivo el camino completo de una aprobación: `agent.approve(ctx, call_id, always=True)` y luego `agent.run(None, ctx)`. `approve` y `run_stream` solo tienen tests con modelo falso.
+3. De último: cambiar `max_ai.agents.Agent` al nuevo y borrar lo viejo: `agent_old.py`, `compaction_old.py`, `clients_old.py`, `reasoning.py`, carpetas `to_delete/`, y los campos `workspace`, `executor`, `compaction`, `policy` de `AgentSpec`.
+
+Hecho después del resumen anterior: `Agent.run_stream` (solo texto) y `Agent.approve(ctx, call_id, always=...)`, que guarda la regla por la primera palabra del comando (`bash(pytest*)`) o la tool entera; lo peligroso nunca se guarda. Bash puede escribir en la memoria de solo lectura: es intencional.
 
 ## Sin conectar todavía
 

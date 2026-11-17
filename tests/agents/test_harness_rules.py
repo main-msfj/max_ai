@@ -63,7 +63,11 @@ def test_our_tools_are_added_and_the_developers_win(tmp_path):
     sandbox = LocalSandbox(str(tmp_path))
     mine = as_tool(weather, name="read_file")
     got = names(Harness.tool_combination([mine, BashTool()], sandbox, None))
-    assert got == ["read_file", "bash", "ask_user", "write_todos", "write_file", "edit_file"]
+    assert got == [
+        "read_file", "bash", "ask_user", "write_todos", "write_file", "edit_file",
+        "enter_worktree", "exit_worktree",  # they come with bash
+    ]
+    assert "enter_worktree" not in names(Harness.tool_combination([], sandbox, None))
 
 
 def test_skills_need_a_sandbox_and_bash(tmp_path):
@@ -119,3 +123,10 @@ def test_all_the_tools_together_stay_under_the_limit():
     Harness.tools_total_rules(20_000)
     with pytest.raises(HarnessError, match="the most is 20000"):
         Harness.tools_total_rules(20_001)
+
+
+def test_a_model_call_is_tried_three_times_at_most_and_the_waits_are_kept():
+    from max_ai.core.retry import RetryPolicy
+
+    made = Harness.retry_rules(RetryPolicy(attempts=10, base_delay=0.5))
+    assert (made.attempts, made.base_delay) == (3, 0.5)

@@ -55,23 +55,13 @@ async def test_middlewares_see_each_tool_and_one_that_fails_stops_nothing(tmp_pa
     assert result.success and seen == [("before", "write_file"), ("after", True)]
 
 
-async def test_the_loop_hook_saves_after_tools_and_renews_the_memory_index(tmp_path):
-    saved = []
-
-    async def save(ctx):
-        saved.append(ctx.session_id)
-
-    async def broken(ctx):
-        raise OSError("disk full")
-
+async def test_the_loop_hook_renews_the_memory_index_after_a_compaction(tmp_path):
     class Fake(Memory):
         async def index(self, sandbox):
             return "- fact.md: likes tea"
 
     ctx, state = RunContext(user_id="u", session_id="s"), LoopState()
-    hook = HarnessLoopHook(memory=Fake(), sandbox=LocalSandbox(str(tmp_path)), save=save)
-    await hook.after_tools(ctx, state)
+    hook = HarnessLoopHook(memory=Fake(), sandbox=LocalSandbox(str(tmp_path)))
     await hook.after_compact(ctx, state)
-    assert saved == ["s"] and ctx.memory_index == "- fact.md: likes tea"
-    await HarnessLoopHook(save=broken).after_tools(ctx, state)  # logged, never raised
+    assert ctx.memory_index == "- fact.md: likes tea"
     assert await HarnessLoopHook().notes(ctx, state) == []

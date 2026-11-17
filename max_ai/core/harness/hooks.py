@@ -3,7 +3,7 @@
 import logging
 import os
 import typing as t
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Sequence
 
 from ...base.loop import LoopHook, LoopState
 from ...base.middleware import CoreMiddleware, MiddlewareContext, ToolRequest
@@ -18,12 +18,10 @@ from .permissions import Permissions
 
 logger = logging.getLogger(__name__)
 
-SaveContext = Callable[[RunContext], Awaitable[None]]
-
 
 class HarnessLoopHook(LoopHook):
-    """Around the model: the memory index stays fresh, the conversation is
-    saved after each batch of tools and the MCP tasks that ended are told."""
+    """Around the model: the memory index stays fresh and the MCP tasks
+    that ended are told."""
 
     TASK_ENDED: t.ClassVar[str] = "The task you left running with {tool} ended. Its result:\n{result}"
     TASK_LOST: t.ClassVar[str] = (
@@ -35,7 +33,6 @@ class HarnessLoopHook(LoopHook):
         *,
         memory: Memory | None = None,
         sandbox: SandboxCore | None = None,  # already bound to the user
-        save: SaveContext | None = None,  # where the application keeps the conversation
         mcp: MCPClientManager | None = None,
         warn_before: int = 3,
         max_repeats: int = 3,
@@ -43,7 +40,6 @@ class HarnessLoopHook(LoopHook):
         super().__init__(warn_before=warn_before, max_repeats=max_repeats)
         self.memory = memory
         self.sandbox = sandbox
-        self.save = save
         self.mcp = mcp
 
     async def refresh_memory(self, ctx: RunContext) -> None:
@@ -54,15 +50,6 @@ class HarnessLoopHook(LoopHook):
     async def after_compact(self, ctx: RunContext, state: LoopState) -> None:
         # The model forgot what it saved: show it the memory as it is now.
         await self.refresh_memory(ctx)
-
-    async def after_tools(self, ctx: RunContext, state: LoopState) -> None:
-        # A save that fails is logged and never stops the turn.
-        if self.save is None:
-            return
-        try:
-            await self.save(ctx)
-        except Exception:
-            logger.exception("The conversation could not be saved")
 
     async def notes(self, ctx: RunContext, state: LoopState) -> list[str]:
         # 1. The usual notes, then the tasks that ended on the MCP servers.

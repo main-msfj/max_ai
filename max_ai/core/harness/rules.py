@@ -13,6 +13,7 @@ from ...base.skills import SkillsCore
 from ...base.tools import CoreTool
 from ...config import setting
 from ..model.llm import ModelConfig
+from ..retry import RetryPolicy
 from ..tokenizer import TokenCounter
 
 logger = logging.getLogger(__name__)
@@ -151,6 +152,7 @@ class Harness:
         from ...capabilities.tools.ask_user import AskUserTool
         from ...capabilities.tools.filesystem import EditFileTool, ReadFileTool, WriteFileTool
         from ...capabilities.tools.todos import WriteTodosTool
+        from ...capabilities.tools.worktree import EnterWorktreeTool, ExitWorktreeTool
 
         tools = list(toolset)
         names = {tool.name for tool in tools}
@@ -165,7 +167,10 @@ class Harness:
         ours: list[CoreTool] = [AskUserTool(), WriteTodosTool()]
         if sandbox is not None:
             ours += [ReadFileTool(), WriteFileTool(), EditFileTool()]
-        # 3. A tool of the developer with the same name wins.
+        # 3. Whoever runs commands can also work on a separate copy of the repository.
+        if cls.BASH in names:
+            ours += [EnterWorktreeTool(), ExitWorktreeTool()]
+        # 4. A tool of the developer with the same name wins.
         return tools + [tool for tool in ours if tool.name not in names]
 
     @classmethod
@@ -190,6 +195,12 @@ class Harness:
         if setting.summary_model and key:
             return SummaryCompaction(client=OpenRouterChatCompletionClient(setting.summary_model))
         return SummaryCompaction()
+
+    @classmethod
+    def retry_rules(cls, given: RetryPolicy) -> RetryPolicy:
+        """A model call is tried at most ``harness_retry_attempts`` times; the
+        waits of the client's own policy are kept."""
+        return given.model_copy(update={"attempts": setting.harness_retry_attempts})
 
     @classmethod
     def model_rules(cls, config: ModelConfig) -> None:

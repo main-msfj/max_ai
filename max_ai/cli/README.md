@@ -16,19 +16,21 @@ stack of widgets, not a text log, so every piece of a turn stays live:
 - **Send while it works**: `enter` during a turn adds your message to it; the
   model reads it on its next call (after the running tool, or right after the
   answer it was writing). `/commands` and `!shell` wait for the turn to end.
-- **Plan** (`update_plan`) is a fold-able box: it folds to
-  `◇ Plan 2/5 · current step`; consecutive updates refresh the same box.
+- **Bash** calls read `◆ Bash  <description>`, then `IN` with the command
+  and `╰─ OUT` with what it printed (click to expand).
+- **Todos** (`write_todos`) is a list under `● Todos 2/5 · current item`;
+  consecutive updates refresh the same box.
 - **Questions** (`ask_user`): every pending question shows in ONE form —
   tabs across the top (`←→`), options for the current one (`↑↓` + `enter`,
   or click), or type your own answer in the prompt. With several questions
   a **Submit** tab reviews them and sends them together. It then folds to
   `? Answered 3 questions ▸ expand`.
 - **Approvals** appear in a card above the prompt: click an option or type
-  its number.
-- **One summary line per turn**: `✓ Done in 16s · stop`, `⚠ …` when the
-  completion gate closed with notes for the user, or `■ Stopped after …`
-  (max_iterations, output_limit, waiting, error) with the reason. The
-  gate's retries are steering for the model: only shown with `ctrl+o`.
+  its number. "Always allow" keeps the rule in the user's `setting.json`
+  (only with a sandbox, never for a dangerous command). Typing anything
+  else is a new message: the call is closed without running.
+- **One summary line per turn**: `◆ Done in 16s · 3 model calls`, or
+  `■ Stopped after …` with the reason (max iterations, length, error).
 
 | Input | Action |
 |---|---|
@@ -46,15 +48,14 @@ and only adds where conversations are saved and whose they are.
 ```python
 from max_ai.cli import run_cli
 
-async with agent:
-    await run_cli(
-        agent,
-        store=LocalSessionStore("./sessions"),  # saves after every turn
-        user_id="user_001",
-        session_id=None,                        # an id resumes that conversation
-    )
+await run_cli(                              # closes the agent at the end
+    agent,
+    store=LocalSessionStore("./sessions"),  # saves after each batch of tools and turn
+    user_id="user_001",
+    session_id=None,                        # an id resumes that conversation
+)
 ```
 
 `/resume` picks a saved conversation, `/new` (or `/clear`) starts a new
-session and `/session` shows the current one. Memory is bound to each
-run's `user_id`/`session_id`, so it follows the session you are in.
+session and `/session` shows the current one. A resumed conversation that
+was waiting for an approval or an answer asks it again.

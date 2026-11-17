@@ -25,7 +25,7 @@ from .middleware import (
 )
 from .quota_store import CoreQuotaStore
 from .session_store import CoreSessionStore
-from .skills import CoreSkillRegistry
+from .skills_previos import CoreSkillRegistry
 from .tools import CoreTool, ToolContext, ToolDefinitionError
 from .workspace import WorkspaceBase
 

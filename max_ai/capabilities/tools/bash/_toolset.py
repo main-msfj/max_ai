@@ -6,6 +6,8 @@ import shlex
 import typing as t
 from pathlib import Path, PurePosixPath
 
+from pydantic import BaseModel
+
 from ....base.tools import CoreTool, ToolContext
 from ....core.ids import short_id
 from ....types.tool_call import ToolCallRecord, ToolResult
@@ -13,8 +15,15 @@ from ....types.tool_call import ToolCallRecord, ToolResult
 SCRIPT = Path(__file__).with_name("script.sh").read_text()  # sent to the sandbox
 
 
+class BashToolConfig(BaseModel):
+    """bash has no settings: stored empty, so an agent that has it can be stored."""
+
+
 class BashTool(CoreTool):
     """Runs a command with bash inside the sandbox."""
+
+    component_schema = BashToolConfig
+    component_provider_override = "max_ai.capabilities.tools.bash.BashTool"
 
     TOOL_NAME: t.ClassVar[str] = "bash"
     DESCRIPTION: t.ClassVar[str] = (
@@ -31,6 +40,13 @@ class BashTool(CoreTool):
 
     def __init__(self) -> None:
         super().__init__(name=self.TOOL_NAME, description=self.DESCRIPTION)
+
+    def _to_config(self) -> BashToolConfig:
+        return BashToolConfig()
+
+    @classmethod
+    def _from_config(cls, config: BaseModel) -> t.Self:
+        return cls()
 
     @property
     def parameters(self) -> dict[str, t.Any]:

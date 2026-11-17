@@ -76,6 +76,15 @@ class Permissions:
         return False
 
     @staticmethod
+    def rule_for(tool_name: str, parameters: Mapping[str, t.Any]) -> str:
+        """The rule "always allow" keeps: a command by its first word, any
+        other tool whole."""
+        words = str(parameters.get("command") or "").split()
+        if tool_name == Permissions.BASH and words:
+            return f"{tool_name}({words[0]}*)"
+        return tool_name
+
+    @staticmethod
     def can_be_kept(tool_name: str, parameters: Mapping[str, t.Any]) -> bool:
         """Whether "always allow" may be offered: never for a dangerous call."""
         target = str(parameters.get("command") or parameters.get("path") or "")
