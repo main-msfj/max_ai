@@ -74,3 +74,73 @@ def test_a_python_function_as_tool_cannot_be_stored():
 
     with pytest.raises(TypeError, match="expose them through an MCP server"):
         agent(toolset=[as_tool(weather)]).serialize()
+
+
+async def test_the_agent_runs_a_turn_with_its_tools_in_a_sandbox(tmp_path):
+    from max_ai.capabilities.sandbox.local import LocalSandbox
+    from max_ai.core.messages import AssistantMessage, ToolCall
+    from max_ai.types.completions import ChatCompletionResult, Usage
+    from max_ai.types.run_context import RunContext
+
+    answers = [
+        AssistantMessage(source="m", content="", tool_calls=[
+            ToolCall(id="c1", tool_name="write_file", parameters={"path": "notes.md", "content": "hi"})
+        ]),
+        AssistantMessage(source="m", content="Written."),
+    ]
+    seen, saved = [], []
+
+    async def model(messages, tools=None, output_format=None, *, retry=None, on_retry=None):
+        seen.append((messages, [tool.name for tool in tools or []]))
+        message = answers.pop(0)
+        reason = "tool_calls" if message.tool_calls else "stop"
+        return ChatCompletionResult(message=message, finish_reason=reason, usage=Usage(), model="m")
+
+    async def save(ctx):
+        saved.append(len(ctx.messages))
+
+    made = agent(sandbox=LocalSandbox(str(tmp_path)), memory=Memory())
+    made.client.run = model
+    ctx = RunContext(user_id="u", session_id="s")
+    state = await made.run("Write hi to notes.md", ctx, save=save)
+    assert state.finish_reason == "stop" and state.message.text() == "Written."
+    assert (tmp_path / ".agent" / "workspace" / "s" / "notes.md").read_text() == "hi"
+    system, tools = str(seen[0][0][0].content), seen[0][1]
+    # Name, description and instructions come from the agent policy layer.
+    assert "<name>helper.</name>" in system and "Answers questions." in system
+    assert "Be brief." in system and "[harness]" in system and "Memory files" in system
+    assert system.index("<WORKSPACE>") < system.index("<MEMORY>")  # memory is its own layer
+    assert str(tmp_path / ".agent" / "workspace" / "s") in system
+    assert set(tools) >= {"ask_user", "write_todos", "read_file", "write_file", "edit_file"}
+    assert saved and ctx.context is not None and ctx.context.tools > 0
+    await made.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        await made.run("again", ctx)
+
+
+async def test_close_waits_for_a_run_that_is_still_going():
+    import asyncio
+
+    from max_ai.core.messages import AssistantMessage
+    from max_ai.types.completions import ChatCompletionResult, Usage
+
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def model(messages, tools=None, output_format=None, *, retry=None, on_retry=None):
+        started.set()
+        await release.wait()
+        message = AssistantMessage(source="m", content="Done.")
+        return ChatCompletionResult(message=message, finish_reason="stop", usage=Usage(), model="m")
+
+    made = agent()
+    made.client.run = model
+    running = asyncio.create_task(made.run("hi"))
+    await started.wait()
+    closing = asyncio.create_task(made.close())
+    await asyncio.sleep(0.05)
+    assert not closing.done()  # the run is alive: the agent is not killed
+    with pytest.raises(RuntimeError, match="closed"):
+        await made.run("another")
+    release.set()
+    assert (await running).message.text() == "Done."
+    await closing

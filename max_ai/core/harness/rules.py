@@ -33,6 +33,10 @@ class Harness:
         "The description of tool {name!r} takes about {tokens} tokens; the most is {limit}. "
         "Say what it does and when to use it, and move the rest to its parameters."
     )
+    TOOLS_TOO_MANY: t.ClassVar[str] = (
+        "The loaded tools take about {tokens} tokens; the most is {limit}. "
+        "Pass fewer tools, or mark some as deferred so they are found with search_tools."
+    )
     PROMPT_SHORT: t.ClassVar[str] = (
         "The system prompt takes about %s tokens; under %s the provider's cache is not used well."
     )
@@ -79,6 +83,13 @@ class Harness:
             if tokens > limit:
                 text = cls.TOOL_TOO_LONG.format(name=tool.name, tokens=tokens, limit=limit)
                 raise HarnessError(text)
+
+    @classmethod
+    def tools_total_rules(cls, tool_tokens: int) -> None:
+        """All the loaded tools together stay under the limit."""
+        limit = setting.harness_tools_max_tokens
+        if tool_tokens > limit:
+            raise HarnessError(cls.TOOLS_TOO_MANY.format(tokens=tool_tokens, limit=limit))
 
     @classmethod
     def prompt_rules(cls, prompt_tokens: int, window: int) -> None:

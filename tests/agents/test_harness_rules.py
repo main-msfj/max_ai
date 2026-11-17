@@ -113,3 +113,9 @@ def test_the_harness_sets_the_models_window_and_output(caplog):
 def test_the_most_of_the_prompt_can_be_changed_from_the_environment(monkeypatch):
     monkeypatch.setenv("HARNESS_PROMPT_MAX_SHARE", "0.2")
     assert Settings().harness_prompt_max_share == 0.2
+
+
+def test_all_the_tools_together_stay_under_the_limit():
+    Harness.tools_total_rules(20_000)
+    with pytest.raises(HarnessError, match="the most is 20000"):
+        Harness.tools_total_rules(20_001)

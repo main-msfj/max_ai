@@ -4,6 +4,7 @@ from .agent_policy_layer import AgentPolicyLayer
 from .builder import PromptBuilder
 from .custom_layer import CustomLayer
 from .knowledge_layer import KnowledgeLayer
+from .memory_files_layer import MemoryFilesLayer
 from .memory_layer import MemoryLayer
 from .rendering_layer import RenderingLayer
 from .session_layer import SessionLayer
@@ -24,6 +25,7 @@ STANDARD_ORDER: list[type[CoreLayer]] = [
     SkillsLayer,
     KnowledgeLayer,
     WorkspaceLayer,
+    MemoryFilesLayer,
     SessionLayer,
 ]
 
@@ -33,6 +35,7 @@ __all__ = [
     "AgentPolicyLayer",
     "CustomLayer",
     "MemoryLayer",
+    "MemoryFilesLayer",
     "KnowledgeLayer",
     "PromptBuilder",
     "RenderingLayer",

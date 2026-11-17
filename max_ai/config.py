@@ -48,6 +48,10 @@ class Settings(BaseSettings):
 
     # -------- HARNESS ----------------------------------------------------------
     harness_tool_description_max_tokens: int = Field(default=100, ge=1)
+    harness_tools_max_tokens: int = Field(
+        default=20_000, ge=1, validation_alias="HARNESS_TOOLS_MAX_TOKENS",
+        description="Most all the loaded tools together may take in a request.",
+    )
     harness_prompt_min_tokens: int = Field(
         default=2000, ge=0, description="Below this the provider's cache is not used well."
     )

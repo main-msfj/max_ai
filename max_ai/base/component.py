@@ -90,6 +90,7 @@ KNOWN_PROVIDERS: dict[str, str] = {
     "maxai.stacks.KnowledgeLayer": "max_ai.capabilities.stacks.knowledge_layer.KnowledgeLayer",
     "maxai.stacks.ContextLayer": "max_ai.capabilities.stacks.context_layer.ContextLayer",
     "maxai.stacks.MemoryLayer": "max_ai.capabilities.stacks.memory_layer.MemoryLayer",
+    "maxai.stacks.MemoryFilesLayer": "max_ai.capabilities.stacks.memory_files_layer.MemoryFilesLayer",
     "maxai.stacks.SessionStateLayer": "max_ai.capabilities.stacks.session_state_layer.SessionStateLayer",
     "maxai.agents.Agent": "max_ai.agents.agent.Agent",
     "maxai.agents.AgentOld": "max_ai.agents.agent_old.Agent",
