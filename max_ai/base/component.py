@@ -100,8 +100,8 @@ KNOWN_PROVIDERS: dict[str, str] = {
     "maxai.guards.NoProgressGuard": "max_ai.capabilities.reasoning.guards.NoProgressGuard",
     "maxai.guards.PlanCompletionGuard": "max_ai.capabilities.reasoning.guards.PlanCompletionGuard",
     "maxai.session_store.LocalSessionStore": "max_ai.capabilities.session_store.local._store.LocalSessionStore",
-    "maxai.compaction.SummaryCompaction": "max_ai.capabilities.compaction.summary._strategy.SummaryCompaction",
-    "maxai.compaction.SlidingWindowCompaction": "max_ai.capabilities.compaction.window._strategy.SlidingWindowCompaction",
+    "maxai.compaction.SummaryCompaction": "max_ai.capabilities.compaction.to_delete.summary._strategy.SummaryCompaction",
+    "maxai.compaction.SlidingWindowCompaction": "max_ai.capabilities.compaction.to_delete.window._strategy.SlidingWindowCompaction",
 }
 
 

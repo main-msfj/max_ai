@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from max_ai.capabilities.compaction import SummaryCompaction
+from max_ai.capabilities.compaction.to_delete import SummaryCompaction
 from max_ai.core.compaction import CompactionOutput
 from max_ai.core.messages import AssistantMessage, UserMessage
 from max_ai.types.completions import ChatCompletionResult, Usage

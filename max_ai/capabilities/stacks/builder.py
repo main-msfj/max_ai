@@ -5,6 +5,7 @@ from __future__ import annotations
 import typing as t
 
 from ...base.layer import CoreLayer
+from ...core.tokenizer import TokenCounter
 from ...core.tool.registry import ToolRegistry
 
 
@@ -72,7 +73,7 @@ class PromptBuilder:
 
     def build(self, variables: t.Mapping[str, t.Any] | None = None) -> str:
         """The system prompt. ``variables`` win over what the registry gives."""
-        known = {"skills": [], **self.tool_variables(), **(variables or {})}
+        known: dict[str, t.Any] = {"skills": [], **self.tool_variables(), **(variables or {})}
         blocks: list[str] = []
         for layer in self.layers:
             wanted = layer.declared_variables()
@@ -80,3 +81,11 @@ class PromptBuilder:
             if rendered:
                 blocks.append(rendered)
         return self.SEPARATOR.join(blocks)
+
+    def tokens(
+        self,
+        variables: t.Mapping[str, t.Any] | None = None,
+        counter: TokenCounter | None = None,
+    ) -> int:
+        """About how many tokens the system prompt takes."""
+        return TokenCounter.estimate(self.build(variables), counter)

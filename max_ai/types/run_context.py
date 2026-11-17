@@ -16,6 +16,8 @@ from ..core.tool.state import ToolState
 from .chat_history import ChatHistory
 
 # from .runtime import RuntimeState
+from .context import Context
+from .summary import Summary
 from .todos import Todo
 
 
@@ -59,6 +61,9 @@ class RunContext(BaseModel):
     cwd: str | None = None  # where bash ended, when not the workspace
     files_seen: dict[str, str] = Field(default_factory=dict)  # file path -> sha256 the model saw
     todos: list[Todo] = Field(default_factory=list)  # the agent's list of things to do
+    context: Context | None = None  # the model's window, part by part, in the last call
+    summary: Summary | None = None  # what is kept of the messages compaction removed
+    position: str | None = None  # folder and todos as they were when messages last left
     memory_index: str | None = None  # the memory index the model saw; renewed after compaction
     inbox: list[str] = Field(
         default_factory=list,

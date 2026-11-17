@@ -5,7 +5,7 @@ clients, capabilities, tools, middleware, and runtime services.
 """
 
 from .capability import CoreAgentCapabilities
-from .compaction import CompactionResult, CoreCompaction
+from .compaction_old import CompactionResult, CoreCompaction
 from .completion_gate import (
     CompletionBase,
     CompletionCheck,

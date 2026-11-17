@@ -16,7 +16,7 @@ from max_ai.base.completion_gate import (
     CompletionDecision,
 )
 from max_ai.capabilities.clients.to_delete.openai.client import OpenAIChatCompletionClient
-from max_ai.capabilities.compaction import SummaryCompaction
+from max_ai.capabilities.compaction.to_delete import SummaryCompaction
 from max_ai.capabilities.completion_gate import RuntimeCompletionGate, RuntimeGateConfig
 from max_ai.capabilities.mcp import HTTPServerConfig
 from max_ai.capabilities.memory.to_delete import LocalMemoryRegistry

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from max_ai.capabilities.compaction import SummaryCompaction
+from max_ai.capabilities.compaction.to_delete import SummaryCompaction
 from max_ai.capabilities.memory.to_delete import LocalMemoryRegistry
 from max_ai.core.compaction import (
     CompactionOutput,

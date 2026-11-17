@@ -6,7 +6,7 @@ Numbers used below: window 10_000, output 1_000, prompt 1_000, 5% margin
 
 from __future__ import annotations
 
-from max_ai.base.compaction import CoreCompaction
+from max_ai.base.compaction_old import CoreCompaction
 from max_ai.core.compaction import CompactionResult
 from max_ai.core.messages import UserMessage
 from max_ai.types.chat_history import ChatHistory

@@ -337,6 +337,7 @@ class CompactionEvent(AgentEvent):
     kept_message_count: int = Field(
         default=0, description="Messages left in the window"
     )
+    usage: Usage | None = Field(default=None, description="What the summary call cost")
     old_messages: list[Message] = Field(  # type: ignore[valid-type]
         default_factory=list, description="Messages that left the window"
     )

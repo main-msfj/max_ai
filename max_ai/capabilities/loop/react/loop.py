@@ -6,6 +6,8 @@ import typing as t
 
 from pydantic import BaseModel
 
+from ....base.compaction import CoreCompaction
+from ....base.component import ComponentBase
 from ....base.loop import AnyClient, CoreLoop, LoopHook, LoopState, Stop
 from ....core.event_type import (
     CoreEvent,
@@ -35,15 +37,24 @@ class ReactLoop(CoreLoop[ReactLoopConfig]):
     WAITING: t.ClassVar[str] = "waiting_for_user"
     LIMIT: t.ClassVar[str] = "max_iterations"
 
-    def __init__(self, max_iterations: int = 50) -> None:
+    def __init__(
+        self, max_iterations: int = 50, compaction: CoreCompaction[t.Any] | None = None
+    ) -> None:
         self.max_iterations = max_iterations  # model calls allowed in one turn
+        if compaction is not None:
+            self.compaction = compaction  # without it, the old messages are dropped
 
     def _to_config(self) -> ReactLoopConfig:
-        return ReactLoopConfig(max_iterations=self.max_iterations)
+        return ReactLoopConfig(
+            max_iterations=self.max_iterations, compaction=self.compaction.serialize()
+        )
 
     @classmethod
     def _from_config(cls, config: ReactLoopConfig) -> t.Self:
-        return cls(max_iterations=config.max_iterations)
+        compaction: CoreCompaction[t.Any] | None = None
+        if config.compaction is not None:
+            compaction = t.cast("CoreCompaction[t.Any]", ComponentBase.deserialize(config.compaction))
+        return cls(max_iterations=config.max_iterations, compaction=compaction)
 
     async def run(
         self,

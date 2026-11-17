@@ -10,6 +10,7 @@ from abc import ABC, abstractmethod
 from pydantic import BaseModel, Field
 
 from ..core.event_type import (
+    CompactionEvent,
     CoreEvent,
     LoopNoticeEvent,
     ModelCallEvent,
@@ -29,9 +30,11 @@ from ..core.messages import (
 from ..core.retry import RetryPolicy
 from ..core.tool import ToolDispatcher
 from ..types.completions import Usage
+from ..types.context import Context
 from ..types.run_context import RunContext
 from ..types.tool_call import ToolCallRecord, ToolResult
 from .clients import CoreChatCompletionClient
+from .compaction import CoreCompaction, WindowCompaction
 from .component import ComponentBase, ConfigT
 
 AnyClient = CoreChatCompletionClient[t.Any]
@@ -46,6 +49,7 @@ class LoopState(BaseModel):
     message: AssistantMessage | None = None  # the model's last message
     limit: int = 0  # model calls allowed in this run
     notices: dict[str, int] = Field(default_factory=dict[str, int])  # times each rule spoke
+    compactions: int = 0  # times the conversation was compacted in this run
     notice: str = ""  # the rule that spoke last
     last_calls: str = ""  # the tool calls of the last round, as text
     repeats: int = 0  # rounds in a row with those same calls
@@ -101,11 +105,9 @@ class LoopHook:
         self.warn_before = warn_before  # calls left when the model is told; 0 = never
         self.max_repeats = max_repeats  # same calls in a row before they stop running
 
-    async def compact(self, ctx: RunContext, state: LoopState, overflow: bool = False) -> bool:
-        """Called before every model call: make the conversation fit.
-        ``overflow``: the model just refused it as too long. Return True if
-        room was made. As it is, nothing is done."""
-        return False
+    async def after_compact(self, ctx: RunContext, state: LoopState) -> None:
+        """The loop compacted the conversation: renew what the model no
+        longer sees (the memory index), save ``ctx``."""
 
     async def notes(self, ctx: RunContext, state: LoopState) -> list[str]:
         """Called before every model call: what happened outside since the
@@ -195,6 +197,15 @@ class CoreLoop(ComponentBase[ConfigT], ABC):
     # it this many calls later.
     EXTRA_CALLS: t.ClassVar[int] = 5
 
+    # How the conversation is kept inside the model's window. A loop always
+    # has one: without a choice, the one that drops the old messages.
+    compaction: CoreCompaction[t.Any] = WindowCompaction()
+
+    # What the system prompt says after messages left the conversation.
+    REMOVED: t.ClassVar[str] = "Earlier messages of this conversation were removed to make room."
+    SUMMARY: t.ClassVar[str] = "This is the summary of what they held:"
+    POSITION: t.ClassVar[str] = "Where things were at that moment:"
+
     # What a call gets when it is closed without running.
     NOT_ANSWERED: t.ClassVar[str] = (
         "The user wrote something else instead of answering. Do not take this as permission."
@@ -243,7 +254,7 @@ class CoreLoop(ComponentBase[ConfigT], ABC):
         """One model call. Its answer is added to ``ctx.messages`` and left
         in ``state.message``; a call that is cut adds nothing."""
         # 1. What the model sees: the conversation and the loaded tools.
-        messages = client.format_messages(ctx, prompt)
+        messages = client.format_messages(ctx, self.system(ctx, prompt))
         tools = dispatcher.registry.definitions()
         yield ModelCallEvent(source=self.SOURCE, model=client.model, input_messages=messages)
 
@@ -280,7 +291,9 @@ class CoreLoop(ComponentBase[ConfigT], ABC):
             raise RuntimeError(f"{type(client).__name__} ended its stream without a message")
 
         # 4. Each tool call needs an id of its own in this conversation.
-        used = set(ctx.tool_state.records)
+        used = set(ctx.tool_state.records) | {
+            call.id for m in ctx.messages if isinstance(m, AssistantMessage) for call in m.tool_calls
+        }
         for call in message.tool_calls:
             if call.id in used:
                 call.id = short_id()
@@ -411,24 +424,111 @@ class CoreLoop(ComponentBase[ConfigT], ABC):
         hook: LoopHook,
         **options: t.Any,
     ) -> t.AsyncGenerator[CoreEvent]:
-        """One model call, after the notes from outside and with room made
-        first; if the model still refuses the conversation as too long and
-        the hook makes room, once more."""
+        """One model call, after the notes from outside and with the
+        conversation compacted if needed; if the model still refuses it as
+        too long, it is compacted by force and the call is made once more."""
         for text in await hook.notes(ctx, state):
             state.notice = "note"
             yield self.note(ctx, state, text)
-        await hook.compact(ctx, state)
+        if event := await self.compact(ctx, prompt, client, dispatcher, state, hook):
+            yield event
         try:
             async for event in self.call_model(ctx, prompt, client, dispatcher, state, **options):
                 yield event
         except Exception as error:
-            too_long = getattr(error, "kind", None) == "token_limit"
-            if not too_long or not await hook.compact(ctx, state, overflow=True):
+            if getattr(error, "kind", None) != "token_limit":
                 raise
-            state.notice = "overflow"
-            yield self.notice(state)
+            forced = await self.compact(ctx, prompt, client, dispatcher, state, hook, force=True)
+            if forced is None:
+                raise
+            yield forced
             async for event in self.call_model(ctx, prompt, client, dispatcher, state, **options):
                 yield event
+
+    async def compact(
+        self,
+        ctx: RunContext,
+        prompt: str,
+        client: AnyClient,
+        dispatcher: ToolDispatcher,
+        state: LoopState,
+        hook: LoopHook,
+        force: bool = False,
+    ) -> CompactionEvent | None:
+        """Make the conversation fit and leave ``ctx`` in order, with the
+        window's parts in ``ctx.context``. The event that tells a
+        compaction, or None when nothing changed."""
+        # 1. What else goes in the call: the system prompt and the tools.
+        count = self.compaction.counter
+        tools = dispatcher.registry.tokens(count)
+        # 2. Compact; what it kept and what it cost stay in ctx and in the run.
+        result = await self.compaction.compact(
+            ctx.messages, client, summary=ctx.summary,
+            prompt_tokens=count.count_text(self.system(ctx, prompt)), tool_tokens=tools,
+            force=force,
+        )
+        ctx.context = result.context
+        if not result.changed:
+            return None
+        ctx.messages[:] = result.messages
+        ctx.summary = result.summary
+        state.usage = state.usage + result.usage
+        state.compactions += 1
+        # 3. Messages left: where the agent is goes to the system prompt, the
+        #    model forgot the files it read, and the closed calls are not needed.
+        if result.removed:
+            ctx.position = self.position(ctx)
+            self.measure(ctx, prompt, client, dispatcher)
+            ctx.files_seen.clear()
+            records = ctx.tool_state.records
+            for call_id in [key for key, record in records.items() if record.is_consumed]:
+                del records[call_id]
+        await hook.after_compact(ctx, state)
+        return CompactionEvent(
+            source=self.SOURCE, phase="end", strategy=type(self.compaction).__name__,
+            changed=True, pruned_only=not result.removed, tokens_before=result.tokens_before,
+            tokens_after=result.tokens_after, kept_message_count=len(result.messages),
+            summary=result.summary.text() if result.summary else None, usage=result.usage,
+        )
+
+    def measure(
+        self, ctx: RunContext, prompt: str, client: AnyClient, dispatcher: ToolDispatcher
+    ) -> Context:
+        """Share out the window with what is loaded now and keep it in
+        ``ctx.context``. Nothing is compacted and no model is called, so it
+        can run when a session opens, before the first message."""
+        # 1. The tools are counted by their registry; the prompt here, because
+        #    the summary and the position are part of it.
+        count = self.compaction.counter
+        words = count.count_text(self.system(ctx, prompt))
+        # 2. Share out the window.
+        ctx.context = self.compaction.measure(
+            ctx.messages, client, words, dispatcher.registry.tokens(count)
+        )
+        return ctx.context
+
+    def system(self, ctx: RunContext, prompt: str) -> str:
+        """The system prompt of a call: ``prompt``, then what compaction
+        kept of the messages that left, and where the agent was then."""
+        if ctx.summary is None and ctx.position is None:
+            return prompt
+        parts = [prompt, self.REMOVED]
+        if ctx.summary is not None and ctx.summary.text():
+            parts.append(f"{self.SUMMARY}\n\n{ctx.summary.text()}")
+        if ctx.position:
+            parts.append(f"{self.POSITION}\n{ctx.position}")
+        return "\n\n".join(part for part in parts if part)
+
+    @staticmethod
+    def position(ctx: RunContext) -> str:
+        """Where the agent is and what it has left, for after a compaction."""
+        lines: list[str] = []
+        if ctx.cwd:
+            lines.append(f"Current folder: {ctx.cwd}")
+        if ctx.todos:
+            lines.append("Your list:")
+            lines += [f"- [{todo.status}] {todo.content}" for todo in ctx.todos]
+        return "\n".join(lines)
 
     async def format_answer(
         self,
@@ -445,7 +545,8 @@ class CoreLoop(ComponentBase[ConfigT], ABC):
         answer = state.message
         if answer is None:
             return
-        asked: list[Message] = [*client.format_messages(ctx, prompt), self.harness(self.FORMAT_ANSWER)]
+        system = self.system(ctx, prompt)
+        asked: list[Message] = [*client.format_messages(ctx, system), self.harness(self.FORMAT_ANSWER)]
         for last in (False, True):
             # 1. Ask for the answer in the format.
             yield ModelCallEvent(source=self.SOURCE, model=client.model, input_messages=asked)

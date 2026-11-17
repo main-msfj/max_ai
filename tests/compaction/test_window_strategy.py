@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from max_ai.capabilities.compaction import SlidingWindowCompaction
+from max_ai.capabilities.compaction.to_delete import SlidingWindowCompaction
 from max_ai.core.messages import (
     HARNESS_SOURCE,
     AssistantMessage,

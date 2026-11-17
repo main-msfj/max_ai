@@ -11,16 +11,16 @@ from __future__ import annotations
 
 from pydantic import JsonValue
 
-from ....base.clients_old import CoreChatCompletionClient
-from ....base.compaction import CoreCompaction
-from ....core.compaction import (
+from .....base.clients_old import CoreChatCompletionClient
+from .....base.compaction_old import CoreCompaction
+from .....core.compaction import (
     CompactionOutput,
     CompactionResult,
     MessageGroup,
     split_recent_messages,
     turn_starts,
 )
-from ....core.messages import CoreMessage
+from .....core.messages import CoreMessage
 from ._model import SummaryCompactionConfig
 
 SUMMARY_TASK = (

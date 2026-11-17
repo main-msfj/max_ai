@@ -78,14 +78,14 @@ async def test_from_a_skill_folder_a_relative_path_is_written_in_the_workspace(s
     ctx = RunContext(user_id="user-1", session_id="s1", cwd=str(sandbox.layout.skills))
     tools = ToolDispatcher(ToolRegistry([WriteFileTool(), EditFileTool()]), sandbox)
     workspace = Path(sandbox.session_paths("s1")["workspace"])
-    write = ToolCallRecord(tool_name="write_file", parameters={"path": "notes.md", "content": "one\n"})
+    write = ToolCallRecord(tool_name="write_file", parameters={"path": "fresh.md", "content": "one\n"})
     assert (await tools.dispatch(write, ctx)).success
     edit = ToolCallRecord(
-        tool_name="edit_file", parameters={"path": "notes.md", "old_text": "one", "new_text": "two"}
+        tool_name="edit_file", parameters={"path": "fresh.md", "old_text": "one", "new_text": "two"}
     )
     assert (await tools.dispatch(edit, ctx)).success
-    assert (workspace / "notes.md").read_text() == "two\n"
-    assert not Path(str(sandbox.layout.skills), "notes.md").exists()
+    assert (workspace / "fresh.md").read_text() == "two\n"
+    assert not Path(str(sandbox.layout.skills), "fresh.md").exists()
 
 
 async def test_a_path_outside_says_where_it_resolved_and_where_to_write(sandbox):

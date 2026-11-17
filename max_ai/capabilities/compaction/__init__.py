@@ -1,7 +1,8 @@
-"""Compaction strategies. The contract is ``base.compaction.CoreCompaction``."""
+"""Ways of compacting a conversation. The contract is ``base.compaction.CoreCompaction``."""
 
+from ...base.compaction import WindowCompaction as SlidingWindowCompaction
+from ...base.compaction import WindowCompactionConfig as SlidingWindowCompactionConfig
 from .summary import SummaryCompaction, SummaryCompactionConfig
-from .window import SlidingWindowCompaction, SlidingWindowCompactionConfig
 
 __all__ = [
     "SlidingWindowCompaction",

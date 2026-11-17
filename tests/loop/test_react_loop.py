@@ -10,6 +10,7 @@ from max_ai.base.loop import LoopHook, LoopState, Stop
 from max_ai.capabilities.loop import ReactLoop
 from max_ai.capabilities.tools.decorator import tool as as_tool
 from max_ai.core.messages import AssistantMessage, ToolCall, UserMessage
+from max_ai.core.model.llm import ModelConfig
 from max_ai.core.retry import RetryPolicy
 from max_ai.core.tool import ToolDispatcher, ToolHook, ToolRegistry
 from max_ai.errors.client import ClientError
@@ -37,6 +38,7 @@ class Model:
 
     model = "test-model"
     retry = RetryPolicy(attempts=3)
+    config = ModelConfig()
 
     def __init__(self, *replies: AssistantMessage) -> None:
         self.replies, self.sent = list(replies), []
@@ -314,20 +316,11 @@ async def test_the_harness_can_keep_the_turn_going_or_end_it():
     assert (state.finish_reason, state.iteration) == ("budget", 1) and ctx.messages[-1].role == "tool"
 
 
-async def test_a_conversation_that_does_not_fit_is_tried_again_if_the_harness_makes_room():
-    class MakesRoom(LoopHook):
-        async def compact(self, ctx, state, overflow=False):
-            return overflow
-
-    ctx, tools = setup()
-    model = Model(ClientError.token_limit_exceeded(), says("ok"))
-    events = await run(ReactLoop(), ctx, model, tools, hook=MakesRoom())
-    assert kinds(events) == ["overflow"] and ctx.messages[-1].content == "ok"
-    # Without room made, it is an error like any other.
+async def test_a_model_error_is_told_and_goes_up_leaving_the_conversation_as_it_was():
     ctx, tools = setup()
     state, events = LoopState(), []
     with pytest.raises(ClientError):
-        async for event in ReactLoop().run(ctx, "p", Model(ClientError.token_limit_exceeded()), tools, state=state):
+        async for event in ReactLoop().run(ctx, "p", Model(ClientError.authentication_failed("x")), tools, state=state):
             events.append(event)
     assert state.finish_reason == "error" and events[-1].event_type == "fatal_error"
     assert [m.role for m in ctx.messages] == ["user"]  # nothing was added

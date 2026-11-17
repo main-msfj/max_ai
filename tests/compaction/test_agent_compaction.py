@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from max_ai.agents import Agent
-from max_ai.capabilities.compaction import SlidingWindowCompaction, SummaryCompaction
+from max_ai.capabilities.compaction.to_delete import SlidingWindowCompaction, SummaryCompaction
 from max_ai.capabilities.workspace.local import LocalWorkspace
 from max_ai.core.compaction import CompactionOutput
 from max_ai.core.event_type import CompactionEvent

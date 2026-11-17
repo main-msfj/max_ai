@@ -73,7 +73,7 @@ from .tools import CoreTool, ToolContext
 if t.TYPE_CHECKING:
     from ..core.messages import ToolCall
     from ..core.tool.dispatcher import ToolDispatcher
-    from .compaction import CoreCompaction
+    from .compaction_old import CoreCompaction
     from .memory import CoreMemoryRegistry
 
 

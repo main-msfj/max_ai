@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from max_ai.base.compaction import CoreCompaction
+from max_ai.base.compaction_old import CoreCompaction
 from max_ai.core.compaction import (
     CompactionResult,
     current_turn_start,

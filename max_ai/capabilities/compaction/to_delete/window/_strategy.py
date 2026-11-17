@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from pydantic import JsonValue
 
-from ....base.clients_old import CoreChatCompletionClient
-from ....base.compaction import CoreCompaction
-from ....core.compaction import (
+from .....base.clients_old import CoreChatCompletionClient
+from .....base.compaction_old import CoreCompaction
+from .....core.compaction import (
     CompactionResult,
     MessageGroup,
     split_recent_messages,

@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from max_ai.base.compaction import CoreCompaction
+from max_ai.base.compaction_old import CoreCompaction
 from max_ai.core.compaction import CompactionResult, split_recent_messages
 from max_ai.core.messages import AssistantMessage, ToolCall, ToolMessage, UserMessage
 from max_ai.errors.compaction import CompactionError

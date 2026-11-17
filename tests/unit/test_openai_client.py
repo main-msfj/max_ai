@@ -200,6 +200,6 @@ async def test_tools_with_thinking_stop_before_the_call():
 
 
 def test_the_models_limits_are_what_the_developer_sets():
-    assert (ModelConfig().max_context_window, ModelConfig().max_output_tokens) == (128_000, 0)
+    assert (ModelConfig().max_context_window, ModelConfig().max_output_tokens) == (128_000, 12_800)
     big = ModelConfig(max_context_window=2_000_000, max_output_tokens=100_000)
     assert (big.max_context_window, big.max_output_tokens) == (2_000_000, 100_000)

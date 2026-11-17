@@ -2,7 +2,7 @@
 
 import typing as t
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ...config import setting
 
@@ -14,7 +14,7 @@ class ModelConfig(BaseModel):
     # Each model has its own limits: read them in the provider's page and set them.
     max_context_window: int = Field(default=128_000, gt=0, description="Context window, in tokens.")
     max_output_tokens: int = Field(
-        default=0, ge=0, description="Output limit, in tokens; 0 sends none (the provider's own).",
+        default=0, ge=0, description="Output limit, in tokens; 0 = a tenth of the window.",
     )
     # Prices in USD per million tokens; unset = cost unknown (no cost limits).
     input_cost_per_mtok: float | None = Field(default=None, ge=0)
@@ -34,3 +34,10 @@ class ModelConfig(BaseModel):
     )
 
     tokenizer_base: str = Field(default_factory=lambda: setting.default_tokenizer)
+
+    @model_validator(mode="after")
+    def _output_is_never_zero(self) -> t.Self:
+        """Room for the answer is always kept: a tenth of the window when not set."""
+        if not self.max_output_tokens:
+            self.max_output_tokens = self.max_context_window // 10
+        return self

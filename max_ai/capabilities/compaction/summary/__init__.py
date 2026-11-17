@@ -1,6 +1,6 @@
-"""Summary compaction: [summary that always lives] + recent messages."""
+"""Compaction that keeps a summary of what leaves."""
 
 from ._model import SummaryCompactionConfig
-from ._strategy import SummaryCompaction
+from ._toolset import SummaryCompaction
 
 __all__ = ["SummaryCompaction", "SummaryCompactionConfig"]

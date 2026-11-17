@@ -29,7 +29,7 @@ from max_ai.agents import Agent
 from max_ai.base.knowledge import KnowledgeToolMode
 from max_ai.base.memory import MemoryToolMode
 from max_ai.capabilities.clients.openrouter import OpenRouterChatCompletionClient
-from max_ai.capabilities.compaction import SummaryCompaction
+from max_ai.capabilities.compaction.to_delete import SummaryCompaction
 from max_ai.capabilities.knowledge.local import LocalKnowledgeRegistry
 from max_ai.capabilities.memory.to_delete.local import LocalMemoryRegistry
 from max_ai.capabilities.middleware import TracingMiddleware, configure_langfuse

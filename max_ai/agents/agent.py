@@ -17,7 +17,7 @@ from typing import Any, Self, get_args
 from pydantic import BaseModel
 
 from ..base.clients_old import CoreChatCompletionClient
-from ..base.compaction import CoreCompaction
+from ..base.compaction_old import CoreCompaction
 from ..base.completion_gate import CompletionBase, CompletionDecision
 from ..base.component import ComponentBase
 from ..base.executor import ExecutorBase
