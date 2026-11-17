@@ -1,19 +1,10 @@
 import typing as t
-from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
 
 from .messages import CoreMessage, Message
 
-
 # -------- UNIT BLOCKS -----------------------------------------------------------
-class RunTimeBlock(BaseModel):
-    """Single block of Run Time context information"""
-
-    metadata: dict[str, t.Any] = Field(default_factory=dict)
-    environment: dict[str, t.Any] = Field(default_factory=dict)
-    shared_state: dict[str, t.Any] = Field(default_factory=dict)
-
 
 class ChatHistoryBlock(BaseModel):
     """Single block of chat history.
@@ -38,35 +29,9 @@ class ChatHistoryBlock(BaseModel):
         return bool(self.message_history)
 
 
-class MemoryBlock(BaseModel):
-    """Single block of memory"""
-
-    key: str | None = Field(default=None, description="Stable memory identifier")
-    category: str = Field(..., description="Memory category")
-    content: str = Field(..., description="Consolidated value for this memory fact")
-    last_updated: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-
 class KnowledgeBlock(BaseModel):
     """Single block of external item"""
 
     content: str = Field(..., description="External Context")
     tokens: int = Field(default=0)
-    metadata: dict[str, t.Any] = Field(default_factory=dict)
-
-
-class SkillBlock(BaseModel):
-    """Single block of skill information"""
-
-    name: str = Field(..., description="Skill name")
-    description: str = Field(..., description="Skill description")
-
-
-class ContextBlock(BaseModel):
-    """A fragment of past conversation returned by ``search``."""
-
-    session_id: str = Field(..., description="Session the fragment belongs to")
-    timestamp: datetime = Field(..., description="When the session occurred")
-    content: str = Field(..., description="Summary or fragment text")
-    score: float | None = Field(default=None, description="Relevance score, if any")
     metadata: dict[str, t.Any] = Field(default_factory=dict)

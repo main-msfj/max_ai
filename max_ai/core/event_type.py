@@ -9,11 +9,9 @@ from __future__ import annotations
 
 import typing as t
 from datetime import datetime, timezone
-from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Discriminator, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from ..base.completion_gate import CompletionDecision
 from ..capabilities.tools.plan import AgentPlan
 from ..types.completions import Usage
 from ..types.todos import Todo
@@ -64,20 +62,6 @@ class CoreEvent(BaseModel):
 # -------- -----------------------------------------------------------
 # Groups event
 # -------- -----------------------------------------------------------
-class OrchestrationEvent(CoreEvent):
-    """Base class for all orchestration-related events"""
-
-    __abstract__ = True
-
-    pass
-
-
-class TasksEvent(CoreEvent):
-    """Base class for all Tasks-related events"""
-
-    __abstract__ = True
-
-    pass
 
 
 class ModelEvent(CoreEvent):
@@ -118,66 +102,6 @@ class ErrorsEvent(CoreEvent):
     __abstract__ = True
 
     pass
-
-
-class MemoryEvent(CoreEvent):
-    """Base class for all Memory-related events"""
-
-    __abstract__ = True
-
-    pass
-
-
-# -------- -----------------------------------------------------------
-#  Orchestration Events For Streaming
-# -------- -----------------------------------------------------------
-class OrchestrationStartEvent(OrchestrationEvent):
-    """Emitted when orchestration begins."""
-
-    EVENT_TYPE = "orchestration_start"
-    task: str = Field(..., description="The task being orchestrated")
-    pattern: str = Field(..., description="Orchestration pattern being used")
-
-
-class OrchestrationCompleteEvent(OrchestrationEvent):
-    """Emitted when orchestration ends."""
-
-    EVENT_TYPE = "orchestration_complete"
-    result: str = Field(..., description="Final orchestration result")
-    stop_reason: str = Field(..., description="Why orchestration stopped")
-
-
-# -------- -----------------------------------------------------------
-#  Tasks Events
-# -------- -----------------------------------------------------------
-class TaskStartEvent(TasksEvent):
-    """Emitted when task processing begins."""
-
-    EVENT_TYPE = "task_start"
-    task: str = Field(..., description="The task being started")
-
-
-class TaskCompleteEvent(TasksEvent):
-    """Emitted once, only when the completion gate accepts the final
-    response. Never emitted by the model, and never on a pause, error,
-    or exhausted limit — only on a genuine, gate-approved completion."""
-
-    EVENT_TYPE = "task_complete"
-    decision: CompletionDecision = Field(
-        ..., description="The aggregate decision that closed this turn"
-    )
-
-
-class CompletionRejectedEvent(TasksEvent):
-    """Emitted every time the completion gate rejects a proposed final
-    response as incomplete and forces the model to try again. Distinct
-    from TaskCompleteEvent so a consumer can show retries live instead
-    of only finding out about them after the fact in ctx.messages."""
-
-    EVENT_TYPE = "completion_rejected"
-    decision: CompletionDecision = Field(
-        ..., description="The aggregate decision that rejected this response"
-    )
 
 
 # -------- -----------------------------------------------------------
@@ -256,14 +180,6 @@ class LoopNoticeEvent(ReasoningEvent):
     message: str = Field(default="", description="What the model was told, if anything")
 
 
-class LastMessageResponseEvent(ReasoningEvent):
-    """The model responded with no tool calls — this response is the
-    proposed end of the turn, about to be checked by the completion gate."""
-
-    EVENT_TYPE = "last_message_response"
-    response: str = Field(..., description="The model's proposed final text")
-
-
 class PlanningEvent(ReasoningEvent):
     """Event emitted when a plan is generated."""
 
@@ -291,29 +207,6 @@ class UserInputRequestEvent(ReasoningEvent):
 # -------- -----------------------------------------------------------
 #  Agent Events
 # -------- -----------------------------------------------------------
-class AgentSelectionEvent(AgentEvent):
-    """Emitted when an agent is selected for execution."""
-
-    EVENT_TYPE = "agent_selection"
-    selected_agent: str = Field(..., description="Name of selected agent")
-    selection_reason: str | None = Field(default=None)
-
-
-class AgentExecutionStartEvent(AgentEvent):
-    """Emitted when agent execution begins."""
-
-    EVENT_TYPE = "agent_execution_start"
-    executing_agent: str = Field(..., description="Name of executing agent")
-    context_size: int = Field(..., description="Number of messages in context")
-
-
-class AgentExecutionCompleteEvent(AgentEvent):
-    """Emitted when agent execution completes."""
-
-    EVENT_TYPE = "agent_execution_complete"
-    executing_agent: str = Field(..., description="Name of executed agent")
-    success: bool = Field(..., description="Whether execution succeeded")
-    message_count: int = Field(..., description="Number of messages produced")
 
 
 class CompactionEvent(AgentEvent):
@@ -349,35 +242,6 @@ class CompactionEvent(AgentEvent):
 # -------- -----------------------------------------------------------
 #  Tool Events
 # -------- -----------------------------------------------------------
-class BashStartedEvent(ToolEvent):
-    """Execution requested; declared_action describes model intent only."""
-
-    EVENT_TYPE = "bash_started"
-    tool_call_id: str
-    command: str
-    declared_action: str
-    description: str
-
-
-class BashFinishedEvent(ToolEvent):
-    EVENT_TYPE = "bash_finished"
-    tool_call_id: str
-    exit_code: int | None
-    duration_ms: int
-    timed_out: bool = False
-    truncated: bool = False
-
-
-class BashFailedEvent(ToolEvent):
-    EVENT_TYPE = "bash_failed"
-    tool_call_id: str
-    error: str
-
-
-class BashCancelledEvent(ToolEvent):
-    EVENT_TYPE = "bash_cancelled"
-    tool_call_id: str
-    reason: str
 
 
 class MCPProgressEvent(ToolEvent):
@@ -398,57 +262,6 @@ class TodosEvent(ToolEvent):
     EVENT_TYPE = "todos"
     tool_call_id: str
     todos: list[Todo]
-
-
-class FileReadEvent(ToolEvent):
-    """A workspace file was read successfully."""
-
-    EVENT_TYPE = "file_read"
-    tool_call_id: str
-    path: str
-    root_dir: str
-    content_hash: str
-
-
-class DirectoryListedEvent(ToolEvent):
-    """A workspace directory was listed successfully."""
-
-    EVENT_TYPE = "directory_listed"
-    tool_call_id: str
-    path: str
-    root_dir: str
-    entry_count: int
-
-
-class FileWrittenEvent(ToolEvent):
-    """A workspace file was created or edited successfully."""
-
-    EVENT_TYPE = "file_written"
-    tool_call_id: str
-    operation: t.Literal["write_file", "edit_file"]
-    path: str
-    root_dir: str
-    content_hash: str
-
-
-class FilesSearchedEvent(ToolEvent):
-    """A workspace search completed successfully."""
-
-    EVENT_TYPE = "files_searched"
-    tool_call_id: str
-    operation: t.Literal["find_files", "search_file"]
-    path: str
-    root_dir: str
-    match_count: int
-    truncated: bool = False
-
-
-class FileDeletedEvent(ToolEvent):
-    EVENT_TYPE = "file_deleted"
-    tool_call_id: str
-    path: str
-    root_dir: str
-    content_hash: str
 
 
 class ToolCallEvent(ToolEvent):
@@ -516,24 +329,6 @@ class ToolAutoApprovalEvent(ToolEvent):
     tool_name: str
 
 
-class ToolValidationEvent(ToolEvent):
-    """Event emitted after parameter validation."""
-
-    EVENT_TYPE = "tool_validation"
-    tool_name: str = Field(..., description="Name of the tool being validated")
-    is_valid: bool = Field(..., description="Whether parameters are valid")
-    errors: str | None = Field(default=None, description="Validation error details")
-
-
-class ToolProgressEvent(ToolEvent):
-    """Event emitted to indicate progress during long-running tool execution."""
-
-    EVENT_TYPE = "tool_progress"
-    tool_name: str = Field(..., description="Name of the tool in progress")
-    content: str = Field(..., description="Human-readable progress update")
-    tool_call_id: str = Field(..., description="Tool call ID")
-
-
 # -------- -----------------------------------------------------------
 #  Error Events
 # -------- -----------------------------------------------------------
@@ -553,78 +348,3 @@ class FatalErrorEvent(ErrorsEvent):
     error_message: str = Field(..., description="Description of the fatal error")
     error_type: str = Field(..., description="Type/category of error")
     is_recoverable: bool = Field(default=False)
-
-
-# -------- -----------------------------------------------------------
-#  Memory Events
-# -------- -----------------------------------------------------------
-class MemoryUpdateEvent(MemoryEvent):
-    """Event emitted when memory state changes."""
-
-    EVENT_TYPE = "memory_update"
-    operation: str = Field(..., description="Type of memory operation")
-
-
-class MemoryRetrievalEvent(MemoryEvent):
-    """Event emitted when memory content is accessed."""
-
-    EVENT_TYPE = "memory_retrieval"
-    query: str = Field(..., description="Query used to retrieve memories")
-    results_count: int = Field(..., description="Number of memories retrieved")
-
-
-# -------- -----------------------------------------------------------
-# Union types Orchestration
-# -------- -----------------------------------------------------------
-OrchestrationEvents = Annotated[
-    t.Union[
-        OrchestrationStartEvent,
-        OrchestrationCompleteEvent,
-        AgentSelectionEvent,
-        AgentExecutionStartEvent,
-        AgentExecutionCompleteEvent,
-        CompactionEvent,
-    ],
-    Discriminator("event_type"),
-]
-
-# -------- -----------------------------------------------------------
-# Union type for all Agent Events
-# -------- -----------------------------------------------------------
-AgentEvents = Annotated[
-    t.Union[
-        TaskStartEvent,
-        TaskCompleteEvent,
-        CompletionRejectedEvent,
-        ModelCallEvent,
-        ModelResponseEvent,
-        ModelRetryEvent,
-        ModelStreamChunkEvent,
-        ReasoningIterationEvent,
-        ReasoningCompleteEvent,
-        LastMessageResponseEvent,
-        PlanningEvent,
-        UserInputRequestEvent,
-        ToolCallEvent,
-        ToolCallResponseEvent,
-        ToolApprovalEvent,
-        ToolAutoApprovalEvent,
-        ToolValidationEvent,
-        ToolProgressEvent,
-        BashStartedEvent,
-        BashFinishedEvent,
-        BashFailedEvent,
-        BashCancelledEvent,
-        FileReadEvent,
-        DirectoryListedEvent,
-        FileWrittenEvent,
-        FilesSearchedEvent,
-        FileDeletedEvent,
-        CompactionEvent,
-        MemoryUpdateEvent,
-        MemoryRetrievalEvent,
-        ErrorEvent,
-        FatalErrorEvent,
-    ],
-    Discriminator("event_type"),
-]

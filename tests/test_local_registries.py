@@ -266,7 +266,6 @@ async def test_local_skill_registry_loads_skill(tmp_path: Path, monkeypatch: pyt
             root=user_root,
             workspace_dir=user_root / "workspace",
             skill_dir=user_root / "skills",
-            artifacts_dir=user_root / "workspace",
         )
         session_skills = reg.materialize(directory)
         assert session_skills == directory.skill_dir
@@ -292,7 +291,7 @@ async def test_materialize_refreshes_unedited_files_but_keeps_local_edits(
     user_root = (tmp_path / "server").resolve() / "tmp" / "u1"
     directory = WorkspaceDirectory(
         root=user_root, workspace_dir=user_root / "workspace",
-        skill_dir=user_root / "skills", artifacts_dir=user_root / "workspace",
+        skill_dir=user_root / "skills",
     )
 
     async with reg:

@@ -1,7 +1,6 @@
 """Spans of a turn: what ran, when and for how long, built from the events of a run.
 
-The CLI draws them as bars in the terminal and the web as an SVG; both read
-the same ``Span`` list from one ``SpanProjector``.
+The web draws them as an SVG from the ``Span`` list of one ``SpanProjector``.
 """
 
 from __future__ import annotations
@@ -11,8 +10,7 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
 
-from ..types.completions import Usage
-from .event_type import (
+from ..core.event_type import (
     CompactionEvent,
     CoreEvent,
     FatalErrorEvent,
@@ -25,7 +23,8 @@ from .event_type import (
     ToolCallEvent,
     ToolCallResponseEvent,
 )
-from .ids import short_id
+from ..core.ids import short_id
+from ..types.completions import Usage
 
 SpanKind = t.Literal["turn", "step", "model", "tool", "compaction"]
 SpanStatus = t.Literal["running", "ok", "error", "cancelled"]

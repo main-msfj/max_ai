@@ -40,20 +40,6 @@ def event_line(event: CoreEvent) -> Text:
         ms = _duration_ms(result)
         tail = f" ({ms}ms)" if ms is not None else ""
         label = f"done{tail}" if ok else f"failed{tail}: {str(result.get('error', ''))[:60]}"
-    elif etype == "task_complete":
-        decision: dict[str, t.Any] = data.get("decision") or {}
-        notes: list[str] = decision.get("reasons", [])
-        if notes:
-            icon, color = "⚠", "yellow"
-            label = "gate completed · " + "; ".join(notes)[:200]
-        else:
-            icon, color, label = "◆", "green", "gate completed"
-    elif etype == "completion_rejected":
-        icon, color = "↻", "yellow"
-        decision: dict[str, t.Any] = data.get("decision") or {}
-        said: list[str] = decision.get("reasons", [])
-        reasons = "; ".join(said)[:60]
-        label = "gate retry" + (f" — {reasons}" if reasons else "")
     elif etype == "reasoning_iteration":
         icon, color = "·", "dim"
         label = f"iteration {data.get('iteration')}/{data.get('max_iterations')}"
@@ -73,8 +59,6 @@ def event_line(event: CoreEvent) -> Text:
         icon, color = "◆", "red"
         kind = data.get("error_type") or etype
         label = f"{kind}: {str(data.get('error_message', ''))[:160]}"
-    elif etype == "last_message_response":
-        icon, color, label = "·", "dim", "checking final response"
     elif "path" in data:
         label = f"{label} · {data['path']}"
 

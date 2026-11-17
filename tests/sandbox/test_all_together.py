@@ -9,7 +9,7 @@ import subprocess
 import pytest
 from dotenv import load_dotenv
 
-from max_ai.capabilities.clients.to_delete.openrouter import OpenRouterChatCompletionClient
+from max_ai.capabilities.clients.openrouter import OpenRouterChatCompletionClient
 from max_ai.capabilities.sandbox.docker import DockerSandbox
 from max_ai.capabilities.sandbox.local import LocalSandbox
 from max_ai.capabilities.skills import LocalSkills

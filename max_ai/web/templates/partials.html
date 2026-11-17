@@ -46,13 +46,11 @@
   <div class="choices">
     <button class="primary" hx-post="/s/{{ sid }}/approve/{{ r.id }}" hx-vals='{"choice": "once"}' hx-swap="none">Allow once</button>
     {%- if r.rules %}
-    <button hx-post="/s/{{ sid }}/approve/{{ r.id }}" hx-vals='{"choice": "always"}' hx-swap="none">Always allow</button>
+    <button class="has-tip" hx-post="/s/{{ sid }}/approve/{{ r.id }}" hx-vals='{"choice": "always"}' hx-swap="none">Always allow
+      <span class="tip"><small>Keeps for next time</small>{% for rule in r.rules %}<code>{{ rule }}</code>{% endfor %}</span></button>
     {%- endif %}
     <button class="danger" hx-post="/s/{{ sid }}/approve/{{ r.id }}" hx-vals='{"choice": "deny"}' hx-swap="none">Deny</button>
   </div>
-  {%- if r.rules %}
-  <div class="keeps">“Always” keeps {% for rule in r.rules %}<code>{{ rule }}</code>{% endfor %}</div>
-  {%- endif %}
   <div class="hint">Or write a new message: the call is closed without running.</div>
 </div>
 {% endmacro %}
@@ -85,9 +83,21 @@
 {%- endmacro %}
 
 {% macro usage(u) -%}
-<span class="agent">{{ u.agent }}</span> · <span class="model">{{ u.model }}</span> · ↑ {{ u.tokens_in }} ↓ {{ u.tokens_out }} · ctx
-<span class="ctx"><span class="{{ u.level }}" style="width: {{ u.percent }}%"></span></span>
-<span class="{{ u.level }}">{{ u.used }} / {{ u.window }}</span>
+<span class="io" title="Tokens sent to the model and written by it, in this page's turns">↑ {{ u.tokens_in }} ↓ {{ u.tokens_out }}</span>
+<span class="sep">·</span>
+<button type="button" class="ctx-button">
+  Context <span class="ctx"><span class="{{ u.level }}" style="width: {{ u.percent }}%"></span></span>
+  <span class="{{ u.level }}">{{ u.used }} / {{ u.window }} · {{ u.percent }}%</span>
+  <span class="ctx-pop">
+    <b>Context window</b>
+    <span class="stack">{% for p in u.parts %}<span class="{{ p.kind }}" style="width: {{ p.share }}%"></span>{% endfor %}</span>
+    {%- for p in u.parts %}
+    <span class="ctx-row"><span class="dot {{ p.kind }}"></span>{{ p.name }}<span class="n">{{ p.tokens }}</span><span class="pc">{{ p.share }}%</span></span>
+    {%- endfor %}
+    <span class="ctx-row free"><span class="dot"></span>Free<span class="n">{{ u.free }}</span><span class="pc">{{ u.free_share }}%</span></span>
+    <small>As the last model call saw it. Only the messages grow; past the limit the conversation is compacted.</small>
+  </span>
+</button>
 {%- endmacro %}
 
 {% macro sessions(groups, current) -%}
@@ -101,56 +111,43 @@
 {%- endfor %}
 {%- endmacro %}
 
-{% macro trace(sid, tr) -%}
-<div id="trace" class="trace-panel" hx-get="/s/{{ sid }}/trace{% if tr.turn %}?turn={{ tr.turn }}{% endif %}"
-     hx-trigger="sse:spans throttle:600ms" hx-swap="outerHTML">
-  <div class="chips">
-    <button class="chip{% if not tr.turn %} active{% endif %}" hx-get="/s/{{ sid }}/trace" hx-target="#trace" hx-swap="outerHTML">All turns</button>
-    {%- for t in tr.turns %}
-    <button class="chip{% if t.id == tr.turn %} active{% endif %}" hx-get="/s/{{ sid }}/trace?turn={{ t.id }}"
-            hx-target="#trace" hx-swap="outerHTML" title="{{ t.name }}">Turn {{ loop.index }}</button>
-    {%- endfor %}
-    <span class="stats">{{ tr.stats }}</span>
-  </div>
-  {%- if not tr.rows %}
-  <div class="empty big">No activity yet. Send a message: its turns, model calls and tools show up here.</div>
-  {%- else %}
-  <svg class="overview" viewBox="0 0 1000 56" preserveAspectRatio="none">
-    {%- for x in tr.marks %}<line x1="{{ x }}" x2="{{ x }}" y1="0" y2="56" class="turn-mark"/>{% endfor %}
-    {%- for r in tr.rows if r.lane is not none %}
-    <rect x="{{ r.x }}" width="{{ r.w }}" y="{{ r.lane }}" height="18" class="{{ r.kind }} {{ r.status }}"><title>{{ r.name }} · {{ r.dur }}</title></rect>
-    {%- if r.ttft_w %}<rect x="{{ r.x }}" width="{{ r.ttft_w }}" y="{{ r.lane }}" height="18" class="ttft"/>{% endif %}
-    {%- endfor %}
-  </svg>
-  <div class="axis"><span>0s</span><span>model calls ▀ · tools ▄</span><span>{{ tr.total }}</span></div>
-  <div class="ledger">
-    {%- for r in tr.rows %}
-    <div class="row {{ r.kind }} {{ r.status }}" style="--depth: {{ r.depth }}"
-         hx-get="/s/{{ sid }}/span/{{ r.id }}" hx-target="#inspector" hx-swap="innerHTML">
-      <span class="label"><span class="icon"></span>{{ r.name }}</span>
-      <span class="dur">{{ r.dur }}</span>
-      <span class="track"><span class="bar" style="left: {{ r.left }}%; width: {{ r.width }}%">
-        {%- if r.ttft_pct %}<span class="wait" style="width: {{ r.ttft_pct }}%"></span>{% endif %}</span></span>
-    </div>
-    {%- endfor %}
-  </div>
+{% macro trace(sid, turns) -%}
+<div id="trace" class="trace-panel" hx-get="/s/{{ sid }}/trace" hx-trigger="sse:spans throttle:600ms" hx-swap="outerHTML">
+  {%- if not turns %}
+  <div class="empty big">Nothing yet.<br>Each turn shows here with its model calls and tools, on a timeline.</div>
   {%- endif %}
+  {%- for turn in turns %}
+  <section class="tturn {{ turn.status }}">
+    <header><span class="ttitle">{{ turn.title }}</span><span class="tdur">{{ turn.dur }}</span></header>
+    <div class="tstats">{{ turn.stats }}</div>
+    <ol class="tl">
+      {%- for r in turn.rows %}
+      <li class="ti {{ r.kind }} {{ r.status }}"><details data-id="{{ r.id }}">
+        <summary>
+          <span class="tdot"></span>
+          <span class="tmain"><b>{{ r.name }}</b>{% if r.line %}<span>{{ r.line }}</span>{% endif %}</span>
+          <span class="tdur">{{ r.dur }}</span>
+          <span class="ttrack"><span class="tbar" style="left: {{ r.left }}%; width: {{ r.width }}%">
+            {%- if r.ttft %}<span class="twait" style="width: {{ r.ttft }}%"></span>{% endif %}</span></span>
+        </summary>
+        {%- if r.input or r.output %}
+        <div class="tdetail">
+          {%- if r.input %}<h4>Input</h4><pre>{{ r.input }}</pre>{% endif %}
+          {%- if r.output %}<h4>Output</h4><pre>{{ r.output }}</pre>{% endif %}
+        </div>
+        {%- endif %}
+      </details></li>
+      {%- endfor %}
+    </ol>
+  </section>
+  {%- endfor %}
 </div>
 {%- endmacro %}
 
-{% macro inspector(s) -%}
-<div class="insp">
-  <div class="insp-head"><span class="kind {{ s.kind }}">{{ s.kind }}</span> <b>{{ s.name }}</b> <span class="state {{ s.status }}">{{ s.status }}</span></div>
-  <dl>{% for key, value in s.facts %}<dt>{{ key }}</dt><dd>{{ value }}</dd>{% endfor %}</dl>
-  {%- if s.input %}<h4>Input</h4><pre>{{ s.input }}</pre>{% endif %}
-  {%- if s.output %}<h4>Output</h4><pre>{{ s.output }}</pre>{% endif %}
-</div>
-{%- endmacro %}
-
-{% macro todos(items) -%}
-{%- if items %}
+{% macro todos(items, open=True) -%}
 {%- set done = items | selectattr("status", "equalto", "done") | list | length %}
-<details class="todos" open>
+{%- if items and done < items | length %}
+<details class="todos"{% if open %} open{% endif %}>
   <summary><span class="gem">◈</span> Tasks <span class="count">{{ done }}/{{ items | length }}</span></summary>
   {%- for t in items %}
   <div class="todo {{ t.status }}"><span class="box"></span><span>{{ t.content }}</span></div>

@@ -45,7 +45,7 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
     ``_from_config``. Everything else is written here, once.
     """
 
-    # True: commands cannot reach the host. The Policy asks less then.
+    # True: commands cannot reach the host.
     isolated: t.ClassVar[bool] = False
 
     component_type = "sandbox"

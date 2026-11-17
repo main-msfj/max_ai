@@ -57,7 +57,6 @@ class WebHost:
             Route("/s/{sid}/approve/{rid}", self.approve, methods=["POST"]),
             Route("/s/{sid}/answer/{rid}", self.answer, methods=["POST"]),
             Route("/s/{sid}/trace", self.trace),
-            Route("/s/{sid}/span/{span_id}", self.span),
             Route("/s/{sid}/menu", self.menu),
             Route("/s/{sid}/command", self.command),
             Route("/s/{sid}/files", self.files),
@@ -108,10 +107,11 @@ class WebHost:
         first = next((m.text() for m in ctx.messages if m.role == "user"), "")
         return HTMLResponse(self.html.page(
             sid=conversation.sid, agent_name=self.agent.name, model=self.agent.client.model,
+            description=getattr(self.agent, "description", "") or "",
             title=first.strip().splitlines()[0][:80] if first.strip() else "",
             history=history, status=conversation.status(), usage=conversation.usage(),
             busy=conversation.busy, sandbox=self.sandbox_label(),
-            todos=str(self.html.parts.todos(ctx.todos)), folder=self.workspace.folder(conversation.sid),
+            todos=str(self.html.parts.todos(ctx.todos, conversation.busy)), folder=self.workspace.folder(conversation.sid),
         ))
 
     def sandbox_label(self) -> str:
@@ -156,15 +156,7 @@ class WebHost:
 
     async def trace(self, request: Request) -> Response:
         conversation = await self.conversation(request.path_params["sid"])
-        turn = request.query_params.get("turn") or None
-        return HTMLResponse(Trace.render(self.html, conversation.sid, conversation.spans, turn))
-
-    async def span(self, request: Request) -> Response:
-        conversation = await self.conversation(request.path_params["sid"])
-        span = conversation.spans.spans.get(request.path_params["span_id"])
-        if span is None:
-            return HTMLResponse('<div class="empty">That span is gone.</div>')
-        return HTMLResponse(Trace.inspect(self.html, span))
+        return HTMLResponse(Trace.render(self.html, conversation.sid, conversation.spans))
 
     # -------- COMMANDS AND FILES -----------------------------------------------------------
     async def menu(self, _request: Request) -> Response:

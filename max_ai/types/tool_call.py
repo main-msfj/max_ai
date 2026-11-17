@@ -337,7 +337,7 @@ class ToolCallRecord(BaseModel):
 
         The ``result`` may carry ``success=True`` (normal completion)
         or ``success=False`` (timeout, cancellation, validation error,
-        runtime exception — captured by the executor's try/except).
+        runtime exception — captured by the dispatcher's try/except).
         Either way the status moves to ``CONSUMED``.
         """
         if self.is_consumed:
@@ -390,7 +390,7 @@ class ToolCallRecord(BaseModel):
     def force_consume(self, result: ToolResult) -> t.Self:
         """Force-transition a non-EXECUTING record to CONSUMED.
 
-        Used by the executor for paths that never reached EXECUTING
+        Used by the dispatcher for paths that never reached EXECUTING
         — rejected approvals, validation failures, tool-not-found.
         These records still need a terminal result for downstream
         consumers (persistence, response building) but ``mark_consumed``

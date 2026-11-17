@@ -43,13 +43,6 @@ class RunContext(BaseModel):
     #         "Overwriting, editing or deleting a file needs a matching entry."
     #     ),
     # )
-    allowed_rules: list[str] = Field(
-        default_factory=list,
-        description=(
-            "Policy rules the user allowed during this session (\"always "
-            "allow\"), e.g. bash(npm:*) or write_file. Added to the agent's allow list."
-        ),
-    )
     completion_state: dict[str, dict[str, JsonValue]] = Field(
         default_factory=dict,
         description=(

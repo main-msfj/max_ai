@@ -25,11 +25,11 @@ from ..core.event_type import (
 from ..core.harness import messages as harness
 from ..core.harness.permissions import Permissions
 from ..core.messages import HARNESS_SOURCE, HARNESS_TAG, UserMessage
-from ..core.spans import SpanProjector
 from ..core.tool import ToolDispatcher
 from ..core.tool.display import BASH
 from ..types.run_context import RunContext
 from ..types.tool_call import ToolResult
+from .spans import SpanProjector
 from .view import Html, Requests, ToolCard, TurnView
 from .workspace import Workspace
 
@@ -93,17 +93,31 @@ class Conversation:
         return str(self.html.parts.status(mode, int(self.started_at * 1000)))
 
     def usage(self) -> str:
-        """Tokens spent and how full the window is, as the last model call left it."""
-        agent = self.host.agent
+        """Tokens spent, and the model's window part by part as the last call left it."""
+        window = self.host.agent.client.config.max_context_window
         parts = self.context.context
-        window = (parts.window if parts else 0) or agent.client.config.max_context_window
-        used = parts.prompt + parts.tools + parts.messages if parts else 0
+        if parts is not None and parts.window:
+            window = parts.window
+        sizes = [
+            ("System prompt", parts.prompt if parts else 0, "c-prompt"),
+            ("Tools", parts.tools if parts else 0, "c-tools"),
+            ("Messages", parts.messages if parts else 0, "c-messages"),
+        ]
+        used = sum(size for _, size, _ in sizes)
         ratio = min(1.0, used / window) if window else 0.0
+
+        def share(size: int) -> float:
+            return round(min(100.0, size / window * 100), 1) if window else 0.0
+
         return str(self.html.parts.usage({
-            "agent": agent.name, "model": agent.client.model,
             "tokens_in": self.k(self.tokens_in), "tokens_out": self.k(self.tokens_out),
-            "used": self.k(used), "window": self.k(window), "percent": round(ratio * 100, 1),
+            "used": self.k(used), "window": self.k(window), "percent": round(ratio * 100),
             "level": "high" if ratio >= 0.85 else "mid" if ratio >= 0.6 else "low",
+            "parts": [
+                {"name": name, "tokens": self.k(size), "share": share(size), "kind": kind}
+                for name, size, kind in sizes
+            ],
+            "free": self.k(max(window - used, 0)), "free_share": round(max(0.0, 100 - ratio * 100), 1),
         }))
 
     def _show_state(self) -> None:
@@ -186,6 +200,8 @@ class Conversation:
                 self.publish(self._note(f"{name}: approved once; the rule was not kept: {error}", "warn"))
             else:
                 kept = Permissions.rules_for(name, record.parameters) if always else []
+                if kept:
+                    self.host.commands.rules = None  # the shield shows the new rule
                 where = " (kept in your setting.json)" if saved else ""
                 rule = f": always allowed {', '.join(kept)}{where}" if always else ": approved once"
                 self.publish(self._note(f"{name}{rule}", "ok"))
@@ -251,6 +267,8 @@ class Conversation:
             self.spans.end_turn("error")
         finally:
             self.publish(*self.view.finish())
+            # Tasks left when the turn ends fold to one line; all done, they go.
+            self.publish(self.html.replace("todos", str(self.html.parts.todos(self.context.todos, False))))
             self.task = None
             await self.host.save(self.context)
             self._show_state()

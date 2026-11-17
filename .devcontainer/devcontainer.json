@@ -8,8 +8,7 @@
     "workspaceMount": "source=${localWorkspaceFolder},target=/max_ai,type=bind,consistency=cached",
     "forwardPorts": [
         8081,
-        3000,
-        9001
+        3000
     ],
     "portsAttributes": {
         "8081": {
@@ -17,9 +16,6 @@
         },
         "3000": {
             "label": "Langfuse"
-        },
-        "9001": {
-            "label": "MinIO Console"
         }
     },
     "runArgs": [

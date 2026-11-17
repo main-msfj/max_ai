@@ -189,6 +189,12 @@ class Agent(ComponentBase[AgentSpec]):
             self._check(value, CoreMiddleware, "middlewares")
         for value in self.gates:
             self._check(value, CompletionBase, "gates")
+        # 3. Gates are not built yet: an agent with them is never made.
+        if self.gates:
+            raise NotImplementedError(
+                "Completion gates are still in progress and not implemented yet. "
+                "Build the agent without gates=."
+            )
 
     @staticmethod
     def _check(value: object, kind: type, what: str) -> None:

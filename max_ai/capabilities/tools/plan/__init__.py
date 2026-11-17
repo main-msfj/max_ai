@@ -1,7 +1,7 @@
 """Plan data model and the native update_plan tool.
 
 ``AgentPlan``/``PlanStep`` are re-exported eagerly: a pure Pydantic model
-that ``core.event_type``, ``types.run_context`` and ``base.reasoning``
+that ``core.event_type`` and ``types.run_context``
 import directly, so keep this eager import free of anything heavier.
 
 ``AgentUpdatePlanTool`` is exported lazily: it imports ``core.event_type``,

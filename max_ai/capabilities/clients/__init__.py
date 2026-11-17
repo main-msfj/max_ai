@@ -1,8 +1,1 @@
-"""Module providing capability implementations and supporting utilities."""
-from .to_delete.openai import OpenAIChatCompletionClient
-from .to_delete.openrouter import OpenRouterChatCompletionClient
-
-__all__ = [
-    "OpenAIChatCompletionClient",
-    "OpenRouterChatCompletionClient",
-]
+"""Model clients: import each from its own package (``clients.openrouter``, ``clients.openai``)."""

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-# Start the infrastructure (MongoDB, MinIO, Azurite, Langfuse). Compose
+# Start the infrastructure (MongoDB, Langfuse). Compose
 # only creates or starts what is missing, so running containers are untouched.
 # Never block the devcontainer: if Docker fails, the log says why.
 echo "Starting docker-infra..."

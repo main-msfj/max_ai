@@ -1,6 +1,5 @@
-"""Composable agents using the dispatcher/executor stack."""
+"""The agent: harness, loop, tools and sandbox put together."""
 
-from ..core.policy import Policy
-from .agent_old import Agent
+from .agent import Agent
 
-__all__ = ["Agent", "Policy"]
+__all__ = ["Agent"]

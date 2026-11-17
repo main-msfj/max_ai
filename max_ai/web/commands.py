@@ -3,6 +3,7 @@ something answer with a panel; the page does the rest on its own (``where``)."""
 
 from __future__ import annotations
 
+import time
 import typing as t
 
 from ..base.tools import CoreTool
@@ -19,6 +20,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
     "/mcp": ("list the MCP servers with their tools", "panel"),
     "/skills": ("list the agent's skills", "panel"),
     "/session": ("this conversation's id and folder", "panel"),
+    "/permissions": ("the sandbox and your allow, ask and deny rules", "panel"),
     "/resume": ("pick a saved conversation", "panel"),
     "/files": ("open the workspace files", "page"),
     "/trace": ("open the Trajectory: model calls and tools", "page"),
@@ -41,9 +43,12 @@ SHORTCUTS: tuple[tuple[str, str], ...] = (
 class Commands:
     """What each panel command shows, and the skills it lists."""
 
+    RULES_FOR = 60  # Seconds the rules of setting.json are kept before reading them again
+
     def __init__(self, host: WebHost) -> None:
         self.host = host
         self.skills: list[tuple[str, str]] | None = None  # name, description; loaded once
+        self.rules: tuple[float, dict[str, list[str]]] | None = None  # When read, and the rules
 
     async def menu(self) -> list[dict[str, str]]:
         """The entries of the ``/`` menu: commands, then skills."""
@@ -78,6 +83,8 @@ class Commands:
                 {"name": "saved", "text": "yes" if store is not None else "no store: nothing is saved"},
                 {"name": "messages", "text": str(len(conversation.context.messages))},
             ]
+        if name == "/permissions":
+            return "Permissions", await self._permission_rows()
         if name == "/resume":
             return "Resume", await self._session_rows()
         return "Unknown command", [{"text": f"{name} is not a command. Try /help."}]
@@ -121,6 +128,43 @@ class Commands:
             rows.append({"group": f"{sid} · {len(mine)} tools" if mine else f"{sid} · not connected"})
             rows += [self._tool_row(tool, tool.name.removeprefix(sid + "_")) for tool in mine]
         return rows
+
+    async def _permission_rows(self) -> list[dict[str, t.Any]]:
+        """Where commands run, and the rules of the user's setting.json."""
+        sandbox = self.host.agent.sandbox
+        rows: list[dict[str, t.Any]] = [{"name": "sandbox", "text": self.host.sandbox_label()}]
+        if sandbox is None:
+            return rows + [{"text": "Without a sandbox there is no setting.json: each tool asks as it is built to."}]
+        box = sandbox.bind(self.host.user_id)
+        rows.append({"name": "settings", "text": str(box.layout.settings)})
+        try:
+            rules = await self.permissions()
+        except Exception as error:  # noqa: BLE001 — the sandbox may be down
+            return rows + [{"text": f"Could not read the rules: {error}"}]
+        for kind, meaning in (("allow", "run without asking"), ("ask", "always asked"), ("deny", "never run")):
+            found = rules.get(kind, [])
+            rows.append({"group": f"{kind} · {meaning}"})
+            rows += [{"name": rule, "text": ""} for rule in found] or [{"text": "none"}]
+        rows.append({"group": "Always asked, whatever the rules say"})
+        rows.append({"text": "rm, sudo, git push --force, git reset --hard, kill, eval, commands built with $( ) or backticks, and setting.json itself."})
+        return rows
+
+    async def permissions(self) -> dict[str, list[str]]:
+        """The rules of setting.json, read again after ``RULES_FOR`` seconds or
+        when "always allow" keeps one (``self.rules = None``)."""
+        if self.rules is not None and time.monotonic() - self.rules[0] < self.RULES_FOR:
+            return self.rules[1]
+        sandbox = self.host.agent.sandbox
+        if sandbox is None:
+            return {}
+        box = sandbox.bind(self.host.user_id)
+        try:
+            rules = await box.permissions()
+        except Exception:  # noqa: BLE001 — no .agent/ yet: made, then read again
+            await box.prepare()
+            rules = await box.permissions()
+        self.rules = (time.monotonic(), rules)
+        return rules
 
     async def _session_rows(self) -> list[dict[str, t.Any]]:
         store = self.host.store

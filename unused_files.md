@@ -26,27 +26,27 @@ Se mandan al sandbox o al contenedor como texto, no con `import`.
 - `max_ai/capabilities/tools/filesystem/read_file/script.py`
 - `max_ai/capabilities/tools/filesystem/write_file/script.py`
 
-## 2. Revisar uno por uno antes de borrar
+## 2. Revisados el 2026-11-17: se quedan
 
-Knowledge está pendiente ("lo haremos después") y se va a usar. Los demás son `__init__.py` de paquetes vivos o textos (`harness/messages.py`) que hoy solo toca el agente viejo; puede que sobren, pero no lo verifiqué.
+Todos se usan: knowledge (y `mongodb_vector.py`, que lo usa `knowledge/mongodb`) es una pieza del agente nuevo; `harness/messages.py` lo usan el CLI, la web, `core/blocks.py`, `core/event_type.py` y `core/tokenizer.py`; los `__init__.py` son los paquetes de piezas vivas. `clients/__init__.py` quedó solo con su docstring. `core/middleware/` (`MiddlewareChain`) se decide con la opción B de middlewares: hoy solo lo nombra un parámetro opcional de `ToolDispatcher` que el agente nuevo no pasa.
 
-- `max_ai/capabilities/clients/__init__.py`
-- `max_ai/capabilities/knowledge/__init__.py`
-- `max_ai/capabilities/knowledge/local/__init__.py`
-- `max_ai/capabilities/knowledge/local/_model.py`
-- `max_ai/capabilities/knowledge/local/_registry.py`
-- `max_ai/capabilities/knowledge/mongodb/__init__.py`
-- `max_ai/capabilities/knowledge/mongodb/_model.py`
-- `max_ai/capabilities/knowledge/mongodb/_registry.py`
-- `max_ai/capabilities/knowledge/sqlite/__init__.py`
-- `max_ai/capabilities/knowledge/sqlite/_model.py`
-- `max_ai/capabilities/knowledge/sqlite/_registry.py`
-- `max_ai/capabilities/mongodb_vector.py`
-- `max_ai/capabilities/sandbox/__init__.py`
-- `max_ai/core/harness/__init__.py`
-- `max_ai/core/harness/messages.py`
-- `max_ai/core/middleware/__init__.py`
-- `max_ai/core/model/__init__.py`
+- ~~`max_ai/capabilities/clients/__init__.py`~~ keep it
+- ~~`max_ai/capabilities/knowledge/__init__.py`~~ keep it
+- ~~`max_ai/capabilities/knowledge/local/__init__.py`~~ keep it
+- ~~`max_ai/capabilities/knowledge/local/_model.py`~~ keep it
+- ~~`max_ai/capabilities/knowledge/local/_registry.py`~~ keep it
+- ~~`max_ai/capabilities/knowledge/mongodb/__init__.py`~~ keep it
+- ~~`max_ai/capabilities/knowledge/mongodb/_model.py`~~ keep it
+- ~~`max_ai/capabilities/knowledge/mongodb/_registry.py`~~ keep it
+- ~~`max_ai/capabilities/knowledge/sqlite/__init__.py`~~ keep it
+- ~~`max_ai/capabilities/knowledge/sqlite/_model.py`~~ keep it
+- ~~`max_ai/capabilities/knowledge/sqlite/_registry.py`~~ keep it
+- ~~`max_ai/capabilities/mongodb_vector.py`~~ keep it
+- ~~`max_ai/capabilities/sandbox/__init__.py`~~ keep it
+- ~~`max_ai/core/harness/__init__.py`~~ keep it
+- ~~`max_ai/core/harness/messages.py`~~ keep it
+- ~~`max_ai/core/middleware/__init__.py`~~ keep it (se decide con la opción B de middlewares)
+- ~~`max_ai/core/model/__init__.py`~~ keep it
 
 ## 4. Borrar ya: borradores y copias (borrados el 2026-11-17)
 
@@ -57,131 +57,131 @@ Nadie los importaba, ni el agente viejo.
 - ~~`max_ai/core/tool/dispatcher_draft.py`~~
 - ~~`max_ai/core/tool/state_draft.py`~~
 
-- `max_ai/base/skills_previos.py` **no** va aquí: el agente viejo toma de ahí `CoreSkillRegistry`; se borra junto con él (grupo 6).
+- ~~`max_ai/base/skills_previos.py`~~ (borrado el 2026-11-17, cuando se comentó el agente viejo)
 
 ## 5. Borrar cuando `max_ai.agents.Agent` pase al nuevo: cuarentena
 
 Código viejo movido a `to_delete/` para que el agente viejo siga vivo (44 archivos).
 
-- `max_ai/capabilities/clients/to_delete/__init__.py`
-- `max_ai/capabilities/clients/to_delete/_schema.py`
-- `max_ai/capabilities/clients/to_delete/openai/__init__.py`
-- `max_ai/capabilities/clients/to_delete/openai/_model.py`
-- `max_ai/capabilities/clients/to_delete/openai/client.py`
-- `max_ai/capabilities/clients/to_delete/openrouter/__init__.py`
-- `max_ai/capabilities/clients/to_delete/openrouter/_model.py`
-- `max_ai/capabilities/clients/to_delete/openrouter/client.py`
-- `max_ai/capabilities/compaction/to_delete/__init__.py`
-- `max_ai/capabilities/compaction/to_delete/summary/__init__.py`
-- `max_ai/capabilities/compaction/to_delete/summary/_model.py`
-- `max_ai/capabilities/compaction/to_delete/summary/_strategy.py`
-- `max_ai/capabilities/compaction/to_delete/window/__init__.py`
-- `max_ai/capabilities/compaction/to_delete/window/_model.py`
-- `max_ai/capabilities/compaction/to_delete/window/_strategy.py`
-- `max_ai/capabilities/memory/to_delete/__init__.py`
-- `max_ai/capabilities/memory/to_delete/local/__init__.py`
-- `max_ai/capabilities/memory/to_delete/local/_model.py`
-- `max_ai/capabilities/memory/to_delete/local/_registry.py`
-- `max_ai/capabilities/memory/to_delete/mongodb/__init__.py`
-- `max_ai/capabilities/memory/to_delete/mongodb/_model.py`
-- `max_ai/capabilities/memory/to_delete/mongodb/_registry.py`
-- `max_ai/capabilities/memory/to_delete/sqlite/__init__.py`
-- `max_ai/capabilities/memory/to_delete/sqlite/_model.py`
-- `max_ai/capabilities/memory/to_delete/sqlite/_registry.py`
-- `max_ai/capabilities/tools/to_delete/__init__.py`
-- `max_ai/capabilities/tools/to_delete/bash/__init__.py`
-- `max_ai/capabilities/tools/to_delete/bash/_permissions.py`
-- `max_ai/capabilities/tools/to_delete/bash/_tool.py`
-- `max_ai/capabilities/tools/to_delete/bash/constant.py`
-- `max_ai/capabilities/tools/to_delete/file_system/__init__.py`
-- `max_ai/capabilities/tools/to_delete/file_system/_capability.py`
-- `max_ai/capabilities/tools/to_delete/file_system/_toolset.py`
-- `max_ai/capabilities/tools/to_delete/file_system/constant.py`
-- `max_ai/capabilities/tools/to_delete/filesystem/__init__.py`
-- `max_ai/capabilities/tools/to_delete/filesystem/_base.py`
-- `max_ai/capabilities/tools/to_delete/filesystem/edit/__init__.py`
-- `max_ai/capabilities/tools/to_delete/filesystem/edit/_base.py`
-- `max_ai/capabilities/tools/to_delete/filesystem/read/__init__.py`
-- `max_ai/capabilities/tools/to_delete/filesystem/read/_base.py`
-- `max_ai/capabilities/tools/to_delete/filesystem/write/__init__.py`
-- `max_ai/capabilities/tools/to_delete/filesystem/write/_base.py`
-- `max_ai/capabilities/tools/to_delete/filesystem/read/script.py`
-- `max_ai/capabilities/tools/to_delete/filesystem/script.py`
+- ~~`max_ai/capabilities/clients/to_delete/__init__.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/clients/to_delete/_schema.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/clients/to_delete/openai/__init__.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/clients/to_delete/openai/_model.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/clients/to_delete/openai/client.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/clients/to_delete/openrouter/__init__.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/clients/to_delete/openrouter/_model.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/clients/to_delete/openrouter/client.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/compaction/to_delete/__init__.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/compaction/to_delete/summary/__init__.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/compaction/to_delete/summary/_model.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/compaction/to_delete/summary/_strategy.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/compaction/to_delete/window/__init__.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/compaction/to_delete/window/_model.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/compaction/to_delete/window/_strategy.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/memory/to_delete/__init__.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/memory/to_delete/local/__init__.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/memory/to_delete/local/_model.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/memory/to_delete/local/_registry.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/memory/to_delete/mongodb/__init__.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/memory/to_delete/mongodb/_model.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/memory/to_delete/mongodb/_registry.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/memory/to_delete/sqlite/__init__.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/memory/to_delete/sqlite/_model.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/memory/to_delete/sqlite/_registry.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/tools/to_delete/__init__.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/tools/to_delete/bash/__init__.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/tools/to_delete/bash/_permissions.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/tools/to_delete/bash/_tool.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/tools/to_delete/bash/constant.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/tools/to_delete/file_system/__init__.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/tools/to_delete/file_system/_capability.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/tools/to_delete/file_system/_toolset.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/tools/to_delete/file_system/constant.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/tools/to_delete/filesystem/__init__.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/tools/to_delete/filesystem/_base.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/tools/to_delete/filesystem/edit/__init__.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/tools/to_delete/filesystem/edit/_base.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/tools/to_delete/filesystem/read/__init__.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/tools/to_delete/filesystem/read/_base.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/tools/to_delete/filesystem/write/__init__.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/tools/to_delete/filesystem/write/_base.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/tools/to_delete/filesystem/read/script.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/tools/to_delete/filesystem/script.py`~~ (ya no existe)
 
 ## 6. Borrar cuando `max_ai.agents.Agent` pase al nuevo: piezas del agente viejo
 
 Agente viejo, su loop (`reasoning`), workspace, executor, gates, bus de eventos, capas viejas, y los errores y tipos que solo ellos usan (70 archivos). El sandbox, el loop nuevo y `LoopHook` / `ToolHook` los reemplazan.
 
 - `max_ai/agents/agent_old.py`
-- `max_ai/base/clients_old.py`
-- `max_ai/base/compaction_old.py`
-- `max_ai/base/context.py`
-- `max_ai/base/executor.py`
-- `max_ai/base/memory.py`
-- `max_ai/base/reasoning.py`
-- `max_ai/base/workspace.py`
+- ~~`max_ai/base/clients_old.py`~~ (ya no existe)
+- ~~`max_ai/base/compaction_old.py`~~ (ya no existe)
+- ~~`max_ai/base/context.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/base/executor.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/base/memory.py`~~ (ya no existe)
+- ~~`max_ai/base/reasoning.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/base/workspace.py`~~ (borrado el 2026-11-17)
 - `max_ai/capabilities/completion_gate/__init__.py`
 - `max_ai/capabilities/completion_gate/_model.py`
 - `max_ai/capabilities/completion_gate/gate.py`
-- `max_ai/capabilities/context/__init__.py`
-- `max_ai/capabilities/context/local/__init__.py`
-- `max_ai/capabilities/context/local/_model.py`
-- `max_ai/capabilities/context/local/_registry.py`
-- `max_ai/capabilities/context/sqlite/__init__.py`
-- `max_ai/capabilities/context/sqlite/_model.py`
-- `max_ai/capabilities/context/sqlite/_registry.py`
-- `max_ai/capabilities/executor/__init__.py`
-- `max_ai/capabilities/executor/docker/__init__.py`
-- `max_ai/capabilities/executor/docker/_executor.py`
-- `max_ai/capabilities/executor/docker/_model.py`
-- `max_ai/capabilities/executor/local/__init__.py`
-- `max_ai/capabilities/executor/local/_executor.py`
-- `max_ai/capabilities/executor/local/_model.py`
-- `max_ai/capabilities/executor/modal/__init__.py`
-- `max_ai/capabilities/executor/modal/_executor.py`
-- `max_ai/capabilities/executor/modal/_model.py`
-- `max_ai/capabilities/reasoning/__init__.py`
-- `max_ai/capabilities/reasoning/guards.py`
-- `max_ai/capabilities/reasoning/react/__init__.py`
-- `max_ai/capabilities/reasoning/react/loop.py`
-- `max_ai/capabilities/stacks/context_layer.py`
-- `max_ai/capabilities/tools/workspace/__init__.py`
-- `max_ai/capabilities/tools/workspace/_toolset.py`
-- `max_ai/capabilities/workspace/__init__.py`
-- `max_ai/capabilities/workspace/_remote.py`
-- `max_ai/capabilities/workspace/azure_blob/__init__.py`
-- `max_ai/capabilities/workspace/azure_blob/_model.py`
-- `max_ai/capabilities/workspace/azure_blob/_workspace.py`
-- `max_ai/capabilities/workspace/local/__init__.py`
-- `max_ai/capabilities/workspace/local/_filesystem.py`
-- `max_ai/capabilities/workspace/local/_model.py`
-- `max_ai/capabilities/workspace/local/_workspace.py`
-- `max_ai/capabilities/workspace/minio/__init__.py`
-- `max_ai/capabilities/workspace/minio/_model.py`
-- `max_ai/capabilities/workspace/minio/_workspace.py`
-- `max_ai/core/environment/__init__.py`
-- `max_ai/core/environment/manager.py`
+- ~~`max_ai/capabilities/context/__init__.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/context/local/__init__.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/context/local/_model.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/context/local/_registry.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/context/sqlite/__init__.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/context/sqlite/_model.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/context/sqlite/_registry.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/executor/__init__.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/executor/docker/__init__.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/executor/docker/_executor.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/executor/docker/_model.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/executor/local/__init__.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/executor/local/_executor.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/executor/local/_model.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/executor/modal/__init__.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/executor/modal/_executor.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/executor/modal/_model.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/reasoning/__init__.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/reasoning/guards.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/reasoning/react/__init__.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/reasoning/react/loop.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/stacks/context_layer.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/tools/workspace/__init__.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/tools/workspace/_toolset.py`~~ (ya no existe)
+- ~~`max_ai/capabilities/workspace/__init__.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/workspace/_remote.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/workspace/azure_blob/__init__.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/workspace/azure_blob/_model.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/workspace/azure_blob/_workspace.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/workspace/local/__init__.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/workspace/local/_filesystem.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/workspace/local/_model.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/workspace/local/_workspace.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/workspace/minio/__init__.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/workspace/minio/_model.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/capabilities/workspace/minio/_workspace.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/core/environment/__init__.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/core/environment/manager.py`~~ (borrado el 2026-11-17)
 - `max_ai/core/events_bus/__init__.py`
 - `max_ai/core/events_bus/bus.py`
 - `max_ai/core/events_bus/hooks.py`
-- `max_ai/core/executor/__init__.py`
-- `max_ai/core/executor/process.py`
-- `max_ai/core/executor/remote.py`
-- `max_ai/core/executor/sync.py`
-- `max_ai/core/runtime/__init__.py`
-- `max_ai/core/runtime/status.py`
-- `max_ai/core/stacks/__init__.py`
-- `max_ai/core/stacks/container.py`
-- `max_ai/errors/agent.py`
-- `max_ai/errors/capabilities.py`
-- `max_ai/errors/compaction.py`
-- `max_ai/errors/executor.py`
-- `max_ai/errors/manager.py`
-- `max_ai/errors/memory.py`
-- `max_ai/errors/workspace.py`
-- `max_ai/types/runtime.py`
-- `max_ai/types/stacks.py`
-- `max_ai/types/workspace.py`
+- ~~`max_ai/core/executor/__init__.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/core/executor/process.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/core/executor/remote.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/core/executor/sync.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/core/runtime/__init__.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/core/runtime/status.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/core/stacks/__init__.py`~~ (ya no existe)
+- ~~`max_ai/core/stacks/container.py`~~ (ya no existe)
+- ~~`max_ai/errors/agent.py`~~ (ya no existe)
+- ~~`max_ai/errors/capabilities.py`~~ (ya no existe)
+- ~~`max_ai/errors/compaction.py`~~ (ya no existe)
+- ~~`max_ai/errors/executor.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/errors/manager.py`~~ (ya no existe)
+- ~~`max_ai/errors/memory.py`~~ (ya no existe)
+- ~~`max_ai/errors/workspace.py`~~ (ya no existe)
+- ~~`max_ai/types/runtime.py`~~ (ya no existe)
+- ~~`max_ai/types/stacks.py`~~ (ya no existe)
+- ~~`max_ai/types/workspace.py`~~ (borrado el 2026-11-17)
 
 ## 7. Por decidir: guardar sesiones y cuotas
 
@@ -206,14 +206,14 @@ El agente nuevo no guarda la conversación por sí mismo (recibe `save=`), así 
 
 No los alcanza el agente nuevo y no revisé quién más los usa.
 
-- `max_ai/capabilities/mcp/config.py`
-- `max_ai/core/model/observation.py`
-- `max_ai/core/observation/__init__.py`
+- ~~`max_ai/capabilities/mcp/config.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/core/model/observation.py`~~ (borrado el 2026-11-17)
+- ~~`max_ai/core/observation/__init__.py`~~ (borrado el 2026-11-17)
 
 ## También dentro de archivos que sí se usan
 
 - `max_ai/types/run_context.py`: campos del agente viejo (`compaction`, `message_history`, `plan`, `completion_state`, `runtime_state`...).
-- `max_ai/core/model/agent.py` (`AgentSpec`): `workspace`, `executor`, `compaction`, `policy`.
+- `max_ai/core/model/agent.py` (`AgentSpec`): `workspace`, `compaction`, `policy` (`executor` ya se quitó).
 - `max_ai/types/agent_response.py`: el agente nuevo devuelve `LoopState`; `AgentResponse` solo lo usan el agente viejo y los middlewares (`on_run_end`).
 - `max_ai/base/middleware.py` y los tres middlewares: cambian de firma (opción B) junto con el paso final.
 - `max_ai/base/component.py`: entradas de `KNOWN_PROVIDERS` que apuntan a `to_delete/` y a clases viejas.

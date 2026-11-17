@@ -14,26 +14,19 @@ __all__ = [
     "tool",
     "FunctionAsTool",
     "BashTool",
-    "FileSystemTools",
-    "FileSystem",
-    "UserFileSystem",
 ]
 
 _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "CoreTool": ("max_ai.base.tools", "CoreTool"),
     "tool": ("max_ai.capabilities.tools.decorator", "tool"),
     "FunctionAsTool": ("max_ai.capabilities.tools.function_as_tool", "FunctionAsTool"),
-    "BashTool": ("max_ai.capabilities.tools.to_delete.bash", "BashTool"),
-    "FileSystem": ("max_ai.capabilities.tools.to_delete.file_system", "FileSystem"),
-    "FileSystemTools": ("max_ai.capabilities.tools.to_delete.file_system", "FileSystemTools"),
-    "UserFileSystem": ("max_ai.capabilities.tools.to_delete.file_system", "UserFileSystem"),
+    "BashTool": ("max_ai.capabilities.tools.bash", "BashTool"),
 }
 
 if t.TYPE_CHECKING:  # static analyzers see the real symbols
     from ...base.tools import CoreTool
-    from .to_delete.bash import BashTool
+    from .bash import BashTool
     from .decorator import tool
-    from .to_delete.file_system import FileSystem, FileSystemTools, UserFileSystem
     from .function_as_tool import FunctionAsTool
 
 

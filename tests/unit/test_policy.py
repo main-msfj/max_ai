@@ -3,17 +3,15 @@
 from types import SimpleNamespace
 
 import pytest
+from max_ai.capabilities.tools.to_delete.bash import BashTool
 
 from max_ai.agents.agent_old import Agent
 from max_ai.capabilities.clients.to_delete.openai import OpenAIChatCompletionClient
-from max_ai.capabilities.executor.local import LocalExecutor
-from max_ai.capabilities.tools.to_delete.bash import BashTool
 from max_ai.capabilities.tools.to_delete.file_system import FileSystemTools
 from max_ai.capabilities.workspace.local import LocalWorkspace
-from max_ai.core.messages import AssistantMessage, ToolCall, ToolMessage
+from max_ai.core.messages import AssistantMessage, ToolCall
 from max_ai.core.policy import DEFAULT_DENY, Policy
 from max_ai.types.completions import ChatCompletionResult, Usage
-from max_ai.types.run_context import RunContext
 from max_ai.types.tools import ToolApprovalMode
 
 
@@ -131,22 +129,6 @@ class BashOnceClient:
         message = AssistantMessage(source="fake", content="" if calls else "done", tool_calls=calls)
         return ChatCompletionResult(message=message, usage=Usage(), model=self.model,
                                     finish_reason="tool_calls" if calls else "stop")
-
-
-async def test_the_agent_never_runs_a_denied_command(tmp_path):
-    marker = tmp_path / "ran"
-    agent = Agent(name="t", description="d", instructions="i",
-                  client=BashOnceClient(f"pwd && env sudo touch {marker}"),
-                  workspace=LocalWorkspace(root=tmp_path / "ws"),
-                  executor=LocalExecutor(allow_commands=True))
-    ctx = RunContext(user_id="u", session_id="s")
-    async with agent:
-        response = await agent.run("go", run_context=ctx)
-
-    assert response.final_text == "done"
-    [answer] = [m for m in ctx.messages if isinstance(m, ToolMessage)]
-    assert not answer.success and "Denied by policy: bash(sudo:*)" in answer.text()
-    assert not marker.exists()
 
 
 def test_the_policy_is_saved_with_the_agent(tmp_path, monkeypatch):

@@ -24,7 +24,7 @@ def bm25(
     total = len(docs)
     average = sum(len(doc) for doc in docs) / total or 1.0
     seen_in = Counter(word for doc in docs for word in set(doc))
-    scores = []
+    scores: list[float] = []
     for doc in docs:
         counts = Counter(doc)
         score = 0.0

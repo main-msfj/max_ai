@@ -38,10 +38,15 @@
 
   // Folders stay open when the tree is drawn again.
   const openDirs = new Set();
+  const openRows = new Set();  // the same for the rows of the Trajectory
   document.addEventListener("toggle", (e) => {
-    const dir = e.target;
-    if (dir.matches?.("details.dir")) dir.open ? openDirs.add(dir.dataset.path) : openDirs.delete(dir.dataset.path);
+    const el = e.target;
+    if (el.matches?.("details.dir")) el.open ? openDirs.add(el.dataset.path) : openDirs.delete(el.dataset.path);
+    if (el.matches?.(".ti details")) el.open ? openRows.add(el.dataset.id) : openRows.delete(el.dataset.id);
   }, true);
+  document.addEventListener("htmx:afterSettle", () => {
+    for (const row of document.querySelectorAll("#trace .ti details")) if (openRows.has(row.dataset.id)) row.open = true;
+  });
   document.addEventListener("htmx:afterSwap", (e) => {
     if (e.target.id === "tree") {
       for (const dir of e.target.querySelectorAll("details.dir")) dir.open = openDirs.has(dir.dataset.path);
@@ -110,7 +115,7 @@
     if (/^\/\S*$/.test(b.value) && !b.value.includes("\n")) {
       const q = b.value.toLowerCase();
       const all = await getCommands();
-      Object.assign(menu, { kind: "/", start: 0, index: 0, items: all.filter((c) => c.name.startsWith(q)) });
+      Object.assign(menu, { kind: "/", start: 0, index: 0, keep: false, items: all.filter((c) => c.name.startsWith(q)) });
       return drawMenu();
     }
     // 2. A file: the word being written starts with "@".
@@ -124,7 +129,7 @@
       // A path written whole needs no menu: Enter sends.
       if (found.length === 1 && found[0].name.toLowerCase() === q) return closeMenu();
       if (!found.length) found.push({ name: all.length ? "no file matches" : "the workspace is empty", description: "", none: true });
-      Object.assign(menu, { kind: "@", start: before.length - mention[1].length - 1, index: 0, items: found });
+      Object.assign(menu, { kind: "@", keep: false, start: before.length - mention[1].length - 1, index: 0, items: found });
       return drawMenu();
     }
     closeMenu();
@@ -143,17 +148,44 @@
       return;
     }
     if (item.kind === "skill") {  // a skill waits for what it should do
-      b.value = item.name + " ";
+      b.value = item.name + " " + (menu.keep ? b.value : "");
       b.focus();
       return;
     }
-    b.value = "";
-    grow(b);
+    if (!menu.keep) { b.value = ""; grow(b); }
     run(item.name);
   };
 
+  // The Commands and Files buttons: open their menu, or close it if it is open.
+  const toggleMenu = (trigger) => {
+    const b = box();
+    if (!$("menu").hidden && menu.kind === trigger) {
+      closeMenu();
+      // The trigger the button wrote, still alone, goes too.
+      if (b.value.endsWith(trigger) && (b.value.length === 1 || /\s/.test(b.value.at(-2)))) b.value = b.value.slice(0, -1);
+      b.focus();
+      return;
+    }
+    if (trigger === "/" && b.value.trim() && !b.value.startsWith("/")) {
+      // Text already written stays: the menu runs a command without touching it.
+      getCommands().then((all) => {
+        Object.assign(menu, { kind: "/", start: 0, index: 0, keep: true, items: all });
+        drawMenu();
+        b.focus();
+      });
+      return;
+    }
+    if (trigger === "/" && b.value.startsWith("/")) { b.focus(); updateMenu(); return; }
+    insert(trigger);
+  };
+
   // ---------- commands ----------
-  const showPanel = (name) => htmx.ajax("GET", `/s/${sid()}/command?name=${encodeURIComponent(name)}`, { target: "#panel", swap: "innerHTML" });
+  const showPanel = (name) => {
+    const panel = $("panel");
+    panel.innerHTML = `<div class="panel-head"><b>${name.slice(1)}</b></div><div class="panel-body"><div class="loading"><span class="shimmer">Loading…</span></div></div>`;
+    panel.hidden = false;
+    htmx.ajax("GET", `/s/${sid()}/command?name=${encodeURIComponent(name)}`, { target: "#panel", swap: "innerHTML" });
+  };
   const closePanel = () => { $("panel").hidden = true; $("panel").innerHTML = ""; };
   const page = {
     "/files": () => openSide("files"),
@@ -219,8 +251,11 @@
   document.addEventListener("input", (e) => {
     if (e.target.matches?.(".composer textarea")) { grow(e.target); updateMenu(); }
   });
+  // Leaving the box closes the menu, unless the focus went to a button of the composer.
   document.addEventListener("focusout", (e) => {
-    if (e.target.matches?.(".composer textarea")) setTimeout(closeMenu, 150);
+    if (!e.target.matches?.(".composer textarea")) return;
+    if (e.relatedTarget?.closest?.(".composer")) return;
+    setTimeout(() => { if (document.activeElement !== box()) closeMenu(); }, 150);
   });
 
   // The turn's timer.
@@ -238,19 +273,13 @@
     if (on("#side-close")) openSide("");
     if (on("#files-refresh")) { files.at = 0; htmx.trigger($("tree"), "refresh"); }
     if (on("[data-close-panel]")) closePanel();
-    if (on("[data-insert]")) insert(on("[data-insert]").dataset.insert);
+    if (on("[data-insert]")) toggleMenu(on("[data-insert]").dataset.insert);
+    if (on("[data-command]")) showPanel(on("[data-command]").dataset.command);
     if (on("[data-file-back]")) on(".files-tab").classList.remove("viewing");
     if (on("[data-mention]")) insert("@" + on("[data-mention]").dataset.mention + " ");
     if (on(".file")) {
       for (const f of document.querySelectorAll(".file.selected")) f.classList.remove("selected");
       on(".file").classList.add("selected");
-    }
-
-    // The row the inspector shows.
-    const row = on(".row");
-    if (row) {
-      for (const r of document.querySelectorAll(".row.selected")) r.classList.remove("selected");
-      row.classList.add("selected");
     }
 
     // Copy a code block, without its line numbers.
@@ -271,5 +300,6 @@
     const side = stored("maxai.side");
     if (side === "files" || side === "trace") openSide(side);
     getCommands().catch(() => {});
+    fetch(`/s/${sid()}/command?name=/permissions`).catch(() => {});  // so the shield opens at once
   });
 })();

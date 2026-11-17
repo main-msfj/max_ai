@@ -40,10 +40,10 @@ from ..core.event_type import (
 )
 from ..core.harness.permissions import Permissions
 from ..core.messages import HARNESS_SOURCE, AssistantMessage, ToolMessage
-from ..core.spans import Span, SpanProjector
 from ..core.tool.display import BASH, exit_code, result_text, tool_summary
 from ..types.run_context import RunContext
 from ..types.tool_call import ToolCallRecord, ToolResult
+from .spans import Span, SpanProjector
 from .workspace import Workspace
 
 HERE = Path(__file__).parent
@@ -439,97 +439,81 @@ class Files:
 
 
 class Trace:
-    """The Trajectory tab: a timeline of the spans and a ledger, one row each."""
+    """The Trajectory tab: one card per turn, newest first, with its model
+    calls and tools on a timeline; a row opens to show what went in and out."""
 
-    LANES = {"model": 6, "compaction": 6, "tool": 32}  # y of each kind in the overview
-
-    @staticmethod
-    def render(html: Html, sid: str, spans: SpanProjector, turn_id: str | None) -> str:
-        return str(html.parts.trace(sid, Trace.data(spans, turn_id)))
+    MAX_DETAIL = 4000  # Characters of input or output shown in a row
 
     @staticmethod
-    def data(spans: SpanProjector, turn_id: str | None) -> dict[str, t.Any]:
-        turns = spans.turns()
-        chosen = [s for s in turns if s.id == turn_id] or turns
-        rows: list[tuple[Span, int]] = []
-        for turn in chosen:
-            Trace._walk(spans, turn, 0, rows)
+    def render(html: Html, sid: str, spans: SpanProjector) -> str:
+        return str(html.parts.trace(sid, Trace.data(spans)))
+
+    @staticmethod
+    def data(spans: SpanProjector) -> list[dict[str, t.Any]]:
         now = datetime.now(timezone.utc)
-        if not rows:
-            return {"turns": turns, "turn": turn_id, "rows": [], "marks": [], "total": "", "stats": ""}
+        turns: list[dict[str, t.Any]] = []
+        for turn in reversed(spans.turns()):
+            # 1. The calls of the turn in the order they started; steps are only grouping.
+            calls = sorted(
+                (s for s in spans.children(turn.id, deep=True) if s.kind != "step"),
+                key=lambda s: s.started_at,
+            )
+            total = max(((turn.ended_at or now) - turn.started_at).total_seconds(), 0.001)
+            rows = [Trace._row(span, turn.started_at, total, now) for span in calls]
 
-        # 1. The time the rows cover, left to right.
-        start = min(span.started_at for span, _ in rows)
-        end = max(span.ended_at or now for span, _ in rows)
-        total = max((end - start).total_seconds(), 0.001)
-
-        def at(moment: datetime) -> float:
-            return (moment - start).total_seconds() / total * 100
-
-        # 2. One row per span, with its bar and, for the model, the wait to its first token.
-        drawn: list[dict[str, t.Any]] = []
-        for span, depth in rows:
-            left = at(span.started_at)
-            width = max(at(span.ended_at or now) - left, 0.4)
-            ttft = span.ttft_ms
-            seconds = (span.duration_ms or 0) / 1000 or (now - span.started_at).total_seconds()
-            ttft_pct = min(100.0, ttft / 1000 / seconds * 100) if ttft and seconds else 0.0
-            drawn.append({
-                "id": span.id, "kind": span.kind, "name": Trace._label(span), "depth": depth,
-                "status": span.status, "dur": Trace._seconds(span.duration_ms, span.status),
-                "left": round(left, 3), "width": round(width, 3), "ttft_pct": round(ttft_pct, 1),
-                "lane": Trace.LANES.get(span.kind), "x": round(left * 10, 2),
-                "w": round(width * 10, 2), "ttft_w": round(width * 10 * ttft_pct / 100, 2),
+            # 2. What the turn cost.
+            models = [s for s in calls if s.kind == "model"]
+            tools = sum(1 for s in calls if s.kind == "tool")
+            tokens = sum(s.usage.tokens_input + s.usage.tokens_output for s in models if s.usage)
+            stats = [f"{len(models)} model call{'s' if len(models) != 1 else ''}",
+                     f"{tools} tool{'s' if tools != 1 else ''}"]
+            if tokens:
+                stats.append(f"{Trace._k(tokens)} tokens")
+            turns.append({
+                "id": turn.id, "title": Trace._title(turn.name), "status": turn.status,
+                "dur": Trace._seconds(turn.duration_ms, turn.status), "stats": " · ".join(stats),
+                "rows": rows,
             })
+        return turns
 
-        # 3. Where each turn starts, and what the scope cost.
-        marks = [round(at(turn.started_at) * 10, 2) for turn in chosen]
-        models = [s for s, _ in rows if s.kind == "model"]
-        tokens_in = sum(s.usage.tokens_input for s in models if s.usage)
-        tokens_out = sum(s.usage.tokens_output for s in models if s.usage)
-        tools = sum(1 for s, _ in rows if s.kind == "tool")
-        stats = f"{len(models)} model calls · {tools} tools · ↑ {tokens_in:,} ↓ {tokens_out:,} tokens"
+    @staticmethod
+    def _row(span: Span, start: datetime, total: float, now: datetime) -> dict[str, t.Any]:
+        """One call: its name, a line under it, and its bar inside the turn."""
+        left = (span.started_at - start).total_seconds() / total * 100
+        seconds = ((span.ended_at or now) - span.started_at).total_seconds()
+        width = max(seconds / total * 100, 1.5)
+        ttft = span.ttft_ms / 1000 / seconds * 100 if span.ttft_ms and seconds else 0.0
+        if span.kind == "model":
+            name, sub = span.name.split("/")[-1], []
+            if span.ttft_ms is not None:
+                sub.append(f"first token {Trace._seconds(span.ttft_ms, 'ok')}")
+            if span.usage is not None:
+                sub.append(f"↑ {Trace._k(span.usage.tokens_input)} ↓ {Trace._k(span.usage.tokens_output)}")
+            line, shown_input = " · ".join(sub), ""
+        elif span.kind == "tool":
+            params = span.input if isinstance(span.input, dict) else {}
+            name = "Bash" if span.name == BASH else span.name
+            line = tool_summary(span.name, t.cast("dict[str, t.Any]", params))
+            shown_input = Trace._text(span.input)
+        else:
+            name, line, shown_input = "Compaction", f"{Trace._text(span.input)} tokens before", ""
         return {
-            "turns": turns, "turn": turn_id if turn_id in {s.id for s in turns} else None,
-            "rows": drawn, "marks": marks, "total": Trace._seconds(int(total * 1000), "ok"),
-            "stats": stats,
+            "id": span.id, "kind": span.kind, "status": span.status, "name": name, "line": line,
+            "dur": Trace._seconds(span.duration_ms, span.status),
+            "left": round(min(left, 98.5), 2), "width": round(min(width, 100 - min(left, 98.5)), 2),
+            "ttft": round(min(ttft, 100.0), 1),
+            "input": shown_input[: Trace.MAX_DETAIL],
+            "output": Trace._text(span.output)[: Trace.MAX_DETAIL],
         }
 
     @staticmethod
-    def inspect(html: Html, span: Span) -> str:
-        facts: list[tuple[str, str]] = [
-            ("started", span.started_at.astimezone().strftime("%H:%M:%S.%f")[:-3]),
-            ("duration", Trace._seconds(span.duration_ms, span.status)),
-        ]
-        if span.ttft_ms is not None:
-            facts.append(("first token", Trace._seconds(span.ttft_ms, "ok")))
-        if span.retries:
-            facts.append(("retries", str(span.retries)))
-        if span.usage is not None:
-            facts.append(("tokens in", f"{span.usage.tokens_input:,}"))
-            facts.append(("tokens out", f"{span.usage.tokens_output:,}"))
-            if span.usage.tokens_cached:
-                facts.append(("cached", f"{span.usage.tokens_cached:,}"))
-        if span.kind == "model" and isinstance(span.input, int):
-            facts.append(("messages sent", str(span.input)))
-        shown_input = "" if span.kind == "model" else Trace._text(span.input)
-        return str(html.parts.inspector({
-            "kind": span.kind, "name": span.name, "status": span.status, "facts": facts,
-            "input": shown_input, "output": Trace._text(span.output)[: Html.MAX_OUTPUT],
-        }))
+    def _title(name: str) -> str:
+        first = name.strip().splitlines()[0] if name.strip() else "turn"
+        return first if len(first) <= 80 else first[:79] + "…"
 
     @staticmethod
-    def _walk(spans: SpanProjector, span: Span, depth: int, rows: list[tuple[Span, int]]) -> None:
-        rows.append((span, depth))
-        for child in spans.children(span.id):
-            Trace._walk(spans, child, depth + 1, rows)
-
-    @staticmethod
-    def _label(span: Span) -> str:
-        if span.kind == "turn":
-            name = span.name.strip().splitlines()[0] if span.name.strip() else "turn"
-            return name if len(name) <= 60 else name[:59] + "…"
-        return span.name
+    def _k(tokens: int) -> str:
+        return f"{tokens / 1000:.1f}k" if tokens >= 1000 else str(tokens)
 
     @staticmethod
     def _seconds(ms: int | None, status: str) -> str:

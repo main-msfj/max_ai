@@ -30,7 +30,7 @@ The default behavior is a ReAct-style agent loop:
 +--------------------------------------------------------------------------------+
 |                                  Agent                                         |
 |--------------------------------------------------------------------------------|
-| Owns configuration, lifecycle, prompt stack, capabilities, executor, client,    |
+| Owns configuration, lifecycle, prompt stack, capabilities, sandbox, client,     |
 | reasoning loop, compaction strategy, middleware, and final AgentResponse.       |
 +-----+----------------+------------------+------------------+-------------------+
       |                |                  |                  |
@@ -65,9 +65,9 @@ The default behavior is a ReAct-style agent loop:
               |
               v
    +----------------------+       +----------------------+
-   | LocalExecutor        |       | DockerExecutor       |
-   | in-process tools     |       | ModalExecutor        |
-   +----------------------+       | sandboxed runtime    |
+   | LocalSandbox         |       | DockerSandbox        |
+   | this machine         |       | one container        |
+   +----------------------+       | per user             |
                                   +----------+-----------+
                                              |
                                              v
@@ -81,7 +81,7 @@ The default behavior is a ReAct-style agent loop:
 
 ## How the Components Talk
 
-The `Agent` is the orchestration root. It receives a model client, optional tools, optional capability registries, optional custom prompt layers, an executor, and an optional reasoning loop. It normalizes everything during construction, prepares async resources before execution, then drives one run through `run_stream_events()`.
+The `Agent` is the orchestration root. It receives a model client, optional tools, optional capability registries, optional custom prompt layers, an optional sandbox, and an optional reasoning loop. It normalizes everything during construction, prepares async resources before execution, then drives one run through `run_stream_events()`.
 
 The agent manages capabilities (memory, skills, knowledge) and tool registration. It validates tool-name uniqueness, loads skill metadata during `prepare()`, and exposes the final tool list to the dispatcher.
 
@@ -105,9 +105,9 @@ Included clients: `OpenAIChatCompletionClient` (OpenAI API), `OpenRouterChatComp
 
 The `ReActLoop` is the default reasoning engine. On each iteration it calls the client, appends the assistant message to `RunContext.messages`, registers any tool calls into `ctx.tool_state`, sends executable records to `ToolExecutor`, appends returned `ToolMessage` objects, and repeats. It stops when there are no tool calls, approval is needed, cancellation happens, no model result is returned, or the configured loop limit is reached.
 
-The `ToolExecutor` is the tool-call pipeline. It receives `ToolCallRecord` objects from the reasoning loop, resolves tool names, validates parameters against each tool's JSON schema, emits approval events when needed, runs middleware around the execution step, dispatches execution to an executor, and returns both observability events and `ToolMessage` results for the LLM.
+The `ToolExecutor` is the tool-call pipeline. It receives `ToolCallRecord` objects from the reasoning loop, resolves tool names, validates parameters against each tool's JSON schema, emits approval events when needed, runs middleware around the execution step, dispatches execution to the tool (commands go to the sandbox), and returns both observability events and `ToolMessage` results for the LLM.
 
-The executor controls where bash runs; every other tool runs in the agent's process. The default `LocalExecutor()` runs no commands, so the agent has no bash; `LocalExecutor(allow_commands=True)` runs them on this machine with approval for each one. `DockerExecutor` and `ModalExecutor` run them in a sandbox with the user's directory at `/workspaces/<user_id>`.
+The sandbox controls where `bash` and the file tools run: `LocalSandbox` on this machine, `DockerSandbox` in one container per user. Without a sandbox the agent has no bash.
 
 The workspace creates per-user runtime directories: local disk (`LocalWorkspace`) or object storage (`AzureBlobWorkspace`, `MinIOWorkspace`). Each run materializes the user's directory, copies the selected skills into it, and gives the file tools and `bash` the same `$WORKSPACE`, `$SCRATCHPAD` and `$SKILLS` paths.
 
@@ -133,7 +133,7 @@ Agent.run_stream_events(task)
    |
    +--> materialize workspace if tools or skills need runtime files
    |
-   +--> build ToolExecutor(all_tools, middlewares, executor)
+   +--> build ToolExecutor(all_tools, middlewares, sandbox)
    |
    +--> optionally compact old context
    |
@@ -154,7 +154,7 @@ Agent.run_stream_events(task)
                  +--> approval check
                  +--> parameter validation
                  +--> middleware chain
-                 +--> LocalExecutor, DockerExecutor or ModalExecutor
+                 +--> the tool, in LocalSandbox or DockerSandbox
                  +--> ToolMessage returned to ReActLoop
 ```
 
@@ -306,36 +306,24 @@ Check each skill's license before using it. Some public skill repos mix open-sou
 
 The token is read from the environment when the repo is cloned. It is never serialized or placed on the command line. The host needs `git` installed.
 
-Skills run their scripts with `bash`, so they need an executor that runs commands: `DockerExecutor` or `ModalExecutor`, or `LocalExecutor(allow_commands=True)` to run them on your machine, approving each command. With the default `LocalExecutor()` the agent has no bash: skills are read and followed with the file tools only (the agent logs a warning).
+Skills run their scripts with `bash`, so they need a sandbox: the harness adds `bash` and the file tools when the agent has one, and refuses skills without it.
 
-### Execution
+### Sandbox
 
-`LocalExecutor` is fast and simple. It runs tool code in the current Python process and is suitable for trusted helpers. It also runs the model's `bash` commands directly on your machine with no sandbox, so the agent logs a warning when it is used; bash permission patterns are a guard rail, not isolation. Use `DockerExecutor` or `ModalExecutor` outside local development.
+Commands and file tools run in the user's sandbox, never in the agent's process. Each user gets their own (`sandbox.bind(user_id)`, done by the agent on every run), with `.agent/` inside: workspace, memory, skills and `setting.json`.
 
-`DockerExecutor` runs `bash` in one container per session. The container runs as a non-root user with a read-only root filesystem and all capabilities dropped. It has no network by default (`network="none"`; `"internet"` opens it), CPU, memory and PID limits, and the user's files copied to `/workspaces/<user_id>` in a container volume; no host path is shared. Docker cannot filter by domain, so `allow_list` does not apply to it.
+`LocalSandbox(root=...)` keeps everything in a folder on this machine. It is fast and simple, for local development only: commands run as your user, so it is not isolation.
 
-`ModalExecutor` (`pip install 'maxai[runtime-modal]'`) runs the same commands in a Modal sandbox. Its default network is `"packages"`: the agent can install with pip, uv or npm and nothing else is reachable. Add domains with `allow_list=[...]`, or use `"internet"` / `"none"`.
-
-Both build their image on first use and cache it: max_ai's runtime (Debian slim with Python 3.12, uv, Node 22/npm, git, ripgrep) by default, or your own image or Dockerfile. Nothing of max_ai runs inside: the executor adds only the agent user and `/workspaces` on top of yours, which needs bash and GNU coreutils, findutils and tar (any Debian or Ubuntu base).
-
-Both sync the same way, with bash and tar around each lease: `workspace/` goes in and comes back, `skills/` only goes in. Only files whose sha256 changed move, and a file changed on both sides since the last sync stops it with a conflict error. `node_modules`, `.venv`, `venv`, `__pycache__` and `.cache` stay on the side that built them; `.git` is synced. A container or sandbox that dies is reported as lost: the session is dropped and the next call starts a new one. Every tool call stops after `TOOL_TIMEOUT_SECONDS` (360 by default).
+`DockerSandbox` runs one container per user, named `docker-sandbox-<user_id>`, with a volume of the same name, so files and skills survive the container. No host path is mounted and only the variables the sandbox declares enter it. With no `networks` it has no network at all; `networks=[...]` lists the domains it may reach, through a proxy.
 
 ```python
-from max_ai.capabilities.executor import DockerExecutor
-from max_ai.capabilities.executor.modal import ModalExecutor
+from max_ai.capabilities.sandbox.docker import DockerSandbox
+from max_ai.capabilities.sandbox.local import LocalSandbox
 
-DockerExecutor()                                  # max_ai's runtime image
-DockerExecutor(image="python:3.12-slim")          # your image
-ModalExecutor(dockerfile="./my.Dockerfile")       # your Dockerfile
-ModalExecutor(allow_list=["api.github.com"])      # package registries + GitHub API
-```
-
-Per-user runtime layout on the host:
-
-```text
-<root>/<user_id>/
-  workspace/          (shared workspace; bash starts here with $WORKSPACE)
-  skills/             (materializes skills; $SKILLS)
+LocalSandbox(root="./box")                          # this machine, not isolated
+DockerSandbox()                                     # our image: python and pypdf
+DockerSandbox(dockerfile="./coding.Dockerfile")     # your Dockerfile, built once per content
+DockerSandbox(networks=["pypi.org", "files.pythonhosted.org"])  # pip, nothing else
 ```
 
 ### Workspace
@@ -419,7 +407,7 @@ pip install maxai
 Or with optional features:
 
 ```bash
-pip install "maxai[cli,embeddings,tracing,mongodb,runtime-modal,azure-blob,minio]"
+pip install "maxai[cli,embeddings,tracing,mongodb]"
 ```
 
 For development:
@@ -565,7 +553,7 @@ Focused examples:
 ```bash
 uv run pytest tests/tools
 uv run pytest tests/reasoning
-uv run pytest tests/executor
+uv run pytest tests/sandbox
 ```
 
 ## Repository Map
@@ -575,15 +563,15 @@ max_ai/
   agents/            Agent orchestration and lifecycle
   base/              Core contracts: clients, tools, layers, reasoning, capabilities
   capabilities/      Local capability implementations
-    clients/         Provider adapters (OpenAI, OpenRouter, Ollama)
+    clients/         Provider adapters (OpenAI, OpenRouter)
     compaction/      Context compaction strategies
     completion_gate/ Completion decision gates
-    executor/        Execution backends (Local, Docker, Modal)
     knowledge/       Knowledge registries and retrieval
     memory/          Memory registries and persistence
     middleware/      Logging, budget, tracing middleware
     mcp/             MCP server client integration
-    reasoning/       ReAct loop implementation
+    loop/            ReAct loop implementation
+    sandbox/         Where commands run (Local, Docker)
     session_store/   Session persistence
     skills/          Skill registry and management
     tools/           Built-in tools (filesystem, bash, approval)
@@ -595,9 +583,10 @@ examples/
   basic/             One feature per file: tools, approvals, memory, MCP, skills, tracing...
   advance/           Custom backends, middleware, layers, embeddings, serialization
 example-for-deployment/
-  travel_agent.py    Web search (Exa MCP), GitHub skill, Modal, MinIO, MongoDB, Langfuse
+  full_test.py       Web search (Exa MCP), GitHub skill, sandbox, memory, Langfuse
+  coding_agent.py    Coding agent on Docker with git and worktrees
   cli_global_agent_openai.py / _openrouter.py   Full agents with memory, knowledge and skills
-tests/               Unit, integration, executor, reasoning, and tool tests
+tests/               Unit, integration, sandbox, reasoning, and tool tests
 ```
 
 ## Design Principles
