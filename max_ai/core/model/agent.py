@@ -5,7 +5,6 @@ import typing as t
 from pydantic import BaseModel, Field
 
 from ...capabilities.mcp._model import HTTPServerConfig, StdioMCPServerConfig
-from ..policy import Policy
 
 
 class AgentSpec(BaseModel):
@@ -22,16 +21,11 @@ class AgentSpec(BaseModel):
     instructions: str
     client: dict[str, t.Any]
     reasoning: dict[str, t.Any] | None = None
-    workspace: dict[str, t.Any] | None = None
-    executor: dict[str, t.Any] | None = None
+    sandbox: dict[str, t.Any] | None = None
     memory: dict[str, t.Any] | None = None
     skills: dict[str, t.Any] | None = None
     knowledge: list[dict[str, t.Any]] = Field(default_factory=list)
-    compaction: dict[str, t.Any] | None = None
     toolset: list[dict[str, t.Any]] = Field(default_factory=list)
-    policy: Policy = Field(
-        default_factory=Policy, description="allow / ask / deny rules for every tool call.",
-    )
     mcp: list[StdioMCPServerConfig | HTTPServerConfig] = Field(default_factory=list)
     gates: list[dict[str, t.Any]] = Field(
         default_factory=list, description="Completion gates: the framework's and your own.",

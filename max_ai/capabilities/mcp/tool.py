@@ -3,32 +3,46 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import re
 import typing as t
 from concurrent.futures import CancelledError as FuturesCancelledError
 
 from mcp import MCPError
-from mcp.types import CallToolResult, ImageContent, TextContent
+from mcp.types import (
+    AudioContent,
+    BlobResourceContents,
+    CallToolResult,
+    EmbeddedResource,
+    ImageContent,
+    ResourceLink,
+    TextContent,
+    TextResourceContents,
+)
 
 from ...base.tools import CoreTool, ToolContext
-from ...config import setting
-from ...core.termination import CancellationToken
+from ...core.event_type import MCPProgressEvent
 from ...errors.mcp import (
     MCPConnectionLost,
+    MCPTaskRunning,
     MCPToolContentError,
     MCPToolError,
     MCPToolExecutionError,
 )
 from ...loggers import ScopedLogger
-from ...types.tool_call import ToolCallRecord, ToolResult
-from ...types.tools import ToolApprovalMode
+from ...types.tool_call import ToolCallRecord, ToolFile, ToolResult
+from ...types.tools import ToolApprovalMode, ToolKind
+from .task import MCPTask
 
 if t.TYPE_CHECKING:
     from .client_manager import MCPClientManager
 
 logger = logging.getLogger(__name__)
 log = ScopedLogger(logger, scope="mcp.tool")
+
+
+TASK_RUNNING = "The tool is still working on the server. Its result will arrive when it is ready."
 
 
 def _sanitize_name(raw: str) -> str:
@@ -42,6 +56,8 @@ def _sanitize_name(raw: str) -> str:
 
 class MCPTool(CoreTool):
     """Adapter that exposes one remote MCP tool as a local CoreTool."""
+
+    kind = ToolKind.MCP  # the server names it
 
     def __init__(
         self,
@@ -68,24 +84,21 @@ class MCPTool(CoreTool):
             deferred=deferred,
         )
 
-    # MCP servers write their own names and descriptions: not ours to check.
-    def validate_name(self, name: str) -> None:
-        pass
-
-    def validate_description(self, name: str, description: str) -> None:
-        pass
-
     @property
     def parameters(self) -> dict[str, t.Any]:
         return self._parameter_schema
 
+    @property
+    def timeout(self) -> float:
+        """Seconds the dispatcher lets a call run: the manager's own limit."""
+        return self.client_manager.max_timeout
+
     async def execute(
         self,
         tool_request: ToolCallRecord,
-        tool_context: ToolContext | None = None,
-        cancellation_token: CancellationToken | None = None,
+        tool_context: ToolContext | None = None,  # None: called without a dispatcher
     ) -> ToolResult:
-        if cancellation_token and cancellation_token.is_cancelled():
+        if tool_context is not None and tool_context.cancelled:
             return ToolResult.cancelled_before_start(tool_request.id)
 
         params = self.validate_parameters(tool_request)
@@ -101,23 +114,30 @@ class MCPTool(CoreTool):
             tool_call_id=tool_request.id,
         )
         try:
+            def on_progress(progress: float, total: float | None, message: str | None) -> None:
+                if tool_context is not None and tool_context.emit_event is not None:
+                    tool_context.emit_event(MCPProgressEvent(
+                        source=self.name, tool_call_id=tool_request.id,
+                        server_id=self.server_id, tool_name=self.mcp_tool_name,
+                        progress=progress, total=total, message=message,
+                    ))
+
             result: CallToolResult = await self.client_manager.call_tool(
                 self.server_id,
                 self.mcp_tool_name,
                 tool_request.parameters,
-                setting.tool_timeout_seconds,
                 read_only=self.read_only,
+                on_progress=on_progress,
             )
 
             if result.is_error:
                 raise MCPToolExecutionError(f"Tool returned error: {result.content}")
 
-            output = self._extract_tool_result(result)
-            if isinstance(output, dict):
-                if "results" in output:
-                    output = output["results"]
-                elif "result" in output:
-                    output = output["result"]
+            output, files = self._extract_tool_result(result)
+            # Servers wrap a plain value as {"result": value}: unwrap only that,
+            # never a dictionary that says more.
+            if isinstance(output, dict) and len(output) == 1:
+                output = output.get("results", output.get("result", output))
 
             return ToolResult.success_result(
                 tool_request.id,
@@ -127,10 +147,17 @@ class MCPTool(CoreTool):
                     "mcp_tool_name": self.mcp_tool_name,
                     "tool_type": "mcp",
                 },
-            )
+            ).model_copy(update={"files": files})
 
         except (asyncio.CancelledError, FuturesCancelledError):
             return ToolResult.cancelled_during_execution(tool_request.id)
+        except MCPTaskRunning as running:
+            if tool_context is not None:
+                tool_context.run_context.mcp_tasks[running.task_id] = MCPTask(
+                    task_id=running.task_id, server_id=self.server_id, tool_name=self.name,
+                    tool_call_id=tool_request.id, expires_at=running.expires_at,
+                ).model_dump()
+            return ToolResult.success_result(tool_request.id, TASK_RUNNING)
         except MCPConnectionLost as exc:
             msg = (f"{exc} The connection to {self.server_id} dropped during the call: it may "
                    "or may not have run. Check before calling it again.")
@@ -149,37 +176,44 @@ class MCPTool(CoreTool):
             logger_for_call.error(msg, exc=exc)
             return ToolResult.execution_error(tool_request.id, msg)
 
-    def _extract_tool_result(self, result: CallToolResult) -> t.Any:
-        if result.structured_content is not None:
-            return result.structured_content
-
-        outputs: dict[str, t.Any] = {"text": [], "images": []}
+    def _extract_tool_result(self, result: CallToolResult) -> tuple[t.Any, list[ToolFile]]:
+        """What the model reads, and apart the files the server sent."""
+        texts: list[str] = []
+        files: list[ToolFile] = []
         for content in result.content:
             if isinstance(content, TextContent):
-                outputs["text"].append(content.text)
-            elif isinstance(content, ImageContent):
-                outputs["images"].append(
-                    {"data": content.data, "mime_type": content.mime_type}
+                texts.append(content.text)
+            elif isinstance(content, (ImageContent, AudioContent)):
+                files.append(
+                    ToolFile(data=base64.b64decode(content.data), mime_type=content.mime_type)
                 )
-
-        if outputs["text"]:
-            outputs["text"] = "\n".join(outputs["text"])
-        else:
-            outputs.pop("text")
-
-        if not outputs["images"]:
-            outputs.pop("images")
-
-        if not outputs:
+            elif isinstance(content, EmbeddedResource):
+                _read_resource(content.resource, texts, files)
+            elif isinstance(content, ResourceLink):
+                texts.append(f"Resource {content.name}: {content.uri}")
+            else:
+                texts.append(f"[content this client cannot read: {content.type}]")
+        output: t.Any = "\n".join(texts)
+        if result.structured_content is not None:
+            output = result.structured_content
+        if output in ("", None) and not files:
             raise MCPToolContentError("Tool returned empty content")
+        return output, files
 
-        if set(outputs) == {"text"}:
-            return t.cast(str, outputs["text"])
-        return outputs
+
+def _read_resource(resource: t.Any, texts: list[str], files: list[ToolFile]) -> None:
+    """A resource's content: its text to ``texts``, anything else to ``files``."""
+    if isinstance(resource, TextResourceContents):
+        texts.append(resource.text)
+    elif isinstance(resource, BlobResourceContents):
+        mime_type = resource.mime_type or "application/octet-stream"
+        files.append(ToolFile(data=base64.b64decode(resource.blob), mime_type=mime_type))
 
 
 class MCPResourceTool(CoreTool):
     """Synthetic CoreTool for reading resources from one MCP server."""
+
+    kind = ToolKind.MCP
 
     def __init__(
         self,
@@ -213,13 +247,6 @@ class MCPResourceTool(CoreTool):
             "additionalProperties": False,
         }
 
-    # MCP servers write their own names and descriptions: not ours to check.
-    def validate_name(self, name: str) -> None:
-        pass
-
-    def validate_description(self, name: str, description: str) -> None:
-        pass
-
     @property
     def parameters(self) -> dict[str, t.Any]:
         return self._parameter_schema
@@ -227,10 +254,9 @@ class MCPResourceTool(CoreTool):
     async def execute(
         self,
         tool_request: ToolCallRecord,
-        tool_context: ToolContext | None = None,
-        cancellation_token: CancellationToken | None = None,
+        tool_context: ToolContext | None = None,  # None: called without a dispatcher
     ) -> ToolResult:
-        if cancellation_token and cancellation_token.is_cancelled():
+        if tool_context is not None and tool_context.cancelled:
             return ToolResult.cancelled_before_start(tool_request.id)
 
         params = self.validate_parameters(tool_request)
@@ -250,14 +276,11 @@ class MCPResourceTool(CoreTool):
             result = await self.client_manager.read_resource(self.server_id, uri)
 
             texts: list[str] = []
+            files: list[ToolFile] = []
             for content in result.contents:
-                if hasattr(content, "text"):
-                    texts.append(content.text)
-                elif hasattr(content, "blob"):
-                    mime_type = getattr(content, "mime_type", None) or "unknown"
-                    texts.append(f"[Binary content: {mime_type}]")
+                _read_resource(content, texts, files)
 
-            if not texts:
+            if not texts and not files:
                 return ToolResult.execution_error(
                     tool_request.id,
                     f"Resource {uri!r} returned no content.",
@@ -271,7 +294,7 @@ class MCPResourceTool(CoreTool):
                     "resource_uri": uri,
                     "tool_type": "mcp",
                 },
-            )
+            ).model_copy(update={"files": files})
 
         except (asyncio.CancelledError, FuturesCancelledError):
             return ToolResult.cancelled_during_execution(tool_request.id)

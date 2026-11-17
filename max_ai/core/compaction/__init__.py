@@ -2,12 +2,8 @@
 atomic message blocks. Token counting lives in ``core.tokenizer``."""
 
 from ..model.compaction import (
-    CompactionConfig,
-    CompactionOutput,
     CompactionResult,
     CompactionState,
-    MemoryFactUpdate,
-    MemoryMaintenanceOutput,
     MessageGroup,
 )
 from .budget import (
@@ -24,12 +20,8 @@ from .groups import (
 )
 
 __all__ = [
-    "CompactionConfig",
     "CompactionState",
-    "CompactionOutput",
     "CompactionResult",
-    "MemoryFactUpdate",
-    "MemoryMaintenanceOutput",
     "MessageGroup",
     "client_max_output_tokens",
     "live_message_budget_tokens",

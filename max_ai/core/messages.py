@@ -18,6 +18,7 @@ Design principles:
 from __future__ import annotations
 
 import base64
+import importlib
 import typing as t
 from datetime import datetime, timezone
 from typing import Annotated, Literal, Union
@@ -306,13 +307,9 @@ class AssistantMessage(CoreMessage):
             return data
         so = data.get("structured_output")
         if isinstance(so, BaseModel):
-            from .type_ref import type_ref
-
             data = {**data, "structured_output_type": type_ref(type(so))}
             return data
         if isinstance(so, dict):
-            from .type_ref import load_type_ref
-
             ref = data.get("structured_output_type")
             try:
                 model_cls = load_type_ref(ref)
@@ -420,15 +417,6 @@ class ToolMessage(CoreMessage):
         )
 
 
-class StopMessage(CoreMessage):
-    """Signals that orchestration has stopped."""
-
-    role: Literal["stop"] = "stop"
-    metadata: dict[str, t.Any] = Field(
-        default_factory=dict, description="Additional stop details"
-    )
-
-
 # -------- UNION TYPE -----------------------------------------------------------
 Message = Annotated[
     Union[
@@ -436,7 +424,6 @@ Message = Annotated[
         UserMessage,
         AssistantMessage,
         ToolMessage,
-        StopMessage,
     ],
     Discriminator("role"),
 ]
@@ -444,3 +431,34 @@ Message = Annotated[
 
 # Module-level adapter so `parse_msg` doesn't rebuild it on every call.
 _MESSAGE_ADAPTER: TypeAdapter[Message] = TypeAdapter(Message)
+
+
+# -------- TYPE REFERENCES -----------------------------------------------------
+# A model *type* that must survive serialization (``structured_output``) is
+# stored as its dotted import path; only module-level classes have one.
+def type_ref(value: type[BaseModel] | None) -> str | None:
+    """Return the dotted import path for a model class, or None."""
+    if value is None:
+        return None
+    return f"{value.__module__}.{value.__qualname__}"
+
+
+def load_type_ref(value: str | None) -> type[BaseModel] | None:
+    """Resolve a dotted import path back to a model class.
+
+    Raises ValueError (malformed), TypeError (not a Pydantic model) or
+    ImportError / AttributeError (the module or attribute is gone).
+    """
+    from ..base.component import _check_allowed  # here: at the top it closes an import cycle
+
+    if value is None:
+        return None
+    module_name, _, attr = value.rpartition(".")
+    if not module_name or not attr:
+        raise ValueError(f"Invalid type reference: {value!r}")
+    # Stored sessions name this path; importing runs code, so allowlist it.
+    _check_allowed(value)
+    loaded = getattr(importlib.import_module(module_name), attr)
+    if not isinstance(loaded, type) or not issubclass(loaded, BaseModel):
+        raise TypeError(f"Type reference must be a Pydantic model: {value!r}")
+    return loaded

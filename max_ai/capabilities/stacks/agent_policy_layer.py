@@ -67,6 +67,3 @@ class AgentPolicyLayer(Component[StackConfig], CoreLayer):
 
     def _required_variables(self) -> set[str]:
         return {"name", "description", "instructions"}
-
-    def _optional_variables(self) -> set[str]:
-        return {"workspace_skills", "execution_environment", "current_date", "can_run_commands"}

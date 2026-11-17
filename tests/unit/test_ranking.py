@@ -1,4 +1,4 @@
-from max_ai.core.ranking import bm25, fuse, words
+from max_ai.capabilities.tools.search_tool._ranking import bm25, fuse, words
 
 
 def test_words_split_names_and_drop_stopwords():

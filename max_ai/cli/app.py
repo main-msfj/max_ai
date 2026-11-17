@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import re
+import shlex
 import time
-from collections.abc import AsyncIterator
-from datetime import datetime, timezone
+import typing as t
+from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
 
 from rich.text import Text
 from textual import work
@@ -25,9 +25,15 @@ from textual.widget import Widget
 from textual.widgets import Button, DirectoryTree, OptionList, Static, TextArea
 
 from ..agents.agent import Agent
+from ..base.loop import LoopState
+from ..base.sandbox import SandboxCore
 from ..base.session_store import CoreSessionStore
+from ..base.tools import CoreTool
+from ..capabilities.loop import ReactLoop
+from ..capabilities.mcp.tool import MCPTool
+from ..capabilities.sandbox.local import LocalSandbox
 from ..capabilities.tools.ask_user import AskUserTool
-from ..core.compaction import client_max_output_tokens, live_message_threshold_tokens
+from ..capabilities.tools.todos import WriteTodosTool
 from ..core.event_type import (
     CompactionEvent,
     CoreEvent,
@@ -36,34 +42,36 @@ from ..core.event_type import (
     ModelResponseEvent,
     ModelRetryEvent,
     ModelStreamChunkEvent,
-    PlanningEvent,
+    TodosEvent,
+    ToolApprovalEvent,
     ToolCallEvent,
     ToolCallResponseEvent,
 )
+from ..core.harness import messages as harness
+from ..core.harness.permissions import Permissions
 from ..core.ids import short_id
-from ..core.messages import HARNESS_SOURCE
+from ..core.messages import HARNESS_SOURCE, HARNESS_TAG, AssistantMessage, UserMessage
 from ..core.model.session import SessionInfo
-from ..core.policy import Policy
-from ..core.termination.cancellation import CancellationToken
 from ..core.tokenizer import default_counter
-from ..core.tool.dispatcher import ToolDispatcher
-from ..types.agent_response import AgentResponse
+from ..core.tool import ToolDispatcher
 from ..types.run_context import RunContext
-from ..types.tool_call import ToolResult
+from ..types.todos import Todo
+from ..types.tool_call import ToolCallRecord, ToolResult
 from .blocks import (
+    BASH,
     SPINNER,
     AssistantBlock,
     CompactionBlock,
     NoteLine,
     PastSummaryBlock,
-    PlanBlock,
     Question,
     QuestionForm,
     ThinkingBlock,
+    TodoBlock,
     ToolBlock,
     UserBlock,
     WelcomeBox,
-    _k,
+    _k,  # pyright: ignore[reportPrivateUsage]
     context_bar,
     time_ago,
     tool_summary,
@@ -76,20 +84,23 @@ from .theme import (
     DIM,
     ELEMENT,
     ERROR,
+    MODEL,
     MUTED,
     PANEL,
     PRIMARY,
     SUCCESS,
+    SYSTEM,
     TEXT,
     WARNING,
+    shimmer,
 )
-from .widgets import CommandMenu, InfoPanel, PromptEditor
+from .widgets import CommandMenu, FileTree, InfoPanel, PromptEditor
 
 COMMANDS = {
     "/help": "show commands and shortcuts",
     "/skills": "list the agent's skills",
     "/tools": "list the tools the agent can call",
-    "/mcp": "list the MCP servers with their tools and resources",
+    "/mcp": "list the MCP servers with their tools",
     "/resume": "pick a saved conversation and continue it",
     "/new": "start a new conversation (the current one stays saved)",
     "/session": "show this conversation's id and how to resume it",
@@ -102,18 +113,21 @@ COMMANDS = {
 
 PLACEHOLDER = 'Try "summarize this project"  ·  @file  ·  !cmd  ·  /help'
 FORM_PLACEHOLDER = "↑↓ ←→ enter · 1-9 to pick · or type your own answer"
+APPROVAL_PLACEHOLDER = "Pick an option (click, or type its number) or write a new message…"
 
-# Rendered as their own fold-able blocks instead of a generic ToolBlock.
+# Rendered as their own blocks instead of a generic ToolBlock.
 _ASK_USER = AskUserTool.TOOL_NAME
-_UPDATE_PLAN = "update_plan"
+_WRITE_TODOS = WriteTodosTool.TOOL_NAME
 
 # Harness events worth a line even outside verbose mode.
-_ALWAYS_SHOWN = {"error", "fatal_error", "compaction"}
-# Folded into the single end-of-turn summary line instead.
+_ALWAYS_SHOWN = {"error"}
+# Folded into the end-of-turn summary line, or shown as an error already.
 _NEVER_SHOWN = {
-    "user_input_request", "tool_call", "tool_call_response",
-    "task_complete", "reasoning_complete", "completion_rejected",
+    "user_input_request", "tool_call", "tool_call_response", "tool_approval",
+    "reasoning_complete", "fatal_error",
 }
+# Seconds a ``!command`` may run.
+_SHELL_TIMEOUT = 120.0
 
 
 class Transcript(VerticalScroll):
@@ -129,11 +143,18 @@ class MaxAIApp(App[None]):
     CSS = f"""
     Screen {{ background: {BACKGROUND}; }}
     #body {{ height: 1fr; }}
-    #sidebar {{ width: 34; background: {PANEL}; border-right: solid {BORDER_SUBTLE}; padding: 0 1; display: none; }}
-    .sidebar-toggle {{ height: 1; width: 1fr; margin-top: 1; padding: 0; border: none; background: {PANEL}; color: {TEXT}; text-align: left; }}
-    #workspace-files, #skill-files {{ height: 1fr; background: {PANEL}; border: none; color: {TEXT}; }}
+    #sidebar {{ width: 30; background: {PANEL}; border-right: tall {BORDER_SUBTLE}; padding: 1 1 0 1; display: none; }}
+    .sidebar-toggle {{ height: 1; min-width: 0; width: 1fr; margin: 0; padding: 0; border: none; background: {PANEL}; color: {DIM}; text-style: bold; text-align: left; content-align: left middle; }}
+    .sidebar-toggle:hover, .sidebar-toggle:focus {{ background: {PANEL}; color: {TEXT}; text-style: bold; }}
+    #skills-toggle {{ margin-top: 1; }}
+    #workspace-files, #skill-files {{ height: 1fr; background: {PANEL}; border: none; color: {MUTED}; padding: 0; scrollbar-size: 0 0; }}
+    DirectoryTree > .tree--cursor, DirectoryTree:focus > .tree--cursor {{ background: {ELEMENT}; color: {TEXT}; text-style: none; }}
+    DirectoryTree > .tree--highlight, DirectoryTree > .tree--highlight-line {{ background: {ELEMENT}; }}
+    DirectoryTree > .tree--guides {{ color: {BORDER_SUBTLE}; }}
+    DirectoryTree > .directory-tree--folder {{ color: {TEXT}; text-style: none; }}
+    DirectoryTree > .directory-tree--extension, DirectoryTree > .directory-tree--file {{ color: {MUTED}; text-style: none; }}
     #main {{ width: 1fr; padding: 0 1; }}
-    #transcript {{ height: 1fr; background: {BACKGROUND}; scrollbar-size: 1 1; padding: 0 1; }}
+    #transcript {{ height: 1fr; background: {BACKGROUND}; scrollbar-size: 1 1; padding: 0 1; scrollbar-background: {BACKGROUND}; scrollbar-background-hover: {BACKGROUND}; scrollbar-background-active: {BACKGROUND}; scrollbar-color: {ELEMENT}; scrollbar-color-hover: {PRIMARY}; scrollbar-color-active: {PRIMARY}; }}
     #request-card {{ height: auto; display: none; border: round {PRIMARY}; padding: 0 1; margin: 1 0 0 0; }}
     #request-detail {{ height: auto; color: {TEXT}; margin-bottom: 1; }}
     #decisions {{ height: auto; display: none; }}
@@ -173,7 +194,6 @@ class MaxAIApp(App[None]):
         self.verbose = False
         # The CLI is a host: it loads, runs and saves; the agent keeps nothing.
         self.store = store
-        # Tools answered "always allow": approved without asking until the CLI closes.
         self.user_id = user_id or (initial_context.user_id if initial_context else "user")
         self._resume_id = session_id if initial_context is None else None
         self.context: RunContext = initial_context or self._new_context(session_id)
@@ -182,26 +202,23 @@ class MaxAIApp(App[None]):
         self._tokens_input = 0
         self._tokens_output = 0
         self._tokens_cached = 0
-        self._context_tokens = 0
         self._compaction: CompactionBlock | None = None
-        self._prompt_tokens = 0
         self._turn_started_at: float | None = None
         self._turn_tokens = 0
         self._frame = 0
         self._waiting = False
         # Shown instead of "Thinking…" while the harness waits to call the model again.
         self._retry: ModelRetryEvent | None = None
-        self._cancel: CancellationToken | None = None
-        self._agent_name = getattr(agent, "name", "agent")
+        # The agent's run of this moment; esc cancels it.
+        self._job: asyncio.Task[LoopState] | None = None
+        self._interrupting = False  # esc asked to stop: a cancel that is ours
+        self._agent_name = agent.name
         self._workspace_open = True
         self._skills_open = True
-        # ask_user params by tool_call_id; the questions render at the pause.
-        self._ask_params: dict[str, dict] = {}
         self._form: QuestionForm | None = None
-        self._plan_call_ids: set[str] = set()
-        self._plan: PlanBlock | None = None
-        self._gate_retries: list[str] = []
-        self._skills: list = []
+        self._todo_call_ids: set[str] = set()
+        self._todos: TodoBlock | None = None
+        self._skills: list[tuple[str, str]] = []  # name and description
         self._tools: dict[str, ToolBlock] = {}
         self._thinking: ThinkingBlock | None = None
         self._assistant: AssistantBlock | None = None
@@ -211,9 +228,9 @@ class MaxAIApp(App[None]):
         with Horizontal(id="body"):
             with Vertical(id="sidebar"):
                 yield Button("▾ WORKSPACE", id="workspace-toggle", classes="sidebar-toggle")
-                yield DirectoryTree(str(self.workspace_root), id="workspace-files")
+                yield self._tree(self.workspace_root, "workspace-files")
                 yield Button("▾ SKILLS", id="skills-toggle", classes="sidebar-toggle")
-                yield DirectoryTree(str(self.skills_root), id="skill-files")
+                yield self._tree(self.skills_root, "skill-files")
             with Vertical(id="main"):
                 yield Transcript(id="transcript")
                 with Vertical(id="request-card"):
@@ -230,83 +247,85 @@ class MaxAIApp(App[None]):
                 yield CommandMenu(id="menu")
                 yield Static("", id="usage")
 
-    async def on_mount(self) -> None:
-        self.query_one("#prompt", TextArea).focus()
-        model = getattr(getattr(self.agent, "client", None), "model", "unknown")
-        await self._mount(WelcomeBox(self._agent_name, model, self.workspace_root))
-        skills = getattr(self.agent, "skills", None)
-        if skills is not None:
-            try:
-                self._skills = list(await skills.get_skills())
-            except Exception as error:  # noqa: BLE001 — a bad skill dir must not kill the UI
-                await self._write_system(f"Could not load skills: {error}", style=ERROR)
-        executor = getattr(self.agent, "executor", None)
-        if self._skills and executor is not None and not executor.runs_commands:
-            from ..agents.agent import COMMANDS_OFF
+    @staticmethod
+    def _tree(root: Path, tree_id: str) -> DirectoryTree:
+        """A file tree that shows what is inside ``root``, not the folder itself."""
+        tree = FileTree(str(root), id=tree_id)
+        tree.show_root = False
+        return tree
 
-            await self._write_system(COMMANDS_OFF, style=WARNING)
-        servers = self._mcp_servers()
+    async def on_mount(self) -> None:
+        # 1. The banner, and the MCP servers the agent was given.
+        self.query_one("#prompt", TextArea).focus()
+        await self._mount(WelcomeBox(self._agent_name, self.agent.client.model))
+        servers = [server.server_id for server in self.agent.mcp]
         if servers:
-            line = Text("MCP ", style="bold")
-            line.append(" · ".join(
-                f"{sid} ({len(info['tools'])} tools"
-                + (f", {len(info['resources'])} resources" if info["resources"] else "") + ")"
-                for sid, info in servers.items()
-            ), style=MUTED)
+            line = Text()
+            line.append("◇ ", style=SYSTEM)
+            line.append("mcp ", style=f"bold {SYSTEM}")
+            line.append(" · ".join(servers), style=TEXT)
             line.append("  /mcp for details", style=DIM)
             await self._mount(NoteLine(line))
+        if self.agent.sandbox is not None and not self._is_local:
+            await self._write_system(
+                "The sandbox is not on this computer: the file sidebar and @file are off.",
+            )
+        # 2. The session to open, then the skills (they may be downloaded).
         if self.store is not None:
             await self._open_session_on_start()
-        client = getattr(self.agent, "client", None)
-        window = getattr(getattr(client, "config", None), "max_context_window", 0) or 0
-        if getattr(self.agent, "compaction", None) is not None and window <= 0:
-            await self._write_system(
-                "The model's context window is unknown, so token-based compaction "
-                "won't trigger. Set max_context_window (or MAX_CONTEXT_WINDOW).",
-                style=WARNING,
-            )
         self._refresh_usage()
         self._refresh_status()
         self.set_interval(0.12, self._tick)
+        if self.agent.skills is not None:
+            self._load_skills()
 
-    def _mcp_servers(self) -> dict[str, dict[str, list]]:
-        """server_id → its tools and resources, from the agent's connected MCP tools."""
-        servers: dict[str, dict[str, list]] = {}
-        for tool in getattr(self.agent, "tools", []):
-            sid = getattr(tool, "server_id", None)
-            if sid is None:
-                continue
-            info = servers.setdefault(sid, {"tools": [], "resources": []})
-            if hasattr(tool, "available_resources"):
-                info["resources"] += [
-                    str(getattr(r, "uri", None) or getattr(r, "uri_template", ""))
-                    for r in [*tool.available_resources, *tool.resource_templates]
-                ]
-            else:
-                info["tools"].append(tool)
-        return servers
+    @work(group="skills")
+    async def _load_skills(self) -> None:
+        """The agent's skills with their descriptions, installed in the user's sandbox."""
+        skills, sandbox = self.agent.skills, self.agent.sandbox
+        if skills is None or sandbox is None:
+            return
+        try:
+            box = sandbox.bind(self.user_id, skills.variables())
+            await box.prepare()
+            await skills.sync(box)
+            installed = await box.installed_skills()
+        except Exception as error:  # noqa: BLE001 — a bad skill must not kill the UI
+            await self._write_system(f"Could not load skills: {error}", style=ERROR)
+            return
+        self._skills = [
+            (name, installed.get(name, {}).get("description", "")) for name in skills.skills
+        ]
 
     @property
-    def project_root(self) -> Path:
-        return self.workspace_root
+    def _is_local(self) -> bool:
+        """The agent's files are on this computer: no sandbox, or a local one."""
+        return self.agent.sandbox is None or isinstance(self.agent.sandbox, LocalSandbox)
 
-    def _workspace_directory(self):
-        materialize = getattr(self.agent.workspace, "materialize", None)
-        if materialize is None:
-            root = Path(self.agent.workspace.base_root).expanduser().resolve()
-            skills = root / "skills"
-            skills.mkdir(parents=True, exist_ok=True)
-            return SimpleNamespace(workspace_dir=root, skill_dir=skills)
-        ctx = self.context or RunContext()
-        return materialize(ctx.user_id, ctx.session_id)
+    def _box(self) -> SandboxCore | None:
+        """The agent's sandbox bound to this user; None without one."""
+        sandbox = self.agent.sandbox
+        return sandbox.bind(self.user_id) if sandbox is not None else None
 
     @property
     def workspace_root(self) -> Path:
-        return self._workspace_directory().workspace_dir
+        """Where this session's files are: its folder in a local sandbox,
+        else the folder the program runs in."""
+        box = self._box()
+        if box is None or not self._is_local:
+            return Path.cwd()
+        root = Path(box.session_paths(self.context.session_id or self.context.run_id)["workspace"])
+        root.mkdir(parents=True, exist_ok=True)
+        return root
 
     @property
     def skills_root(self) -> Path:
-        return self._workspace_directory().skill_dir
+        box = self._box()
+        if box is None or not self._is_local:
+            return Path.cwd()
+        root = Path(str(box.layout.skills))
+        root.mkdir(parents=True, exist_ok=True)
+        return root
 
     # -------- TRANSCRIPT -----------------------------------------------------------
     def _transcript(self) -> Transcript:
@@ -327,7 +346,10 @@ class MaxAIApp(App[None]):
             transcript.scroll_end(animate=False)
 
     async def _write_system(self, message: str, style: str = DIM) -> None:
-        await self._mount(NoteLine(f"• {message}", style=style))
+        line = Text()
+        line.append("◇ ", style=SYSTEM if style == DIM else style)
+        line.append(message, style=style)
+        await self._mount(NoteLine(line))
 
     async def _write_user(self, value: str) -> None:
         await self._mount(UserBlock(value))
@@ -369,57 +391,49 @@ class MaxAIApp(App[None]):
             line.append(f"({retry.reason.replace('_', ' ')}, try {retry.attempt + 1}"
                         f"/{retry.max_attempts}) ", style=MUTED)
         else:
-            line = Text(f"{SPINNER[self._frame % len(SPINNER)]} ", style=f"bold {PRIMARY}")
-            line.append("Thinking… ", style=f"bold {TEXT}")
-        line.append(f"({elapsed}s · ↓ {self._turn_tokens:,} tokens · ", style=MUTED)
+            line = Text()
+            line.append(f"{SPINNER[self._frame % len(SPINNER)]} ", style=f"bold {PRIMARY}")
+            line.append_text(shimmer("Thinking…", self._frame))
+            line.append(" ")
+        line.append(f"{elapsed}s", style=TEXT)
+        line.append(f" · ↓ {self._turn_tokens:,} tokens · ", style=DIM)
         line.append("esc", style=f"bold {MUTED}")
-        line.append(" to interrupt)", style=MUTED)
+        line.append(" to interrupt", style=DIM)
         status.update(line)
 
     def _refresh_usage(self) -> None:
-        client = getattr(self.agent, "client", None)
-        maximum = getattr(getattr(client, "config", None), "max_context_window", 0) or 0
+        """Tokens spent, the window used and where compaction starts."""
+        # 1. Tokens of this CLI's life.
         line = Text()
         if self.verbose:
             line.append("verbose · ", style=PRIMARY)
-        line.append(f"{self._agent_name} · in {_k(self._tokens_input)} · out {_k(self._tokens_output)}",
-                    style=DIM)
+        line.append(self._agent_name, style=f"bold {PRIMARY}")
+        line.append(" · ", style=DIM)
+        line.append(self.agent.client.model, style=MODEL)
+        line.append(f" · ↑ {_k(self._tokens_input)} ↓ {_k(self._tokens_output)}", style=MUTED)
         if self._tokens_cached:
             line.append(f" · cached {_k(self._tokens_cached)}", style=DIM)
+        # 2. The window as the last model call shared it out.
+        parts = self.context.context
+        window = (parts.window if parts else 0) or self.agent.client.config.max_context_window
+        used = parts.prompt + parts.tools + parts.messages if parts else 0
         line.append(" · ctx ", style=DIM)
-        if maximum > 0:
-            line.append_text(context_bar(self._context_tokens, maximum))
-        else:
-            line.append("? (window unknown · set MAX_CONTEXT_WINDOW)", style=WARNING)
-        strategy = getattr(self.agent, "compaction", None)
-        if strategy is not None:
-            name = type(strategy).__name__.removesuffix("Compaction").lower()
-            line.append(f" · {name} compaction", style=DIM)
-            trigger = self._compaction_trigger(strategy, client, maximum)
-            if trigger:
-                line.append(f" at ~{trigger}%", style=DIM)
+        line.append_text(context_bar(used, window))
+        # 3. Compaction starts when the messages fill their room.
+        name = type(self.agent.reasoning.compaction).__name__.removesuffix("Compaction").lower()
+        line.append(f" · {name} compaction", style=DIM)
+        if parts is not None and parts.window:
+            share = round((parts.window - parts.output - parts.margin) / parts.window * 100)
+            line.append(f" at ~{share}%", style=DIM)
         usage = self._static("#usage")
         if usage is not None:
             usage.update(line)
-
-    def _compaction_trigger(self, strategy, client, maximum: int) -> int:
-        """Share of the whole window where compaction kicks in: system prompt +
-        the strategy's threshold of the message capacity (0 = unknown yet)."""
-        if maximum <= 0 or not self._prompt_tokens:
-            return 0
-        threshold = live_message_threshold_tokens(
-            maximum,
-            max_output_tokens=client_max_output_tokens(client),
-            prompt_tokens=self._prompt_tokens,
-            ratio=strategy.config.threshold,
-        )
-        return round((self._prompt_tokens + threshold) / maximum * 100) if threshold else 0
 
     # -------- ACTIONS -----------------------------------------------------------
     async def action_clear_chat(self) -> None:
         await self._transcript().remove_children()
         self._tools.clear()
-        self._plan = None
+        self._todos = None
         await self._write_system("Screen cleared (the conversation is kept — /clear resets it).")
 
     def action_scroll_transcript(self, direction: int) -> None:
@@ -444,6 +458,7 @@ class MaxAIApp(App[None]):
         self._refresh_usage()
 
     def action_interrupt(self) -> None:
+        # 1. Esc first closes what is open on top: panel, typing, menu.
         if self._info().display:
             self._info().hide()
             return
@@ -453,13 +468,14 @@ class MaxAIApp(App[None]):
         if self._menu().display:
             self._close_menu()
             return
-        if not self._busy or self._cancel is None:
-            return
-        # Also while paused on a question/approval: the turn stops and
-        # what it already did stays, like any other interrupt.
-        self._cancel.cancel()
-        if self._request_future is not None and not self._request_future.done():
-            self._request_future.cancel()
+        # 2. Then it stops the run, or the wait for an answer; what ran stays.
+        job, future = self._job, self._request_future
+        if job is not None and not job.done():
+            self._interrupting = True
+            job.cancel()
+        elif future is not None and not future.done():
+            self._interrupting = True
+            future.cancel()
 
     async def action_submit_prompt(self) -> None:
         waiting = self._request_future is not None and not self._request_future.done()
@@ -470,16 +486,15 @@ class MaxAIApp(App[None]):
             typed = prompt.text.strip().split(maxsplit=1)
             prompt.text = selected[0] + (f" {typed[1]}" if len(typed) > 1 else "")
             self._close_menu()
+        value = prompt.text.strip()
+        # A message during a run goes to the inbox; the loop reads it on its next call.
         if self._busy and not waiting:
-            value = prompt.text.strip()
-            # Only a model turn takes messages; commands wait for it to end.
-            if self._cancel is None or not value or value.startswith(("/", "!")):
+            if self._job is None or not value or value.startswith(("/", "!")):
                 return
             prompt.text = ""
             await self._write_user(value)
-            self._ensure_context().inbox.append(self._expand_file_mentions(value))
+            self.context.inbox.append(self._expand_file_mentions(value))
             return
-        value = prompt.text.strip()
         prompt.text = ""
         if value:
             self._info().hide()
@@ -490,7 +505,7 @@ class MaxAIApp(App[None]):
             return
         if not value:
             return
-        if waiting:
+        if waiting and self._request_future is not None:
             self._request_future.set_result(value)
             return
         if value.startswith("/"):
@@ -508,11 +523,10 @@ class MaxAIApp(App[None]):
         self._turn_started_at = time.monotonic()
         self._retry = None
         self._turn_tokens = 0
-        self._plan = None
-        self._gate_retries = []
+        self._todos = None
         self._refresh_status()
 
-    def _start_turn(self, task: str) -> None:
+    def _start_turn(self, task: str | None) -> None:
         self._begin_busy()
         self._run_turn(task)
 
@@ -529,7 +543,7 @@ class MaxAIApp(App[None]):
 
     def _menu_entries(self) -> list[tuple[str, str, str]]:
         entries = [(cmd, desc, "command") for cmd, desc in COMMANDS.items()]
-        entries += [(f"/{skill.name}", skill.description, "skill") for skill in self._skills]
+        entries += [(f"/{name}", description, "skill") for name, description in self._skills]
         return entries
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
@@ -601,69 +615,35 @@ class MaxAIApp(App[None]):
         self._close_menu()
         command, _, args = value.partition(" ")
         command = command.lower()
-        skill = next((s for s in self._skills if f"/{s.name}" == command), None)
+        # 1. A skill's name runs a turn that asks for that skill.
+        skill = next((name for name, _ in self._skills if f"/{name}" == command), None)
         if skill is not None:
             await self._write_user(value)
-            task = f'Use the "{skill.name}" skill.' + (f" {args.strip()}" if args.strip() else "")
+            task = f'Use the "{skill}" skill.' + (f" {args.strip()}" if args.strip() else "")
             self._start_turn(task)
             return
+        # 2. The CLI's own commands.
         if command == "/help":
-            body = Text("Commands\n", style="bold")
-            for cmd, desc in COMMANDS.items():
-                body.append(f"  {cmd:<12}", style=f"bold {PRIMARY}")
-                body.append(f"{desc}\n", style=MUTED)
-            body.append("\nShortcuts\n", style="bold")
-            for keys, desc in (
-                ("enter", "send · shift+enter or ctrl+j for a new line"),
-                ("esc", "interrupt the running turn"),
-                ("ctrl+t", "thinking on/off"),
-                ("ctrl+o", "verbose runtime events on/off"),
-                ("ctrl+b", "file sidebar"),
-                ("ctrl+l", "clear the screen"),
-                ("pgup/pgdn", "scroll the conversation"),
-                ("@path", "attach a workspace file"),
-                ("!cmd", "run a shell command in the workspace"),
-                ("/ ↑↓ tab", "open, move through and complete the command menu"),
-                ("1-9", "pick an option of a question or approval"),
-                ("click", "expand/collapse thinking and tool output; run a menu command"),
-            ):
-                body.append(f"  {keys:<12}", style=f"bold {PRIMARY}")
-                body.append(f"{desc}\n", style=MUTED)
-            self._show("Help", body)
+            self._show("Help", self._help())
         elif command == "/skills":
             if not self._skills:
                 self._show("Skills", Text("This agent has no skills.", style=MUTED))
             else:
-                body = Text(f"Run one with /name, e.g. /{self._skills[0].name}\n\n", style=DIM)
-                for item in self._skills:
-                    body.append(f"  /{item.name:<18}", style=f"bold {PRIMARY}")
-                    body.append(f"{item.description}\n", style=MUTED)
+                body = Text(f"Run one with /name, e.g. /{self._skills[0][0]}\n\n", style=DIM)
+                for name, description in self._skills:
+                    body.append(f"  /{name:<18}", style=f"bold {PRIMARY}")
+                    body.append(f"{description}\n", style=MUTED)
                 self._show("Skills", body)
         elif command == "/tools":
             body = Text()
-            for tool in getattr(self.agent, "tools", []):
-                mode = getattr(getattr(tool, "approval_mode", None), "value", "")
-                first = (tool.description or "").strip().splitlines()[0][:80] if tool.description else ""
+            for tool in await self._all_tools():
                 body.append(f"  {tool.name:<22}", style=f"bold {PRIMARY}")
-                if "ask" in str(mode).lower():
+                if self._asks(tool):
                     body.append("asks approval · ", style=WARNING)
-                body.append(f"{first}\n", style=MUTED)
+                body.append(f"{self._first_line(tool.description)}\n", style=MUTED)
             self._show("Tools", body)
         elif command == "/mcp":
-            servers = self._mcp_servers()
-            if not servers:
-                self._show("MCP servers", Text("This agent has no MCP servers.", style=MUTED))
-                return
-            body = Text()
-            for sid, info in servers.items():
-                body.append(f"  {sid}\n", style=f"bold {PRIMARY}")
-                for tool in info["tools"]:
-                    ask = "ask" in str(getattr(getattr(tool, "approval_mode", None), "value", "")).lower()
-                    body.append(f"    {tool.name.removeprefix(sid + '_'):<26}", style="bold")
-                    body.append("asks approval\n" if ask else "auto\n", style=WARNING if ask else DIM)
-                for uri in info["resources"]:
-                    body.append(f"    {uri}\n", style=MUTED)
-            self._show("MCP servers", body)
+            await self._show_mcp()
         elif command in ("/new", "/clear"):
             await self._switch_to(self._new_context())
             await self._write_system(f"New conversation · session {self.context.session_id}.")
@@ -687,6 +667,70 @@ class MaxAIApp(App[None]):
             self.exit()
         else:
             await self._write_system(f"Unknown command {command} — try /help.", style=ERROR)
+
+    @staticmethod
+    def _help() -> Text:
+        """The commands and the keys, for /help."""
+        body = Text("Commands\n", style="bold")
+        for cmd, desc in COMMANDS.items():
+            body.append(f"  {cmd:<12}", style=f"bold {PRIMARY}")
+            body.append(f"{desc}\n", style=MUTED)
+        body.append("\nShortcuts\n", style="bold")
+        for keys, desc in (
+            ("enter", "send · shift+enter or ctrl+j for a new line"),
+            ("esc", "interrupt the running turn"),
+            ("ctrl+t", "thinking on/off"),
+            ("ctrl+o", "verbose runtime events on/off"),
+            ("ctrl+b", "file sidebar"),
+            ("ctrl+l", "clear the screen"),
+            ("pgup/pgdn", "scroll the conversation"),
+            ("@path", "attach a workspace file"),
+            ("!cmd", "run a shell command in the workspace"),
+            ("/ ↑↓ tab", "open, move through and complete the command menu"),
+            ("1-9", "pick an option of a question or approval"),
+            ("click", "expand/collapse thinking and tool output; run a menu command"),
+        ):
+            body.append(f"  {keys:<12}", style=f"bold {PRIMARY}")
+            body.append(f"{desc}\n", style=MUTED)
+        return body
+
+    async def _all_tools(self) -> list[CoreTool]:
+        """Every tool of a run, MCP ones included; the agent's own if MCP fails."""
+        try:
+            registry = await self.agent._registry()  # pyright: ignore[reportPrivateUsage]
+        except Exception as error:  # noqa: BLE001 — a server down must not kill the UI
+            await self._write_system(f"Could not reach the MCP servers: {error}", style=WARNING)
+            return list(self.agent.tools)
+        return registry.all_tools()
+
+    @staticmethod
+    def _asks(tool: CoreTool) -> bool:
+        """The tool asks before it runs, unless setting.json allows it."""
+        return "ask" in str(getattr(tool.approval_mode, "value", tool.approval_mode)).lower()
+
+    @staticmethod
+    def _first_line(text: str | None) -> str:
+        lines = (text or "").strip().splitlines()
+        return lines[0][:80] if lines else ""
+
+    async def _show_mcp(self) -> None:
+        """/mcp: each server with its tools, connecting them if needed."""
+        servers = [server.server_id for server in self.agent.mcp]
+        if not servers:
+            self._show("MCP servers", Text("This agent has no MCP servers.", style=MUTED))
+            return
+        tools = [tool for tool in await self._all_tools() if isinstance(tool, MCPTool)]
+        body = Text()
+        for sid in servers:
+            body.append(f"  {sid}\n", style=f"bold {PRIMARY}")
+            mine = [tool for tool in tools if tool.server_id == sid]
+            if not mine:
+                body.append("    not connected\n", style=WARNING)
+            for tool in mine:
+                ask = self._asks(tool)
+                body.append(f"    {tool.name.removeprefix(sid + '_'):<26}", style="bold")
+                body.append("asks approval\n" if ask else "auto\n", style=WARNING if ask else DIM)
+        self._show("MCP servers", body)
 
     def _info(self) -> InfoPanel:
         return self.query_one("#info", InfoPanel)
@@ -727,27 +771,28 @@ class MaxAIApp(App[None]):
 
     # -------- HELPERS -----------------------------------------------------------
     @staticmethod
-    def _format_parameters(parameters: dict) -> str:
+    def _format_parameters(parameters: dict[str, t.Any]) -> str:
         """Render approval arguments as readable key/value lines, never JSON."""
         if not parameters:
             return "No parameters"
         lines: list[str] = []
 
-        def add_value(name: str, value) -> None:
+        def add_value(name: str, value: t.Any) -> None:
             if isinstance(value, dict):
-                if not value:
+                items = t.cast("dict[str, t.Any]", value)
+                if not items:
                     lines.append(f"{name}: (empty)")
-                else:
-                    for child, nested in value.items():
-                        add_value(f"{name}.{child}", nested)
+                for child, nested in items.items():
+                    add_value(f"{name}.{child}", nested)
             elif isinstance(value, (list, tuple)):
-                if not value:
+                values = list(t.cast("list[t.Any]", value))
+                if not values:
                     lines.append(f"{name}: (empty)")
-                elif any(isinstance(item, (dict, list, tuple)) for item in value):
-                    for index, item in enumerate(value, start=1):
+                elif any(isinstance(item, (dict, list, tuple)) for item in values):
+                    for index, item in enumerate(values, start=1):
                         add_value(f"{name} {index}", item)
                 else:
-                    lines.append(f"{name}: {', '.join(str(item) for item in value)}")
+                    lines.append(f"{name}: {', '.join(str(item) for item in values)}")
             else:
                 rendered = str(value).replace("\n", " ")
                 if len(rendered) > 240:
@@ -758,12 +803,27 @@ class MaxAIApp(App[None]):
             add_value(str(key).replace("_", " "), value)
         return "\n".join(lines)
 
+    @staticmethod
+    def _approval_card(record: ToolCallRecord) -> str:
+        """What the approval card says. Bash: what the command does, then
+        the exact command; any other tool: its arguments."""
+        if record.tool_name != BASH:
+            details = MaxAIApp._format_parameters(record.parameters)
+            return f"Allow {record.tool_name}?\n\n{details}"
+        description = str(record.parameters.get("description") or "").strip()
+        command = str(record.parameters.get("command") or "").strip()
+        head = f"Allow Bash?\n\n{description}\n\n" if description else "Allow Bash?\n\n"
+        return head + "$ " + command.replace("\n", "\n  ")
+
     def _expand_file_mentions(self, value: str) -> str:
-        """Attach readable project files referenced as ``@relative/path``."""
+        """Attach readable workspace files referenced as ``@relative/path``."""
+        if not self._is_local:
+            return value
+        root = self.workspace_root
         attachments: list[str] = []
         for mention in re.findall(r"(?<!\w)@([\w./-]+)", value):
-            candidate = (self.project_root / mention).resolve()
-            if not candidate.is_file() or self.project_root not in candidate.parents:
+            candidate = (root / mention).resolve()
+            if not candidate.is_file() or root not in candidate.parents:
                 continue
             try:
                 content = candidate.read_text(encoding="utf-8")
@@ -816,6 +876,15 @@ class MaxAIApp(App[None]):
         self._follow()
 
     async def _write_event(self, event: CoreEvent) -> None:
+        """Draw one event of the run."""
+        # 1. The model: retries, calls and answers.
+        if isinstance(event, ModelStreamChunkEvent):
+            self._retry = None
+            if event.thinking:
+                await self._write_thinking(event.thinking)
+            if event.chunk and not event.is_final:
+                await self._write_assistant_chunk(event.chunk)
+            return
         if isinstance(event, ModelRetryEvent):
             if event.discard_partial:
                 await self._discard_partial()
@@ -829,58 +898,25 @@ class MaxAIApp(App[None]):
         if isinstance(event, (ModelResponseEvent, ErrorEvent)) and self._retry is not None:
             self._retry = None
             self._refresh_status()
-        if isinstance(event, PlanningEvent):
-            await self._render_plan(event)
-            return
         if isinstance(event, ModelCallEvent):
-            self._prompt_tokens = event.prompt_tokens or self._prompt_tokens
             await self._finish_assistant()
+            self._refresh_usage()
             return
         if isinstance(event, ModelResponseEvent):
             if event.usage is not None:
                 self._tokens_input += event.usage.tokens_input
                 self._tokens_output += event.usage.tokens_output
                 self._tokens_cached += event.usage.tokens_cached
-                self._context_tokens = event.usage.tokens_input
                 self._refresh_usage()
             if event.response and self._assistant is None:
                 await self._write_assistant_chunk(event.response)
             await self._finish_assistant()
             return
-        if isinstance(event, ToolCallEvent):
-            await self._finish_assistant()
-            if event.tool_name == _ASK_USER:
-                self._ask_params[event.tool_call_id] = event.parameters
-                return
-            if event.tool_name == _UPDATE_PLAN:
-                self._plan_call_ids.add(event.tool_call_id)
-                return
-            # A call paused for approval is re-emitted on resume: same block.
-            if event.tool_call_id in self._tools:
-                self._tools[event.tool_call_id].set_waiting(False)
-                return
-            block = ToolBlock(event.tool_name, event.parameters)
-            await self._mount(block)
-            self._tools[event.tool_call_id] = block
+        # 2. The tools: their blocks, the list of todos and approvals.
+        if isinstance(event, (ToolCallEvent, ToolApprovalEvent, ToolCallResponseEvent, TodosEvent)):
+            await self._write_tool_event(event)
             return
-        if event.event_type == "tool_approval":
-            block = self._tools.get(getattr(event, "tool_call_id", ""))
-            if block is not None:
-                block.set_waiting(True)
-            return
-        if isinstance(event, ToolCallResponseEvent):
-            if event.tool_call_id in self._ask_params:
-                return
-            if event.tool_call_id in self._plan_call_ids:
-                self._plan_call_ids.discard(event.tool_call_id)
-                result = event.tool_result
-                if result is not None and not result.success:
-                    await self._write_system(f"update_plan failed: {result.error}", style=ERROR)
-                return
-            block = self._tools.pop(event.tool_call_id, None)
-            if block is not None:
-                block.complete(event.tool_result)
-            return
+        # 3. Compaction, and everything else as one line.
         if isinstance(event, CompactionEvent):
             await self._render_compaction(event)
             return
@@ -889,15 +925,61 @@ class MaxAIApp(App[None]):
                 self._compaction.fail(event.error_message)
                 self._compaction = None
                 return
-        if event.event_type == "completion_rejected":
-            reasons = getattr(getattr(event, "decision", None), "reasons", ()) or ()
-            self._gate_retries.append("; ".join(reasons) or "incomplete")
-            return
         etype = event.event_type
         if etype in _NEVER_SHOWN:
             return
         if etype in _ALWAYS_SHOWN or self.verbose:
             await self._mount(NoteLine(event_line(event)))
+
+    async def _write_tool_event(
+        self, event: ToolCallEvent | ToolApprovalEvent | ToolCallResponseEvent | TodosEvent
+    ) -> None:
+        """A tool call starts, waits for approval, or ends."""
+        # 1. A call starts; one paused for approval comes again when it runs.
+        if isinstance(event, ToolCallEvent):
+            await self._finish_assistant()
+            if event.tool_name == _ASK_USER:
+                return
+            if event.tool_name == _WRITE_TODOS:
+                self._todo_call_ids.add(event.tool_call_id)
+                return
+            if event.tool_call_id in self._tools:
+                self._tools[event.tool_call_id].set_waiting(False)
+                return
+            block = ToolBlock(event.tool_name, event.parameters)
+            await self._mount(block)
+            self._tools[event.tool_call_id] = block
+            return
+        # 2. It waits for the user.
+        if isinstance(event, ToolApprovalEvent):
+            waiting = self._tools.get(event.tool_call_id)
+            if waiting is not None:
+                waiting.set_waiting(True)
+            return
+        # 3. The list of todos changed.
+        if isinstance(event, TodosEvent):
+            await self._render_todos(event.todos)
+            return
+        # 4. It ended: its block shows how.
+        if event.tool_call_id in self._todo_call_ids:
+            self._todo_call_ids.discard(event.tool_call_id)
+            result = event.tool_result
+            if result is not None and not result.success:
+                await self._write_system(f"{_WRITE_TODOS} failed: {result.error}", style=ERROR)
+            return
+        block = self._tools.pop(event.tool_call_id, None)
+        if block is not None:
+            block.complete(event.tool_result)
+
+    def _close_finished_blocks(self) -> None:
+        """Blocks whose calls were closed without an event (the user wrote
+        instead of answering, a compaction dropped them) show how they ended."""
+        records = self.context.tool_state.records
+        for call_id, block in list(self._tools.items()):
+            record = records.get(call_id)
+            if record is None or record.is_consumed:
+                block.complete(record.result if record is not None else None)
+                del self._tools[call_id]
 
     async def _render_compaction(self, event: CompactionEvent) -> None:
         """One block per compaction: live at start, folded line at end."""
@@ -915,124 +997,140 @@ class MaxAIApp(App[None]):
             block = CompactionBlock(event.strategy)
             await self._mount(block)
         block.finish(event)
-        # Provider usage only updates on the next call: estimate what was freed.
-        freed = max(0, event.tokens_before - event.tokens_after)
-        self._context_tokens = max(0, self._context_tokens - freed)
         self._refresh_usage()
 
-    async def _render_plan(self, event: PlanningEvent) -> None:
-        """Each update is a PlanBlock; consecutive updates with nothing in
+    async def _render_todos(self, todos: list[Todo]) -> None:
+        """Each update is a TodoBlock; consecutive updates with nothing in
         between refresh the same block, older ones fold to one line."""
-        plan = event.plan
-        if plan is None or not plan.steps:
+        if not todos:
             return
         await self._finish_assistant()
         children = self._transcript().children
-        if self._plan is not None and children and children[-1] is self._plan:
-            self._plan.update_plan(plan.model_copy(deep=True))
+        if self._todos is not None and children and children[-1] is self._todos:
+            self._todos.update_todos(todos)
             return
-        if self._plan is not None:
-            self._plan.collapse()
-        self._plan = PlanBlock(plan.model_copy(deep=True))
-        await self._mount(self._plan)
+        if self._todos is not None:
+            self._todos.collapse()
+        self._todos = TodoBlock(todos)
+        await self._mount(self._todos)
 
-    async def _write_turn_summary(self, response: AgentResponse) -> None:
-        """One line per turn: outcome, time, finish reason and what the gate
-        says to the user. Its retries are steering for the model: only shown
-        in verbose mode (ctrl+o)."""
+    async def _write_turn_summary(self, state: LoopState) -> None:
+        """One line per turn: outcome, time, why it ended and what it cost.
+        An answer the harness gave in the model's place is shown first."""
         await self._finish_assistant()
+        # 1. A hook ended the turn with an answer of its own: nothing streamed it.
+        message = state.message
+        if message is not None and message.source == HARNESS_SOURCE and message.text().strip():
+            block = AssistantBlock()
+            await self._mount(block)
+            await block.write(message.text())
+            await block.finish()
+        # 2. The line.
         elapsed = int(time.monotonic() - (self._turn_started_at or time.monotonic()))
-        decision = response.completion
-        status = decision.status if decision is not None else None
-        reasons = list(decision.reasons) if decision is not None else []
-        closed = response.finish_reason == "stop" and status in (None, "completed")
-        warn = bool(reasons)
-        if closed:
-            icon, head = ("⚠", "Done") if warn else ("✓", "Done")
-            color = WARNING if warn else SUCCESS
-            line = Text(f"{icon} {head} in {elapsed}s", style=f"bold {color}")
+        if state.finish_reason == "stop":
+            line = Text(f"◆ Done in {elapsed}s", style=f"bold {SUCCESS}")
         else:
-            color = ERROR if response.finish_reason in ("error", "cancelled") else WARNING
+            color = ERROR if state.finish_reason in ("error", "cancelled") else WARNING
             line = Text(f"■ Stopped after {elapsed}s", style=f"bold {color}")
-        line.append(f" · {response.finish_reason}", style=MUTED)
-        if closed and decision is not None and not warn:
-            fixes = len(self._gate_retries)
-            line.append(" · gate ✓", style=SUCCESS)
-            if fixes:
-                line.append(f" after {fixes} fix{'es' if fixes > 1 else ''}", style=MUTED)
-        if self._gate_retries and self.verbose:
-            line.append(" · gate asked: ", style=WARNING)
-            line.append(" | ".join(self._gate_retries)[:200], style=MUTED)
-        if response.stop_message:
-            line.append(f" · {response.stop_message}", style=MUTED)
-        if response.finish_reason == "output_limit":
+            line.append(f" · {state.finish_reason.replace('_', ' ')}", style=MUTED)
+        line.append(f" · {state.iteration} model call{'s' if state.iteration != 1 else ''}",
+                    style=MUTED)
+        if state.compactions:
+            line.append(f" · compacted {state.compactions}x", style=MUTED)
+        if state.finish_reason == "length":
             line.append(
-                " · the model's replies kept hitting its output limit (max_tokens): "
-                "raise it or ask for smaller steps", style=MUTED,
+                " · the model's reply hit its output limit: ask for smaller steps", style=MUTED,
             )
-        if reasons:
-            line.append(" · gate: ", style=color)
-            line.append("; ".join(reasons)[:300], style=MUTED)
         await self._mount(NoteLine(line))
 
-    # -------- AGENT TURN -----------------------------------------------------------
-    async def _resolve_requests(self, response: AgentResponse) -> None:
-        """Ask separately for every pending operation; never approve a batch."""
-        ctx = response.context
-        if ctx is None:
-            raise RuntimeError("Cannot resume without a run context")
-        self.context = ctx
-        policy = getattr(self.agent, "policy", None) or Policy()
-        for record in response.pending_approvals:
+    # -------- APPROVALS AND QUESTIONS -------------------------------------------------
+    async def _resolve_requests(self) -> str | None:
+        """Ask separately for every call that waits; never approve a batch.
+        A text that is no option is a new message: it is returned and the
+        calls still open are closed by the agent."""
+        ctx = self.context
+        open_calls = [r for r in ctx.tool_state.records.values() if not r.is_consumed]
+        kept: list[str] = []  # rules kept with "always" in this batch
+        # 1. Approvals, one by one.
+        for record in [r for r in open_calls if r.is_pending_approval]:
             name = record.tool_name
-            tool = next((x for x in getattr(self.agent, "tools", []) if x.name == name), None)
-            # "Always allow" earlier in this batch may already cover this call.
-            if tool is not None and ctx.allowed_rules:
-                decision = Policy(allow=[], ask=[], deny=[]).decide(
-                    tool, record.parameters, isolated=False, extra_allow=ctx.allowed_rules)
-                if decision.verdict == "allow" and decision.rule in ctx.allowed_rules:
-                    ctx.tool_state.apply_approval(record.id, approved=True)
-                    await self._write_system(f"{name}: approved ({decision.rule})", style=SUCCESS)
-                    continue
-            rules = policy.rules_for(tool, record.parameters) if tool is not None else []
-            options = ["Yes, allow once"]
-            if rules:
-                options.append(f"Yes, always allow {', '.join(rules)}")
-            options.append("No, deny")
-            labeled = [f"{n}. {option}" for n, option in enumerate(options, start=1)]
-            details = self._format_parameters(record.parameters)
-            while True:
-                answer = (await self._request(
-                    "", labeled, prompt_card=f"Allow {name}?\n\n{details}",
-                )).strip().lower()
-                if answer in {options[0].lower(), "allow once", "yes", "y", "1"}:
-                    approved, label = True, "approved once"
-                    break
-                if rules and answer in {options[1].lower(), "always", "a", "2"}:
-                    ctx.allowed_rules.extend(r for r in rules if r not in ctx.allowed_rules)
-                    approved, label = True, f"always allowed in this conversation: {', '.join(rules)}"
-                    break
-                if answer in {options[-1].lower(), "deny", "no", "n", str(len(options))}:
-                    approved, label = False, "denied"
-                    break
-                await self._write_system(f"Answer a number from 1 to {len(options)}.")
-            ctx.tool_state.apply_approval(record.id, approved=approved)
-            await self._write_system(
-                f"{name}: {label}", style=SUCCESS if approved else ERROR,
-            )
-        questions = [q for record in response.pending_questions for q in self._questions(record)]
+            # A rule kept earlier in this batch may already cover this call.
+            if kept and Permissions({"allow": kept}).decide(name, record.parameters) is True:
+                await self.agent.approve(ctx, record.id)
+                await self._write_system(f"{name}: approved (always allowed)", style=SUCCESS)
+                continue
+            answer = await self._ask_approval(record)
+            if answer is None or isinstance(answer, str):
+                return answer
+            await self._apply_approval(record, answer, kept)
+        # 2. Questions, all in one form.
+        asked = [r for r in open_calls if r.is_awaiting_input]
+        questions = [question for record in asked for question in self._questions(record)]
         if questions:
             answers = await self._ask_form(questions)
-            for record in response.pending_questions:
-                ctx.tool_state.provide_result(
-                    record.id, AskUserTool.answer(record, answers[record.id]),
-                )
+            for record in asked:
+                record.store_result(AskUserTool.answer(record, answers.get(record.id, {})))
+        return None
 
-    def _questions(self, record) -> list[Question]:
-        """Every question of a pending record, read from the call itself."""
+    async def _ask_approval(self, record: ToolCallRecord) -> int | str | None:
+        """The option picked (0 once, 1 always, 2 deny), or a new message."""
+        # 1. "Always" only when a rule can be kept and is not a dangerous call.
+        keep = self.agent.sandbox is not None and Permissions.can_be_kept(
+            record.tool_name, record.parameters
+        )
+        rule = ", ".join(Permissions.rules_for(record.tool_name, record.parameters))
+        options = ["Yes, allow once"]
+        if keep:
+            options.append(f"Yes, always allow {rule}")
+        options.append("No, deny")
+        labeled = [f"{n}. {option}" for n, option in enumerate(options, start=1)]
+        # 2. Ask until the answer is an option or a message.
+        while True:
+            answer = (await self._request(
+                "", labeled, prompt_card=self._approval_card(record),
+            )).strip()
+            low = answer.lower()
+            if low in {options[0].lower(), "allow once", "yes", "y", "1"}:
+                return 0
+            if keep and low in {options[1].lower(), "always", "a", "2"}:
+                return 1
+            if low in {options[-1].lower(), "deny", "no", "n", str(len(options))}:
+                return 2
+            if answer.isdigit():
+                await self._write_system(f"Answer a number from 1 to {len(options)}.")
+                continue
+            await self._write_user(answer)
+            return self._expand_file_mentions(answer)
+
+    async def _apply_approval(self, record: ToolCallRecord, answer: int, kept: list[str]) -> None:
+        """Approve or reject ``record`` as picked, and say it."""
+        name = record.tool_name
+        if answer == 2:
+            record.reject()
+            await self._write_system(f"{name}: denied", style=ERROR)
+            return
+        always = answer == 1
+        try:
+            saved = await self.agent.approve(self.context, record.id, always=always)
+        except Exception as error:  # noqa: BLE001 — the setting.json write failed
+            await self._write_system(f"{name}: approved once; the rule was not kept: {error}",
+                                     style=WARNING)
+            return
+        if not always:
+            await self._write_system(f"{name}: approved once", style=SUCCESS)
+            return
+        rules = Permissions.rules_for(name, record.parameters)
+        kept.extend(rules)
+        rule = ", ".join(rules)
+        where = "kept in your setting.json" if saved else "for this call only"
+        await self._write_system(f"{name}: always allowed {rule} ({where})", style=SUCCESS)
+
+    @staticmethod
+    def _questions(record: ToolCallRecord) -> list[Question]:
+        """Every question of a waiting ask_user call, read from the call itself."""
         questions: list[Question] = []
-        for item in record.parameters["questions"]:
-            options = item.get("options") or []
+        for item in t.cast("list[dict[str, t.Any]]", record.parameters.get("questions") or []):
+            options = t.cast("list[dict[str, str]]", item.get("options") or [])
             questions.append(Question(
                 record.id, item["question"],
                 [(o["label"], o.get("description", "")) for o in options],
@@ -1049,17 +1147,18 @@ class MaxAIApp(App[None]):
             return f"Session {sid} (not saved: no session store configured)."
         return f"Session {sid} · saved after every turn · resume it with /resume or --session {sid}"
 
-    async def _save_session(self) -> None:
+    async def _save(self, ctx: RunContext) -> None:
+        """Keep ``ctx`` in the store: after each batch of tools and when a turn ends."""
         if self.store is None:
             return
         try:
-            await self.store.save(self.context)
+            await self.store.save(ctx)
         except Exception as error:  # noqa: BLE001 — a failed save must not kill the UI
             await self._write_system(f"Could not save the session: {error}", style=ERROR)
 
     async def _open_session_on_start(self) -> None:
         sid = self._resume_id
-        if sid is None:
+        if sid is None or self.store is None:
             await self._write_system(self._session_line())
             return
         try:
@@ -1072,23 +1171,30 @@ class MaxAIApp(App[None]):
             return
         await self._switch_to(ctx)
         await self._write_system(f"Resumed session {sid}.")
+        self._answer_open_calls()
 
     async def _switch_to(self, ctx: RunContext) -> None:
         """Show ``ctx`` as the current conversation: clear and redraw it."""
         self.context = ctx
         await self._transcript().remove_children()
         self._tools.clear()
-        self._plan = None
-        self._context_tokens = 0
+        self._todos = None
         await self._replay(ctx)
         self._refresh_usage()
+        # The sidebar follows the session's folder.
+        if self._is_local:
+            self.query_one("#workspace-files", DirectoryTree).path = self.workspace_root
+
+    def _answer_open_calls(self) -> None:
+        """A resumed conversation that waits for approvals or answers asks them now."""
+        if any(not record.is_consumed for record in self.context.tool_state.records.values()):
+            self._begin_busy()
+            self._run_turn(None, ask_first=True)
 
     async def _replay(self, ctx: RunContext) -> None:
         """Redraw a saved conversation from its messages (no model calls)."""
-        if ctx.compaction.compactions:
-            strategy = getattr(self.agent, "compaction", None)
-            summary = strategy.render(ctx.compaction.state) if strategy is not None else None
-            block = PastSummaryBlock(ctx.compaction.archived_messages, summary)
+        if ctx.summary is not None:
+            block = PastSummaryBlock(ctx.summary.text())
             await self._mount(block)
             block.collapse()
         for message in ctx.messages:
@@ -1096,26 +1202,30 @@ class MaxAIApp(App[None]):
                 continue
             if message.role == "user":
                 await self._mount(UserBlock(message.text()))
-            elif message.role == "assistant":
+            elif isinstance(message, AssistantMessage):
                 if message.text().strip():
                     block = AssistantBlock()
                     await self._mount(block)
                     await block.write(message.text())
                     await block.finish()
-                for call in getattr(message, "tool_calls", None) or []:
+                for call in message.tool_calls:
                     line = Text("  ● ", style=PRIMARY)
-                    line.append(call.tool_name, style=f"bold {TEXT}")
+                    line.append("Bash" if call.tool_name == BASH else call.tool_name,
+                                style=f"bold {TEXT}")
                     line.append(f"  {tool_summary(call.tool_name, call.parameters)}", style=DIM)
                     await self._mount(NoteLine(line))
-        if ctx.plan is not None and ctx.plan.steps:
-            self._plan = PlanBlock(ctx.plan)
-            await self._mount(self._plan)
+        if ctx.todos:
+            self._todos = TodoBlock(ctx.todos)
+            await self._mount(self._todos)
 
     @work(exclusive=True, group="agent")
     async def _resume_picker(self, session_id: str | None) -> None:
         """``/resume [id]``: pick a saved session (same form as ask_user)."""
+        store = self.store
+        if store is None:
+            return
         if session_id is None:
-            sessions = [s for s in await self.store.list_sessions(self.user_id)
+            sessions = [s for s in await store.list_sessions(self.user_id)
                         if s.session_id != self.context.session_id]
             if not sessions:
                 await self._write_system("No other saved conversations yet.")
@@ -1125,24 +1235,26 @@ class MaxAIApp(App[None]):
                 options=[(s.title or "(untitled)", self._session_detail(s)) for s in sessions],
                 values=[s.session_id for s in sessions],
             )
-            self._busy, self._cancel = True, CancellationToken()
+            self._busy, self._interrupting = True, False
             try:
-                session_id = str((await self._ask_form([question]))["resume"][question.text]).strip()
+                answers = (await self._ask_form([question])).get("resume", {})
             except asyncio.CancelledError:
-                # esc cancels our token; anything else (app exit) must propagate.
-                if self._cancel is None or not self._cancel.is_cancelled():
+                # esc cancels the wait; anything else (app exit) must propagate.
+                if not self._interrupting:
                     raise
                 await self._write_system("Resume cancelled.")
                 return
             finally:
-                self._busy, self._cancel = False, None
+                self._busy, self._interrupting = False, False
                 self._refresh_status()
-        ctx = await self.store.load(self.user_id, session_id) if session_id else None
+            session_id = str(answers.get(question.text) or "").strip()
+        ctx = await store.load(self.user_id, session_id) if session_id else None
         if ctx is None:
             await self._write_system(f"No saved session {session_id!r}.", style=ERROR)
             return
         await self._switch_to(ctx)
         await self._write_system(f"Resumed session {session_id}.")
+        self._answer_open_calls()
 
     @staticmethod
     def _session_detail(info: SessionInfo) -> str:
@@ -1151,102 +1263,108 @@ class MaxAIApp(App[None]):
             detail += f" · {info.compactions} compaction{'s' if info.compactions > 1 else ''}"
         return detail
 
-    def _ensure_context(self) -> RunContext:
-        return self.context
-
     def _new_context(self, session_id: str | None = None) -> RunContext:
         return RunContext(user_id=self.user_id, session_id=session_id or short_id())
 
+    # -------- AGENT TURN -----------------------------------------------------------
     @work(exclusive=True, group="agent")
-    async def _run_turn(self, task: str) -> None:
-        self._busy = True
-        self._ensure_context()
-        self._cancel = CancellationToken()
+    async def _run_turn(self, task: str | None, ask_first: bool = False) -> None:
+        """One turn of the user, through every approval and question it asks."""
+        self._busy, self._interrupting = True, False
         try:
-            # Messages sent after the loop's last look become the next task.
-            while task:
-                await self._turn(task)
-                inbox, self.context.inbox = self.context.inbox, []
-                task = "\n\n".join(inbox)
+            # 1. Runs follow while calls wait for the user; None goes on after an answer.
+            waiting = ask_first
+            while True:
+                if waiting:
+                    task = await self._resolve_requests()
+                state = await self._run_once(task)
+                self._close_finished_blocks()
+                waiting = state.finish_reason == ReactLoop.WAITING
+                if waiting:
+                    # Written while the turn ran: the agent closes the calls and reads it.
+                    if self.context.inbox:
+                        waiting, task = False, None
+                    continue
+                await self._write_turn_summary(state)
+                # 2. Written after the loop's last look: one more run reads it.
+                if not self.context.inbox:
+                    break
+                task = None
         except asyncio.CancelledError:
-            if self._cancel is None or not self._cancel.is_cancelled():
+            if not self._interrupting:
                 raise
-            ToolDispatcher.close_interrupted(self.context)
-            await self._finish_assistant()
-            for block in self._tools.values():
-                block.complete(None)
-            self._tools.clear()
-            await self._write_system(
-                "Interrupted · what ran so far stays in the conversation.",
-                style=WARNING,
-            )
-        except Exception as error:
+            await self._close_interrupted()
+        except Exception as error:  # noqa: BLE001 — a failed turn must not kill the UI
             await self._write_system(f"Failed: {error}", style=ERROR)
         finally:
             await self._finish_assistant()
-            await self._save_session()
-            self._cancel = None
-            self._busy = False
-            self._waiting = False
+            self._close_finished_blocks()
+            await self._save(self.context)
+            self._job = None
+            self._busy = self._waiting = self._interrupting = False
             self._request_future = None
             self._refresh_status()
+            self._refresh_usage()
             self.query_one("#prompt", TextArea).focus()
 
-    async def _turn(self, task: str) -> None:
-        """One task, through any approvals and questions it asks for."""
-        response = await self._consume(
-            self.agent.run_stream_events(
-                task=task,
-                run_context=self._ensure_context(),
-                cancellation_token=self._cancel,
-                stream_tokens=True,
-            )
+    async def _run_once(self, task: str | None) -> LoopState:
+        """One run of the agent, its events drawn as they come; esc cancels it."""
+        state = LoopState()
+
+        async def consume() -> LoopState:
+            events = self.agent.run_stream_events(task, self.context, state=state, stream=True)
+            answered = False  # tools answered since the last save
+            async for event in events:
+                # Saved at the model call after tools: by then every answer is in ctx.
+                if isinstance(event, ToolCallResponseEvent):
+                    answered = True
+                elif isinstance(event, ModelCallEvent) and answered:
+                    answered = False
+                    await self._save(self.context)
+                await self._write_event(event)
+            return state
+
+        self._job = asyncio.ensure_future(consume())
+        try:
+            return await self._job
+        finally:
+            self._job = None
+
+    async def _close_interrupted(self) -> None:
+        """Esc stopped the turn: every open call gets its answer and the
+        model is told, so the conversation can go on."""
+        ToolDispatcher.close_interrupted(self.context)
+        self.context.messages.append(
+            UserMessage(source=HARNESS_SOURCE, content=f"{HARNESS_TAG} {harness.TURN_INTERRUPTED}")
         )
-        while response is not None and (response.needs_approval or response.needs_input):
-            await self._resolve_requests(response)
-            response = await self._consume(
-                self.agent.resume_stream_events(
-                    run_context=response.context,
-                    cancellation_token=self._cancel,
-                    stream_tokens=True,
-                )
-            )
-        if response is not None:
-            self.context = response.context
-            await self._write_turn_summary(response)
+        await self._finish_assistant()
+        for block in self._tools.values():
+            block.complete(None)
+        self._tools.clear()
+        await self._write_system(
+            "Interrupted · what ran so far stays in the conversation.", style=WARNING,
+        )
 
     @work(exclusive=True, group="shell")
     async def _run_shell(self, command: str) -> None:
-        """Run a command entered with ``!`` in the configured workspace."""
+        """Run a command entered with ``!`` in the session's workspace."""
         if not command:
             await self._write_system("Shell command is empty.")
             self._busy = False
             self._refresh_status()
             return
         self._busy = True
-        block = ToolBlock("shell", {"command": command})
+        block = ToolBlock(BASH, {"command": command, "description": "Your command"})
         await self._mount(block)
         self._tools["__shell__"] = block
-        started = datetime.now(timezone.utc)
+        started = datetime.now(UTC)
         try:
-            process = await asyncio.create_subprocess_shell(
-                command,
-                cwd=str(self.project_root),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
-            output, _ = await process.communicate()
-            result = ToolResult(
-                success=True,
-                tool_call_id="shell",
-                result={"stdout": output.decode(errors="replace"), "exit_code": process.returncode},
-                started_at=started,
-                completed_at=datetime.now(timezone.utc),
-            )
+            result = await self._shell(command)
+            result = result.model_copy(update={"started_at": started, "completed_at": datetime.now(UTC)})
             self._tools.pop("__shell__", None)
             block.complete(result)
             block.set_expanded()
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 — shown in the block
             self._tools.pop("__shell__", None)
             block.complete(ToolResult(success=False, error=str(error), tool_call_id="shell"))
         finally:
@@ -1254,22 +1372,30 @@ class MaxAIApp(App[None]):
             self._refresh_status()
             self.query_one("#prompt", TextArea).focus()
 
-    async def _consume(
-        self, stream: AsyncIterator[CoreEvent | AgentResponse],
-    ) -> AgentResponse | None:
-        response: AgentResponse | None = None
-        async for item in stream:
-            if isinstance(item, AgentResponse):
-                response = item
-            elif isinstance(item, ModelStreamChunkEvent):
-                self._retry = None
-                if item.thinking:
-                    await self._write_thinking(item.thinking)
-                if item.chunk and not item.is_final:
-                    await self._write_assistant_chunk(item.chunk)
-            else:
-                await self._write_event(item)
-        return response
+    async def _shell(self, command: str) -> ToolResult:
+        """``command`` in the agent's sandbox, in the session's folder; on
+        this computer when the agent has no sandbox."""
+        box = self._box()
+        # 1. In the sandbox, from the session's folder.
+        if box is not None:
+            await box.prepare()
+            folder = box.session_paths(self.context.session_id or self.context.run_id)["workspace"]
+            script = f"mkdir -p {shlex.quote(folder)} && cd {shlex.quote(folder)} && {command}"
+            ran = await box.execute_command(script, timeout=_SHELL_TIMEOUT)
+            output = {"stdout": ran.stdout, "stderr": ran.stderr, "exit_code": ran.exit_code}
+            return ToolResult.success_result("shell", output)
+        # 2. Without one, here.
+        process = await asyncio.create_subprocess_shell(
+            command, cwd=str(self.workspace_root),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+        )
+        try:
+            out, _ = await asyncio.wait_for(process.communicate(), _SHELL_TIMEOUT)
+        except (TimeoutError, asyncio.CancelledError):
+            process.kill()  # nothing stays running after the CLI gave up on it
+            raise
+        output = {"stdout": out.decode(errors="replace"), "exit_code": process.returncode}
+        return ToolResult.success_result("shell", output)
 
     async def _ask_form(self, questions: list[Question]) -> dict[str, dict[str, str | list[str]]]:
         """All pending questions in one form; the prompt drives it (↑↓ ←→
@@ -1314,7 +1440,7 @@ class MaxAIApp(App[None]):
             await self._write_system(label)
         card = self.query_one("#request-card", Vertical)
         input_widget = self.query_one("#prompt", TextArea)
-        input_widget.placeholder = "Pick an option (click, or type its number) or write an answer…"
+        input_widget.placeholder = APPROVAL_PLACEHOLDER
         self._request_future = asyncio.get_running_loop().create_future()
         self._waiting = True
         self._refresh_status()
@@ -1352,15 +1478,16 @@ async def run_cli(
     """Run the Textual interface for an already configured agent.
 
     With a ``store`` the CLI acts as a host: it saves the conversation after
-    every turn and ``/resume`` (or ``session_id``) continues a saved one.
-
-    ``show_thinking`` sets the initial state; ctrl+t or /thinking toggles it
-    at runtime. ``initial_context`` pins ``user_id``/``session_id`` up front —
-    needed when memory/knowledge is bound to a specific session, since
-    otherwise the first turn gets a random ``session_id``.
+    every batch of tools and every turn, and ``/resume`` (or ``session_id``)
+    continues a saved one. ``show_thinking`` sets the initial state; ctrl+t
+    or /thinking toggles it. ``initial_context`` pins ``user_id`` and
+    ``session_id`` up front. The agent is closed when the CLI ends.
     """
     app = MaxAIApp(
         agent, show_thinking=show_thinking, initial_context=initial_context,
         store=store, user_id=user_id, session_id=session_id,
     )
-    await app.run_async()
+    try:
+        await app.run_async()
+    finally:
+        await agent.close()

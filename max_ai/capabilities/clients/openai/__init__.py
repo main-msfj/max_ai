@@ -1,4 +1,4 @@
-"""Module providing capability implementations and supporting utilities."""
+"""The OpenAI client."""
 from ._model import OpenAIChatCompletionClientConfig
 from .client import OpenAIChatCompletionClient
 

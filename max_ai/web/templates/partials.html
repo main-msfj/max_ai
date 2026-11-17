@@ -1,0 +1,263 @@
+{# Every piece of the page the server sends on its own: Python calls these macros. #}
+
+{% macro user(text) -%}
+<div class="msg user"><div class="bubble">{{ text }}</div></div>
+{%- endmacro %}
+
+{% macro assistant(id, html) -%}
+<div class="msg assistant"><div class="md" id="{{ id }}">{{ html | safe }}</div></div>
+{%- endmacro %}
+
+{% macro thinking(id, text, done, took) -%}
+<details class="thinking{% if not done %} live{% endif %}" id="{{ id }}">
+  <summary><span class="gem">◇</span>
+    {%- if done %} Thought for {{ took }}{% else %} <span class="shimmer">Thinking…</span>{% endif -%}
+    <svg class="chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></summary>
+  <div class="body">{{ text }}</div>
+</details>
+{%- endmacro %}
+
+{% macro tool(t, open=False) -%}
+<details class="tool {{ t.state }}" id="t-{{ t.id }}"{% if open %} open{% endif %}>
+  <summary>
+    <span class="dot"></span>
+    <span class="name">{{ t.name }}</span>
+    {%- if t.summary %} <span class="arg {{ t.kind }}">{{ t.summary }}</span>{% endif %}
+    <span class="meta">{{ t.meta }}</span>
+  </summary>
+  {%- if t.command %}<pre class="cmd"><span class="prompt">$</span> {{ t.command }}</pre>{% endif %}
+  {%- if t.output %}<pre class="out">{{ t.output }}</pre>{% endif %}
+</details>
+{%- endmacro %}
+
+{% macro note(text, kind="") -%}
+<div class="note {{ kind }}"><span class="gem">◇</span> {{ text }}</div>
+{%- endmacro %}
+
+{% macro turn_end(ok, text, details) -%}
+<div class="turn-end {{ 'ok' if ok else 'stop' }}"><span class="gem">{{ '◆' if ok else '■' }}</span> <b>{{ text }}</b> <span>{{ details }}</span></div>
+{%- endmacro %}
+
+{% macro approval(sid, r) -%}
+<div class="card request" id="req-{{ r.id }}">
+  <div class="card-head"><span class="gem warn">◆</span> <b>{{ r.name }}</b> wants to run
+    {%- if r.reason %}<span class="reason"> · {{ r.reason }}</span>{% endif %}</div>
+  <pre class="params">{% if r.bash %}<span class="prompt">$ </span>{% endif %}{{ r.params }}</pre>
+  <div class="choices">
+    <button class="primary" hx-post="/s/{{ sid }}/approve/{{ r.id }}" hx-vals='{"choice": "once"}' hx-swap="none">Allow once</button>
+    {%- if r.rules %}
+    <button class="has-tip" hx-post="/s/{{ sid }}/approve/{{ r.id }}" hx-vals='{"choice": "always"}' hx-swap="none">Always allow
+      <span class="tip"><small>Keeps for next time</small>{% for rule in r.rules %}<code>{{ rule }}</code>{% endfor %}</span></button>
+    {%- endif %}
+    <button class="danger" hx-post="/s/{{ sid }}/approve/{{ r.id }}" hx-vals='{"choice": "deny"}' hx-swap="none">Deny</button>
+  </div>
+  <div class="hint">Or write a new message: the call is closed without running.</div>
+</div>
+{% endmacro %}
+
+{% macro questions(sid, rid, items) -%}
+<form class="card request questions" id="req-{{ rid }}" hx-post="/s/{{ sid }}/answer/{{ rid }}" hx-swap="none" data-step="0">
+  {%- if items | length > 1 %}
+  <div class="q-tabs">
+    {%- for q in items %}
+    <button type="button" class="q-tab{% if loop.first %} on{% endif %}" data-go="{{ loop.index0 }}">
+      <span class="q-dot"></span>{{ q.header or "Question " ~ loop.index }}</button>
+    {%- endfor %}
+  </div>
+  {%- endif %}
+  {%- for q in items %}{% set qi = loop.index0 %}
+  <fieldset class="q-step"{% if not loop.first %} hidden{% endif %} data-multi="{{ 'y' if q.multi else '' }}">
+    <legend>{{ q.text }}</legend>
+    {%- if q.multi %}<div class="q-hint">Pick all that apply</div>{% endif %}
+    {%- for o in q.options %}
+    <label class="option">
+      <input type="{{ 'checkbox' if q.multi else 'radio' }}" name="q{{ qi }}" value="{{ o.label }}">
+      <span class="o-key">{{ loop.index }}</span>
+      <span><b>{{ o.label }}</b>{% if o.description %}<small>{{ o.description }}</small>{% endif %}</span>
+    </label>
+    {%- endfor %}
+    <input class="other" name="q{{ qi }}_other" placeholder="Something else…" autocomplete="off">
+  </fieldset>
+  {%- endfor %}
+  <div class="q-nav">
+    {%- if items | length > 1 %}
+    <button type="button" class="q-back" data-back hidden>Back</button>
+    <span class="q-count"><b>1</b> of {{ items | length }}</span>
+    {%- endif %}
+    <span class="spacer"></span>
+    {%- if items | length > 1 %}<button type="button" class="q-next primary" data-next>Next</button>{% endif %}
+    <button type="submit" class="q-send primary"{% if items | length > 1 %} hidden{% endif %}>Send answers</button>
+  </div>
+</form>
+{%- endmacro %}
+
+{% macro status(mode, since=0) -%}
+{%- if mode == "busy" -%}
+<span class="gem spin">◈</span> <span class="shimmer">Working…</span> <span class="elapsed" data-since="{{ since }}"></span><span class="hint"> · ■ to stop</span>
+{%- elif mode == "waiting" -%}
+<span class="gem warn">◆</span> Waiting for your answer…
+{%- endif -%}
+{%- endmacro %}
+
+{% macro usage(u) -%}
+<span class="io" title="Tokens sent to the model and written by it, in this page's turns">↑ {{ u.tokens_in }} ↓ {{ u.tokens_out }}</span>
+<span class="sep">·</span>
+<button type="button" class="ctx-button">
+  Context <span class="ctx"><span class="{{ u.level }}" style="width: {{ u.percent }}%"></span></span>
+  <span class="{{ u.level }}">{{ u.used }} / {{ u.window }} · {{ u.percent }}%</span>
+  <span class="ctx-pop">
+    <b>Context window</b>
+    <span class="stack">{% for p in u.parts %}<span class="{{ p.kind }}" style="width: {{ p.share }}%"></span>{% endfor %}</span>
+    {%- for p in u.parts %}
+    <span class="ctx-row"><span class="dot {{ p.kind }}"></span>{{ p.name }}<span class="n">{{ p.tokens }}</span><span class="pc">{{ p.share }}%</span></span>
+    {%- endfor %}
+    <span class="ctx-row free"><span class="dot"></span>Free<span class="n">{{ u.free }}</span><span class="pc">{{ u.free_share }}%</span></span>
+    <small>As the last model call saw it. Only the messages grow; past the limit the conversation is compacted.</small>
+  </span>
+</button>
+{%- endmacro %}
+
+{% macro sessions(groups, current) -%}
+{%- for group, items in groups %}
+<div class="group">{{ group }}</div>
+{%- for s in items %}
+<a class="session{% if s.id == current %} active{% endif %}" href="/s/{{ s.id }}" title="{{ s.meta }}">{{ s.title }}</a>
+{%- endfor %}
+{%- else %}
+<div class="empty">No conversations yet.</div>
+{%- endfor %}
+{%- endmacro %}
+
+{% macro trace(sid, turns) -%}
+<div id="trace" class="wf" hx-get="/s/{{ sid }}/trace" hx-trigger="sse:spans throttle:600ms" hx-swap="outerHTML">
+  {%- if not turns %}
+  <div class="wf-empty">
+    <svg viewBox="0 0 24 24"><path d="M4 6h10M4 12h16M4 18h7"/></svg>
+    <b>No activity yet</b>
+    <span>Each turn shows here as a timeline of its model calls and tools.</span>
+  </div>
+  {%- endif %}
+  {%- for turn in turns %}
+  <details class="wf-turn s-{{ turn.status }}" data-id="{{ turn.id }}"{% if loop.first %} open{% endif %}>
+    <summary class="wf-head">
+      <svg class="chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+      <span class="wf-title">{{ turn.title }}</span>
+      <span class="wf-meta">{{ turn.meta }}</span>
+    </summary>
+    <div class="wf-body" style="--tick: {{ turn.tick }}%">
+      <div class="wf-axis">
+        <span></span>
+        <span class="wf-scale">{% for t in turn.ticks %}<i style="left: {{ t.at }}%">{{ t.label }}</i>{% endfor %}</span>
+        <span></span>
+      </div>
+      {%- for r in turn.rows %}
+      <div class="wf-row k-{{ r.kind }} s-{{ r.status }}" data-id="{{ r.id }}" title="{{ r.line }}"
+           hx-get="/s/{{ sid }}/span/{{ r.id }}" hx-target="#span-detail" hx-swap="innerHTML">
+        <span class="wf-name"><i></i><b>{{ r.name }}</b><small>{{ r.line }}</small></span>
+        <span class="wf-track"><span class="wf-bar" style="left: {{ r.left }}%; width: {{ r.width }}%">
+          {%- if r.ttft %}<span class="wf-wait" style="width: {{ r.ttft }}%"></span>{% endif %}</span></span>
+        <span class="wf-dur">{{ r.dur }}</span>
+      </div>
+      {%- endfor %}
+    </div>
+  </details>
+  {%- endfor %}
+</div>
+{%- endmacro %}
+
+{% macro span_detail(d) -%}
+<div class="sd k-{{ d.kind }} s-{{ d.status }}">
+  <div class="sd-head">
+    <i></i><b>{{ d.name }}</b>
+    {%- if d.status != "ok" %}<span class="sd-state">{{ d.status }}</span>{% endif %}
+    <button type="button" class="icon-button sm" data-close-detail title="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  {%- if d.line and d.kind == "tool" %}<div class="sd-line">{{ d.line }}</div>{% endif %}
+  <div class="sd-facts">{% for f in d.facts %}<span>{{ f }}</span>{% endfor %}</div>
+  {%- if d.answer %}<div class="sd-label">Answer</div><div class="sd-md md">{{ d.answer }}</div>{% endif %}
+  {%- if d.output %}<div class="sd-label">Output</div><pre>{{ d.output }}</pre>{% endif %}
+  {%- if d.input %}<div class="sd-label">Input</div><pre>{{ d.input }}</pre>{% endif %}
+</div>
+{%- endmacro %}
+
+{% macro todos(items, open=True) -%}
+{%- set done = items | selectattr("status", "equalto", "done") | list | length %}
+{%- if items and done < items | length %}
+<details class="todos"{% if open %} open{% endif %}>
+  <summary><span class="gem">◈</span> Tasks <span class="count">{{ done }}/{{ items | length }}</span></summary>
+  {%- for t in items %}
+  <div class="todo {{ t.status }}"><span class="box"></span><span>{{ t.content }}</span></div>
+  {%- endfor %}
+</details>
+{%- endif %}
+{%- endmacro %}
+
+{% macro panel(title, rows) -%}
+<div class="panel-head"><b>{{ title }}</b><span class="hint">esc to close</span>
+  <button type="button" class="icon-button" data-close-panel title="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+<div class="panel-body">
+  {%- for r in rows %}
+  {%- if r.group %}<div class="panel-group">{{ r.group }}</div>
+  {%- elif r.href %}<a class="prow link" href="{{ r.href }}"><span class="pname">{{ r.name }}</span><span class="ptext">{{ r.text }}</span></a>
+  {%- else %}<div class="prow{% if not r.name %} wide{% endif %}">{% if r.name %}<span class="pname">{{ r.name }}</span>{% endif %}<span class="ptext">{{ r.text }}</span>{% if r.tag %}<span class="tag">asks approval</span>{% endif %}</div>
+  {%- endif %}
+  {%- endfor %}
+</div>
+{%- endmacro %}
+
+{% macro tree(sid, nodes, count) -%}
+{%- if not nodes %}<div class="empty big">The workspace is empty.<br>Files the agent writes show up here.</div>
+{%- else %}{{ tree_nodes(sid, nodes) }}{% endif %}
+{%- endmacro %}
+
+{% macro tree_nodes(sid, nodes) -%}
+{%- for n in nodes %}
+{%- if n.size < 0 %}
+<details class="dir" data-path="{{ n.path }}"><summary><svg class="chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span>{{ n.name }}</span></summary>
+<div class="kids">{{ tree_nodes(sid, n.children) }}</div></details>
+{%- else %}
+<div class="file" data-path="{{ n.path }}" role="button" tabindex="0" hx-get="/s/{{ sid }}/file?path={{ n.path | urlencode }}" hx-target="#file-view" hx-swap="innerHTML"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg><span>{{ n.name }}</span><small>{{ n.label }}</small>
+<a class="dl" href="/s/{{ sid }}/download?path={{ n.path | urlencode }}" download title="Download" onclick="event.stopPropagation()"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg></a></div>
+{%- endif %}
+{%- endfor %}
+{%- endmacro %}
+
+{% macro file_view(sid, path, size, body) -%}
+<div class="file-head">
+  <button type="button" class="icon-button sm" data-file-back title="Back to the files"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
+  <span class="file-path" title="{{ path }}">{{ path }}</span><small>{{ size }}</small>
+  <span class="spacer"></span>
+  <button type="button" class="mini" data-mention="{{ path }}" title="Add @{{ path }} to your message">@ Mention</button>
+  <a class="mini" href="/s/{{ sid }}/download?path={{ path | urlencode }}" download title="Download">
+    <svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>Download</a>
+</div>
+<div class="file-body">{{ body | safe }}</div>
+{%- endmacro %}
+
+{% macro rules(sid, lists, has_rules, error) -%}
+{%- if not has_rules %}
+<div class="empty big">This agent runs without a sandbox:<br>each tool asks as it is built to.</div>
+{%- else %}
+{%- for kind, title, meaning in [("allow", "Allow", "Run without asking"), ("ask", "Ask", "Always ask first"), ("deny", "Deny", "Never run")] %}
+<section class="rules-group {{ kind }}">
+  <header><b>{{ title }}</b><span>{{ meaning }}</span></header>
+  {%- for rule in lists.get(kind, []) %}
+  <div class="rule"><code>{{ rule }}</code>
+    <button type="button" class="icon-button" title="Remove" hx-post="/s/{{ sid }}/rules" hx-target="#rules" hx-swap="innerHTML"
+            hx-vals='{"action": "remove", "kind": "{{ kind }}", "rule": {{ rule | tojson | forceescape }}}'>
+      <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+  {%- else %}
+  <div class="rule none">No rules</div>
+  {%- endfor %}
+</section>
+{%- endfor %}
+<form class="rule-add" hx-post="/s/{{ sid }}/rules" hx-target="#rules" hx-swap="innerHTML">
+  <input type="hidden" name="action" value="add">
+  <select name="kind"><option value="allow">Allow</option><option value="ask">Ask</option><option value="deny">Deny</option></select>
+  <input name="rule" placeholder="bash(npm test*) or write_file" autocomplete="off" required>
+  <button type="submit">Add</button>
+</form>
+{%- if error %}<div class="rule-error">{{ error }}</div>{% endif %}
+<p class="rules-hint">Deleting, sudo, force-push and commands built while they run are always asked.</p>
+{%- endif %}
+{%- endmacro %}

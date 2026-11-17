@@ -1,6 +1,5 @@
-from max_ai.core.harness import messages as harness
 from max_ai.core.messages import ToolMessage
-from max_ai.core.tool.dispatcher import ToolDispatcher
+from max_ai.core.tool.dispatcher import NOT_ANSWERED, ToolDispatcher
 from max_ai.types.run_context import RunContext
 from max_ai.types.tool_call import ToolCallRecord, ToolResult
 
@@ -15,7 +14,7 @@ def answers(ctx: RunContext) -> dict[str, ToolMessage]:
     return {m.tool_call_id: m for m in ctx.messages if isinstance(m, ToolMessage)}
 
 
-def test_every_open_call_gets_its_answer_and_the_model_is_told():
+def test_every_open_call_gets_its_answer():
     ctx = RunContext()
     record(ctx, "approval")
     record(ctx, "question").await_user_input()
@@ -28,11 +27,12 @@ def test_every_open_call_gets_its_answer_and_the_model_is_told():
 
     closed = answers(ctx)
     assert closed["approval"].success is False
-    assert closed["question"].content == harness.QUESTION_NOT_ANSWERED
+    assert closed["question"].content == NOT_ANSWERED
     assert "yes" in closed["answered"].content  # the answer is not lost
     assert closed["running"].success is False
     assert all(r.is_consumed for r in ctx.tool_state.records.values())
-    assert ctx.messages[-1].content.endswith(harness.TURN_INTERRUPTED)
+    # Only answers to calls: telling the model the turn was cut is the harness's.
+    assert all(isinstance(m, ToolMessage) for m in ctx.messages)
 
 
 def test_a_finished_call_is_not_answered_twice():

@@ -1,19 +1,9 @@
-"""Serializable configuration for SummaryCompaction."""
+"""What is stored of a summary compaction."""
 
-from __future__ import annotations
-
-from pydantic import Field
-
-from ....core.compaction import CompactionConfig
+from ....base.compaction import WindowCompactionConfig
+from ....base.component import ComponentModel
 
 
-class SummaryCompactionConfig(CompactionConfig):
-    """Configuration options for ``SummaryCompaction``."""
-    summary_max_tokens: int = Field(
-        default=2000, gt=0,
-        description="Output cap of each summary call; also reserved in the window.",
-    )
-    message_cap_tokens: int = Field(
-        default=2000, gt=0,
-        description="Each old message is cut to this before summarizing it.",
-    )
+class SummaryCompactionConfig(WindowCompactionConfig):
+    instructions: str = ""  # what to care about in the summary, added to the task
+    client: ComponentModel | None = None  # the model that summarizes; None = the agent's

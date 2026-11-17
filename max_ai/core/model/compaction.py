@@ -2,101 +2,9 @@
 
 from __future__ import annotations
 
-import typing as t
-
-from pydantic import BaseModel, Field, JsonValue, model_validator
+from pydantic import BaseModel, Field, JsonValue
 
 from ..messages import AssistantMessage, CoreMessage
-
-
-class CompactionOutput(BaseModel):
-    """Structured summary produced by future summary-based compaction."""
-
-    summary: str = Field(
-        default="",
-        description="Quick summary of what is going on in the conversation.",
-    )
-    objective: list[str] = Field(
-        default_factory=list,
-        description="Current user or agent objectives that still matter.",
-    )
-    pending: list[str] = Field(
-        default_factory=list,
-        description="Open questions, blockers, approvals, or unfinished work.",
-    )
-    successfully_done: list[str] = Field(
-        default_factory=list,
-        description="Work already completed successfully.",
-    )
-    decisions: list[str] = Field(
-        default_factory=list,
-        description="Important decisions, constraints, or preferences established.",
-    )
-    important_context: list[str] = Field(
-        default_factory=list,
-        description="Facts that should be preserved for future turns.",
-    )
-
-
-class MemoryFactUpdate(BaseModel):
-    """One memory category to create or overwrite after compaction."""
-
-    category: str = Field(..., description="Memory category (its identity).")
-    content: str = Field(
-        ..., description="The category's COMPLETE new content; it replaces the old one.",
-    )
-    reason: str | None = Field(default=None, description="Why this update is justified.")
-
-
-class MemoryMaintenanceOutput(BaseModel):
-    """Structured memory maintenance produced during compaction."""
-
-    updates: list[MemoryFactUpdate] = Field(
-        default_factory=list,
-        description="Memory facts that should be created or overwritten.",
-    )
-
-
-class CompactionConfig(BaseModel):
-    """Config shared by every compaction strategy. Strategies extend it."""
-
-    threshold: float = Field(
-        default=0.8, gt=0, lt=1,
-        description="Compact when live messages use this share of their capacity.",
-    )
-    keep_ratio: float = Field(
-        default=0.4, gt=0, lt=1,
-        description="Share of capacity kept as raw recent messages.",
-    )
-    min_keep_groups: int = Field(
-        default=2, ge=1, description="Newest blocks always kept, budget or not.",
-    )
-    truncate_tool_outputs: bool = Field(
-        default=True, description="Shrink old tool results/arguments before summarizing.",
-    )
-    tool_output_max_tokens: int = Field(default=500, gt=0)
-    drop_harness_messages: bool = Field(
-        default=True, description="Drop harness messages from previous turns.",
-    )
-    update_memory: bool = Field(
-        default=True,
-        description="Save durable facts from what leaves the window into memory.",
-    )
-    memory_max_tokens: int = Field(default=1000, gt=0)
-    client: dict[str, t.Any] | None = Field(
-        default=None,
-        description="Serialized client for summaries/memory. None = the agent's client.",
-    )
-
-    @model_validator(mode="after")
-    def _keep_less_than_threshold(self) -> "CompactionConfig":
-        # Keeping >= what triggers means a compaction frees nothing, forever.
-        if self.keep_ratio >= self.threshold:
-            raise ValueError(
-                f"keep_ratio ({self.keep_ratio}) must be lower than threshold "
-                f"({self.threshold}): compaction would keep everything it found."
-            )
-        return self
 
 
 class CompactionState(BaseModel):
@@ -144,11 +52,7 @@ class MessageGroup(BaseModel):
 
 
 __all__ = [
-    "CompactionConfig",
     "CompactionState",
-    "CompactionOutput",
-    "MemoryFactUpdate",
-    "MemoryMaintenanceOutput",
     "CompactionResult",
     "MessageGroup",
 ]

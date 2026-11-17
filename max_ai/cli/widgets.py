@@ -7,10 +7,18 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.message import Message
-from textual.widgets import OptionList, Static, TextArea
+from textual.widgets import DirectoryTree, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
 from .theme import DIM, ELEMENT, MUTED, PANEL, PRIMARY, TEXT
+
+
+class FileTree(DirectoryTree):
+    """The sidebar's file tree: plain arrows instead of emoji icons."""
+
+    ICON_NODE = "▸ "
+    ICON_NODE_EXPANDED = "▾ "
+    ICON_FILE = "  "
 
 
 class PromptEditor(TextArea):

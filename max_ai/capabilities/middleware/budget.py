@@ -1,7 +1,7 @@
 """Budget for one task and quota per user: tokens, cost, time and calls.
 
-Per task (``max_*``): a task is what one new input starts; resuming it
-after an approval or a question keeps counting. Time counts only while
+Per task (``max_*``): a task is what one new input starts; the turn that
+goes on after an approval or a question keeps counting. Time counts only while
 the agent runs, never while it waits for the user.
 
 Per user (``quota`` + ``quota_store``): limits per day or month shared by
@@ -11,7 +11,7 @@ model call, so concurrent tasks of one user may go slightly over: the
 next check stops them.
 
 When a limit is reached:
-- the next model call does not happen: the run ends with
+- the next model call does not happen: the turn ends with
   ``finish_reason="budget_exceeded"`` and a message for the user;
 - tools the model already asked for do not run: they answer
   "not run, budget used up", so the transcript stays consistent.
@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import time
 import typing as t
+from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
 
 from pydantic import Field, model_validator
@@ -28,19 +29,23 @@ from pydantic import Field, model_validator
 from ...base.middleware import (
     CoreMiddleware,
     MiddlewareConfig,
-    MiddlewareContext,
-    ModelRequest,
-    StopRun,
-    ToolRequest,
+    ModelCall,
+    NextModel,
+    NextStream,
+    NextTool,
+    NextTurn,
 )
 from ...base.quota_store import CoreQuotaStore
 from ...core.model.quota import QuotaLimits, QuotaUsage
-from ...types.tool_call import ToolResult
+from ...errors.middleware import StopRun
+from ...types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
+from ...types.tool_call import ToolCallRecord, ToolCallStatus, ToolResult
 
 if t.TYPE_CHECKING:
-    from ...core.messages import CoreMessage
-    from ...types.agent_response import AgentResponse
-    from ...types.completions import ChatCompletionResult
+    from pydantic import JsonValue
+
+    from ...core.event_type import CoreEvent
+    from ...core.model.llm import ModelConfig
     from ...types.run_context import RunContext
 
 EXCEEDED = "budget_exceeded"
@@ -113,7 +118,8 @@ class BudgetMiddleware(CoreMiddleware):
         )
 
     @classmethod
-    def _from_config(cls, config: BudgetConfig) -> BudgetMiddleware:
+    def _from_config(cls, config: MiddlewareConfig) -> BudgetMiddleware:
+        config = BudgetConfig.model_validate(config.model_dump())
         store = CoreQuotaStore.deserialize(config.quota_store) if config.quota_store else None
         return cls(
             **config.model_dump(exclude={"quota", "quota_store"}),
@@ -124,7 +130,7 @@ class BudgetMiddleware(CoreMiddleware):
     def spent(self, ctx: RunContext) -> dict[str, t.Any]:
         """What the current task has used: tokens, cost_usd, seconds,
         model_calls, tool_calls (for the host: billing, dashboards)."""
-        state = ctx.runtime_state.shared_state.get("middleware", {}).get(self.state_key, {})
+        state = self.state(ctx)
         internal = ("segment_start", "blocked", "quota_used")
         return {key: value for key, value in state.items() if key not in internal}
 
@@ -134,19 +140,22 @@ class BudgetMiddleware(CoreMiddleware):
             raise ValueError("This budget has no quota")
         return await self.quota_store.usage(user_id, self.quota.period_key(_now()))
 
-    def _spent_seconds(self, state: dict[str, t.Any]) -> float:
-        running = time.monotonic() - state["segment_start"] if state.get("segment_start") else 0
-        return state.get("seconds", 0.0) + running
+    @staticmethod
+    def _spent_seconds(state: dict[str, JsonValue]) -> float:
+        start = state.get("segment_start")
+        running = time.monotonic() - start if isinstance(start, float) else 0.0
+        return _number(state, "seconds") + running
 
-    def _exhausted(self, state: dict[str, t.Any]) -> str | None:
+    def _exhausted(self, state: dict[str, JsonValue]) -> str | None:
         """Which limit is used up, said for the user; ``None`` if none."""
-        if state.get("blocked"):  # a tool was refused: stop before asking the model again
-            return state["blocked"]
+        blocked = state.get("blocked")
+        if isinstance(blocked, str):  # a tool was refused: stop before asking the model again
+            return blocked
         checks = (
-            (self.max_tokens, state.get("tokens", 0), "token budget ({limit:,} tokens) was used up: {used:,}"),
-            (self.max_cost_usd, state.get("cost_usd", 0.0), "cost budget (${limit:.2f}) was used up: ${used:.4f}"),
+            (self.max_tokens, _number(state, "tokens"), "token budget ({limit:,} tokens) was used up: {used:,.0f}"),
+            (self.max_cost_usd, _number(state, "cost_usd"), "cost budget (${limit:.2f}) was used up: ${used:.4f}"),
             (self.max_seconds, self._spent_seconds(state), "time budget ({limit:.0f}s) was used up: {used:.0f}s"),
-            (self.max_model_calls, state.get("model_calls", 0), "model-call budget ({limit}) was used up"),
+            (self.max_model_calls, _number(state, "model_calls"), "model-call budget ({limit}) was used up"),
         )
         for limit, used, text in checks:
             if limit is not None and used >= limit:
@@ -155,83 +164,112 @@ class BudgetMiddleware(CoreMiddleware):
             return self.quota.exceeded(QuotaUsage.model_validate(state["quota_used"]), _now())
         return None
 
-    async def _charge(self, mw: MiddlewareContext, delta: QuotaUsage) -> None:
+    async def _charge(self, ctx: RunContext, delta: QuotaUsage) -> None:
         """Add to the user's quota and keep the new total for the checks."""
         if self.quota is None or self.quota_store is None:
             return
         key = self.quota.period_key(_now())
-        total = await self.quota_store.add(_user(mw), key, delta)
-        mw.state(self)["quota_used"] = total.model_dump()
+        total = await self.quota_store.add(_user(ctx), key, delta)
+        self.state(ctx)["quota_used"] = total.model_dump()
 
-    # -------- HOOKS -----------------------------------------------------------
-    async def on_run_start(self, mw: MiddlewareContext, task: list[CoreMessage] | None) -> None:
-        state = mw.state(self)
-        if task is not None:  # a new task starts from zero; a resume keeps counting
+    def _before_model(self, ctx: RunContext, call: ModelCall) -> None:
+        """No call once a limit is used up. A cost limit without the model's
+        prices stops the turn: it never spends without counting."""
+        needs_prices = self.max_cost_usd is not None or (self.quota and self.quota.max_cost_usd)
+        if needs_prices and _prices(call.model_config) is None:
+            raise StopRun(
+                "A cost limit needs input_cost_per_mtok and output_cost_per_mtok "
+                f"in the ModelConfig of {call.model!r}",
+                finish_reason=EXCEEDED,
+            )
+        state = self.state(ctx)
+        if (reason := self._exhausted(state)) is not None:
+            raise StopRun(reason, finish_reason=EXCEEDED)
+        state["model_calls"] = int(_number(state, "model_calls")) + 1
+
+    async def _after_model(self, ctx: RunContext, call: ModelCall, usage: Usage) -> None:
+        """What the call used, added to the task and to the user's quota."""
+        state = self.state(ctx)
+        tokens = (usage.tokens_input or 0) + (usage.tokens_output or 0)
+        cost = 0.0
+        if (prices := _prices(call.model_config)) is not None:
+            cost = ((usage.tokens_input or 0) * prices[0] + (usage.tokens_output or 0) * prices[1]) / 1_000_000
+        state["tokens"] = int(_number(state, "tokens")) + tokens
+        state["cost_usd"] = _number(state, "cost_usd") + cost
+        await self._charge(ctx, QuotaUsage(tokens=tokens, cost_usd=cost))
+
+    # -------- THE FOUR PLACES ----------------------------------------------------------
+    async def turn(self, ctx: RunContext, call_next: NextTurn) -> AsyncGenerator[CoreEvent]:
+        # 1. A new task (the user said something) starts from zero; a turn that
+        #    goes on after an approval keeps counting.
+        state = self.state(ctx)
+        new_task = bool(ctx.inbox)
+        if new_task:
             state.clear()
         state["segment_start"] = time.monotonic()
-        if self.quota is not None and self.quota_store is not None:
-            used = await self.quota_used(_user(mw))
-            state["quota_used"] = used.model_dump()
-            if task is not None and (reason := self.quota.exceeded(used, _now(), starting_task=True)):
+        try:
+            # 2. The user's quota, before the task starts.
+            if self.quota is not None and self.quota_store is not None:
+                used = await self.quota_used(_user(ctx))
+                state["quota_used"] = used.model_dump()
+                if new_task and (reason := self.quota.exceeded(used, _now(), starting_task=True)):
+                    raise StopRun(reason, finish_reason=EXCEEDED)
+            if (reason := self._exhausted(state)) is not None:
                 raise StopRun(reason, finish_reason=EXCEEDED)
-        if (reason := self._exhausted(state)) is not None:
-            raise StopRun(reason, finish_reason=EXCEEDED)
-        if task is not None:
-            await self._charge(mw, QuotaUsage(tasks=1))
+            if new_task:
+                await self._charge(ctx, QuotaUsage(tasks=1))
+            # 3. The turn; its time counts only while it runs.
+            async for event in call_next():
+                yield event
+        finally:
+            state["seconds"] = self._spent_seconds(state)
+            state.pop("segment_start", None)
 
-    async def on_run_end(self, mw: MiddlewareContext, response: AgentResponse) -> None:
-        state = mw.state(self)
-        state["seconds"] = self._spent_seconds(state)
-        state.pop("segment_start", None)
-
-    async def on_model_request(self, mw: MiddlewareContext, request: ModelRequest) -> ModelRequest:
-        needs_prices = self.max_cost_usd is not None or (self.quota and self.quota.max_cost_usd)
-        if needs_prices and _prices(request) is None:
-            raise ValueError(
-                "A cost limit needs input_cost_per_mtok and output_cost_per_mtok "
-                f"in the ModelConfig of {request.model!r}"
-            )
-        state = mw.state(self)
-        if (reason := self._exhausted(state)) is not None:
-            raise StopRun(reason, finish_reason=EXCEEDED)
-        state["model_calls"] = state.get("model_calls", 0) + 1
-        return request
-
-    async def on_model_response(
-        self, mw: MiddlewareContext, request: ModelRequest, result: ChatCompletionResult,
-    ) -> ChatCompletionResult:
-        state = mw.state(self)
-        tokens = (result.usage.tokens_input or 0) + (result.usage.tokens_output or 0)
-        cost = 0.0
-        if (prices := _prices(request)) is not None:
-            cost = ((result.usage.tokens_input or 0) * prices[0]
-                    + (result.usage.tokens_output or 0) * prices[1]) / 1_000_000
-        state["tokens"] = state.get("tokens", 0) + tokens
-        state["cost_usd"] = state.get("cost_usd", 0.0) + cost
-        await self._charge(mw, QuotaUsage(tokens=tokens, cost_usd=cost))
+    async def model(self, ctx: RunContext, call: ModelCall, call_next: NextModel) -> ChatCompletionResult:
+        self._before_model(ctx, call)
+        result = await call_next(call)
+        await self._after_model(ctx, call, result.usage)
         return result
 
-    async def on_tool_request(self, mw: MiddlewareContext, request: ToolRequest) -> ToolResult | None:
-        state = mw.state(self)
+    async def stream(
+        self, ctx: RunContext, call: ModelCall, call_next: NextStream
+    ) -> AsyncGenerator[ChatCompletionChunk]:
+        self._before_model(ctx, call)
+        async for chunk in call_next(call):
+            if chunk.is_complete:
+                await self._after_model(ctx, call, chunk.usage or Usage())
+            yield chunk
+
+    async def tool(self, ctx: RunContext, record: ToolCallRecord, call_next: NextTool) -> ToolResult | None:
+        # 1. A limit used up: the call answers "not run", so the transcript stays whole.
+        state = self.state(ctx)
         reason = self._exhausted(state)
-        calls = state.get("tool_calls", 0)
-        if reason is None and self.max_tool_calls is not None and calls >= self.max_tool_calls:
+        calls = _number(state, "tool_calls")
+        first_pass = record.status == ToolCallStatus.PENDING_APPROVAL
+        if reason is None and first_pass and self.max_tool_calls is not None and calls >= self.max_tool_calls:
             reason = f"This task's tool-call budget ({self.max_tool_calls}) was used up."
         if reason is not None:
             state["blocked"] = reason
-            return ToolResult.execution_error(request.record.id, f"Not run: {reason}")
-        state["tool_calls"] = calls + 1
-        return None
+            return ToolResult.execution_error(record.id, f"Not run: {reason}")
+        # 2. Counted once: a call that waits for approval passes here twice.
+        if first_pass:
+            state["tool_calls"] = int(calls) + 1
+        return await call_next(record)
 
 
-def _user(mw: MiddlewareContext) -> str:
-    if not mw.ctx.user_id:
+def _user(ctx: RunContext) -> str:
+    if not ctx.user_id:
         raise ValueError("A user quota needs RunContext.user_id")
-    return mw.ctx.user_id
+    return ctx.user_id
 
 
-def _prices(request: ModelRequest) -> tuple[float, float] | None:
-    config = request.model_config
+def _number(state: dict[str, JsonValue], key: str) -> float:
+    """A count kept in the state; 0 when there is none yet."""
+    value = state.get(key, 0)
+    return float(value) if isinstance(value, (int, float)) else 0.0
+
+
+def _prices(config: ModelConfig | None) -> tuple[float, float] | None:
     if config is None or config.input_cost_per_mtok is None or config.output_cost_per_mtok is None:
         return None
     return config.input_cost_per_mtok, config.output_cost_per_mtok

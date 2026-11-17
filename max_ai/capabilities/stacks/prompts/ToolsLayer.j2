@@ -1,3 +1,12 @@
+{% if tool_instructions %}
+<TOOL_INSTRUCTIONS>
+{% for tool in tool_instructions %}
+<tool name="{{ tool.name }}">
+{{ tool.instructions }}
+</tool>
+{% endfor %}
+</TOOL_INSTRUCTIONS>
+{% endif %}
 {% if deferred_tools %}
 <DEFERRED_TOOLS>
 <purpose>

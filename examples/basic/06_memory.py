@@ -5,7 +5,7 @@ from pathlib import Path
 
 from max_ai.agents import Agent
 from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
-from max_ai.capabilities.memory.local import LocalMemoryRegistry
+from max_ai.capabilities.memory.to_delete.local import LocalMemoryRegistry
 from max_ai.types.run_context import RunContext
 
 

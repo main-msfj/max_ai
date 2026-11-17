@@ -1,804 +1,501 @@
-"""Agent runtime built around a tool registry, dispatcher and execution provider."""
+"""The agent: where the harness decides how a run is done."""
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
-import logging
-import time
+import typing as t
 import weakref
-from collections.abc import AsyncGenerator, Callable, Sequence
-from contextlib import aclosing
+from collections.abc import AsyncGenerator, Sequence
 from datetime import UTC, datetime
-from types import TracebackType
-from typing import Any, Self, get_args
 
 from pydantic import BaseModel
 
 from ..base.clients import CoreChatCompletionClient
-from ..base.compaction import CoreCompaction
-from ..base.completion_gate import CompletionBase, CompletionDecision
+from ..base.completion_gate import CompletionBase
 from ..base.component import ComponentBase
-from ..base.executor import ExecutorBase
 from ..base.knowledge import CoreKnowledgeRegistry
 from ..base.layer import CoreLayer
-from ..base.memory import CoreMemoryRegistry
-from ..base.middleware import CoreMiddleware, MiddlewareContext, StopRun
-from ..base.reasoning import BaseReasoning
-from ..base.skills import CoreSkillRegistry
-from ..base.tools import CoreTool, ToolContext
-from ..base.workspace import WorkspaceBase
-from ..capabilities.completion_gate import RuntimeCompletionGate
-from ..capabilities.executor.local import LocalExecutor
-from ..capabilities.mcp import MCPClientManager, MCPServerConfig
-from ..capabilities.mcp._model import serialize_mcp_servers
-from ..capabilities.reasoning.react import ReactLoop
+from ..base.loop import CoreLoop, LoopState, Stop
+from ..base.middleware import CoreMiddleware
+from ..base.sandbox import SandboxCore
+from ..base.skills import SkillsCore
+from ..base.tools import CoreTool
+from ..capabilities.loop import ReactLoop
+from ..capabilities.mcp import MCPClientManager
+from ..capabilities.mcp._model import (
+    HTTPServerConfig,
+    MCPServerConfig,
+    StdioMCPServerConfig,
+    serialize_mcp_servers,
+)
+from ..capabilities.memory import Memory
 from ..capabilities.stacks import (
+    STANDARD_ORDER,
+    AgentPolicyLayer,
     KnowledgeLayer,
-    MemoryLayer,
+    MemoryFilesLayer,
+    PromptBuilder,
     RenderingLayer,
-    SessionStateLayer,
+    SessionLayer,
     SkillsLayer,
     TaskAnalysisLayer,
     ToolsLayer,
+    WorkspaceLayer,
 )
-from ..capabilities.stacks.agent_policy_layer import AgentPolicyLayer
-from ..capabilities.tools.ask_user import AskUserTool
-from ..capabilities.tools.bash import BashTool
 from ..capabilities.tools.call_tool import CallToolTool
-from ..capabilities.tools.file_system import FileSystem
-from ..capabilities.tools.plan import AgentUpdatePlanTool
 from ..capabilities.tools.search_tool import SearchToolsTool
-from ..capabilities.workspace.local import LocalWorkspace
+from ..capabilities.tools.skill import ReadSkillTool
 from ..config import setting
-from ..core.environment.manager import EnvironmentManager
 from ..core.event_type import CoreEvent, ModelRetryEvent, ModelStreamChunkEvent
-from ..core.events_bus import EventBus
-from ..core.messages import (
-    CoreMessage,
-    UserMessage,
-)
-from ..core.middleware import MiddlewareChain
+from ..core.harness.hooks import HarnessLoopHook, HarnessToolHook
+from ..core.harness.permissions import Permissions
+from ..core.harness.rules import Harness
+from ..core.middleware.chain import MiddlewareChain
 from ..core.model.agent import AgentSpec
 from ..core.model.json_schema import model_from_schema, schema_of
-from ..core.policy import Policy
-from ..core.stacks.container import LayerContainer
-from ..core.termination import CancellationToken
-from ..core.tokenizer import TokenCounter
-from ..core.tool.dispatcher import ToolDispatcher
-from ..core.tool.registry import ToolRegistry
-from ..loggers.scope import ScopedLogger
-from ..types.agent_response import AgentResponse, FinishReason
-from ..types.completions import ChatCompletionResult, Usage
+from ..core.tool import ToolDispatcher, ToolRegistry
+from ..errors.middleware import StopRun
 from ..types.run_context import RunContext
-from ..types.stacks import PromptCtx
 
-log = ScopedLogger(logging.getLogger(__name__), scope=["Agent"])
-# run_stream hands out plain text it can't take back; this marks the retry.
-STREAM_RESTARTED = "\n\n[connection lost; the answer starts again below]\n\n"
-COMMANDS_OFF = (
-    "Commands are off: the agent runs on this machine (LocalExecutor), so it has "
-    "no bash tool and skills cannot run scripts. Use DockerExecutor or "
-    "ModalExecutor, or LocalExecutor(allow_commands=True) to run commands here "
-    "with your approval for each one."
-)
-
-
-def _storable(component: Any, what: str) -> ComponentBase[Any]:
-    """``component`` if it can be stored; a clear error saying what to do if not."""
-    try:
-        component.serialize()
-    except (NotImplementedError, AttributeError, TypeError) as error:
-        name = getattr(component, "name", None) or type(component).__name__
-        hint = (
-            "Tools written as Python functions are code and cannot be stored: "
-            "expose them through an MCP server (mcp=[...]) instead."
-            if what == "tool" else
-            "Give it a component_schema, _to_config and _from_config."
-        )
-        raise TypeError(f"Cannot serialize {what} {name!r}: {hint}") from error
-    return component
+AnyClient = CoreChatCompletionClient[t.Any]
+AnyLoop = CoreLoop[t.Any]
+ServerConfig = StdioMCPServerConfig | HTTPServerConfig
 
 
 class Agent(ComponentBase[AgentSpec]):
-    """Connect a pluggable reasoning loop to workspace, skills and execution.
+    """A model with its tools, skills, memory and sandbox, run by a loop.
 
-    Supply tools through toolset: CoreTools, or functions made tools with @tool.
-    The tool registry is managed internally by the agent.
-
-    Memory, skills and knowledge are optional and only enabled when supplied.
-    Supplied registries remain caller-owned. Configure memory with its backend
-    only: each run binds it to that RunContext's user_id/session_id, so one
-    agent serves every user and session without ever mixing their memories.
-
-    Defaults: LocalWorkspace, LocalExecutor and ReactLoop. The agent manages
-    execution sessions internally and closes them on close(). Local execution
-    is not a sandbox.
-
-    Concurrency: one Agent serves many runs at once. Each run executes on
-    its own bound copy of the reasoning loop, MCP connections are opened
-    once and shared, and only messages of the same (user_id, session_id)
-    wait for each other. ``close()`` waits for the active runs.
-
-    ``serialize()`` turns the agent into storable data (``AgentSpec``) and
-    ``Agent.deserialize(row)`` rebuilds it: store once, rebuild per request.
+    Every piece is given already built and must come from its Core class.
+    ``serialize()`` turns the agent into data and ``Agent.deserialize()``
+    builds it again.
     """
 
     component_type = "agent"
     component_schema = AgentSpec
     component_provider_override = "maxai.agents.Agent"
 
+    NOT_STORABLE: t.ClassVar[str] = "Cannot serialize {what} {name!r}: {hint}"
+    TOOL_HINT: t.ClassVar[str] = (
+        "tools written as Python functions are code and cannot be stored; "
+        "expose them through an MCP server (mcp=[...]) instead."
+    )
+    COMPONENT_HINT: t.ClassVar[str] = "give it a component_schema, _to_config and _from_config."
+    CLOSED: t.ClassVar[str] = "The agent is closed"
+    STREAM_RESTARTED: t.ClassVar[str] = "\n\n[connection lost; the answer starts again below]\n\n"
+
     def __init__(
         self,
         name: str,
         description: str,
         instructions: str,
-        client: CoreChatCompletionClient,
+        client: AnyClient,
         *,
-        # Most used first; the infrastructure (workspace, executor) has defaults.
         toolset: Sequence[CoreTool] | None = None,
-        policy: Policy | None = None,
-        mcp: Sequence[MCPServerConfig] | None = None,
-        memory: CoreMemoryRegistry | None = None,
+        mcp: Sequence[ServerConfig] | None = None,
+        memory: Memory | None = None,
         knowledge: Sequence[CoreKnowledgeRegistry] | None = None,
-        skills: CoreSkillRegistry | None = None,
-        reasoning: BaseReasoning | None = None,
-        compaction: CoreCompaction | None = None,
+        skills: SkillsCore | None = None,
+        reasoning: AnyLoop | None = None,
         middlewares: Sequence[CoreMiddleware] | None = None,
         gates: Sequence[CompletionBase] | None = None,
         output_format: type[BaseModel] | None = None,
         prompt_layers: Sequence[CoreLayer] | None = None,
-        workspace: WorkspaceBase | None = None,
-        executor: ExecutorBase | None = None,
+        sandbox: SandboxCore | None = None,
     ) -> None:
-        self._validate_configuration(executor, reasoning)
-        if compaction is not None and not isinstance(compaction, CoreCompaction):
-            raise TypeError("compaction must implement CoreCompaction")
-        # None: the window is never compacted (fine for short sessions).
-        self.compaction = compaction
-
+        # 1. Keep what was given; the loop is the only piece with a default.
         self.name = name
         self.description = description
         self.instructions = instructions
         self.client = client
-        self.output_format = output_format
-        # allow / ask / deny for every tool call; Policy() is a safe default.
-        if policy is not None and not isinstance(policy, Policy):
-            raise TypeError("policy must be a max_ai.Policy")
-        self.policy = policy or Policy()
-        self.middlewares = list(middlewares or [])
-        for middleware in self.middlewares:
-            if not isinstance(middleware, CoreMiddleware):
-                raise TypeError("middlewares must implement CoreMiddleware")
-        self._middleware = MiddlewareChain(self.middlewares)
-
-        self._configure_environment(executor, workspace)
-        # Iteration limit lives in the loop (default: setting.max_loop_iterations).
-        self.reasoning = reasoning if reasoning is not None else ReactLoop()
-        self._configure_tools(toolset)
-        self.mcp_servers = tuple(mcp or ())
-        self._mcp_manager = MCPClientManager()
-        for config in self.mcp_servers:
-            self._mcp_manager.add_server(config)
-        self._configure_capabilities(memory, skills, knowledge)
-        self._configure_runtime(gates)
-        self.prompt_layers = list(prompt_layers or ())
-        self._stack = self._build_prompt_stack(self.prompt_layers)
-
-    @staticmethod
-    def _validate_configuration(
-        executor: ExecutorBase | None,
-        reasoning: BaseReasoning | None,
-    ) -> None:
-        """Reject invalid options before constructing runtime components."""
-        if reasoning is not None and not isinstance(reasoning, BaseReasoning):
-            raise TypeError("reasoning must implement BaseReasoning")
-        if executor is not None and not isinstance(executor, ExecutorBase):
-            raise TypeError("Use an executor from max_ai.capabilities.executor")
-
-    def _configure_environment(
-        self,
-        executor: ExecutorBase | None,
-        workspace: WorkspaceBase | None,
-    ) -> None:
-        """Create the internal session manager from the public components."""
-        self.workspace = (
-            workspace
-            if workspace is not None
-            else LocalWorkspace(root=setting.root_dir / ".agents")
-        )
-        self.executor = executor if executor is not None else LocalExecutor()
-        # Known at build time: the prompt tells the model where commands run.
-        self._environment = self.executor.describe_environment()
-        # Idle sessions close after setting.environment_idle_timeout.
-        self._manager = EnvironmentManager(self.executor, self.workspace)
-
-    def _configure_tools(
-        self,
-        toolset: Sequence[CoreTool] | None,
-    ) -> None:
-        """User tools take precedence over built-in defaults."""
-        # The developer's tools; built-ins are recreated, never stored.
         self.toolset = list(toolset or ())
-        self._registry = ToolRegistry(self.toolset)
-        self._register_filesystem_tools()
-        self._register_control_tools()
-        self._register_deferred_access()
-
-    def _register_filesystem_tools(self) -> None:
-        """Filesystem tools access the persistent workspace on the host."""
-        for tool in FileSystem().get_toolset().tools:
-            if self._registry.get(tool.name) is None:
-                self._registry.register(tool)
-
-    def _register_control_tools(self) -> None:
-        """Plan and user input run on the host; Bash uses the executor."""
-        if (
-            self.reasoning.enable_human_input
-            and self._registry.get(AskUserTool.TOOL_NAME) is None
-        ):
-            self._registry.register(AskUserTool())
-        if self._registry.get(AgentUpdatePlanTool.TOOL_NAME) is None:
-            self._registry.register(AgentUpdatePlanTool())
-        if not self.executor.runs_commands:
-            if any(tool.runs_commands for tool in self._registry.all_tools()):
-                raise ValueError(COMMANDS_OFF)
-            return
-        if self._registry.get("bash") is None:
-            self._registry.register(BashTool())
-
-    def _register_deferred_access(self) -> None:
-        """search_tools and call_tool reach the deferred tools; without
-        any, they are left out."""
-        if not self._registry.deferred_tools():
-            return
-        for name, build in (
-            (SearchToolsTool.TOOL_NAME, SearchToolsTool),
-            (CallToolTool.TOOL_NAME, CallToolTool),
-        ):
-            if self._registry.get(name) is None:
-                self._registry.register(build(self._registry))
-
-    def _configure_capabilities(
-        self,
-        memory: CoreMemoryRegistry | None,
-        skills: CoreSkillRegistry | None,
-        knowledge: Sequence[CoreKnowledgeRegistry] | None,
-    ) -> None:
-        """Keep optional registries and register only their exposed tools."""
-        self.skills = skills
-        if skills is not None and not self.executor.runs_commands:
-            log.warning(COMMANDS_OFF)
+        self.mcp = list(mcp or ())
         self.memory = memory
-        self.knowledge = tuple(knowledge or ())
-        self._skill_blocks = []
-        self._memory_tools = self._register_capability_tools(
-            memory.tools if memory is not None else ()
+        self.knowledge = list(knowledge or ())
+        self.skills = skills
+        # The loop the harness gives when none is passed compacts with a summary.
+        self.reasoning: AnyLoop = (
+            reasoning if reasoning is not None else ReactLoop(compaction=Harness.compaction_rules())
         )
-        self._knowledge_tools = self._register_capability_tools(
-            [tool for source in self.knowledge for tool in source.tools]
-        )
+        self.middlewares = list(middlewares or ())
+        self.gates = list(gates or ())
+        self.output_format = output_format
+        self.prompt_layers = list(prompt_layers or ())
+        self.sandbox = sandbox
 
-    def _configure_runtime(
-        self,
-        gates: Sequence[CompletionBase] | None,
-    ) -> None:
-        """Connect dispatch, completion checks and turn synchronization."""
-        self.dispatcher = ToolDispatcher(
-            self._registry, source=self.name, manager=self._manager,
-            middleware=self._middleware, policy=self.policy,
-        )
-        # The framework's gate is always there (first); pass your own
-        # RuntimeCompletionGate in ``gates`` to change its options.
-        self.gates = list(gates or [])
-        for gate in self.gates:
-            if not isinstance(gate, CompletionBase):
-                raise TypeError("gates must implement CompletionBase")
-        if not any(isinstance(g, RuntimeCompletionGate) for g in self.gates):
-            self.gates.insert(0, RuntimeCompletionGate())
-        self.completion_bus = EventBus(handlers=list(self.gates))
-        # Runs of different sessions overlap; messages of one session queue.
-        self._session_locks: weakref.WeakValueDictionary[tuple[str, str], asyncio.Lock] = (
+        self._validate()
+        self._run_harness_validation()
+        # What the runs share: MCP connections and one lock per session.
+        self._mcp = MCPClientManager()
+        for server in self.mcp:
+            self._mcp.add_server(server)
+        self._mcp_lock = asyncio.Lock()
+        self._locks: weakref.WeakValueDictionary[tuple[str, str], asyncio.Lock] = (
             weakref.WeakValueDictionary()
         )
-        self._active_runs = 0
+        self._closed = False
+        self._boxes: dict[str, SandboxCore] = {}  # one sandbox per user, closed by close()
+        # close() waits for the runs that are still going.
+        self._active = 0
         self._idle = asyncio.Event()
         self._idle.set()
-        self._mcp_lock = asyncio.Lock()
-        self._closed = False
-        # Duck-typed clients (test fakes) may not count their users.
-        if hasattr(self.client, "attach"):
-            self.client.attach()
 
-    def _register_capability_tools(self, tools: Sequence[CoreTool]) -> list[str]:
-        """Register bound registry tools on the host and retain their names."""
-        for tool in tools:
-            self._registry.register(tool)
-        return [tool.name for tool in tools]
+    # -------- CHECKS WHEN IT IS BUILT ----------------------------------------
 
-    def _build_prompt_stack(
-        self,
-        overrides: Sequence[CoreLayer] = (),
-    ) -> LayerContainer:
-        """Only configured capabilities contribute layers; context is deferred."""
-        layers: list[CoreLayer] = [
-            AgentPolicyLayer(),
-            TaskAnalysisLayer(),
-            RenderingLayer(),
-            ToolsLayer(),
-        ]
+    def _validate(self) -> None:
+        """Every piece must come from its Core class; the error names the one that does not."""
+        self._validate_directives()
+        self._validate_capabilities()
+        self._validate_runtime()
+
+    def _validate_directives(self) -> None:
+        """Who the agent is and how it answers: name, description, instructions, output format."""
+        # 1. The three texts.
+        for what in ("name", "description", "instructions"):
+            if not isinstance(getattr(self, what), str):
+                raise TypeError(f"{what} must be text")
+        if not self.name.strip():
+            raise ValueError("name cannot be empty")
+        # 2. The answer's format is a class, not an object.
+        form = t.cast("object", self.output_format)
+        if form is not None and not (isinstance(form, type) and issubclass(form, BaseModel)):
+            raise TypeError("output_format must be a pydantic BaseModel class")
+
+    def _validate_capabilities(self) -> None:
+        """What the agent can do: tools, MCP, memory, knowledge, skills and prompt layers."""
+        # 1. The ones that are a single object.
+        if self.memory is not None:
+            self._check(self.memory, Memory, "memory")
         if self.skills is not None:
-            layers.append(SkillsLayer())
+            self._check(self.skills, SkillsCore, "skills")
+        # 2. The ones that are a list: each element is checked.
+        lists: tuple[tuple[Sequence[object], type, str], ...] = (
+            (self.toolset, CoreTool, "toolset"),
+            (self.mcp, MCPServerConfig, "mcp"),
+            (self.knowledge, CoreKnowledgeRegistry, "knowledge"),
+            (self.prompt_layers, CoreLayer, "prompt_layers"),
+        )
+        for values, kind, what in lists:
+            for value in values:
+                self._check(value, kind, what)
+
+    def _validate_runtime(self) -> None:
+        """What runs the agent: client, loop, middlewares, gates and sandbox."""
+        # 1. The model and the loop are always there.
+        self._check(self.client, CoreChatCompletionClient, "client")
+        self._check(self.reasoning, CoreLoop, "reasoning")
+        # 2. The sandbox is optional; middlewares and gates are lists.
+        if self.sandbox is not None:
+            self._check(self.sandbox, SandboxCore, "sandbox")
+        for value in self.middlewares:
+            self._check(value, CoreMiddleware, "middlewares")
+        for value in self.gates:
+            self._check(value, CompletionBase, "gates")
+        # 3. Gates are not built yet: an agent with them is never made.
+        if self.gates:
+            raise NotImplementedError(
+                "Completion gates are still in progress and not implemented yet. "
+                "Build the agent without gates=."
+            )
+
+    @staticmethod
+    def _check(value: object, kind: type, what: str) -> None:
+        """Raise when ``value`` is not a ``kind``, saying what was given."""
+        if not isinstance(value, kind):
+            given = type(value).__name__
+            raise TypeError(f"{what} must be a {kind.__name__}; got {given}")
+
+    def _run_harness_validation(self) -> None:
+        """Apply the harness's rules: an error names the rule that is broken."""
+        # 1. The texts and the tools the developer wrote.
+        Harness.description_rules(self.description)
+        Harness.instruction_rules(self.instructions)
+        Harness.custom_prompt_rules(self.prompt_layers)
+        Harness.tool_rules(self.toolset)
+        # 2. The model's limits and the sandbox's time are the harness's.
+        Harness.model_rules(self.client.config)
+        if self.sandbox is not None:
+            Harness.sandbox_rules()
+        # 3. What the harness adds: tracing and its own tools.
+        self.middlewares = Harness.middleware_rules(self.middlewares, self.name)
+        self._chain = MiddlewareChain(self.middlewares)
+        self.tools = Harness.tool_combination(self.toolset, self.sandbox, self.skills)
+
+    # -------- WHAT THE APPLICATION CALLS -------------------------------------
+
+    async def run(
+        self,
+        task: str | None = None,
+        ctx: RunContext | None = None,
+    ) -> LoopState:
+        """Run one turn to its end. The answer is ``state.message``, why it
+        ended ``state.finish_reason``; the conversation stays in ``ctx``."""
+        state = LoopState()
+        async for _ in self.run_stream_events(task, ctx, state=state):
+            pass
+        return state
+
+    async def run_stream(
+        self,
+        task: str | None = None,
+        ctx: RunContext | None = None,
+        *,
+        state: LoopState | None = None,
+    ) -> AsyncGenerator[str]:
+        """Run one turn and give out only the text of the answer, as the model writes it."""
+        events = self.run_stream_events(task, ctx, state=state, stream=True)
+        async for event in events:
+            if isinstance(event, ModelStreamChunkEvent) and event.chunk:
+                yield event.chunk
+            # Text already given cannot be taken back: say that it starts again.
+            elif isinstance(event, ModelRetryEvent) and event.discard_partial:
+                yield self.STREAM_RESTARTED
+
+    async def run_stream_events(
+        self,
+        task: str | None = None,
+        ctx: RunContext | None = None,
+        *,
+        state: LoopState | None = None,
+        stream: bool = False,
+    ) -> AsyncGenerator[CoreEvent]:
+        """Run one turn and give out what happens. ``task`` is what the user
+        says now; None goes on with ``ctx`` (an approval was answered).
+        ``state`` is filled with how the turn ended;"""
+        if self._closed:
+            raise RuntimeError(self.CLOSED)
+        # A run that started is counted until it ends, so close() can wait for it.
+        self._active += 1
+        self._idle.clear()
+        try:
+            async for item in self._turn(task, ctx, state or LoopState(), stream):
+                yield item
+        finally:
+            self._active -= 1
+            if self._active == 0:
+                self._idle.set()
+
+    async def approve(self, ctx: RunContext, call_id: str, *, always: bool = False) -> bool:
+        """Approve a call that waits for the user; call ``run(None, ctx)``
+        after. ``always`` keeps a rule in the user's settings so it is not
+        asked again; a dangerous call is approved this once only. Whether a
+        rule was kept."""
+        # 1. Approve this call.
+        record = ctx.tool_state.records[call_id]
+        record.approve()
+        # 2. Keep the rule, unless the harness always asks for this call.
+        kept = always and self.sandbox is not None
+        if not kept or not Permissions.can_be_kept(record.tool_name, record.parameters):
+            return False
+        box = self.sandbox.bind(ctx.user_id) if self.sandbox is not None else None
+        if box is not None:
+            for rule in Permissions.rules_for(record.tool_name, record.parameters):
+                await box.add_permission("allow", rule)
+        return box is not None
+
+    async def close(self) -> None:
+        """Refuse new runs, wait for the ones still going, then release the
+        MCP connections, the sandbox and the client."""
+        first = not self._closed
+        self._closed = True
+        await self._idle.wait()
+        if not first:
+            return
+        await self._mcp.disconnect_all()
+        # The users' sandboxes, not self.sandbox: that one has no user.
+        for box in self._boxes.values():
+            await box.close()
+        await self.client.aclose()
+
+    # -------- ONE TURN, STEP BY STEP -----------------------------------------
+
+    async def _turn(
+        self,
+        task: str | None,
+        ctx: RunContext | None,
+        state: LoopState,
+        stream: bool,
+    ) -> AsyncGenerator[CoreEvent]:
+        """One turn over ``ctx``: each step below is one small method."""
+        ctx = ctx if ctx is not None else RunContext()
+        ctx.session_id = ctx.session_id or ctx.run_id
+        # 1. Messages of one session wait for each other; other sessions overlap.
+        async with self._lock(ctx):
+            # 2. What the user says enters as steering: the loop puts it in the
+            #    conversation and closes a question left without answer.
+            if task is not None:
+                ctx.inbox.append(task)
+            # 3. Where the tools run, which tools there are and who watches them.
+            box = await self._sandbox(ctx)
+            registry = await self._registry()
+            dispatcher = await self._dispatcher(registry, box)
+            loop_hook = HarnessLoopHook(memory=self.memory, sandbox=box, mcp=self._mcp)
+            # 4. The prompt, with the memory as it is now.
+            if ctx.memory_index is None:
+                await loop_hook.refresh_memory(ctx)
+            prompt = await self._prompt(ctx, box, registry)
+            # 5. The harness's limits, and the window known before the model.
+            counter = self.reasoning.compaction.counter
+            Harness.tools_total_rules(registry.tokens(counter))
+            Harness.prompt_rules(counter.count_text(prompt), self.client.config.max_context_window)
+            self.reasoning.measure(ctx, prompt, self.client, dispatcher)
+            # 6. The turn, with the middlewares around every event.
+            events = self.reasoning.run(
+                ctx, prompt, self.client, dispatcher, stream=stream, hook=loop_hook,
+                state=state, output_format=self.output_format,
+                retry=Harness.retry_rules(self.client.retry),
+            )
+            try:
+                async for event in self._chain.turn(ctx, lambda: events):
+                    yield event
+            except StopRun as error:
+                # Ended before the loop took the task: it is not kept for the next turn.
+                ctx.inbox.clear()
+                yield self.reasoning.end(
+                    ctx, state, Stop(reason=error.finish_reason, answer=error.message)
+                )
+
+    def _lock(self, ctx: RunContext) -> asyncio.Lock:
+        """The lock of this user's session; made the first time it is asked for."""
+        key = (ctx.user_id, ctx.session_id or ctx.run_id)
+        lock = self._locks.get(key)
+        if lock is None:
+            lock = self._locks[key] = asyncio.Lock()
+        return lock
+
+    async def _sandbox(self, ctx: RunContext) -> SandboxCore | None:
+        """The user's sandbox, ready and with the skills installed; None without one."""
+        if self.sandbox is None:
+            return None
+        variables = self.skills.variables() if self.skills is not None else None
+        box = self.sandbox.bind(ctx.user_id, variables)
+        self._boxes[ctx.user_id] = box
+        await box.prepare()
+        if self.skills is not None:
+            await self.skills.sync(box)
+        return box
+
+    async def _registry(self) -> ToolRegistry:
+        """The tools of a run: the agent's, the MCP servers' and what reaches them."""
+        tools = list(self.tools)
+        # 1. MCP servers connect once; one that is down is skipped.
+        if self.mcp:
+            async with self._mcp_lock:
+                await self._mcp.connect_all()
+            tools += self._mcp.get_tools()
+        if self.skills is not None:
+            tools.append(ReadSkillTool())
+        # 2. A tool with a name already taken is left out: the first one wins.
+        registry = ToolRegistry()
+        for tool in tools:
+            if registry.get(tool.name) is None:
+                registry.register(tool)
+        # 3. Deferred tools are found and called through these two.
+        if registry.deferred_tools():
+            for extra in (SearchToolsTool(registry), CallToolTool(registry)):
+                if registry.get(extra.name) is None:
+                    registry.register(extra)
+        return registry
+
+    async def _dispatcher(self, registry: ToolRegistry, box: SandboxCore | None) -> ToolDispatcher:
+        """Who runs the tools of a run, watched by the harness's hook with the user's rules."""
+        rules = Permissions(await box.permissions()) if box is not None else None
+        hook = HarnessToolHook(memory=self.memory, agent=self.name, permissions=rules)
+        return ToolDispatcher(
+            registry, box, hook=hook, middleware=self._chain, timeout=setting.tool_timeout_seconds
+        )
+
+    async def _prompt(self, ctx: RunContext, box: SandboxCore | None, registry: ToolRegistry) -> str:
+        """The system prompt: the native layers always, then the developer's,
+        in the standard order. Name, description and instructions go in the
+        agent policy layer."""
+        # 1. The native layers; each optional one only when the agent has its piece.
+        layers: list[CoreLayer] = [
+            AgentPolicyLayer(), TaskAnalysisLayer(), RenderingLayer(), ToolsLayer(), SessionLayer(),
+        ]
+        variables: dict[str, t.Any] = {
+            "name": self.name, "description": self.description,
+            "instructions": self.instructions,
+            "current_date": datetime.now(UTC).date().isoformat(),
+        }
+        if box is not None:
+            layers.append(WorkspaceLayer())
+            variables.update(box.session_paths(ctx.session_id or ctx.run_id))
+            if self.skills is not None:
+                layers.append(SkillsLayer())
+                installed = await box.installed_skills()
+                variables["skills"] = [
+                    {"name": name, "description": installed[name]["description"]}
+                    for name in self.skills.skills
+                    if name in installed
+                ]
+            if self.memory is not None:
+                layers.append(MemoryFilesLayer())
+                variables["memory"] = self.memory.block(box, ctx.memory_index or "")
         if self.knowledge:
             layers.append(KnowledgeLayer())
-        if self.memory is not None:
-            layers.append(MemoryLayer())
-        # Compaction summary and plan: must survive compaction of the transcript.
-        layers.append(SessionStateLayer())
+        # 2. The developer's layers join them, all in the standard order.
+        builder = PromptBuilder([*layers, *self.prompt_layers], registry, order=STANDARD_ORDER)
+        return builder.build(variables)
 
-        replacements: dict[type[CoreLayer], CoreLayer] = {}
-        for layer in overrides:
-            if not isinstance(layer, CoreLayer):
-                raise TypeError("prompt_layers must contain CoreLayer instances")
-            layer_type = type(layer)
-            if layer_type in replacements:
-                raise ValueError(
-                    f"Duplicate prompt layer override: {layer_type.__name__}"
-                )
-            replacements[layer_type] = layer
+    # -------- STORED AND BUILT AGAIN -----------------------------------------
 
-        for index, layer in enumerate(layers):
-            replacement = replacements.pop(type(layer), None)
-            if replacement is not None:
-                layers[index] = replacement
-        # Custom layer types extend the standard stack in caller-provided order.
-        layers.extend(replacements.values())
-        return LayerContainer(layers)
-
-    # -------- SERIALIZATION ------------------------------------------------------------
     def _to_config(self) -> AgentSpec:
-        def dump(component: ComponentBase[Any]) -> dict[str, Any]:
-            return component.serialize().model_dump(exclude_none=True)
-
+        dump = self._dump
+        form = self.output_format
         return AgentSpec(
             name=self.name,
             description=self.description,
             instructions=self.instructions,
-            client=dump(self.client),
-            reasoning=dump(self.reasoning),
-            workspace=dump(self.workspace),
-            executor=dump(self.executor),
-            memory=dump(self.memory) if self.memory is not None else None,
-            skills=dump(self.skills) if self.skills is not None else None,
-            knowledge=[dump(source) for source in self.knowledge],
-            compaction=dump(self.compaction) if self.compaction is not None else None,
-            toolset=[dump(_storable(tool, "tool")) for tool in self.toolset],
-            policy=self.policy,
-            mcp=json.loads(serialize_mcp_servers(self.mcp_servers)),
-            gates=[dump(_storable(gate, "gate")) for gate in self.gates],
-            output_format=schema_of(self.output_format) if self.output_format else None,
-            middlewares=[dump(_storable(m, "middleware")) for m in self.middlewares],
-            prompt_layers=[dump(_storable(layer, "prompt layer")) for layer in self.prompt_layers],
+            client=dump(self.client, "client"),
+            reasoning=dump(self.reasoning, "reasoning"),
+            toolset=[dump(tool, "tool") for tool in self.toolset],
+            mcp=json.loads(serialize_mcp_servers(self.mcp)),
+            # Memory has no settings of its own beyond this one.
+            memory={"read_only": self.memory.read_only} if self.memory is not None else None,
+            knowledge=[dump(source, "knowledge") for source in self.knowledge],
+            skills=dump(self.skills, "skills") if self.skills is not None else None,
+            middlewares=[dump(item, "middleware") for item in self.middlewares],
+            gates=[dump(gate, "gate") for gate in self.gates],
+            output_format=schema_of(form) if form is not None else None,
+            prompt_layers=[dump(layer, "prompt layer") for layer in self.prompt_layers],
+            sandbox=dump(self.sandbox, "sandbox") if self.sandbox is not None else None,
         )
 
     @classmethod
-    def _from_config(cls, config: AgentSpec) -> Self:
-        def load(data: dict[str, Any] | None, kind: type[Any]) -> Any:
-            return kind.deserialize(data) if data is not None else None
-
+    def _from_config(cls, config: AgentSpec) -> t.Self:
+        load = cls._load
+        form = config.output_format
+        # What comes back is checked again by the constructor.
         return cls(
             name=config.name,
             description=config.description,
             instructions=config.instructions,
-            client=load(config.client, CoreChatCompletionClient),
-            toolset=[load(tool, CoreTool) for tool in config.toolset],
-            policy=config.policy,
+            client=load(config.client),
+            reasoning=load(config.reasoning),
+            toolset=[load(tool) for tool in config.toolset],
             mcp=list(config.mcp),
-            executor=load(config.executor, ExecutorBase),
-            workspace=load(config.workspace, WorkspaceBase),
-            skills=load(config.skills, CoreSkillRegistry),
-            memory=load(config.memory, CoreMemoryRegistry),
-            knowledge=[load(source, CoreKnowledgeRegistry) for source in config.knowledge],
-            reasoning=load(config.reasoning, BaseReasoning),
-            output_format=(
-                model_from_schema(config.output_format) if config.output_format else None
-            ),
-            gates=[load(gate, CompletionBase) for gate in config.gates],
-            compaction=load(config.compaction, CoreCompaction),
-            middlewares=[load(m, CoreMiddleware) for m in config.middlewares],
-            prompt_layers=[load(layer, CoreLayer) for layer in config.prompt_layers],
+            memory=Memory(**config.memory) if config.memory is not None else None,
+            knowledge=[load(source) for source in config.knowledge],
+            skills=load(config.skills),
+            middlewares=[load(item) for item in config.middlewares],
+            gates=[load(gate) for gate in config.gates],
+            output_format=model_from_schema(form) if form is not None else None,
+            prompt_layers=[load(layer) for layer in config.prompt_layers],
+            sandbox=load(config.sandbox),
         )
 
-    @property
-    def tools(self) -> list[CoreTool]:
-        """Every tool the model can call (host, capability and native)."""
-        return self._registry.all_tools()
-
-    async def prepare(self) -> None:
-        """Load selected skill metadata and prepare the executor; retrieval
-        backends connect on demand."""
-        if self.skills is not None:
-            self._skill_blocks = await self.skills.get_skills()
-        await self.executor.prepare()
-
-    async def _memory_for(self, ctx: RunContext) -> CoreMemoryRegistry | None:
-        """The memory scoped to this run's user and session. The registry is
-        connected first so every bound copy shares one backend client."""
-        if self.memory is None:
-            return None
-        await self.memory._ensure_connected()
-        return self.memory.bind(ctx.user_id, ctx.session_id or ctx.run_id)
-
-    async def _prompt_variables(
-        self, ctx: RunContext, memory: CoreMemoryRegistry | None = None
-    ) -> dict[str, Any]:
-        """Collect current data without making the templates access registries."""
-        variables: dict[str, Any] = {
-            "name": self.name,
-            "description": self.description,
-            "instructions": self.instructions,
-            "current_date": datetime.now(UTC).date().isoformat(),
-            "can_run_commands": self.executor.runs_commands,
-            # Only the first line: MCP descriptions can be long; search_tools
-            # returns the whole description.
-            "deferred_tools": [
-                {"name": tool.name, "description": tool.description.strip().split("\n")[0]}
-                for tool in self._registry.deferred_tools()
-            ],
-            "search_tool": SearchToolsTool.TOOL_NAME,
-            "call_tool": CallToolTool.TOOL_NAME,
-        }
-        if self._environment:
-            variables["execution_environment"] = self._environment
-        if self.skills is not None:
-            variables["loaded_skills"] = self._skill_blocks
-        if self.knowledge:
-            variables["retrieval_tools"] = self._knowledge_tools
-        if memory is None:
-            memory = await self._memory_for(ctx)
-        if memory is not None:
-            variables["persistent_memories"] = await memory.get_context()
-            variables["memory_tools"] = self._memory_tools
-        return variables
-
-    async def _prompts(
-        self, ctx: RunContext, memory: CoreMemoryRegistry | None = None
-    ) -> PromptCtx:
-        """Render a fresh snapshot for each run/resume in stack order."""
-        variables = await self._prompt_variables(ctx, memory)
-        prompts = PromptCtx(
-            stack=self._stack,
-            variables=variables,
-            rendered_layers={
-                type(layer): layer.render(variables) for layer in self._stack
-            },
-        )
-        # The real prompt size, so compaction budgets the window correctly.
-        tokenizer = getattr(self.client.config, "tokenizer_base", None)
-        prompts.measure(TokenCounter(tokenizer_base=tokenizer) if tokenizer else TokenCounter())
-        return prompts
-
-    async def _drive(
-        self,
-        ctx: RunContext,
-        sink: Callable[[CoreEvent], None],
-        cancellation_token: CancellationToken | None,
-        stream_tokens: bool,
-        kwargs: dict[str, Any],
-        task: list[CoreMessage] | None = None,
-    ) -> AgentResponse:
-        """Make sure MCP tools are available, then run. A remote workspace
-        brings the user's files in first and sends the changes back after,
-        also when the run pauses or fails."""
-        await self._ensure_mcp()
-        await self.workspace.download(ctx.user_id, ctx.session_id)
+    @staticmethod
+    def _dump(component: ComponentBase[t.Any], what: str) -> dict[str, t.Any]:
+        """A component as storable data; a clear error when it cannot be stored."""
         try:
-            return await self._drive_connected(
-                ctx, sink, cancellation_token, stream_tokens, kwargs, task
-            )
-        finally:
-            await asyncio.shield(self.workspace.upload(ctx.user_id, ctx.session_id))
+            return component.serialize().model_dump(exclude_none=True)
+        except (NotImplementedError, AttributeError, TypeError) as error:
+            name = getattr(component, "name", None) or type(component).__name__
+            hint = Agent.TOOL_HINT if what == "tool" else Agent.COMPONENT_HINT
+            raise TypeError(Agent.NOT_STORABLE.format(what=what, name=name, hint=hint)) from error
 
-    async def _ensure_mcp(self) -> None:
-        """Connect MCP servers once and share them with every run; a dropped
-        connection reconnects on the next run. Closed by ``close()``.
-
-        An unavailable server is logged and skipped (its known tools answer
-        that it is unavailable) unless its config says ``required``."""
-        if not self.mcp_servers:
-            return
-        async with self._mcp_lock:
-            unavailable = await self._mcp_manager.connect_all()
-            for server_id, error in unavailable.items():
-                log.warning("MCP server unavailable", server_id=server_id, error=str(error))
-            for tool in self._mcp_manager.get_tools():
-                if self._registry.get(tool.name) is not tool:
-                    if self._registry.get(tool.name) is not None:
-                        self._registry.unregister(tool.name)
-                    self._registry.register(tool)
-            self._register_deferred_access()
-
-    async def _drive_connected(
-        self,
-        ctx: RunContext,
-        sink: Callable[[CoreEvent], None],
-        cancellation_token: CancellationToken | None,
-        stream_tokens: bool,
-        kwargs: dict[str, Any],
-        task: list[CoreMessage] | None = None,
-    ) -> AgentResponse:
-        def emit(event: CoreEvent) -> None:
-            self.completion_bus.emit(event, ctx)
-            sink(event)
-
-        mw = MiddlewareContext(ctx=ctx, agent=self.name, emit=emit)
-
-        await self.prepare()
-        directory = self.workspace.materialize(ctx.user_id, ctx.session_id)
-        if self.skills is not None:
-            self.skills.materialize(directory)
-        pending = ctx.runtime_state.shared_state.pop("reasoning_loop", {})
-        loop_state = self.reasoning.LOOP_STATE_CLS()
-        loop_state.apply_metrics(pending.get("metrics", {}))
-        if pending.get("completion") is not None:
-            loop_state.last_completion_decision = CompletionDecision.model_validate(
-                pending["completion"]
-            )
-        if pending.get("last_result") is not None:
-            loop_state.last_result = ChatCompletionResult.model_validate(
-                pending["last_result"]
-            )
-        if hasattr(loop_state, "guard_state"):
-            loop_state.guard_state.update(pending.get("guard_state", {}))
-        started = time.monotonic()
-        context = ToolContext(
-            run_id=ctx.run_id,
-            user_id=ctx.user_id,
-            session_id=ctx.session_id,
-            emit_event=emit,
-            deps={
-                "runtime_root": str(directory.root),
-                "workspace_dir": str(directory.workspace_dir),
-                "skills_dir": str(directory.skill_dir),
-                "filesystem_root": str(self.workspace.base_root),
-                "workspace_filesystem": self.workspace.get_filesystem(),
-                # Generic hook for tools needing the live RunContext
-                # in-process (e.g. AgentUpdatePlanTool writing ctx.plan).
-                "run_context": ctx,
-            },
-        )
-        # One bound copy per run: the prompt and the loop share it.
-        memory = await self._memory_for(ctx)
-        reasoning = self.reasoning.bind(
-            name=self.name,
-            client=self.client,
-            dispatcher=self.dispatcher,
-            tool_context=context,
-            completion_bus=self.completion_bus,
-            middleware_chain=self._middleware,
-            compaction=self.compaction,
-            # Custom clients may not declare a window: 0 = unknown.
-            max_context_tokens=getattr(self.client.config, "max_context_window", 0) or 0,
-            memory=memory,
-        )
-        stopped: StopRun | None = None
-        try:
-            await self._middleware.run_start(mw, task)
-            async with aclosing(
-                reasoning.execute_reasoning_loop(
-                    ctx=ctx,
-                    prompts=await self._prompts(ctx, memory),
-                    loop_state=loop_state,
-                    stream_tokens=stream_tokens,
-                    cancellation_token=cancellation_token,
-                    output_format=self.output_format,
-                    **kwargs,
-                )
-            ) as stream:
-                async for event in stream:
-                    emit(event)
-        except StopRun as stop:
-            # A middleware ended the turn (budget, policy...): a clean finish.
-            stopped = stop
-            known = get_args(FinishReason)
-            loop_state.finish_reason = stop.finish_reason if stop.finish_reason in known else "stopped"
-        except BaseException as error:
-            # Crash or cancel: middlewares still close what they opened.
-            await self._middleware.run_error(mw, error)
-            raise
-        duration_ms = pending.get("duration_ms", 0) + int(
-            (time.monotonic() - started) * 1000
-        )
-        if loop_state.finish_reason in (
-            "approval_needed",
-            "input_needed",
-            "waiting",
-            "tool_denied",
-        ):
-            ctx.runtime_state.shared_state["reasoning_loop"] = {
-                "metrics": loop_state.metrics_snapshot(),
-                "guard_state": getattr(loop_state, "guard_state", {}),
-                "duration_ms": duration_ms,
-                "completion": (
-                    loop_state.last_completion_decision.model_dump(mode="json")
-                    if loop_state.last_completion_decision is not None
-                    else None
-                ),
-                "last_result": (
-                    loop_state.last_result.model_dump(mode="json")
-                    if loop_state.finish_reason == "waiting"
-                    and loop_state.last_result is not None
-                    else None
-                ),
-            }
-        usage = Usage(
-            duration_ms=duration_ms,
-            retries=loop_state.retries,
-            llm_calls=loop_state.llm_calls,
-            attempts_to_call_api=loop_state.attempts_to_call_api,
-            tool_calls=loop_state.tool_calls,
-            tokens_input=loop_state.tokens_input,
-            tokens_output=loop_state.tokens_output,
-            tokens_cached=loop_state.tokens_cached,
-        )
-        response = AgentResponse(
-            context=ctx,
-            source=self.name,
-            usage=usage,
-            finish_reason=loop_state.finish_reason,
-            completion=None if stopped else loop_state.last_completion_decision,
-            stop_message=stopped.message if stopped else None,
-        )
-        await self._middleware.run_end(mw, response)
-        return response
-
-    async def run_stream_events(
-        self,
-        task: str | CoreMessage | list[CoreMessage] | None = None,
-        run_context: RunContext | None = None,
-        cancellation_token: CancellationToken | None = None,
-        stream_tokens: bool = False,
-        **kwargs: Any,
-    ) -> AsyncGenerator[CoreEvent | AgentResponse, None]:
-        if self._closed:
-            raise RuntimeError("Agent is closed")
-        ctx = run_context if run_context is not None else RunContext()
-        ctx.session_id = ctx.session_id or ctx.run_id
-        key = (ctx.user_id, ctx.session_id)
-        lock = self._session_locks.get(key)
-        if lock is None:
-            lock = self._session_locks[key] = asyncio.Lock()
-        async with lock, self._tracking_run():
-            if self._closed:
-                raise RuntimeError("Agent is closed")
-            if task is not None:
-                # Only an open question gives way to a new message; approvals block.
-                if any(
-                    not r.is_consumed and not r.is_awaiting_input
-                    for r in ctx.tool_state.records.values()
-                ):
-                    raise ValueError(
-                        "Resolve pending tool calls before adding another task"
-                    )
-                ToolDispatcher.close_unanswered(ctx)
-                # New task: drop last task's tool_state and gate evidence so
-                # completion gates only see evidence from the task actually
-                # in progress.
-                ctx.tool_state.reset()
-                ctx.completion_state.clear()
-                # An unfinished plan belongs to the conversation (e.g. walked
-                # step by step with the user); only a finished one is dropped.
-                if ctx.plan is not None and not ctx.plan.has_unfinished_steps():
-                    ctx.plan = None
-                ctx.runtime_state.shared_state.pop("reasoning_loop", None)
-                new_messages = (
-                    [UserMessage(source=ctx.user_id, content=task)]
-                    if isinstance(task, str)
-                    else task
-                    if isinstance(task, list)
-                    else [task]
-                )
-                ctx.messages.extend(new_messages)
-            queue = asyncio.Queue()
-            sentinel = object()
-
-            async def produce() -> AgentResponse:
-                try:
-                    return await self._drive(
-                        ctx, queue.put_nowait, cancellation_token, stream_tokens, kwargs,
-                        task=new_messages if task is not None else None,
-                    )
-                finally:
-                    queue.put_nowait(sentinel)
-
-            producer = asyncio.create_task(produce())
-            if cancellation_token is not None:
-                cancellation_token.link_future(producer)
-            try:
-                while (item := await queue.get()) is not sentinel:
-                    yield item
-                response = await producer
-            finally:
-                if not producer.done():
-                    producer.cancel()
-                await asyncio.gather(producer, return_exceptions=True)
-            yield response
-
-    async def run(self, *args: Any, **kwargs: Any) -> AgentResponse:
-        async with aclosing(self.run_stream_events(*args, **kwargs)) as stream:
-            async for item in stream:
-                if isinstance(item, AgentResponse):
-                    return item
-        raise RuntimeError("Agent produced no response")
-
-    async def run_stream(self, *args: Any, **kwargs: Any) -> AsyncGenerator[str, None]:
-        kwargs["stream_tokens"] = True
-        async with aclosing(self.run_stream_events(*args, **kwargs)) as stream:
-            async for item in stream:
-                if isinstance(item, ModelStreamChunkEvent) and item.chunk:
-                    yield item.chunk
-                elif isinstance(item, ModelRetryEvent) and item.discard_partial:
-                    yield STREAM_RESTARTED
-
-    async def resume(self, run_context: RunContext, **kwargs: Any) -> AgentResponse:
-        """Continue after callers apply approvals or answers to tool records."""
-        return await self.run(run_context=run_context, **kwargs)
-
-    async def resume_stream_events(
-        self,
-        run_context: RunContext,
-        **kwargs: Any,
-    ) -> AsyncGenerator[CoreEvent | AgentResponse, None]:
-        async with aclosing(
-            self.run_stream_events(run_context=run_context, **kwargs)
-        ) as stream:
-            async for item in stream:
-                yield item
-
-    async def resume_stream(
-        self,
-        run_context: RunContext,
-        **kwargs: Any,
-    ) -> AsyncGenerator[str, None]:
-        async with aclosing(
-            self.run_stream(run_context=run_context, **kwargs)
-        ) as stream:
-            async for chunk in stream:
-                yield chunk
-
-    @contextlib.asynccontextmanager
-    async def _tracking_run(self) -> AsyncGenerator[None, None]:
-        """Count active runs so close() waits for them."""
-        self._active_runs += 1
-        self._idle.clear()
-        try:
-            yield
-        finally:
-            self._active_runs -= 1
-            if self._active_runs == 0:
-                self._idle.set()
-
-    async def close(self) -> None:
-        """Refuse new runs, wait for the active ones, then release MCP
-        connections, execution sessions and the model client (when no other
-        agent uses it)."""
-        first = not self._closed
-        self._closed = True
-        await self._idle.wait()
-        await self._mcp_manager.disconnect_all()
-        await self._manager.close()
-        await self.workspace.disconnect()
-        if first and hasattr(self.client, "detach"):
-            await self.client.detach()
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None:
-        await self.close()
+    @staticmethod
+    def _load(data: dict[str, t.Any] | None) -> t.Any:
+        """The component stored in ``data``; None when nothing was stored."""
+        return ComponentBase[t.Any].deserialize(data) if data is not None else None

@@ -1,13 +1,13 @@
-"""Structured log lines for a run, its model calls and its tool calls.
+"""Structured log lines for a turn, its model calls and its tool calls.
 
-    → run started | task=1 message(s)
+    → turn started | task=new
     → model call | model=gpt-5 | messages=12 | tools=9
     ← model call | ms=1240 | tokens_in=4500 | tokens_out=80 | tool_calls=1 | finish_reason=tool_calls
     → tool get_weather | params={"city": "Tokyo"}        (params only at level="debug")
     ← tool get_weather | ms=12 | ok=True
-    ← run finished | finish_reason=stop | seconds=3.2
+    ← turn finished | finish_reason=stop | seconds=3.2
 
-Observes only: never changes a request or a result.
+Observes only: never changes a call or a result.
 """
 
 from __future__ import annotations
@@ -16,25 +16,28 @@ import json
 import logging
 import time
 import typing as t
+from collections.abc import AsyncGenerator
 
 from pydantic import Field
 
 from ...base.middleware import (
     CoreMiddleware,
     MiddlewareConfig,
-    MiddlewareContext,
-    ModelRequest,
-    ToolRequest,
+    ModelCall,
+    NextModel,
+    NextStream,
+    NextTool,
+    NextTurn,
 )
+from ...core.event_type import ReasoningCompleteEvent
 from ...loggers import ScopedLogger
 
 if t.TYPE_CHECKING:
-    from ...core.messages import CoreMessage
-    from ...types.agent_response import AgentResponse
-    from ...types.completions import ChatCompletionResult
-    from ...types.tool_call import ToolResult
-
-_STARTED = "log_started"
+    from ...core.event_type import CoreEvent
+    from ...core.messages import AssistantMessage
+    from ...types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
+    from ...types.run_context import RunContext
+    from ...types.tool_call import ToolCallRecord, ToolResult
 
 
 class LoggingMiddlewareConfig(MiddlewareConfig):
@@ -52,129 +55,98 @@ class LoggingMiddleware(CoreMiddleware):
     component_provider_override = "max_ai.capabilities.middleware.LoggingMiddleware"
     component_schema = LoggingMiddlewareConfig
 
-    def __init__(
-        self, level: t.Literal["info", "debug"] = "info", preview_chars: int = 200
-    ) -> None:
+    def __init__(self, level: t.Literal["info", "debug"] = "info", preview_chars: int = 200) -> None:
         self.level = level
         self.preview_chars = preview_chars
-        self._log = ScopedLogger(
-            logging.getLogger(__name__), scope=["LoggingMiddleware"]
+        self._log = ScopedLogger(logging.getLogger(__name__), scope=["LoggingMiddleware"])
+
+    # -------- THE FOUR PLACES ----------------------------------------------------------
+    async def turn(self, ctx: RunContext, call_next: NextTurn) -> AsyncGenerator[CoreEvent]:
+        started, finish = time.monotonic(), None
+        self._write("→ turn started", ctx, task="new" if ctx.inbox else "goes on")
+        try:
+            async for event in call_next():
+                if isinstance(event, ReasoningCompleteEvent):
+                    finish = event.finish_reason
+                yield event
+        finally:
+            self._write(
+                "← turn finished", ctx, finish_reason=finish,
+                seconds=round(time.monotonic() - started, 1),
+            )
+
+    async def model(self, ctx: RunContext, call: ModelCall, call_next: NextModel) -> ChatCompletionResult:
+        started = self._model_call(ctx, call)
+        try:
+            result = await call_next(call)
+        except Exception as error:
+            self._model_error(ctx, started, error)
+            raise
+        self._model_answer(ctx, started, result.message, result.usage, result.finish_reason)
+        return result
+
+    async def stream(
+        self, ctx: RunContext, call: ModelCall, call_next: NextStream
+    ) -> AsyncGenerator[ChatCompletionChunk]:
+        started = self._model_call(ctx, call)
+        try:
+            async for chunk in call_next(call):
+                if chunk.is_complete and chunk.message is not None and chunk.usage is not None:
+                    self._model_answer(ctx, started, chunk.message, chunk.usage, chunk.finish_reason)
+                yield chunk
+        except Exception as error:
+            self._model_error(ctx, started, error)
+            raise
+
+    async def tool(self, ctx: RunContext, record: ToolCallRecord, call_next: NextTool) -> ToolResult | None:
+        started = time.monotonic()
+        details = {"params": self._preview(record.parameters)} if self.level == "debug" else {}
+        self._write(f"→ tool {record.tool_name}", ctx, status=record.status.value, **details)
+        result = await call_next(record)
+        # 1. None: it waits for a person.
+        if result is None:
+            self._write(f"← tool {record.tool_name}", ctx, waiting="user")
+            return result
+        answer: dict[str, t.Any] = {"ms": _ms(started), "ok": result.success}
+        if not result.success:
+            answer["error"] = self._preview(result.error or "")
+        elif self.level == "debug":
+            answer["result"] = self._preview(result.result)
+        self._write(f"← tool {record.tool_name}", ctx, **answer)
+        return result
+
+    # -------- HELPERS ------------------------------------------------------------------
+    def _model_call(self, ctx: RunContext, call: ModelCall) -> float:
+        self._write("→ model call", ctx, model=call.model, messages=len(call.messages), tools=len(call.tools))
+        return time.monotonic()
+
+    def _model_answer(
+        self, ctx: RunContext, started: float, message: AssistantMessage, usage: Usage, finish: str | None
+    ) -> None:
+        self._write(
+            "← model call", ctx, ms=_ms(started), tokens_in=usage.tokens_input,
+            tokens_out=usage.tokens_output, tool_calls=len(message.tool_calls), finish_reason=finish,
         )
 
-    def _write(self, text: str, mw: MiddlewareContext, **details: t.Any) -> None:
-        # Readable with any formatter; also structured (``extra``) for JSON logs.
-        shown = " | ".join(
-            f"{key}={value}" for key, value in details.items() if value is not None
+    def _model_error(self, ctx: RunContext, started: float, error: Exception) -> None:
+        self._log.error(
+            "✗ model call", run_id=ctx.run_id, ms=_ms(started),
+            error_type=type(error).__name__, error=str(error),
         )
+
+    def _write(self, text: str, ctx: RunContext, **details: t.Any) -> None:
+        # Readable with any formatter; also structured (``extra``) for JSON logs.
+        shown = " | ".join(f"{key}={value}" for key, value in details.items() if value is not None)
         line = f"{text} | {shown}" if shown else text
-        self._log.info(line, run_id=mw.ctx.run_id, agent=mw.agent, **details)
+        self._log.info(line, run_id=ctx.run_id, session_id=ctx.session_id, **details)
 
     def _preview(self, value: t.Any) -> str:
-        text = (
-            value
-            if isinstance(value, str)
-            else json.dumps(value, ensure_ascii=False, default=str)
-        )
-        return (
-            text
-            if len(text) <= self.preview_chars
-            else text[: self.preview_chars - 1] + "…"
-        )
-
-    # -------- HOOKS -----------------------------------------------------------
-    async def on_run_start(
-        self, mw: MiddlewareContext, task: list[CoreMessage] | None
-    ) -> None:
-        mw.state(self)[_STARTED] = time.monotonic()
-        self._write(
-            "→ run started", mw, task=f"{len(task)} message(s)" if task else "resume"
-        )
-
-    async def on_run_end(self, mw: MiddlewareContext, response: AgentResponse) -> None:
-        started = mw.state(self).pop(_STARTED, None)
-        seconds = round(time.monotonic() - started, 1) if started else None
-        self._write(
-            "← run finished", mw, finish_reason=response.finish_reason, seconds=seconds
-        )
-
-    async def on_model_request(
-        self, mw: MiddlewareContext, request: ModelRequest
-    ) -> ModelRequest:
-        request.metadata[_STARTED] = time.monotonic()
-        self._write(
-            "→ model call",
-            mw,
-            model=request.model,
-            messages=len(request.messages),
-            tools=len(request.tools),
-        )
-        return request
-
-    async def on_model_response(
-        self,
-        mw: MiddlewareContext,
-        request: ModelRequest,
-        result: ChatCompletionResult,
-    ) -> ChatCompletionResult:
-        self._write(
-            "← model call",
-            mw,
-            ms=_elapsed_ms(request.metadata),
-            tokens_in=result.usage.tokens_input,
-            tokens_out=result.usage.tokens_output,
-            tool_calls=len(result.message.tool_calls),
-            finish_reason=result.finish_reason,
-        )
-        return result
-
-    async def on_model_error(
-        self,
-        mw: MiddlewareContext,
-        request: ModelRequest,
-        error: Exception,
-    ) -> None:
-        self._log.error(
-            "✗ model call",
-            run_id=mw.ctx.run_id,
-            ms=_elapsed_ms(request.metadata),
-            error_type=type(error).__name__,
-            error=str(error),
-        )
-        return None
-
-    async def on_tool_request(
-        self, mw: MiddlewareContext, request: ToolRequest
-    ) -> None:
-        request.metadata[_STARTED] = time.monotonic()
-        details = (
-            {"params": self._preview(request.parameters)}
-            if self.level == "debug"
-            else {}
-        )
-        self._write(f"→ tool {request.tool_name}", mw, **details)
-        return None
-
-    async def on_tool_response(
-        self,
-        mw: MiddlewareContext,
-        request: ToolRequest,
-        result: ToolResult,
-    ) -> ToolResult:
-        details: dict[str, t.Any] = {
-            "ms": _elapsed_ms(request.metadata),
-            "ok": result.success,
-        }
-        if not result.success:
-            details["error"] = self._preview(result.error or "")
-        elif self.level == "debug":
-            details["result"] = self._preview(result.result)
-        self._write(f"← tool {request.tool_name}", mw, **details)
-        return result
+        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+        return text if len(text) <= self.preview_chars else text[: self.preview_chars - 1] + "…"
 
 
-def _elapsed_ms(metadata: dict[str, t.Any]) -> int | None:
-    started = metadata.get(_STARTED)
-    return int((time.monotonic() - started) * 1000) if started else None
+def _ms(started: float) -> int:
+    return int((time.monotonic() - started) * 1000)
 
 
 __all__ = ["LoggingMiddleware", "LoggingMiddlewareConfig"]

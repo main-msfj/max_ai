@@ -43,7 +43,7 @@ def manager_with(monkeypatch, clients, **config):
 
     attempts = {server_id: 0 for server_id in clients}
 
-    def create(server_config):
+    def create(server_config, extensions=None):
         attempts[server_config.server_id] += 1
         return clients[server_config.server_id]()
 

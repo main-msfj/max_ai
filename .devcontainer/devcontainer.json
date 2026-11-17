@@ -8,9 +8,7 @@
     "workspaceMount": "source=${localWorkspaceFolder},target=/max_ai,type=bind,consistency=cached",
     "forwardPorts": [
         8081,
-        3000,
-        9001,
-        "ollama:11434"
+        3000
     ],
     "portsAttributes": {
         "8081": {
@@ -18,12 +16,6 @@
         },
         "3000": {
             "label": "Langfuse"
-        },
-        "9001": {
-            "label": "MinIO Console"
-        },
-        "ollama:11434": {
-            "label": "Ollama API"
         }
     },
     "runArgs": [
@@ -56,9 +48,6 @@
     "overrideCommand": true,
     "initializeCommand": "docker network create llm-vnet 2>/dev/null || true",
     "postCreateCommand": "bash /max_ai/.devcontainer/post-create.sh",
-    "remoteEnv": {
-        "OLLAMA_BASE_URL": "http://ollama:11434"
-    },
     "customizations": {
         "vscode": {
             "extensions": [

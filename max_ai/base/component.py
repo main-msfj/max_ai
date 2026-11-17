@@ -32,6 +32,7 @@ ComponentType = t.Union[
         "prompts",
         "skills",
         "context",
+        "sandbox",
     ],
     str,
 ]
@@ -78,32 +79,21 @@ def _type_to_provider_str(cls: type) -> str:
 
 
 KNOWN_PROVIDERS: dict[str, str] = {
-    "ollama": "max_ai.capabilities.clients.ollama.client.OllamaChatCompletionClient",
-    "OllamaChatCompletionClient": "max_ai.capabilities.clients.ollama.client.OllamaChatCompletionClient",
-    "maxai.llm.OllamaChatCompletionClient": "max_ai.capabilities.clients.ollama.client.OllamaChatCompletionClient",
-    "OpenAIChatCompletionClient": "max_ai.capabilities.clients.openai.client.OpenAIChatCompletionClient",
-    "maxai.llm.OpenAIChatCompletionClient": "max_ai.capabilities.clients.openai.client.OpenAIChatCompletionClient",
-    "OpenRouterChatCompletionClient": "max_ai.capabilities.clients.openrouter.client.OpenRouterChatCompletionClient",
-    "maxai.llm.OpenRouterChatCompletionClient": "max_ai.capabilities.clients.openrouter.client.OpenRouterChatCompletionClient",
+    "OpenAIChatCompletionClient": "max_ai.capabilities.clients.openai.OpenAIChatCompletionClient",
+    "maxai.llm.OpenAIChatCompletionClient": "max_ai.capabilities.clients.openai.OpenAIChatCompletionClient",
+    "OpenRouterChatCompletionClient": "max_ai.capabilities.clients.openrouter.OpenRouterChatCompletionClient",
+    "maxai.llm.OpenRouterChatCompletionClient": "max_ai.capabilities.clients.openrouter.OpenRouterChatCompletionClient",
     "maxai.stacks.AgentPolicyLayer": "max_ai.capabilities.stacks.agent_policy_layer.AgentPolicyLayer",
     "maxai.stacks.TaskAnalysisLayer": "max_ai.capabilities.stacks.task_analysis_layer.TaskAnalysisLayer",
     "maxai.stacks.RenderingLayer": "max_ai.capabilities.stacks.rendering_layer.RenderingLayer",
     "maxai.stacks.SkillsLayer": "max_ai.capabilities.stacks.skills_layer.SkillsLayer",
     "maxai.stacks.KnowledgeLayer": "max_ai.capabilities.stacks.knowledge_layer.KnowledgeLayer",
-    "maxai.stacks.ContextLayer": "max_ai.capabilities.stacks.context_layer.ContextLayer",
-    "maxai.stacks.MemoryLayer": "max_ai.capabilities.stacks.memory_layer.MemoryLayer",
-    "maxai.stacks.SessionStateLayer": "max_ai.capabilities.stacks.session_state_layer.SessionStateLayer",
+    "maxai.stacks.MemoryFilesLayer": "max_ai.capabilities.stacks.memory_files_layer.MemoryFilesLayer",
     "maxai.agents.Agent": "max_ai.agents.agent.Agent",
     "maxai.completion.RuntimeCompletionGate": "max_ai.capabilities.completion_gate.gate.RuntimeCompletionGate",
-    "maxai.reasoning.ReactLoop": "max_ai.capabilities.reasoning.react.loop.ReactLoop",
-    "maxai.guards.SchemaRetryGuard": "max_ai.capabilities.reasoning.guards.SchemaRetryGuard",
-    "maxai.guards.RepetitionGuard": "max_ai.capabilities.reasoning.guards.RepetitionGuard",
-    "maxai.guards.BudgetGuard": "max_ai.capabilities.reasoning.guards.BudgetGuard",
-    "maxai.guards.NoProgressGuard": "max_ai.capabilities.reasoning.guards.NoProgressGuard",
-    "maxai.guards.PlanCompletionGuard": "max_ai.capabilities.reasoning.guards.PlanCompletionGuard",
     "maxai.session_store.LocalSessionStore": "max_ai.capabilities.session_store.local._store.LocalSessionStore",
-    "maxai.compaction.SummaryCompaction": "max_ai.capabilities.compaction.summary._strategy.SummaryCompaction",
-    "maxai.compaction.SlidingWindowCompaction": "max_ai.capabilities.compaction.window._strategy.SlidingWindowCompaction",
+    "maxai.compaction.SummaryCompaction": "max_ai.capabilities.compaction.summary.SummaryCompaction",
+    "maxai.compaction.SlidingWindowCompaction": "max_ai.base.compaction.WindowCompaction",
 }
 
 

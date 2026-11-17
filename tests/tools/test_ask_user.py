@@ -1,7 +1,6 @@
 import pytest
 
 from max_ai.capabilities.tools.ask_user import AskUserTool
-from max_ai.core.harness import messages as harness
 from max_ai.types.tool_call import ToolCallRecord
 
 
@@ -40,7 +39,7 @@ def test_an_answer_covers_every_question_and_nothing_else():
     questions = [{"question": "A?"}, {"question": "B?"}]
     record = ToolCallRecord(id="r", tool_name=AskUserTool.TOOL_NAME, parameters={"questions": questions})
     answers = AskUserTool.answer(record, {"A?": "yes", "Z?": "ignored"}).result["answers"]
-    assert answers == {"A?": "yes", "B?": harness.QUESTION_NOT_ANSWERED}
+    assert answers == {"A?": "yes", "B?": AskUserTool.NOT_ANSWERED}
 
 
 def test_multi_select_must_be_a_boolean():

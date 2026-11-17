@@ -5,9 +5,8 @@ from __future__ import annotations
 from ...base.completion_gate import CompletionBase, CompletionDecision
 from ...core.harness import messages as harness
 from ...core.messages import AssistantMessage
-from ...core.primitives import FailureReason
 from ...types.run_context import RunContext
-from ...types.tool_call import ToolCallRecord
+from ...types.tool_call import FailureReason, ToolCallRecord
 from ._model import RuntimeGateConfig
 
 # Failures where the command actually ran (or tried to). Denials, cancels and

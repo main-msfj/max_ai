@@ -12,45 +12,10 @@ from opentelemetry.trace import StatusCode
 
 from max_ai.agents import Agent
 from max_ai.capabilities.middleware import TracingMiddleware, configure_langfuse
-from max_ai.capabilities.tools.function_as_tool import FunctionAsTool
-from max_ai.capabilities.workspace.local import LocalWorkspace
-from max_ai.core.messages import AssistantMessage, ToolCall
 from max_ai.core.model.llm import ModelConfig
-from max_ai.types.completions import ChatCompletionResult, Usage
 from max_ai.types.run_context import RunContext
-from max_ai.types.tools import ToolApprovalMode
 
-
-def get_weather(city: str) -> dict:
-    """Current weather for a city."""
-    if city == "Atlantis":
-        raise ValueError("unknown city")
-    return {"city": city, "temp_c": 24}
-
-
-class FakeLLM:
-    model = "fake-model"
-
-    def __init__(self, *replies, config: ModelConfig | None = None, fail: bool = False):
-        self.replies = list(replies)
-        self.config = config or ModelConfig()
-        self.generation_options = {"max_tokens": 500}
-        self.fail = fail
-
-    async def run(self, **kwargs):
-        if self.fail:
-            raise RuntimeError("provider down")
-        return ChatCompletionResult(message=self.replies.pop(0), usage=Usage(tokens_input=1000, tokens_output=100),
-                                    model="fake-model-2026", finish_reason="stop")
-
-
-def call(city: str) -> AssistantMessage:
-    return AssistantMessage(source="llm", content="", tool_calls=[
-        ToolCall(id=f"c-{city}", tool_name="get_weather", parameters={"city": city})])
-
-
-def say(text: str) -> AssistantMessage:
-    return AssistantMessage(source="llm", content=text)
+from .fakes import FakeClient, call, say, weather_agent
 
 
 @pytest.fixture
@@ -58,20 +23,14 @@ def exporter() -> InMemorySpanExporter:
     return InMemorySpanExporter()
 
 
-def traced_agent(tmp_path, llm, exporter, **options) -> Agent:
+def traced_agent(client: FakeClient, exporter: InMemorySpanExporter, **options) -> Agent:
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
-    tool = FunctionAsTool(get_weather, approval_mode=ToolApprovalMode.AUTO_APPROVED)
-    agent = Agent(name="weather", description="d", instructions="i", client=llm, toolset=[tool],
-                  workspace=LocalWorkspace(root=tmp_path),
-                  middlewares=[TracingMiddleware(tracer_provider=provider, **options)])
-    agent.reasoning.max_connection_retries = 0
-    return agent
+    return weather_agent(client, TracingMiddleware(tracer_provider=provider, **options))
 
 
 async def run(agent: Agent, text: str = "clima en Lima"):
-    async with agent:
-        return await agent.run(text, run_context=RunContext(user_id="ana", session_id="chat-1"))
+    return await agent.run(text, RunContext(user_id="ana", session_id="chat-1"))
 
 
 def by_name(exporter: InMemorySpanExporter) -> dict[str, list]:
@@ -81,9 +40,9 @@ def by_name(exporter: InMemorySpanExporter) -> dict[str, list]:
     return spans
 
 
-async def test_a_run_is_one_trace_with_model_and_tool_spans(tmp_path, exporter):
+async def test_a_turn_is_one_trace_with_model_and_tool_spans(exporter):
     prices = ModelConfig(input_cost_per_mtok=2.0, output_cost_per_mtok=10.0)
-    await run(traced_agent(tmp_path, FakeLLM(call("Lima"), say("24 grados"), config=prices), exporter))
+    await run(traced_agent(FakeClient(call("Lima"), say("24 grados"), config=prices), exporter))
     spans = by_name(exporter)
     root = spans["invoke_agent weather"][0]
     chats, tool = spans["chat fake-model"], spans["execute_tool get_weather"][0]
@@ -110,22 +69,22 @@ async def test_a_run_is_one_trace_with_model_and_tool_spans(tmp_path, exporter):
     assert json.loads(tool.attributes["gen_ai.tool.call.result"])["temp_c"] == 24
 
 
-async def test_failed_tools_and_crashed_runs_are_marked_as_errors(tmp_path, exporter):
-    await run(traced_agent(tmp_path, FakeLLM(call("Atlantis"), say("no sé")), exporter))
+async def test_failed_tools_and_crashed_turns_are_marked_as_errors(exporter):
+    await run(traced_agent(FakeClient(call("Atlantis"), say("no sé")), exporter))
     tool = by_name(exporter)["execute_tool get_weather"][0]
     assert tool.status.status_code == StatusCode.ERROR
 
     exporter.clear()
     with pytest.raises(Exception, match="provider down"):
-        await run(traced_agent(tmp_path, FakeLLM(fail=True), exporter))
+        await run(traced_agent(FakeClient(fail=1), exporter))
     spans = by_name(exporter)
     assert spans["chat fake-model"][0].status.status_code == StatusCode.ERROR
     root = spans["invoke_agent weather"][0]  # still ended, with the error
     assert root.status.status_code == StatusCode.ERROR and root.events[0].name == "exception"
 
 
-async def test_content_can_be_left_out(tmp_path, exporter):
-    await run(traced_agent(tmp_path, FakeLLM(call("Lima"), say("24 grados")), exporter, capture_content=False))
+async def test_content_can_be_left_out(exporter):
+    await run(traced_agent(FakeClient(call("Lima"), say("24 grados")), exporter, capture_content=False))
     for span in exporter.get_finished_spans():
         keys = set(span.attributes)
         assert not keys & {"langfuse.trace.input", "langfuse.observation.input", "langfuse.observation.output",

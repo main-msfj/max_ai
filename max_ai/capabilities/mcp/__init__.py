@@ -9,7 +9,6 @@ from ._model import (
     serialize_mcp_servers,
 )
 from .client_manager import MCPClientManager
-from .integration import create_mcp_tools
 from .tool import MCPResourceTool, MCPTool
 
 __all__ = [
@@ -22,5 +21,4 @@ __all__ = [
     "deserialize_mcp_servers",
     "serialize_mcp_servers",
     "ensure_serializable",
-    "create_mcp_tools",
 ]

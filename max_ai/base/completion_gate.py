@@ -19,14 +19,6 @@ if TYPE_CHECKING:
     from ..types.run_context import RunContext
 
 
-class CompletionCheck(BaseModel):
-    """Evidence returned by trusted application code, never model arguments."""
-
-    model_config = ConfigDict(frozen=True)
-    status: Literal["pass", "fail", "unknown"]
-    reason: str = ""
-
-
 class CompletionDecision(BaseModel):
     """
     Represent the result of evaluating whether an agent turn may finish.
@@ -47,8 +39,7 @@ class CompletionBase(ComponentBase[CompletionConfig], ABC):
     """Subclass and override what you need — only ``on_final_response`` is
     required.
 
-    Registered as a handler on an Agent's ``EventBus``. The three
-    observation hooks (``on_model_response``, ``on_call_tool``,
+    The three observation hooks (``on_model_response``, ``on_call_tool``,
     ``on_tool_response``) are fire-and-forget: nothing reads their return
     value, and they cannot veto anything. Only ``on_final_response`` can
     force the loop to keep iterating instead of ending the turn.

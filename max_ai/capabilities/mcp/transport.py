@@ -3,25 +3,30 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from typing import AsyncIterator, Sequence
 
 import httpx2
 from mcp import Client, StdioServerParameters
+from mcp.client.extension import ClientExtension
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamable_http_client
 
 from ._model import HTTPServerConfig, MCPServerConfig, StdioMCPServerConfig
 
 
-def create_mcp_client(config: MCPServerConfig) -> Client:
+def create_mcp_client(
+    config: MCPServerConfig, extensions: Sequence[ClientExtension] | None = None
+) -> Client:
     """The v2 client probes 2026-07-28 and falls back to legacy MCP."""
     if isinstance(config, StdioMCPServerConfig):
         return Client(StdioServerParameters(
             command=config.command, args=config.args, env=config.process_env or None,
-        ))
+        ), extensions=extensions)
     if isinstance(config, HTTPServerConfig):
         if config.transport_protocol == "sse":
-            return Client(sse_client(config.url, headers=config.request_headers))
+            return Client(
+                sse_client(config.url, headers=config.request_headers), extensions=extensions
+            )
 
         @asynccontextmanager
         async def transport() -> AsyncIterator[object]:
@@ -31,5 +36,5 @@ def create_mcp_client(config: MCPServerConfig) -> Client:
                 ) as streams:
                     yield streams
 
-        return Client(transport())
+        return Client(transport(), extensions=extensions)
     raise TypeError(f"Unsupported MCP server config: {type(config).__name__}")

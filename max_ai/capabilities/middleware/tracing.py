@@ -1,6 +1,6 @@
-"""OpenTelemetry spans for a run, its model calls and its tool calls.
+"""OpenTelemetry spans for a turn, its model calls and its tool calls.
 
-    invoke_agent billing                 one trace per run (user.id, session.id)
+    invoke_agent billing                 one trace per turn (user.id, session.id)
     ├─ chat gpt-5                        model, tokens, cost, finish reason
     ├─ execute_tool get_weather          arguments, result, errors
     └─ chat gpt-5
@@ -11,8 +11,9 @@ agents, generations and tools. Spans go to the global tracer provider: set
 one up with ``configure_langfuse()``, ``logfire.configure()`` or any OTLP
 exporter. Without a provider, spans are no-ops and cost nothing.
 
-A paused run (approval, question) ends its trace; the resume starts another
-with the same ``session.id``, so the backend groups them.
+A turn that waits for a person (approval, question) ends its trace; the
+next turn starts another with the same ``session.id``, so the backend
+groups them.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ import base64
 import json
 import os
 import typing as t
+from collections.abc import AsyncGenerator
 
 from opentelemetry import trace
 from opentelemetry.trace import Span, SpanKind, Status, StatusCode
@@ -29,20 +31,23 @@ from pydantic import Field
 from ...base.middleware import (
     CoreMiddleware,
     MiddlewareConfig,
-    MiddlewareContext,
-    ModelRequest,
-    ToolRequest,
+    ModelCall,
+    NextModel,
+    NextStream,
+    NextTool,
+    NextTurn,
 )
+from ...core.event_type import ModelResponseEvent, ReasoningCompleteEvent
+from ...types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
 
 if t.TYPE_CHECKING:
     from opentelemetry.sdk.trace import TracerProvider
 
-    from ...core.messages import AssistantMessage, CoreMessage
-    from ...types.agent_response import AgentResponse
-    from ...types.completions import ChatCompletionResult
-    from ...types.tool_call import ToolResult
-
-_SPAN = "trace_span"
+    from ...core.event_type import CoreEvent
+    from ...core.messages import AssistantMessage
+    from ...core.model.llm import ModelConfig
+    from ...types.run_context import RunContext
+    from ...types.tool_call import ToolCallRecord, ToolResult
 
 
 class TracingConfig(MiddlewareConfig):
@@ -68,12 +73,123 @@ class TracingMiddleware(CoreMiddleware):
     ) -> None:
         self.capture_content = capture_content
         self.max_content_chars = max_content_chars
+        self.agent = "agent"  # set by the harness: the name the traces carry
         # Runtime only (not serialized): default is the global provider.
         self._provider = tracer_provider
         # Live spans can't be stored in the RunContext: they stay in this
-        # process, keyed by run, and end with the run.
-        self._runs: dict[str, Span] = {}
+        # process, keyed by run, and end with the turn.
+        self._turns: dict[str, Span] = {}
 
+    # -------- TURN ---------------------------------------------------------------------
+    async def turn(self, ctx: RunContext, call_next: NextTurn) -> AsyncGenerator[CoreEvent]:
+        # 1. The turn's span: what the user said is waiting in the inbox.
+        task = "\n".join(ctx.inbox) or None
+        span = self._tracer.start_span(
+            f"invoke_agent {self.agent}",
+            kind=SpanKind.INTERNAL,
+            attributes=_clean({
+                "gen_ai.operation.name": "invoke_agent",
+                "gen_ai.agent.name": self.agent,
+                "user.id": ctx.user_id,
+                "session.id": ctx.session_id,
+                "max_ai.run_id": ctx.run_id,
+                "max_ai.resumed": task is None,
+                "langfuse.trace.name": self.agent,
+                "langfuse.observation.type": "agent",
+                "langfuse.trace.input": self._content(task),
+                "langfuse.observation.input": self._content(task),
+            }),
+        )
+        self._turns[ctx.run_id] = span
+        # 2. The turn, adding up what it used and seeing how it ends.
+        usage, finish = Usage(), None
+        try:
+            async for event in call_next():
+                if isinstance(event, ModelResponseEvent) and event.usage is not None:
+                    usage = usage + event.usage
+                elif isinstance(event, ReasoningCompleteEvent):
+                    finish = event.finish_reason
+                yield event
+        except BaseException as error:
+            span.record_exception(error)
+            span.set_status(Status(StatusCode.ERROR, f"{type(error).__name__}: {error}"))
+            raise
+        else:
+            # 3. The answer the user got.
+            answer = self._answer(ctx)
+            span.set_attributes(_clean({
+                "langfuse.trace.output": self._content(answer),
+                "langfuse.observation.output": self._content(answer),
+                "max_ai.finish_reason": finish,
+                "gen_ai.usage.input_tokens": usage.tokens_input,
+                "gen_ai.usage.output_tokens": usage.tokens_output,
+            }))
+            if finish not in (None, "stop", "waiting_for_user"):
+                span.set_attributes({"langfuse.observation.level": "WARNING"})
+        finally:
+            self._turns.pop(ctx.run_id, None)
+            span.end()
+
+    # -------- MODEL --------------------------------------------------------------------
+    async def model(self, ctx: RunContext, call: ModelCall, call_next: NextModel) -> ChatCompletionResult:
+        span = self._model_span(ctx, call)
+        try:
+            result = await call_next(call)
+        except BaseException as error:
+            self._failed(span, error)
+            raise
+        self._answered(span, call.model_config, result.message, result.usage, result.model, result.finish_reason)
+        return result
+
+    async def stream(
+        self, ctx: RunContext, call: ModelCall, call_next: NextStream
+    ) -> AsyncGenerator[ChatCompletionChunk]:
+        span, ended = self._model_span(ctx, call), False
+        try:
+            async for chunk in call_next(call):
+                # The last chunk brings the whole message and what it used.
+                if chunk.is_complete and chunk.message is not None:
+                    self._answered(
+                        span, call.model_config, chunk.message, chunk.usage or Usage(),
+                        call.model, chunk.finish_reason,
+                    )
+                    ended = True
+                yield chunk
+        except BaseException as error:
+            if not ended:
+                self._failed(span, error)
+            raise
+        if not ended:  # the stream stopped without its last chunk
+            span.end()
+
+    # -------- TOOLS --------------------------------------------------------------------
+    async def tool(self, ctx: RunContext, record: ToolCallRecord, call_next: NextTool) -> ToolResult | None:
+        span = self._child(ctx, f"execute_tool {record.tool_name}", {
+            "gen_ai.operation.name": "execute_tool",
+            "gen_ai.tool.name": record.tool_name,
+            "gen_ai.tool.call.id": record.id,
+            "gen_ai.tool.call.arguments": self._content(record.parameters),
+            "max_ai.tool.status": record.status.value,
+            "langfuse.observation.type": "tool",
+        })
+        try:
+            result = await call_next(record)
+        except BaseException as error:
+            self._failed(span, error)
+            span.end()
+            raise
+        # 1. None: it waits for a person; the next turn traces it again.
+        if result is None:
+            span.set_attributes({"gen_ai.tool.call.result": "waiting for the user"})
+        elif result.success:
+            span.set_attributes(_clean({"gen_ai.tool.call.result": self._content(result.result)}))
+        else:
+            span.set_status(Status(StatusCode.ERROR, result.error or "tool failed"))
+            span.set_attributes({"langfuse.observation.level": "ERROR"})
+        span.end()
+        return result
+
+    # -------- HELPERS ------------------------------------------------------------------
     @property
     def _tracer(self) -> trace.Tracer:
         return trace.get_tracer("max_ai", tracer_provider=self._provider)
@@ -84,138 +200,65 @@ class TracingMiddleware(CoreMiddleware):
         text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
         return text if len(text) <= self.max_content_chars else text[: self.max_content_chars] + "…"
 
-    def _child(self, mw: MiddlewareContext, name: str, attributes: dict[str, t.Any]) -> Span:
-        parent = self._runs.get(mw.ctx.run_id)
+    def _child(self, ctx: RunContext, name: str, attributes: dict[str, t.Any]) -> Span:
+        """A span under the turn's; on every span the user and the session, so
+        per-observation filters find them."""
+        parent = self._turns.get(ctx.run_id)
         context = trace.set_span_in_context(parent) if parent is not None else None
-        # On every span, so per-observation filters (user, session) find them.
-        scope = {"user.id": mw.ctx.user_id, "session.id": mw.ctx.session_id}
+        scope = {"user.id": ctx.user_id, "session.id": ctx.session_id}
         return self._tracer.start_span(
             name, context=context, kind=SpanKind.CLIENT, attributes=_clean({**attributes, **scope}),
         )
 
-    # -------- RUN -----------------------------------------------------------
-    async def on_run_start(self, mw: MiddlewareContext, task: list[CoreMessage] | None) -> None:
-        ctx = mw.ctx
-        task_text = "\n".join(m.text() for m in task) if task else None
-        self._runs[ctx.run_id] = self._tracer.start_span(
-            f"invoke_agent {mw.agent}",
-            kind=SpanKind.INTERNAL,
-            attributes=_clean({
-                "gen_ai.operation.name": "invoke_agent",
-                "gen_ai.agent.name": mw.agent,
-                "user.id": ctx.user_id,
-                "session.id": ctx.session_id,
-                "max_ai.run_id": ctx.run_id,
-                "max_ai.resumed": task is None,
-                "langfuse.trace.name": mw.agent,
-                "langfuse.observation.type": "agent",
-                "langfuse.trace.input": self._content(task_text),
-                "langfuse.observation.input": self._content(task_text),
-            }),
-        )
-
-    async def on_final_response(self, mw: MiddlewareContext, message: AssistantMessage) -> AssistantMessage:
-        span = self._runs.get(mw.ctx.run_id)
-        if span is not None:
-            answer = message.structured_output.model_dump() if message.structured_output else message.text()
-            span.set_attributes(_clean({
-                "langfuse.trace.output": self._content(answer),
-                "langfuse.observation.output": self._content(answer),
-            }))
-        return message
-
-    async def on_run_end(self, mw: MiddlewareContext, response: AgentResponse) -> None:
-        span = self._runs.pop(mw.ctx.run_id, None)
-        if span is None:
-            return
-        usage = response.usage
-        span.set_attributes(_clean({
-            "max_ai.finish_reason": response.finish_reason,
-            "max_ai.stop_message": response.stop_message,
-            "gen_ai.usage.input_tokens": usage.tokens_input,
-            "gen_ai.usage.output_tokens": usage.tokens_output,
-            "max_ai.llm_calls": usage.llm_calls,
-            "max_ai.tool_calls": usage.tool_calls,
-        }))
-        if response.finish_reason in ("error", "budget_exceeded", "output_limit", "stopped"):
-            span.set_attributes({"langfuse.observation.level": "WARNING"})
-        span.end()
-
-    async def on_run_error(self, mw: MiddlewareContext, error: BaseException) -> None:
-        span = self._runs.pop(mw.ctx.run_id, None)
-        if span is not None:
-            span.record_exception(error)
-            span.set_status(Status(StatusCode.ERROR, f"{type(error).__name__}: {error}"))
-            span.end()
-
-    # -------- MODEL -----------------------------------------------------------
-    async def on_model_request(self, mw: MiddlewareContext, request: ModelRequest) -> ModelRequest:
-        messages = [{"role": m.role, "content": m.text()} for m in request.messages]
-        options = {k: v for k, v in request.options.items() if isinstance(v, (str, int, float, bool))}
-        request.metadata[_SPAN] = self._child(mw, f"chat {request.model}", {
+    def _model_span(self, ctx: RunContext, call: ModelCall) -> Span:
+        messages = [{"role": m.role, "content": m.text()} for m in call.messages]
+        return self._child(ctx, f"chat {call.model}", {
             "gen_ai.operation.name": "chat",
-            "gen_ai.request.model": request.model,
-            "gen_ai.request.tools": len(request.tools) or None,
-            **{f"gen_ai.request.{key}": value for key, value in options.items()},
+            "gen_ai.request.model": call.model,
+            "gen_ai.request.tools": len(call.tools) or None,
             "langfuse.observation.type": "generation",
             "langfuse.observation.input": self._content(messages),
         })
-        return request
 
-    async def on_model_response(
-        self, mw: MiddlewareContext, request: ModelRequest, result: ChatCompletionResult,
-    ) -> ChatCompletionResult:
-        span: Span | None = request.metadata.pop(_SPAN, None)
-        if span is None:
-            return result
-        message, usage = result.message, result.usage
+    def _answered(
+        self,
+        span: Span,
+        config: ModelConfig | None,
+        message: AssistantMessage,
+        usage: Usage,
+        model: str,
+        finish_reason: str | None,
+    ) -> None:
+        """What the model said and what it used, on its span; then it ends."""
         output: t.Any = message.text()
         if message.tool_calls:
             calls = [{"name": c.tool_name, "arguments": c.parameters} for c in message.tool_calls]
             output = {"content": output, "tool_calls": calls} if output else {"tool_calls": calls}
         span.set_attributes(_clean({
-            "gen_ai.response.model": result.model,
-            "gen_ai.response.finish_reasons": [result.finish_reason] if result.finish_reason else None,
+            "gen_ai.response.model": model,
+            "gen_ai.response.finish_reasons": [finish_reason] if finish_reason else None,
             "gen_ai.usage.input_tokens": usage.tokens_input,
             "gen_ai.usage.output_tokens": usage.tokens_output,
             "langfuse.observation.output": self._content(output),
-            "langfuse.observation.cost_details": _cost(request, usage.tokens_input, usage.tokens_output),
+            "langfuse.observation.cost_details": _cost(config, usage.tokens_input, usage.tokens_output),
         }))
         span.end()
-        return result
 
-    async def on_model_error(self, mw: MiddlewareContext, request: ModelRequest, error: Exception) -> None:
-        span: Span | None = request.metadata.pop(_SPAN, None)
-        if span is not None:
-            span.record_exception(error)
-            span.set_status(Status(StatusCode.ERROR, str(error)))
-            span.end()
-        return None
-
-    # -------- TOOLS -----------------------------------------------------------
-    async def on_tool_request(self, mw: MiddlewareContext, request: ToolRequest) -> None:
-        request.metadata[_SPAN] = self._child(mw, f"execute_tool {request.tool_name}", {
-            "gen_ai.operation.name": "execute_tool",
-            "gen_ai.tool.name": request.tool_name,
-            "gen_ai.tool.call.id": request.record.id,
-            "gen_ai.tool.call.arguments": self._content(request.parameters),
-            "langfuse.observation.type": "tool",
-        })
-        return None
-
-    async def on_tool_response(
-        self, mw: MiddlewareContext, request: ToolRequest, result: ToolResult,
-    ) -> ToolResult:
-        span: Span | None = request.metadata.pop(_SPAN, None)
-        if span is None:
-            return result
-        if result.success:
-            span.set_attributes(_clean({"gen_ai.tool.call.result": self._content(result.result)}))
-        else:
-            span.set_status(Status(StatusCode.ERROR, result.error or "tool failed"))
-            span.set_attributes({"langfuse.observation.level": "ERROR"})
+    @staticmethod
+    def _failed(span: Span, error: BaseException) -> None:
+        span.record_exception(error)
+        span.set_status(Status(StatusCode.ERROR, f"{type(error).__name__}: {error}"))
         span.end()
-        return result
+
+    @staticmethod
+    def _answer(ctx: RunContext) -> t.Any:
+        """The last thing the agent said, in its structured form when it has one."""
+        from ...core.messages import AssistantMessage
+
+        last = next((m for m in reversed(ctx.messages) if isinstance(m, AssistantMessage)), None)
+        if last is None:
+            return None
+        return last.structured_output.model_dump() if last.structured_output else last.text()
 
 
 def _clean(attributes: dict[str, t.Any]) -> dict[str, t.Any]:
@@ -223,8 +266,7 @@ def _clean(attributes: dict[str, t.Any]) -> dict[str, t.Any]:
     return {key: value for key, value in attributes.items() if value is not None}
 
 
-def _cost(request: ModelRequest, tokens_in: int | None, tokens_out: int | None) -> str | None:
-    config = request.model_config
+def _cost(config: ModelConfig | None, tokens_in: int | None, tokens_out: int | None) -> str | None:
     if config is None or config.input_cost_per_mtok is None or config.output_cost_per_mtok is None:
         return None
     cost_in = (tokens_in or 0) * config.input_cost_per_mtok / 1_000_000

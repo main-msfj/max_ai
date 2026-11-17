@@ -6,7 +6,7 @@ import typing as t
 from max_ai.agents import Agent
 from max_ai.base.tools import CoreTool, ToolContext
 from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
-from max_ai.core.termination import CancellationToken
+from max_ai.core.cancellation import CancellationToken
 from max_ai.types.tool_call import ToolCallRecord, ToolResult
 from max_ai.types.tools import ToolApprovalMode
 

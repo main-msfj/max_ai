@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-# Start the infrastructure (Ollama, MongoDB, MinIO, Azurite, Langfuse). Compose
+# Start the infrastructure (MongoDB, Langfuse). Compose
 # only creates or starts what is missing, so running containers are untouched.
 # Never block the devcontainer: if Docker fails, the log says why.
 echo "Starting docker-infra..."
@@ -12,7 +12,7 @@ echo "Starting docker-infra..."
 # The infrastructure UIs run in other containers. Rejoin their networks after
 # a devcontainer recreation and expose them on this container's loopback so
 # VS Code can forward ordinary numeric ports.
-for network in max-ai-infra_capabilities max-ai-infra_observability max-ai-infra_llm; do
+for network in max-ai-infra_capabilities max-ai-infra_observability; do
     if docker network inspect "$network" >/dev/null 2>&1; then
         docker network connect "$network" "$(hostname)" 2>/dev/null || true
     fi

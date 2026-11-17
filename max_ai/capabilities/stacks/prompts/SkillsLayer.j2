@@ -1,74 +1,22 @@
-{% if loaded_skills %}
+{% if skills %}
 <SKILLS>
-<purpose>
-{% if can_run_commands != false %}
-Skills are workflow instructions stored under $SKILLS (outside $WORKSPACE) in the configured execution environment.
-They are NOT callable tool names. Engage one by reading its instructions,
-following them, and using `bash` only when the skill needs command execution.
-{% else %}
-Skills are workflow instructions stored under `skills/`.
-They are NOT callable tool names. Engage one by reading its instructions
-and following them with your file tools.
-{% endif %}
-</purpose>
+A skill is a set of instructions for one kind of task. It is not a tool:
+you cannot call it by name.
 
 <available_skills>
-{% for skill in loaded_skills %}
-- `{{ skill.name }}` — {{ skill.description }}
-  Instructions: `skills/{{ skill.name }}/SKILL.md`
+{% for skill in skills %}
+- `{{ skill.name }}`: {{ skill.description }}
 {% endfor %}
 </available_skills>
 
-<workflow>
-When a user's request matches one of the skills above:
-1. Read `skills/<skill-name>/SKILL.md` with `read_file`. Replace
-   `<skill-name>` with the exact name from the catalog above.
-{% if can_run_commands != false %}
-2. Prepare the environment BEFORE running anything from the skill:
-   - List the packages and command-line tools the skill needs (imports
-     in its scripts, packages it names, commands it calls).
-   - Check and install in ONE command, so a missing package is not a
-     failed step, for example
-     `python3 -c "import openpyxl, pandas" 2>/dev/null || pip install --user openpyxl pandas`.
-     Install only what is missing, as the execution environment allows;
-     never reinstall or upgrade what is already there.
-   - If something cannot be installed, stop and tell the user what is
-     missing instead of improvising a replacement.
-3. Follow the skill's workflow, using `bash` and other tools as it
-   directs. A skill's files live in `$SKILLS/<skill-name>/` (for example
-   `python "$SKILLS/<skill-name>/scripts/run.py"`); commands start in
-   $WORKSPACE, where `skills/` does not exist.
-4. Keep the workspace clean:
-   - Scripts you write, drafts, downloads and any other intermediate
-     file go in /tmp, even when the skill names a folder inside the
-     workspace such as `tmp/` or `scratch/`.
-   - Only the deliverables the user asked for go in $WORKSPACE (for
-     example `trip_plan.xlsx`). It is a shared project space, not scoped
-     to this conversation, so don't overwrite files you didn't create
-     unless the user asks.
-5. Verify the deliverable exists and opens (for example, load the file
-   you just created) before replying.
-6. Reply with the result and the names of the generated files.
-{% else %}
-2. Follow the skill's workflow with your file tools. Its other files
-   (references, templates) are in `skills/<skill-name>/`.
-3. Only the deliverables the user asked for go in the workspace. It is a
-   shared project space, not scoped to this conversation, so don't
-   overwrite files you didn't create unless the user asks.
-4. Reply with the result and the names of the generated files.
-{% endif %}
-</workflow>
+<how_to_use>
+1. When the request matches a skill above, or the user names one, read it
+   with `{{ skill_tool }}` before doing anything else.
+2. Follow what it says.{% if bash_tool %} Run its scripts and commands with
+   `{{ bash_tool }}`.{% endif %}
 
-<rules>
-- Never treat a skill name as a callable tool.
-- Don't invent skill contents. If you haven't loaded a skill via
-  a successful file read, you don't know what it does — load it first.
-- When a skill's instructions conflict with these rules about where
-  files go or how to install dependencies, these rules win.
-- Never expose implementation details to the user: no skill paths,
-  environment variables, script paths, workspace mount names, or the
-  shell commands you ran. Name only the deliverables you created and
-  describe the user-facing result.
-</rules>
+3. Never guess what a skill contains: if you have not read it, you do not
+   know what it does.
+</how_to_use>
 </SKILLS>
 {% endif %}

@@ -2,21 +2,14 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 
-from max_ai.agents import Agent
 from max_ai.capabilities.session_store import LocalSessionStore
-from max_ai.capabilities.tools.function_as_tool import FunctionAsTool
 from max_ai.capabilities.tools.plan import AgentPlan
-from max_ai.capabilities.workspace.local import LocalWorkspace
-from max_ai.core.messages import HARNESS_SOURCE, AssistantMessage, ToolCall, UserMessage
-from max_ai.core.model.llm import ModelConfig
-from max_ai.types.completions import ChatCompletionResult, Usage
+from max_ai.core.messages import HARNESS_SOURCE, AssistantMessage, UserMessage
 from max_ai.types.run_context import RunContext
-from max_ai.types.tools import ToolApprovalMode
 
 
 def conversation(user: str = "alice", session: str = "s1", first: str = "arma un scraper") -> RunContext:
@@ -99,53 +92,3 @@ def test_store_is_a_serializable_component(tmp_path):
     component = store.serialize()
     assert component.provider == "maxai.session_store.LocalSessionStore"
     assert LocalSessionStore.deserialize(component).base_path == Path(tmp_path)
-
-
-# -------- the production flow: load → run → save, across "processes" ------------------
-def send_email(to: str) -> dict:
-    """Send an email to an address."""
-    return {"sent": to}
-
-
-class ScriptedLLM:
-    model = "fake"
-
-    def __init__(self, *messages):
-        self.messages = list(messages)
-        self.config = ModelConfig()
-        self.generation_options = {"max_tokens": 200}
-
-    async def run(self, *, ctx, prompts, tools=None, output_format=None, stream=False, **kwargs):
-        message = self.messages.pop(0)
-        return ChatCompletionResult(message=message, usage=Usage(), model="fake", finish_reason="stop")
-
-
-def make_agent(root: Path, *messages) -> Agent:
-    return Agent(
-        name="demo", description="d", instructions="i", client=ScriptedLLM(*messages),
-        toolset=[FunctionAsTool(send_email, approval_mode=ToolApprovalMode.ASK_APPROVED)],
-        workspace=LocalWorkspace(root=root / "work"),
-    )
-
-
-async def test_a_paused_turn_resumes_in_another_process(tmp_path):
-    call = AssistantMessage(source="llm", content="", tool_calls=[
-        ToolCall(id="e1", tool_name="send_email", parameters={"to": "a@b.c"})])
-    done = AssistantMessage(source="llm", content="Email enviado.")
-
-    # Process 1: the turn pauses waiting for approval; the host saves it.
-    async with make_agent(tmp_path, call) as agent:
-        response = await agent.run("manda el email", run_context=RunContext(user_id="alice", session_id="s1"))
-        assert response.needs_approval
-        await LocalSessionStore(tmp_path / "sessions").save(response.context)
-
-    # Process 2: a fresh store and agent load it, approve and finish.
-    ctx = await LocalSessionStore(tmp_path / "sessions").load("alice", "s1")
-    pending = next(r for r in ctx.tool_state.records.values() if not r.is_consumed)
-    ctx.tool_state.apply_approval(pending.id, True)
-    async with make_agent(tmp_path, done) as agent:
-        response = await agent.resume(ctx)
-    assert response.finish_reason == "stop"
-    assert response.context.messages[-1].text() == "Email enviado."
-    saved = json.loads((tmp_path / "sessions" / "alice" / "s1.meta.json").read_text())
-    assert saved["title"] == "manda el email"

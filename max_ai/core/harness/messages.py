@@ -14,33 +14,6 @@ if t.TYPE_CHECKING:
 
 
 # -------- REASONING LOOP -----------------------------------------------------------
-MAX_ITERATIONS_REACHED = (
-    "The previous turn stopped at its iteration limit before it finished. "
-    "Tell the user where you left off and what is still missing before "
-    "starting anything new."
-)
-
-ANSWER_AT_ITERATION_LIMIT = (
-    "You reached the step limit for this turn and cannot call tools now. "
-    "Answer the user: what you did, what is still missing, and what they "
-    "can ask next to continue."
-)
-
-FORMAT_FINAL_ANSWER = (
-    "Your answer above was accepted. Return it now in the required JSON "
-    "format: same content, nothing new, nothing left out."
-)
-
-
-def output_cut_off(limit: int) -> str:
-    """The reply hit the client's max_tokens; its tool calls did not run."""
-    return (
-        f"Your last reply hit the output limit (~{limit:,} tokens) and was cut "
-        "off; any tool call in it was incomplete and did not run. Every reply, "
-        "including tool arguments, must fit in that limit. Do not retry it the "
-        "same way: split the work into smaller steps (several smaller files, or "
-        "write a first part and extend it with edit_file), or answer more briefly."
-    )
 
 
 def tool_denied(denied: t.Sequence[ToolCallRecord], ask_tool: str) -> str:
@@ -55,19 +28,6 @@ def tool_denied(denied: t.Sequence[ToolCallRecord], ask_tool: str) -> str:
 
 
 # -------- DEFERRED TOOLS -----------------------------------------------------------
-def call_tool_unknown(name: str, search_tool: str) -> str:
-    return f"No tool named {name!r}. Find it with {search_tool} first."
-
-
-def call_tool_loaded(name: str) -> str:
-    return f"{name} is already loaded: call it directly, not through call_tool."
-
-
-
-QUESTION_NOT_ANSWERED = (
-    "The user did not answer this question. Do not take this as permission. "
-    "Ask it again only if you still need the answer."
-)
 
 
 TURN_INTERRUPTED = (
@@ -122,49 +82,4 @@ def invalid_parameters(tool_name: str, error: object, schema: str) -> str:
         f"Your call to '{tool_name}' had invalid parameters ({error}). The "
         f"expected JSON schema is: {schema}. Retry the call with parameters "
         "matching this schema exactly."
-    )
-
-
-def repeated_calls(listing: str) -> str:
-    return (
-        "You are re-calling tools with arguments identical to calls you already "
-        f"made this turn. You already have the results: {listing}. Do not call "
-        "these tools again with the same arguments — use the results above and "
-        "move on to the next plan step, or answer the user with what you have."
-    )
-
-
-def budget_running_out(remaining: int, pct_used: int, ask_tool: str | None) -> str:
-    ask = f" Call {ask_tool} to ask them whether to continue," if ask_tool else " Tell the user"
-    return (
-        f"You have {remaining} reasoning iteration(s) left (~{pct_used}% of this "
-        f"turn's budget used).{ask} or give them a summary of what you have so "
-        "far, before the budget runs out."
-    )
-
-
-def empty_response(tool_names: str) -> str:
-    return (
-        "Your last response was empty. Either call one of your tools "
-        f"({tool_names}) or answer the user directly in plain text."
-    )
-
-
-def plan_unfinished(listing: str, ask_tool: str | None) -> str:
-    ask = (
-        " If you are blocked because you need information or a decision from "
-        f"the user, do NOT repeat the request in plain text — call {ask_tool} to "
-        "ask them right now."
-        if ask_tool else ""
-    )
-    return (
-        "Do not stop yet — your plan still has unfinished steps: "
-        f"{listing}. Continue executing the next step NOW instead of "
-        "announcing it. If the remaining steps are already covered by work you "
-        "have done, call update_plan marking them done. If the reply you just "
-        "wrote already consolidates the results of ALL plan steps, send ONLY "
-        "that update_plan call — do NOT retype the answer; it will be delivered "
-        "to the user as-is. If that reply was incomplete, include the full "
-        "consolidated final answer as text in the same message as the "
-        "update_plan call." + ask
     )

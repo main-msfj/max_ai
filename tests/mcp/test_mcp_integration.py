@@ -23,11 +23,9 @@ from max_ai.capabilities.mcp import (
     MCPResourceTool,
     MCPTool,
     StdioMCPServerConfig,
-    create_mcp_tools,
     deserialize_mcp_servers,
     serialize_mcp_servers,
 )
-from max_ai.config import setting
 from max_ai.errors.mcp import MCPConnectionLost, MCPServerConfigError
 from max_ai.types.tool_call import ToolCallRecord
 from max_ai.types.tools import ToolApprovalMode
@@ -37,7 +35,7 @@ class FakeManager:
     def __init__(self, tool_result: t.Any = None, resource_result: t.Any = None) -> None:
         self.tool_result = tool_result
         self.resource_result = resource_result
-        self.calls: list[tuple[str, str, dict[str, t.Any], float]] = []
+        self.calls: list[tuple[str, str, dict[str, t.Any]]] = []
         self.resource_calls: list[tuple[str, t.Any]] = []
 
     async def call_tool(
@@ -45,11 +43,11 @@ class FakeManager:
         server_id: str,
         tool_name: str,
         arguments: dict[str, t.Any],
-        timeout_seconds: float,
         *,
         read_only: bool = False,
+        on_progress: t.Any = None,
     ) -> t.Any:
-        self.calls.append((server_id, tool_name, arguments, timeout_seconds))
+        self.calls.append((server_id, tool_name, arguments))
         return self.tool_result
 
     async def read_resource(self, server_id: str, uri: t.Any) -> t.Any:
@@ -87,7 +85,7 @@ async def test_mcp_tool_executes_remote_tool_and_returns_core_result() -> None:
     assert result.result == "hello from mcp"
     assert result.metadata["server_id"] == "docs"
     assert result.metadata["mcp_tool_name"] == "search"
-    assert manager.calls == [("docs", "search", {"q": "abc"}, setting.tool_timeout_seconds)]
+    assert manager.calls == [("docs", "search", {"q": "abc"})]
 
 
 def test_http_server_config_adds_bearer_token_header() -> None:
@@ -164,18 +162,6 @@ async def test_mcp_resource_tool_reads_text_resource() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_mcp_tools_can_register_without_connecting() -> None:
-    manager, tools = await create_mcp_tools(
-        [StdioMCPServerConfig(server_id="fs", command="npx", args=["server"])],
-        auto_connect=False,
-    )
-
-    assert isinstance(manager, MCPClientManager)
-    assert manager.server_ids == ["fs"]
-    assert tools == []
-
-
-@pytest.mark.asyncio
 async def test_manager_connect_discovers_tools_and_resources(monkeypatch: pytest.MonkeyPatch) -> None:
     import max_ai.capabilities.mcp.client_manager as client_manager_module
 
@@ -210,15 +196,15 @@ async def test_manager_connect_discovers_tools_and_resources(monkeypatch: pytest
                 ResourceTemplate(name="doc", uri_template="docs://{name}")
             ])
 
-        async def call_tool(self, name, arguments, read_timeout_seconds=None):
+        async def call_tool(self, name, arguments, read_timeout_seconds=None, progress_callback=None):
             self.calls.append((name, arguments, read_timeout_seconds))
             return CallToolResult(content=[TextContent(type="text", text="done")])
 
     client = FakeClient()
-    monkeypatch.setattr(client_manager_module, "create_mcp_client", lambda config: client)
+    monkeypatch.setattr(client_manager_module, "create_mcp_client", lambda config, extensions=None: client)
     manager = MCPClientManager()
     manager.add_server(HTTPServerConfig(
-        server_id="docs", url="http://localhost:3000/mcp",
+        server_id="docs", url="http://localhost:3000/mcp", trusted=True,
         tool_approval_modes={"forced_safe": ToolApprovalMode.AUTO_APPROVED},
     ))
 
@@ -232,10 +218,10 @@ async def test_manager_connect_discovers_tools_and_resources(monkeypatch: pytest
     assert tools[0].approval_mode == ToolApprovalMode.AUTO_APPROVED
     assert tools[1].approval_mode == ToolApprovalMode.ASK_APPROVED
     assert tools[2].approval_mode == ToolApprovalMode.AUTO_APPROVED
-    assert await manager.call_tool("docs", "search", {"q": "x"}, 12) == CallToolResult(
+    assert await manager.call_tool("docs", "search", {"q": "x"}) == CallToolResult(
         content=[TextContent(type="text", text="done")]
     )
-    assert client.calls == [("search", {"q": "x"}, 12)]
+    assert client.calls == [("search", {"q": "x"}, manager.max_timeout)]
     await manager.disconnect_all()
     assert client.closed
 
@@ -301,15 +287,15 @@ async def test_a_cancellation_inside_the_client_is_a_connection_error(monkeypatc
         async def list_resource_templates(self, *, cursor=None):
             return ListResourceTemplatesResult(resource_templates=[])
 
-        async def call_tool(self, name, arguments, read_timeout_seconds=None):
+        async def call_tool(self, name, arguments, read_timeout_seconds=None, progress_callback=None):
             raise asyncio.CancelledError  # what the transport does when the stream breaks
 
-    monkeypatch.setattr(client_manager_module, "create_mcp_client", lambda config: DroppingClient())
+    monkeypatch.setattr(client_manager_module, "create_mcp_client", lambda config, extensions=None: DroppingClient())
     manager = MCPClientManager()
     manager.add_server(HTTPServerConfig(server_id="web", url="http://localhost:3000/mcp"))
     await manager.connect("web")
     with pytest.raises(MCPConnectionLost, match="interrupted the request"):
-        await manager.call_tool("web", "search", {}, 5)
+        await manager.call_tool("web", "search", {})
 
     await manager.disconnect_all()
 
@@ -339,21 +325,21 @@ async def test_only_read_only_calls_are_sent_again_after_a_drop(monkeypatch):
         async def list_resource_templates(self, *, cursor=None):
             return ListResourceTemplatesResult(resource_templates=[])
 
-        async def call_tool(self, name, arguments, read_timeout_seconds=None):
+        async def call_tool(self, name, arguments, read_timeout_seconds=None, progress_callback=None):
             calls.append(name)
             if len(calls) % 2:
                 raise asyncio.CancelledError  # the stream broke mid-call
             return CallToolResult(content=[TextContent(type="text", text="done")])
 
-    monkeypatch.setattr(client_manager_module, "create_mcp_client", lambda config: DropsOnce())
+    monkeypatch.setattr(client_manager_module, "create_mcp_client", lambda config, extensions=None: DropsOnce())
     manager = MCPClientManager(retry=RetryPolicy(base_delay=0))
     manager.add_server(HTTPServerConfig(server_id="web", url="http://localhost:3000/mcp"))
     await manager.connect("web")
 
-    result = await manager.call_tool("web", "search", {}, 5, read_only=True)
+    result = await manager.call_tool("web", "search", {}, read_only=True)
     assert result.content[0].text == "done" and calls == ["search", "search"]
     with pytest.raises(MCPConnectionLost):
-        await manager.call_tool("web", "send_email", {}, 5)
+        await manager.call_tool("web", "send_email", {})
     assert calls[2:] == ["send_email"]  # it may have run: never sent twice
 
     await manager.disconnect_all()

@@ -1,13 +1,43 @@
 import typing as t
 from datetime import datetime, timezone
+from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..core.ids import short_id
-from ..core.primitives import FailureReason, ToolCallStatus
+
+# -------- ENUMS -----------------------------------------------------------
+
+
+class FailureReason(str, Enum):
+    """Categorized reason for a ToolResult failure."""
+
+    CANCELLED_BEFORE_START = "cancelled_before_start"
+    CANCELLED_DURING_EXECUTION = "cancelled_during_execution"
+    INVALID_PARAMETERS = "invalid_parameters"
+    EXECUTION_ERROR = "execution_error"
+    TIMEOUT = "timeout"
+    APPROVAL_DENIED = "approval_denied"
+
+
+class ToolCallStatus(str, Enum):
+    PENDING_APPROVAL = "pending_approval"
+    APPROVED = "approved"
+    AUTO_APPROVED = "auto_approved"
+    REJECTED = "rejected"
+    INPUT_NEEDED = "input_needed"
+    EXECUTING = "executing"
+    CONSUMED = "consumed"
 
 
 # -------- TOOL RESULT -----------------------------------------------------------
+class ToolFile(BaseModel):
+    """A file a tool returned: an image, a PDF, anything that is not text."""
+
+    data: bytes
+    mime_type: str = "application/octet-stream"
+
+
 class ToolResult(BaseModel):
     """Tool execution result to be returned to the LLM.
 
@@ -24,6 +54,9 @@ class ToolResult(BaseModel):
     error: str | None = Field(default=None)
     result: t.Any | None = Field(default=None, description="Tool execution output")
     failure_reason: FailureReason | None = Field(default=None)
+    # Never saved with the session: the dispatcher's hook keeps each file in
+    # the sandbox and leaves its path in the text.
+    files: list[ToolFile] = Field(default_factory=list, exclude=True)
 
     # -------- TRACKING -----------------------------------------------------------
     tool_call_id: str = Field(
@@ -327,7 +360,7 @@ class ToolCallRecord(BaseModel):
 
         The ``result`` may carry ``success=True`` (normal completion)
         or ``success=False`` (timeout, cancellation, validation error,
-        runtime exception — captured by the executor's try/except).
+        runtime exception — captured by the dispatcher's try/except).
         Either way the status moves to ``CONSUMED``.
         """
         if self.is_consumed:
@@ -380,7 +413,7 @@ class ToolCallRecord(BaseModel):
     def force_consume(self, result: ToolResult) -> t.Self:
         """Force-transition a non-EXECUTING record to CONSUMED.
 
-        Used by the executor for paths that never reached EXECUTING
+        Used by the dispatcher for paths that never reached EXECUTING
         — rejected approvals, validation failures, tool-not-found.
         These records still need a terminal result for downstream
         consumers (persistence, response building) but ``mark_consumed``

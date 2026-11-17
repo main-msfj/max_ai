@@ -14,9 +14,9 @@ class RenderingLayer(Component[StackConfig], CoreLayer):
     Prompt layer that defines how the agent must format its final output
     so it renders correctly in the UI.
 
-    Covers plain text, Markdown links, fenced code blocks with language
-    tags, tables, lists, ASCII/Mermaid diagrams, math, emphasis, quotes,
-    and headings — plus what to avoid.
+    Covers the shape of the answer, Markdown (headings, lists, tables,
+    emphasis, quotes), code blocks, math, links and sources, and what
+    to avoid.
 
     This layer has no template variables — the content is fully static
     instructions. It is always included in the prompt as-is.

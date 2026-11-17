@@ -30,7 +30,7 @@ class AgentPlan(BaseModel):
     """Represents a plan consisting of multiple steps to achieve a goal.
 
     Validated on construction so a malformed plan coming from the model
-    (via the ``update_plan`` tool or structured output) fails with a
+    (via structured output) fails with a
     message the model can self-correct from:
 
     - step ids must be unique;

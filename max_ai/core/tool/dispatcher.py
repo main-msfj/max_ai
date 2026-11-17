@@ -1,15 +1,18 @@
-"""Tool approval and execution routing for the agent runtime."""
+"""ToolDispatcher: where the registry and the sandbox meet. It receives a
+tool call, checks it, waits for approval, runs it and closes its record."""
+
+from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, AsyncIterator, Iterable
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Iterable
 
-from ...base.middleware import MiddlewareContext, ToolRequest
-from ...base.tools import ToolContext
-from ...config import setting
+from ...base.tools import CoreTool, ToolContext
+from ...loggers import ScopedLogger
 from ...types.tool_call import ToolCallRecord, ToolResult
-from ...types.tools import ToolApprovalMode
+from ..cancellation import CancellationToken
 from ..event_type import (
     CoreEvent,
     ToolApprovalEvent,
@@ -18,177 +21,85 @@ from ..event_type import (
     ToolCallResponseEvent,
     UserInputRequestEvent,
 )
-from ..harness import messages as harness
-from ..messages import HARNESS_SOURCE, HARNESS_TAG, ToolMessage, UserMessage
-from ..policy import Policy
-from ..termination import CancellationToken
+from ..messages import ToolMessage
+from .hook import ToolHook
 from .registry import ToolRegistry
 
 if TYPE_CHECKING:
-    from ...base.executor import ExecutionSession
+    from ...base.sandbox import SandboxCore
     from ...types.run_context import RunContext
-    from ..environment.manager import EnvironmentManager
     from ..middleware.chain import MiddlewareChain
+
+logger = logging.getLogger(__name__)
+log = ScopedLogger(logger, scope=["ToolDispatcher"])
+
+Emit = Callable[[Any], None]
+
+# What the model reads. General on purpose: who denied and why is the hook's to say.
+DENIED = "The tool call was denied."
+INTERRUPTED = (
+    "The tool call was interrupted and may not have finished. Check before calling it again."
+)
+CANNOT_RUN = "The tool call could not be run. Call the tool again if you still need it."
+NOT_ANSWERED = "The user did not answer."
+CANCELLED = "The user cancelled the call."
 
 
 class ToolDispatcher:
-    """Resolve, validate, request approval and invoke a tool adapter.
+    """Runs the calls of one user: build it with the tools and that user's
+    sandbox (``sandbox.bind(identifier)``); without a sandbox it runs the
+    tools that work on the host.
 
-    Every tool runs in this process. Only bash needs the environment: it gets
-    the manager's executor and the conversation's session, and only its
-    script reaches the sandbox.
-    Approval is supplied by trusted application code via record.approve/reject.
-    Pending approval returns None and leaves the record resumable.
+    ``hook`` is asked at the four moments of a call: before, permission,
+    after and failed. ``middleware`` sees every call and what it answers. A call
+    that waits for a person returns None: the application answers with
+    ``record.approve()`` / ``record.reject()`` and dispatches it again.
     """
 
     def __init__(
         self,
         registry: ToolRegistry,
+        sandbox: SandboxCore | None = None,
         *,
-        source: str = "tool_dispatcher",
-        manager: "EnvironmentManager | None" = None,
-        middleware: "MiddlewareChain | None" = None,
-        policy: Policy | None = None,
-    ):
+        hook: ToolHook | None = None,
+        middleware: MiddlewareChain | None = None,
+        deps: dict[str, Any] | None = None,
+        timeout: float = 360,
+        max_parallel: int = 8,
+    ) -> None:
         self.registry = registry
-        self.source = source
-        self.manager = manager
+        self.sandbox = sandbox
+        self.hook = hook or ToolHook()
         self.middleware = middleware
-        self.policy = policy or Policy()
+        self.source = "tool_dispatcher"  # who the events say they come from
+        self.deps = deps or {}  # the developer's own objects, handed to every tool
+        self.timeout = timeout  # seconds one call may run
+        self.max_parallel = max_parallel  # read-only calls that may run at once
         self._active: set[str] = set()
 
-    def _runs_commands(self, name: str) -> bool:
-        tool = self.registry.get(name)
-        return tool is not None and tool.runs_commands
-
-    def _batches(self, records: list[ToolCallRecord]) -> list[list[ToolCallRecord]]:
-        """Consecutive read-only calls form one batch that runs at once; any
-        other call runs alone, so "write A, read A" keeps its order."""
-        batches: list[list[ToolCallRecord]] = []
-        previous_read_only = False
-        for record in records:
-            read_only = bool(getattr(self.registry.get(record.tool_name), "read_only", False))
-            if read_only and previous_read_only:
-                batches[-1].append(record)
-            else:
-                batches.append([record])
-            previous_read_only = read_only
-        return batches
-
-    @staticmethod
-    def _capped(text: str) -> str:
-        """``text`` cut in the middle past ``max_tool_result_chars``: the model
-        keeps the start and the end, and is told how much is missing."""
-        limit = setting.max_tool_result_chars
-        if len(text) <= limit:
-            return text
-        half = limit // 2
-        cut = len(text) - 2 * half
-        return (
-            f"{text[:half]}\n\n[... {cut:,} of {len(text):,} characters cut: "
-            f"the tool returned more than fits ...]\n\n{text[-half:]}"
-        )
-
-    @classmethod
-    def close_unanswered(cls, ctx: "RunContext") -> None:
-        """Close every open question. Call it before a new user message:
-        each tool call needs its answer first, or the provider rejects it."""
-        for record in ctx.tool_state.pending_user_input:
-            result = ToolResult.tool_failure(record.id, harness.QUESTION_NOT_ANSWERED)
-            record.force_consume(result)
-            ctx.messages.append(cls.tool_message(record, result))
-
-    @classmethod
-    def answer_unanswered(cls, ctx: "RunContext", records: Iterable[ToolCallRecord]) -> None:
-        """Give each of ``records`` the ToolMessage it lacks. A call that never
-        started is closed as cancelled, so it does not run on the next turn."""
-        answered = {m.tool_call_id for m in ctx.messages if isinstance(m, ToolMessage)}
-        for record in records:
-            if record.id in answered:
-                continue
-            if not record.is_consumed and not record.is_executing:
-                record.force_consume(record.result or ToolResult.cancelled_before_start(record.id))
-            if record.result is not None:
-                ctx.messages.append(cls.tool_message(record, record.result))
-
-    @classmethod
-    def close_interrupted(cls, ctx: "RunContext") -> None:
-        """Keep an interrupted turn usable: every open call gets its answer,
-        and the model is told the turn was cut short."""
-        cls.close_unanswered(ctx)
-        state = ctx.tool_state
-        open_calls = [r for r in state.records.values() if not r.is_consumed]
-        for record in open_calls:
-            if record.is_executing:
-                state.fail_stale(record.id, "Interrupted by the user")
-        cls.answer_unanswered(ctx, open_calls)
-        ctx.messages.append(
-            UserMessage(
-                source=HARNESS_SOURCE,
-                content=f"{HARNESS_TAG} {harness.TURN_INTERRUPTED}",
-            )
-        )
-
-    @classmethod
-    def tool_message(cls, record: ToolCallRecord, result: ToolResult) -> ToolMessage:
-        """The transcript entry that answers ``record``'s call."""
-        return ToolMessage(
-            source=record.tool_name,
-            tool_call_id=record.id,
-            tool_name=record.called_as or record.tool_name,
-            success=result.success,
-            error=cls._capped(result.error) if result.error else None,
-            content=cls._capped(
-                json.dumps(result.result, ensure_ascii=False, default=str)
-                if result.success
-                else result.error or "Tool failed"
-            ),
-        )
-
+    # -------- MANY CALLS ---------------------------------------------------------
     async def dispatch_many(
         self,
         records: Iterable[ToolCallRecord],
-        context: ToolContext,
+        ctx: RunContext,
         cancellation_token: CancellationToken | None = None,
     ) -> AsyncIterator[CoreEvent | ToolMessage]:
         """Stream tool events and transcript results, preserving call order.
-        Read-only calls next to each other run concurrently."""
+        Read-only calls next to each other run at once."""
         # None marks the end of the stream.
         queue: asyncio.Queue[CoreEvent | ToolMessage | None] = asyncio.Queue()
-        call_context = ToolContext(
-            context.run_id,
-            session_id=context.session_id,
-            user_id=context.user_id,
-            retry_count=context.retry_count,
-            deps=dict(context.deps),
-            emit_event=queue.put_nowait,
-        )
+        limit = asyncio.Semaphore(self.max_parallel)
 
-        limit = asyncio.Semaphore(setting.max_parallel_tools)
-
-        async def run(
-            record: ToolCallRecord, session: "ExecutionSession | None" = None
-        ) -> ToolResult | None:
+        async def run(record: ToolCallRecord) -> ToolResult | None:
             async with limit:
-                return await self.dispatch(record, call_context, cancellation_token, session)
-
-        async def run_batch(batch: list[ToolCallRecord]) -> list[ToolResult | None]:
-            sandboxed = {r.id for r in batch if self._runs_commands(r.tool_name)}
-            manager = self.manager
-            if len(batch) == 1 or not sandboxed or manager is None:
-                return await asyncio.gather(*(run(record) for record in batch))
-            # Read-only calls share one execution lease: nothing to sync between them.
-            async with manager.acquire(context.user_id, context.session_id) as session:
-                return await asyncio.gather(
-                    *(run(record, session if record.id in sandboxed else None) for record in batch)
-                )
+                return await self.dispatch(record, ctx, queue.put_nowait, cancellation_token)
 
         async def produce() -> None:
             try:
                 for batch in self._batches(list(records)):
                     if cancellation_token is not None and cancellation_token.is_cancelled():
                         raise asyncio.CancelledError()
-                    results = await run_batch(batch)
+                    results = await asyncio.gather(*(run(record) for record in batch))
                     # Results enter the transcript in call order, whatever finished first.
                     for record, result in zip(batch, results):
                         if result is not None:
@@ -206,53 +117,123 @@ class ToolDispatcher:
                 task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
+    def _batches(self, records: list[ToolCallRecord]) -> list[list[ToolCallRecord]]:
+        """Consecutive read-only calls form one batch that runs at once; any
+        other call runs alone, so "write A, read A" keeps its order."""
+        batches: list[list[ToolCallRecord]] = []
+        previous_read_only = False
+        for record in records:
+            self._unwrap(record)
+            tool = self.registry.get(record.tool_name)
+            read_only = tool is not None and tool.read_only
+            if read_only and previous_read_only:
+                batches[-1].append(record)
+            else:
+                batches.append([record])
+            previous_read_only = read_only
+        return batches
+
+    # -------- THE CONVERSATION ---------------------------------------------------
+    @staticmethod
+    def tool_message(record: ToolCallRecord, result: ToolResult) -> ToolMessage:
+        """The message that answers ``record``'s call in the conversation."""
+        return ToolMessage(
+            source=record.tool_name,
+            tool_call_id=record.id,
+            tool_name=record.called_as or record.tool_name,
+            success=result.success,
+            error=result.error or None,
+            content=(
+                json.dumps(result.result, ensure_ascii=False, default=str)
+                if result.success
+                else result.error or "Tool failed"
+            ),
+        )
+
+    @classmethod
+    def close_unanswered(cls, ctx: RunContext) -> None:
+        """Close every open question. Call it before a new user message:
+        each tool call needs its answer first, or the provider rejects it."""
+        for record in ctx.tool_state.pending_user_input:
+            result = ToolResult.tool_failure(record.id, NOT_ANSWERED)
+            record.force_consume(result)
+            ctx.messages.append(cls.tool_message(record, result))
+
+    @classmethod
+    def answer_unanswered(cls, ctx: RunContext, records: Iterable[ToolCallRecord]) -> None:
+        """Give each of ``records`` the ToolMessage it lacks. A call that never
+        started is closed as cancelled, so it does not run on the next turn."""
+        answered = {m.tool_call_id for m in ctx.messages if isinstance(m, ToolMessage)}
+        for record in records:
+            if record.id in answered:
+                continue
+            if not record.is_consumed and not record.is_executing:
+                record.force_consume(record.result or ToolResult.cancelled_before_start(record.id))
+            if record.result is not None:
+                ctx.messages.append(cls.tool_message(record, record.result))
+
+    @classmethod
+    def close_interrupted(cls, ctx: RunContext) -> None:
+        """The user stopped the turn: every open call gets its answer, so
+        the conversation can go on."""
+        cls.close_unanswered(ctx)
+        state = ctx.tool_state
+        open_calls = [r for r in state.records.values() if not r.is_consumed]
+        for record in open_calls:
+            if record.is_executing:
+                state.fail_stale(record.id, CANCELLED)
+        cls.answer_unanswered(ctx, open_calls)
+
+    # -------- ONE CALL -----------------------------------------------------------
     async def dispatch(
         self,
         record: ToolCallRecord,
-        context: ToolContext,
+        ctx: RunContext,
+        emit: Emit | None = None,
         cancellation_token: CancellationToken | None = None,
-        session: "ExecutionSession | None" = None,
     ) -> ToolResult | None:
-        """Run one call. ``session`` is an execution lease the caller already
-        holds (shared by a batch of read-only calls); otherwise one is taken."""
-        if record.id in self._active or record.is_executing:
-            raise ValueError("Tool call is already executing; resolve stale state first")
+        """Run one call. None means it waits for a person: approve or answer
+        it and dispatch it again."""
+        emit = emit or _silent
         if record.is_consumed:
+            return record.result
+        self._unwrap(record)
+        # This same call is running right now: that run will answer it.
+        if record.id in self._active:
+            log.child(tool_call_id=record.id).warning("Tool call dispatched while it runs")
+            return None
+        # Left running by a run that died: nobody will finish it, so close it.
+        if record.is_executing:
+            record.mark_stale_as_failed(INTERRUPTED)
+            log.child(tool_call_id=record.id).warning("Tool call left running was closed")
+            assert record.result is not None
+            emit(
+                ToolCallResponseEvent(
+                    source=self.source, tool_call_id=record.id, tool_result=record.result
+                )
+            )
             return record.result
         self._active.add(record.id)
         try:
-            return await self._dispatch(record, context, cancellation_token, session)
+            # Every call passes through the middlewares, whatever happens to it.
+            if self.middleware:
+                result = await self.middleware.tool(
+                    ctx, record, lambda given: self._dispatch(given, ctx, emit, cancellation_token)
+                )
+            else:
+                result = await self._dispatch(record, ctx, emit, cancellation_token)
+            # The record closes with what the middlewares left: that is kept and shown.
+            return None if result is None else self._finish(record, result, emit)
         finally:
             self._active.discard(record.id)
 
     async def _dispatch(
         self,
         record: ToolCallRecord,
-        context: ToolContext,
+        ctx: RunContext,
+        emit: Emit,
         cancellation_token: CancellationToken | None,
-        shared_session: "ExecutionSession | None" = None,
     ) -> ToolResult | None:
-        def emit(event: Any) -> None:
-            if context.emit_event is not None:
-                context.emit_event(event)
-
-        def finish(result: ToolResult) -> ToolResult:
-            # The result is built after the tool ran: stamp the real start/end.
-            now = datetime.now(timezone.utc)
-            result = result.model_copy(
-                update={"started_at": record.started_at or now, "completed_at": now}
-            )
-            if record.is_executing:
-                record.mark_consumed(result)
-            else:
-                record.force_consume(result)
-            emit(
-                ToolCallResponseEvent(
-                    source=self.source, tool_call_id=record.id, tool_result=result
-                )
-            )
-            return result
-
         emit(
             ToolCallEvent(
                 source=self.source,
@@ -262,39 +243,65 @@ class ToolDispatcher:
             )
         )
         if record.is_rejected:
-            return finish(
-                ToolResult.approval_denied(
-                    record.id, record.approval_reason or "User declined approval"
-                )
-            )
+            reason = record.approval_reason or "User declined approval"
+            return ToolResult.approval_denied(record.id, reason)
         if cancellation_token is not None and cancellation_token.is_cancelled():
-            return finish(ToolResult.cancelled_before_start(record.id))
+            return ToolResult.cancelled_before_start(record.id)
+
+        # Can this call run at all?
+        tool = self._check(record)
+        if isinstance(tool, ToolResult):
+            return tool
+        tool_ctx = ToolContext(ctx, self.sandbox, emit, dict(self.deps), cancellation_token)
+
+        # 1. before: the hook may stop the call here.
+        if (answered := await self.hook.before(tool, record, tool_ctx)) is not None:
+            return answered
+
+        # 2. permission: run it, deny it, or wait for the user.
+        ready = await self._permission(tool, record, tool_ctx, emit)
+        if isinstance(ready, ToolResult):
+            return ready
+        if not ready:
+            return None
+
+        # 3 and 4. Run it; the hook sees how it went.
+        result = await self._execute(tool, record, tool_ctx, emit, cancellation_token)
+        react = self.hook.after if result.success else self.hook.failed
+        return await react(tool, record, tool_ctx, result)
+
+    def _unwrap(self, record: ToolCallRecord) -> None:
+        """A call through a door (``call_tool``) becomes the call to the real
+        tool, once: checks, permission and hooks only see the real tool."""
+        if record.called_as is not None or record.is_consumed:
+            return
+        tool = self.registry.get(record.tool_name)
+        target = tool.unwrap(record.parameters) if tool is not None else None
+        if target is not None:
+            record.called_as = record.tool_name
+            record.tool_name, record.parameters = target
+
+    def _check(self, record: ToolCallRecord) -> CoreTool | ToolResult:
+        """The tool this call names, or why the call cannot run."""
         tool = self.registry.get(record.tool_name)
         if tool is None:
-            return finish(ToolResult.execution_error(record.id, "Unknown tool"))
+            return ToolResult.execution_error(record.id, "Unknown tool")
         try:
             validation = tool.validate_parameters(record)
         except (ValueError, TypeError) as error:
-            return finish(ToolResult.invalid_parameters(record.id, str(error)))
+            return ToolResult.invalid_parameters(record.id, str(error))
         if not validation.is_tool_valid:
-            return finish(
-                ToolResult.invalid_parameters(
-                    record.id, validation.msg_error or "Invalid arguments"
-                )
+            return ToolResult.invalid_parameters(
+                record.id, validation.msg_error or "Invalid arguments"
             )
-        # One decision for every tool: the agent's Policy plus the rules the
-        # user allowed during this session.
-        run_ctx = context.deps.get("run_context")
-        decision = self.policy.decide(
-            tool,
-            record.parameters,
-            isolated=self.manager is not None and self.manager.executor.isolated,
-            extra_allow=getattr(run_ctx, "allowed_rules", ()),
-        )
-        if decision.verdict == "deny":
-            return finish(
-                ToolResult.approval_denied(record.id, f"Denied by policy: {decision.rule}")
-            )
+        if tool.sandbox and self.sandbox is None:
+            return ToolResult.execution_error(record.id, f"{tool.name} needs a sandbox")
+        return tool
+
+    async def _permission(
+        self, tool: CoreTool, record: ToolCallRecord, tool_ctx: ToolContext, emit: Emit
+    ) -> bool | ToolResult:
+        """True: run it now. False: it waits for a person. A result: denied."""
         # A person will see this call anyway: no approval on top of it.
         if tool.waits_for_user and record.result is None:
             if not record.is_awaiting_input:
@@ -307,14 +314,11 @@ class ToolDispatcher:
                     parameters=record.parameters,
                 )
             )
-            return None
-        approval_mode = (
-            ToolApprovalMode.AUTO_APPROVED
-            if decision.verdict == "allow"
-            else ToolApprovalMode.ASK_APPROVED
-        )
+            return False
+        # Asked once per call: after the user approves, the record no longer waits.
         if record.is_pending_approval:
-            if approval_mode == ToolApprovalMode.ASK_APPROVED:
+            answer = await self.hook.permission(tool, record, tool_ctx)
+            if answer is None:
                 emit(
                     ToolApprovalEvent(
                         source=self.source,
@@ -327,96 +331,71 @@ class ToolDispatcher:
                         ),
                     )
                 )
-                return None
+                return False
+            if answer is False:
+                return ToolResult.approval_denied(record.id, DENIED)
             record.auto_approve()
             emit(
                 ToolAutoApprovalEvent(
-                    source=self.source,
-                    tool_call_id=record.id,
-                    tool_name=record.tool_name,
+                    source=self.source, tool_call_id=record.id, tool_name=record.tool_name
                 )
             )
         if not record.is_actionable:
-            raise ValueError(f"Cannot dispatch from {record.status}")
-        if approval_mode == ToolApprovalMode.ASK_APPROVED and record.was_auto_approved:
-            return finish(
-                ToolResult.execution_error(
-                    record.id,
-                    "Current permissions require manual approval; submit a new tool call",
-                )
-            )
-        if tool.runs_commands and self.manager is None:
-            return finish(
-                ToolResult.execution_error(
-                    record.id,
-                    f"{tool.name} requires an EnvironmentManager",
-                )
-            )
+            return ToolResult.execution_error(record.id, CANNOT_RUN)
+        return True
 
-        # Per-call dependencies must not leak into concurrent calls or resumes.
-        deps = dict(context.deps)
-        deps["tool_call_id"] = record.id
-        call_context = ToolContext(
-            context.run_id,
-            session_id=context.session_id,
-            user_id=context.user_id,
-            retry_count=context.retry_count,
-            deps=deps,
-            emit_event=context.emit_event,
-        )
-
-        # Checked above: a tool that runs commands always has a manager.
-        manager = self.manager
-
-        async def run_in(session: "ExecutionSession") -> ToolResult:
-            # bash runs here; only its script reaches the environment.
-            assert manager is not None
-            call_context.deps.update(executor=manager.executor, execution_session=session)
-            return await tool.execute(record, call_context, cancellation_token)
-
+    async def _execute(
+        self,
+        tool: CoreTool,
+        record: ToolCallRecord,
+        tool_ctx: ToolContext,
+        emit: Emit,
+        cancellation_token: CancellationToken | None,
+    ) -> ToolResult:
+        """Run the tool. Only calls that passed ``before`` and ``permission``
+        get here."""
         async def invoke() -> object:
             # object: a user's tool may return anything; checked below.
             if record.result is not None:  # a person already produced it
                 return record.result
-            # Every tool runs in this process; only bash needs the environment.
-            if not tool.runs_commands:
-                return await tool.execute(record, call_context, cancellation_token)
-            if shared_session is not None:
-                return await run_in(shared_session)
-            assert manager is not None
-            async with manager.acquire(context.user_id, context.session_id) as session:
-                return await run_in(session)
-
-        # Middleware sees only approved calls about to run; it may answer
-        # in the tool's place (e.g. a budget that blocks it).
-        chain = self.middleware
-        mw: MiddlewareContext | None = None
-        request: ToolRequest | None = None
-        run_ctx = context.deps.get("run_context")
-        if chain and run_ctx is not None:
-            mw = MiddlewareContext(ctx=run_ctx, agent=self.source, emit=emit)
-            request = ToolRequest(record=record)
-            if (blocked := await chain.tool_request(mw, request)) is not None:
-                return finish(blocked)
+            return await tool.execute(record, tool_ctx)
 
         record.start_execution()
+        limit = self.timeout
         try:
             task = asyncio.create_task(invoke())
             if cancellation_token is not None:
                 cancellation_token.link_future(task)
-            # Tools stop themselves at tool_timeout_seconds (bash inside the
-            # sandbox); this is only the net for one that never returns.
-            limit = setting.tool_timeout_seconds + 30
-            result = await asyncio.wait_for(task, timeout=limit)
+            # A tool stops itself at its own limit (bash inside the sandbox);
+            # this is only the net for one that never returns.
+            limit = getattr(tool, "timeout", None) or self.timeout
+            result = await asyncio.wait_for(task, timeout=limit + 30)
             if not isinstance(result, ToolResult) or result.tool_call_id != record.id:
                 result = ToolResult.execution_error(record.id, "Invalid tool result")
         except asyncio.TimeoutError:
-            result = ToolResult.timeout(record.id, setting.tool_timeout_seconds)
+            result = ToolResult.timeout(record.id, limit)
         except asyncio.CancelledError:
-            finish(ToolResult.cancelled_during_execution(record.id))
+            # Not a hook's business: close the record and let the cancel go on.
+            self._finish(record, ToolResult.cancelled_during_execution(record.id), emit)
             raise
         except Exception as error:
             result = ToolResult.execution_error(record.id, str(error))
-        if chain and mw is not None and request is not None:
-            result = await chain.tool_response(mw, request, result)
-        return finish(result)
+        return result
+
+    def _finish(self, record: ToolCallRecord, result: ToolResult, emit: Emit) -> ToolResult:
+        """Close the record with ``result`` and tell the outside."""
+        # The result is built after the tool ran: stamp the real start and end.
+        now = datetime.now(timezone.utc)
+        result = result.model_copy(
+            update={"started_at": record.started_at or now, "completed_at": now}
+        )
+        if record.is_executing:
+            record.mark_consumed(result)
+        else:
+            record.force_consume(result)
+        emit(ToolCallResponseEvent(source=self.source, tool_call_id=record.id, tool_result=result))
+        return result
+
+
+def _silent(event: Any) -> None:
+    """Nobody listens: used when a call is dispatched without ``emit``."""

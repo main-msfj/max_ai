@@ -1,14 +1,5 @@
-"""Memory registry backends: local JSON files, SQLite and MongoDB."""
+"""The user's memory, kept as files in the sandbox."""
 
-from .local import LocalMemoryRegistry, LocalMemoryRegistryConfig
-from .mongodb import MongoDBMemoryRegistry, MongoDBMemoryRegistryConfig
-from .sqlite import SQLiteMemoryRegistry, SQLiteMemoryRegistryConfig
+from ._memory import Memory
 
-__all__ = [
-    "LocalMemoryRegistry",
-    "LocalMemoryRegistryConfig",
-    "MongoDBMemoryRegistry",
-    "MongoDBMemoryRegistryConfig",
-    "SQLiteMemoryRegistry",
-    "SQLiteMemoryRegistryConfig",
-]
+__all__ = ["Memory"]

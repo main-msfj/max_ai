@@ -1,4 +1,4 @@
-"""Module providing capability implementations and supporting utilities."""
+"""The OpenRouter client."""
 from ._model import OpenRouterChatCompletionClientConfig
 from .client import OpenRouterChatCompletionClient
 

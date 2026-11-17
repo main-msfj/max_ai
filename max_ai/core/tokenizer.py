@@ -51,7 +51,7 @@ class TokenCounter(BaseModel):
     _encoder: tiktoken.Encoding = PrivateAttr()
     # Messages are immutable: each one is counted once per counter. Keyed by
     # id(), dropped when the message is garbage-collected.
-    _counts: dict[int, int] = PrivateAttr(default_factory=dict)
+    _counts: dict[int, int] = PrivateAttr(default_factory=lambda: dict[int, int]())
 
     def model_post_init(self, __context: t.Any) -> None:
         self._encoder = _encoding(self.tokenizer_base)
@@ -66,6 +66,13 @@ class TokenCounter(BaseModel):
         if not text:
             return 0
         return len(self._encoder.encode(text))
+
+    @staticmethod
+    def estimate(text: str, counter: TokenCounter | None = None) -> int:
+        """Tokens of a text: the counter's when given, else 4 characters each."""
+        if counter is not None:
+            return counter.count_text(text)
+        return len(text) // 4
 
     def count_message(self, message: CoreMessage) -> int:
         if message.token_count > 0:
@@ -111,10 +118,12 @@ class TokenCounter(BaseModel):
 
         content = data.get("content")
         if isinstance(content, list):
-            for part in content:
-                if isinstance(part, dict) and part.get("data") is not None:
-                    part_type = part.get("type", "binary")
-                    part["data"] = f"<{part_type}_bytes>"
+            for item in t.cast("list[t.Any]", content):
+                if not isinstance(item, dict):
+                    continue
+                part = t.cast("dict[str, t.Any]", item)
+                if part.get("data") is not None:
+                    part["data"] = f"<{part.get('type', 'binary')}_bytes>"
 
         return json.dumps(data, ensure_ascii=False, default=str)
 

@@ -8,12 +8,9 @@ from ...base.embedding import CoreEmbedding
 from .fastembed import FastEmbedEmbedding, FastEmbedEmbeddingConfig
 from .lightweight import (
     DEFAULT_LIGHTWEIGHT_EMBEDDING_MODEL,
-    get_lightweight_embedding,
-    get_lightweight_embeddings,
 )
 from .openai import OpenAIEmbedding, OpenAIEmbeddingConfig
-from .similarity import cosine_similarity, rank
-from .vectors import pack_vector, unpack_vector
+from .vectors import cosine_similarity, pack_vector, rank, unpack_vector
 
 __all__ = [
     "CoreEmbedding",
@@ -23,8 +20,6 @@ __all__ = [
     "OpenAIEmbedding",
     "OpenAIEmbeddingConfig",
     "cosine_similarity",
-    "get_lightweight_embedding",
-    "get_lightweight_embeddings",
     "pack_vector",
     "rank",
     "unpack_vector",

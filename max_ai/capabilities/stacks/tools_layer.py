@@ -41,3 +41,6 @@ class ToolsLayer(Component[StackConfig], CoreLayer):
 
     def _required_variables(self) -> set[str]:
         return {"deferred_tools", "search_tool", "call_tool"}
+
+    def _optional_variables(self) -> set[str]:
+        return {"tool_instructions"}

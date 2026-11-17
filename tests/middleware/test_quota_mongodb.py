@@ -13,12 +13,10 @@ from max_ai.agents import Agent
 from max_ai.base.embedding import CoreEmbedding
 from max_ai.capabilities.middleware import BudgetMiddleware
 from max_ai.capabilities.quota_store.mongodb import MongoDBQuotaStore
-from max_ai.capabilities.workspace.local import LocalWorkspace
-from max_ai.core.messages import AssistantMessage
-from max_ai.core.model.llm import ModelConfig
 from max_ai.core.model.quota import QuotaLimits, QuotaUsage
-from max_ai.types.completions import ChatCompletionResult, Usage
 from max_ai.types.run_context import RunContext
+
+from .fakes import FakeClient
 
 
 class NoConfig(BaseModel):
@@ -68,28 +66,14 @@ async def test_charges_from_several_processes_are_never_lost(collection):
         await first._collection.drop()
 
 
-class FakeLLM:
-    model = "fake"
-    config = ModelConfig()
-    generation_options = {"max_tokens": 500}
-
-    async def run(self, **kwargs):
-        return ChatCompletionResult(
-            message=AssistantMessage(source="llm", content="ok"),
-            usage=Usage(tokens_input=1000, tokens_output=100), model="fake", finish_reason="stop",
-        )
-
-
-async def test_a_quota_in_mongodb_stops_new_agent_instances(tmp_path, collection):
+async def test_a_quota_in_mongodb_stops_new_agent_instances(collection):
     store = MongoDBQuotaStore(collection=collection)
     quota = QuotaLimits(max_tokens=2000)
     finish = []
     for _ in range(3):  # a new Agent per request, as in serverless
-        agent = Agent(name="a", description="d", instructions="i", client=FakeLLM(),
-                      workspace=LocalWorkspace(root=tmp_path),
-                      middlewares=[BudgetMiddleware(quota=quota, quota_store=store)])
-        async with agent:
-            finish.append((await agent.run("hola", run_context=RunContext(user_id="ana"))).finish_reason)
+        agent = Agent("a", "d", "i", FakeClient(), middlewares=[BudgetMiddleware(quota=quota, quota_store=store)])
+        finish.append((await agent.run("hola", RunContext(user_id="ana", session_id="s"))).finish_reason)
+        await agent.close()
     assert finish == ["stop", "stop", "budget_exceeded"]
     await store._collection.drop()
     await store.disconnect()

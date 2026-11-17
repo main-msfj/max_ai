@@ -1,6 +1,4 @@
-"""
-Layer to inject loaded skills into the agent's system prompt.
-"""
+"""Layer that lists the skills and how to read them."""
 import typing as t
 from pathlib import Path
 
@@ -11,32 +9,13 @@ from ...core.model.stacks import StackConfig
 
 class SkillsLayer(Component[StackConfig], CoreLayer):
     """
-    Prompt layer that renders the lightweight catalog of available
-    skills.
-
-    Skills are self-contained packages (instructions, scripts, reference
-    files) resolved from a ``CoreSkillRegistry`` during
-    ``agent.prepare()``. This layer receives ``SkillBlock`` entries with
-    only ``name`` and ``description`` populated. Full instructions,
-    references, scripts, and assets stay inside the materialized skill
-    directory and are handled by the skill runtime.
-
-    If the loaded-skills list is empty, the layer renders to an empty
-    string — it always lives in the stack, but contributes nothing
-    when there's nothing to advertise.
+    Prompt layer that lists the skills and says how to read one. Renders
+    nothing when there are no skills.
 
     Template Variables:
-        loaded_skills (required): List of lightweight ``SkillBlock``
-            objects from the skill registry (``Agent`` passes them).
-
-    Example:
-        layer = SkillsLayer()
-
-        # With skills loaded
-        prompt = layer.render({"loaded_skills": registry.loaded_skill_blocks})
-
-        # No skills — layer disappears from the prompt
-        prompt = layer.render({"loaded_skills": []})
+        skills (required): ``{"name", "description"}`` per skill.
+        skill_tool (required): name of the tool that reads a skill.
+        bash_tool (optional): name of the tool that runs commands.
     """
 
     component_schema = StackConfig
@@ -49,13 +28,6 @@ class SkillsLayer(Component[StackConfig], CoreLayer):
         load_from: str | Path | None = None,
         extra_variables: dict[str, t.Any] | None = None,
     ) -> None:
-        """
-        Args:
-            template: Inline Jinja2 template string referencing
-                ``loaded_skills``. If None, the default is used.
-            load_from: Path to a template file (.j2). If None, the
-                default is used.
-        """
         super().__init__(
             name="SkillsLayer",
             template=template,
@@ -67,7 +39,7 @@ class SkillsLayer(Component[StackConfig], CoreLayer):
         return self._load_file(self._DEFAULT_TEMPLATE_PATH / f"{self.name}.j2")
 
     def _required_variables(self) -> set[str]:
-        return {"loaded_skills"}
+        return {"skills", "skill_tool"}
 
     def _optional_variables(self) -> set[str]:
-        return {"can_run_commands"}
+        return {"bash_tool"}

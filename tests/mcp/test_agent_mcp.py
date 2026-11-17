@@ -6,9 +6,11 @@ from mcp.server import MCPServer
 
 from max_ai.agents import Agent
 from max_ai.capabilities.mcp import MCPClientManager, StdioMCPServerConfig
+from max_ai.core.messages import AssistantMessage, ToolCall
 from max_ai.types.run_context import RunContext
 from max_ai.types.tool_call import ToolCallRecord
 from max_ai.types.tools import ToolApprovalMode
+from tests.middleware.fakes import FakeClient, say
 
 
 @pytest.mark.asyncio
@@ -25,7 +27,7 @@ async def test_manager_uses_v2_client_for_multiple_servers(monkeypatch):
 
         servers[server_id] = server
 
-    monkeypatch.setattr(module, "create_mcp_client", lambda config: Client(servers[config.server_id]))
+    monkeypatch.setattr(module, "create_mcp_client", lambda config, extensions=None: Client(servers[config.server_id]))
     manager = MCPClientManager()
     for server_id in servers:
         manager.add_server(StdioMCPServerConfig(
@@ -53,32 +55,35 @@ async def test_agent_shares_one_mcp_connection_until_close(monkeypatch):
     from max_ai.capabilities.mcp import client_manager as module
 
     server = MCPServer("docs")
+    searched: list[str] = []
 
     @server.tool()
     async def search(q: str) -> str:
+        searched.append(q)
         return q
 
-    monkeypatch.setattr(module, "create_mcp_client", lambda config: Client(server))
-    config = StdioMCPServerConfig(server_id="docs", command="unused")
-    agent = Agent(
-        name="test", description="test", instructions="test", client=None,
-        toolset=[], mcp=[config],
+    # 1. Count the connections the agent opens.
+    opened: list[str] = []
+
+    def connect(config, extensions=None):
+        opened.append(config.server_id)
+        return Client(server)
+
+    monkeypatch.setattr(module, "create_mcp_client", connect)
+    config = StdioMCPServerConfig(
+        server_id="docs", command="unused",
+        tool_approval_modes={"search": ToolApprovalMode.AUTO_APPROVED},
     )
-    observed = []
+    asks = AssistantMessage(source="llm", content="", tool_calls=[
+        ToolCall(id="s1", tool_name="docs_search", parameters={"q": "mcp"})])
+    agent = Agent("test", "test", "test", FakeClient(asks, say("listo"), say("otra")), mcp=[config])
 
-    async def fake_drive(*args):
-        observed.append(agent._registry.get("docs_search") is not None)
-        return "finished"
+    # 2. Two runs use the MCP tool over the same connection.
+    for task in ("busca", "otra vez"):
+        async for _ in agent.run_stream_events(task, RunContext(user_id="u")):
+            pass
+    assert searched == ["mcp"] and opened == ["docs"]
 
-    monkeypatch.setattr(agent, "_drive_connected", fake_drive)
-    assert await agent._drive(RunContext(user_id="u"), None, None, False, {}) == "finished"
-    assert observed == [True]
-    # One connection shared by every run, released by close().
-    assert await agent._drive(RunContext(user_id="u"), None, None, False, {}) == "finished"
-    assert observed == [True, True]
-    assert len(agent._mcp_manager.get_tools()) == 1
+    # 3. close() releases it.
     await agent.close()
-    assert all(s.worker is None for s in agent._mcp_manager._servers.values())
-    assert agent.mcp_servers[0] == StdioMCPServerConfig.model_validate_json(
-        agent.mcp_servers[0].model_dump_json()
-    )
+    assert agent._mcp.get_tools() == []
