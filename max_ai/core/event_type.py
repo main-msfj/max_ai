@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Discriminator, Field
 from ..base.completion_gate import CompletionDecision
 from ..capabilities.tools.plan import AgentPlan
 from ..types.completions import Usage
+from ..types.todos import Todo
 from ..types.tool_call import ToolResult
 from .ids import short_id
 from .messages import CoreMessage, Message
@@ -380,6 +381,14 @@ class MCPProgressEvent(ToolEvent):
     progress: float
     total: float | None = None
     message: str | None = None
+
+
+class TodosEvent(ToolEvent):
+    """The agent changed its list of things to do."""
+
+    EVENT_TYPE = "todos"
+    tool_call_id: str
+    todos: list[Todo]
 
 
 class FileReadEvent(ToolEvent):
