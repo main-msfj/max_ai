@@ -103,7 +103,8 @@ class BashTool(CoreTool):
         script = "".join(f"{name}={shlex.quote(value)}\n" for name, value in values.items())
         ran = await sandbox.execute_command(script + SCRIPT, timeout=limit)
         output, found, cwd = ran.stdout.rpartition(mark)
-        code, notes = ran.exit_code, []
+        code = ran.exit_code
+        notes: list[str] = []
 
         # 3. Killed by the time limit: the script printed nothing, take the end of its log.
         if ran.timed_out:

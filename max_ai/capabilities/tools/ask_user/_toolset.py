@@ -132,10 +132,11 @@ class AskUserTool(CoreTool):
         checked = super().validate_parameters(tool_request)
         if not checked.is_tool_valid:
             return checked
-        questions = tool_request.parameters["questions"]
+        questions: list[dict[str, t.Any]] = tool_request.parameters["questions"]
         error = self._empty_or_repeated("question", [q["question"] for q in questions])
         for question in questions:
-            labels = [option["label"] for option in question.get("options") or []]
+            options: list[dict[str, t.Any]] = question.get("options") or []
+            labels = [option["label"] for option in options]
             error = error or self._empty_or_repeated("option", labels)
         if error:
             return CoreToolParameters(is_tool_valid=False, msg_error=error)

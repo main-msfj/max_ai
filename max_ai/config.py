@@ -54,6 +54,11 @@ class Settings(BaseSettings):
         validation_alias="HARNESS_TOOLS_MAX_TOKENS",
         description="Most all the loaded tools together may take in a request.",
     )
+    harness_deferred_tools_min_tokens: int = Field(
+        default=5_000,
+        ge=0,
+        description="Deferred tools that take less than this together are loaded directly.",
+    )
     harness_prompt_min_tokens: int = Field(
         default=2000, ge=0, description="Below this the provider's cache is not used well."
     )

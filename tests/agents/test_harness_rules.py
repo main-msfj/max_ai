@@ -5,6 +5,7 @@ import pytest
 from max_ai.agents.agent import Agent
 from max_ai.capabilities.clients.openrouter import OpenRouterChatCompletionClient
 from max_ai.capabilities.compaction import SummaryCompaction
+from max_ai.capabilities.memory import Memory
 from max_ai.capabilities.middleware.tracing import TracingMiddleware
 from max_ai.capabilities.sandbox.local import LocalSandbox
 from max_ai.capabilities.stacks.custom_layer import CustomLayer
@@ -77,6 +78,8 @@ def test_skills_need_a_sandbox_and_bash(tmp_path):
         Harness.tool_combination([], None, skills)
     with pytest.raises(HarnessError, match="bash runs its commands in a sandbox"):
         Harness.tool_combination([BashTool()], None, None)
+    with pytest.raises(HarnessError, match="memory is kept in a sandbox"):
+        Harness.tool_combination([], None, None, Memory())
     with pytest.raises(HarnessError, match="add BashTool"):
         Harness.tool_combination([], LocalSandbox(str(tmp_path)), skills)
     assert "bash" in names(Harness.tool_combination([BashTool()], LocalSandbox(str(tmp_path)), skills))
