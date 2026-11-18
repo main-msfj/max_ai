@@ -814,7 +814,10 @@ class MaxAIApp(App[None]):
         description = str(record.parameters.get("description") or "").strip()
         command = str(record.parameters.get("command") or "").strip()
         head = f"Allow Bash?\n\n{description}\n\n" if description else "Allow Bash?\n\n"
-        return head + "$ " + command.replace("\n", "\n  ")
+        card = head + "$ " + command.replace("\n", "\n  ")
+        # The judge's verdict, when one was asked and it did not let the command run.
+        note = record.approval_reason or ""
+        return f"{card}\n\n{note}" if note.startswith("judge:") else card
 
     def _expand_file_mentions(self, value: str) -> str:
         """Attach readable workspace files referenced as ``@relative/path``."""

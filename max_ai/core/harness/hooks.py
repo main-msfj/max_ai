@@ -12,7 +12,9 @@ from ...capabilities.memory import Memory
 from ...capabilities.tools.memory import SaveMemoryTool
 from ...types.run_context import RunContext
 from ...types.tool_call import ToolCallRecord, ToolResult
+from ..messages import HARNESS_SOURCE, UserMessage
 from ..tool.hook import ToolHook
+from .judge import Judge
 from .permissions import Permissions
 
 logger = logging.getLogger(__name__)
@@ -73,7 +75,8 @@ class HarnessLoopHook(LoopHook):
 
 class HarnessToolHook(ToolHook):
     """Around each tool: a read-only memory is not written, and the user's
-    rules decide the permission."""
+    rules decide the permission; a bash command without a rule goes to the
+    judge when there is one."""
 
     WRITERS: t.ClassVar[frozenset[str]] = frozenset({"write_file", "edit_file"})
     SAVER: t.ClassVar[str] = SaveMemoryTool.TOOL_NAME
@@ -87,8 +90,10 @@ class HarnessToolHook(ToolHook):
         memory: Memory | None = None,
         agent: str = "",
         permissions: Permissions | None = None,  # the user's rules, read from setting.json
+        judge: Judge | None = None,  # as given; without one, what the settings ask for
     ) -> None:
         self.permissions = permissions or Permissions()
+        self.judge = judge or Judge.configured()
         self.memory = memory
         self.agent = agent
 
@@ -106,11 +111,35 @@ class HarnessToolHook(ToolHook):
     async def permission(
         self, tool: CoreTool, record: ToolCallRecord, tool_ctx: ToolContext
     ) -> bool | None:
-        # The rules decide first; without one, the tool's own approval mode.
+        # 1. The rules decide first: deny, dangerous, ask and allow end here.
         decision = self.permissions.decide(record.tool_name, record.parameters)
-        if isinstance(decision, str):
-            return await super().permission(tool, record, tool_ctx)
-        return decision
+        if not isinstance(decision, str):
+            return decision
+        # 2. Without a rule, the tool's own approval mode.
+        answer = await super().permission(tool, record, tool_ctx)
+        if answer is not None or self.judge is None or record.tool_name != Permissions.BASH:
+            return answer
+        # 3. What "always" may not keep (an interpreter, a wrapper, a loop) runs
+        #    code the judge cannot see: it is asked as before.
+        if not Permissions.can_be_kept(record.tool_name, record.parameters):
+            return None
+        # 4. Bash would ask: the judge may take the question away, never add one.
+        safe = await self.judge.safe(
+            self.last_request(tool_ctx.run_context),
+            str(record.parameters.get("description") or ""),
+            str(record.parameters.get("command") or ""),
+        )
+        record.approval_reason = self.judge.note(safe)
+        logger.info("%s: %s", record.approval_reason, record.id)
+        return True if self.judge.passes(safe) else None
+
+    @staticmethod
+    def last_request(ctx: RunContext) -> str:
+        """The last thing the user wrote, not what the harness told the model."""
+        for message in reversed(ctx.messages):
+            if isinstance(message, UserMessage) and message.source != HARNESS_SOURCE:
+                return message.text()
+        return ""
 
     @staticmethod
     def memory_path(record: ToolCallRecord, tool_ctx: ToolContext) -> str | None:

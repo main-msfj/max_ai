@@ -90,6 +90,17 @@ class Settings(BaseSettings):
         default="",
         description="OpenRouter model that writes the summaries; empty: the agent's own.",
     )
+    harness_judge_model: str = Field(
+        default="",
+        description="OpenRouter decisions model that judges bash commands without a rule; "
+        "empty: no judge, the user is asked.",
+    )
+    harness_judge_min_safe: float = Field(
+        default=0.9, ge=0.5, le=1, description="How sure the judge must be to run a command."
+    )
+    harness_judge_seconds: float = Field(
+        default=3, gt=0, description="Most the judge may take; after it the user is asked."
+    )
 
     # -------- COMPACTION -------------------------------------------------------
     compaction_prompt_budget_tokens: int = Field(default=6000, gt=0)
