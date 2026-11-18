@@ -36,6 +36,7 @@ class PromptBuilder:
         "call_tool": "call_tool",
         "skill_tool": "read_skill",
         "bash_tool": "bash",
+        "memory_tool": "save_memory",
     }
 
     def __init__(
@@ -59,6 +60,8 @@ class PromptBuilder:
         variables: dict[str, t.Any] = dict(self.tool_names)
         if not any(tool.name == self.tool_names["bash_tool"] for tool in tools):
             variables["bash_tool"] = None  # no commands: layers must not mention it
+        if not any(tool.name == self.tool_names["memory_tool"] for tool in tools):
+            variables["memory_tool"] = None  # nothing to save with
         # Only the first line: the whole description comes with search_tools.
         variables["deferred_tools"] = [
             {"name": tool.name, "description": tool.description.strip().split("\n")[0]}
