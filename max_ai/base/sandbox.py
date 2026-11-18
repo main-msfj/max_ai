@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import posixpath
 import shlex
 import typing as t
@@ -49,8 +50,10 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
 
     component_type = "sandbox"
 
-    def __init__(self, base: str) -> None:
+    def __init__(self, base: str, extra_env: list[str] | None = None) -> None:
         self.layout = Layout(base)
+        # Names of variables of this machine that the commands also see.
+        self.extra_env = list(extra_env or [])
         # Set by bind(): whose machine this is and what its commands see.
         self.identifier: str | None = None
         self.variables: dict[str, str] = {}
@@ -65,7 +68,7 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
         stdin: bytes | None = None,
         harness: bool = False,
     ) -> CommandResult:
-        """Run ``command`` with bash in the sandbox, with ``self.variables``
+        """Run ``command`` with bash in the sandbox, with ``self.environment()``
         in its environment. A failing command is an exit code; only
         infrastructure problems raise. ``harness``: it is the harness's own
         work (it writes the settings or a skill), never a command of the model."""
@@ -82,6 +85,13 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
         bound.identifier = identifier
         bound.variables = dict(variables or {})
         return bound
+
+    def environment(self) -> dict[str, str]:
+        """What the commands see besides the provider's own: the variables
+        named in ``extra_env`` that this machine has, read now and never
+        stored, and the user's ``variables``."""
+        extra = {name: os.environ[name] for name in self.extra_env if name in os.environ}
+        return {**extra, **self.variables}
 
     async def prepare(self) -> None:
         """Create ``.agent/`` if it is missing; never overwrite what is there."""

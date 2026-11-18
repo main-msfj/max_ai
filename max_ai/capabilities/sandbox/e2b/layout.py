@@ -35,6 +35,7 @@ class E2BSandboxConfig(BaseModel):
     template: str | None = None
     networks: list[str] = Field(default_factory=list)
     api_key_env: str = "E2B_API_KEY"
+    extra_env: list[str] = Field(default_factory=list)
 
 
 class E2BSandbox(SandboxCore):
@@ -60,6 +61,7 @@ class E2BSandbox(SandboxCore):
 
     ``api_key_env`` is the name of the variable with the E2B key: the key
     is read on this machine and never stored or sent into the sandbox.
+    ``extra_env`` names variables of this machine that the commands also see.
 
     Use it bound: ``sandbox.bind(identifier)``.
     """
@@ -73,8 +75,9 @@ class E2BSandbox(SandboxCore):
         template: str | None = None,
         networks: list[str] | None = None,
         api_key_env: str = "E2B_API_KEY",
+        extra_env: list[str] | None = None,
     ) -> None:
-        super().__init__(HOME)
+        super().__init__(HOME, extra_env)
         self.template = template
         self.networks = list(networks or [])
         self.api_key_env = api_key_env
@@ -83,7 +86,8 @@ class E2BSandbox(SandboxCore):
 
     def _to_config(self) -> E2BSandboxConfig:
         return E2BSandboxConfig(
-            template=self.template, networks=self.networks, api_key_env=self.api_key_env
+            template=self.template, networks=self.networks, api_key_env=self.api_key_env,
+            extra_env=self.extra_env,
         )
 
     @classmethod
@@ -122,7 +126,9 @@ class E2BSandbox(SandboxCore):
         box = await self._start()
         user = ROOT if harness else AGENT
         # Its home is a folder it may write: pip and git keep their files there.
-        variables = dict(self.variables) if harness else {**self.variables, "HOME": str(self.layout.tmp)}
+        variables = self.environment()
+        if not harness:
+            variables["HOME"] = str(self.layout.tmp)
         mark = f"run-{short_id()}"  # an extra argument, only to find the command later
         inside = f"timeout -k 2 {timeout} bash -c {shlex.quote(command)} {mark}"
         try:
