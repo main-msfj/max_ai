@@ -5,9 +5,10 @@ import json
 import os
 import shutil
 import sys
+from typing import Any
 
 
-def inside(file, folders):
+def inside(file: str, folders: list[str]) -> bool:
     """``file`` (links resolved) is in one of ``folders``."""
     return any(file.startswith(os.path.realpath(folder) + os.sep) for folder in folders)
 
@@ -40,13 +41,15 @@ def memory_file(content: bytes, most: int) -> None:
         raise ValueError(f"a memory file starts with these lines, all filled in:\n{HEADER}\n")
 
 
-def write(request, content):
+def write(request: dict[str, Any], content: bytes) -> dict[str, bool]:
     # 1. All of the content arrived.
     if hashlib.sha256(content).hexdigest() != request["sha256"]:
         raise ValueError("its content arrived incomplete")
 
     # 2. Resolve the path from the working directory, links included.
-    file = os.path.realpath(os.path.join(request["cwd"], request["path"]))
+    cwd: str = request["cwd"]
+    given: str = request["path"]
+    file = os.path.realpath(os.path.join(cwd, given))
     if not inside(file, request["allowed"]):
         folders = ", ".join(request["allowed"])
         raise ValueError(
@@ -57,7 +60,7 @@ def write(request, content):
         raise ValueError("it is a folder, not a file")
     # 3. The memory is one folder: a path that only looks like it would be
     #    written where nobody reads it.
-    memory = request["memory"]
+    memory: str = request["memory"]
     if inside(file, [memory]):
         memory_file(content, request["memory_max"])
     elif os.sep + os.sep.join(memory.split(os.sep)[-2:]) + os.sep in file:
@@ -87,9 +90,9 @@ def write(request, content):
     return {"existed": existed}
 
 
-def main():
+def main() -> None:
     try:
-        answer = {"ok": True, **write(json.loads(sys.argv[1]), sys.stdin.buffer.read())}
+        answer: dict[str, Any] = {"ok": True, **write(json.loads(sys.argv[1]), sys.stdin.buffer.read())}
     except (ValueError, OSError) as error:
         answer = {"ok": False, "error": str(error)}
     print(json.dumps(answer))

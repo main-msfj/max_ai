@@ -64,7 +64,8 @@ class SearchToolsTool(CoreTool):
         }
 
     async def execute(self, tool_request: ToolCallRecord, tool_ctx: ToolContext) -> ToolResult:
-        names = [str(name) for name in tool_request.parameters.get("names") or []]
+        given: list[t.Any] = tool_request.parameters.get("names") or []
+        names = [str(name) for name in given]
         query = str(tool_request.parameters.get("query") or "").strip()
         if not names and not query:
             return ToolResult.execution_error(tool_request.id, "Pass names, a query, or both.")

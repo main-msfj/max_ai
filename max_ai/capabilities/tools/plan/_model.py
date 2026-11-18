@@ -17,7 +17,7 @@ class PlanStep(BaseModel):
         None, description="Optional hint for which tool to use for this step"
     )
     depends_on: t.List[int] = Field(
-        default_factory=list,
+        default_factory=list[int],
         description="List of plan step IDs that this step depends on",
     )
     status: t.Literal["pending", "active", "done", "failed"] = Field(
@@ -39,7 +39,7 @@ class AgentPlan(BaseModel):
     """
 
     steps: t.List[PlanStep] = Field(
-        default_factory=list, description="List of steps in the plan"
+        default_factory=list[PlanStep], description="List of steps in the plan"
     )
     rationale: str = Field(..., description="Rationale behind the plan")
 

@@ -5,14 +5,15 @@ import json
 import os
 import shutil
 import sys
+from typing import Any
 
 
-def inside(file, folders):
+def inside(file: str, folders: list[str]) -> bool:
     """``file`` (links resolved) is in one of ``folders``."""
     return any(file.startswith(os.path.realpath(folder) + os.sep) for folder in folders)
 
 
-def windows(text):
+def windows(text: str) -> str:
     """``text`` with the line breaks of a Windows file."""
     return text.replace("\r\n", "\n").replace("\n", "\r\n")
 
@@ -45,9 +46,11 @@ def memory_file(content: bytes, most: int) -> None:
         raise ValueError(f"a memory file starts with these lines, all filled in:\n{HEADER}\n")
 
 
-def edit(request):
+def edit(request: dict[str, Any]) -> dict[str, Any]:
     # 1. Resolve the path from the working directory, links included.
-    file = os.path.realpath(os.path.join(request["cwd"], request["path"]))
+    cwd: str = request["cwd"]
+    given: str = request["path"]
+    file = os.path.realpath(os.path.join(cwd, given))
     if not inside(file, request["allowed"]):
         folders = ", ".join(request["allowed"])
         raise ValueError(
@@ -70,7 +73,8 @@ def edit(request):
             )
 
     # 3. A Windows file is shown without its \r: put them back in both texts.
-    old, new = request["old"], request["new"]
+    old: str = request["old"]
+    new: str = request["new"]
     if "\r\n" in content:
         old, new = windows(old), windows(new)
 
@@ -96,9 +100,9 @@ def edit(request):
     return {"replaced": found, "sha256": hashlib.sha256(edited).hexdigest()}
 
 
-def main():
+def main() -> None:
     try:
-        answer = {"ok": True, **edit(json.loads(sys.stdin.read()))}
+        answer: dict[str, Any] = {"ok": True, **edit(json.loads(sys.stdin.read()))}
     except (ValueError, OSError) as error:
         answer = {"ok": False, "error": str(error)}
     print(json.dumps(answer))

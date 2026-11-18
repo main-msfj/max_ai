@@ -67,11 +67,12 @@ class WriteFileTool(CoreTool):
         allowed = [paths["workspace"], paths["tmp"], str(sandbox.layout.memory)]
         start = FilesSeen.write_start(tool_ctx, paths["workspace"], allowed)
         key = FilesSeen.key(start, path)
+        digest = hashlib.sha256(content).hexdigest()
         request = {
             "path": path, "cwd": start,
             "allowed": allowed,
             "memory": str(sandbox.layout.memory), "memory_max": sandbox.layout.MEMORY_FILE_BYTES,
-            "sha256": hashlib.sha256(content).hexdigest(), "seen": seen.get(key),
+            "sha256": digest, "seen": seen.get(key),
         }
 
         # 2. The content goes on stdin: an argument has a size limit, stdin does not.
@@ -88,7 +89,7 @@ class WriteFileTool(CoreTool):
             return ToolResult.execution_error(tool_request.id, f"{path}: {answer['error']}.")
 
         # 4. The model knows what the file holds now: it wrote it.
-        seen[key] = request["sha256"]
+        seen[key] = digest
 
         # 5. Say whether it is new, so the model notices a replace it did not expect.
         did = "Replaced" if answer["existed"] else "Created"

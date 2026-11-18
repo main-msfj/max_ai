@@ -106,7 +106,7 @@ class FunctionAsTool(CoreTool):
     async def execute(
         self,
         tool_request: ToolCallRecord,
-        tool_context: ToolContext | None = None,  # None: called without a dispatcher
+        tool_ctx: ToolContext | None = None,  # None: called without a dispatcher
     ) -> ToolResult:
         logs = log.child(
             action="Executing FunctionTool",
@@ -125,7 +125,7 @@ class FunctionAsTool(CoreTool):
         # 2. Build kwargs, injecting ToolContext if the function requires it.
         kwargs: dict[str, t.Any] = dict(tool_request.parameters)
         if self._needs_context:
-            if tool_context is None and not self._context_optional:
+            if tool_ctx is None and not self._context_optional:
                 msg = (
                     f"Tool: {self.name} requires a ToolContext "
                     "but none was provided by the caller."
@@ -133,7 +133,7 @@ class FunctionAsTool(CoreTool):
                 logs.error(msg, action=self._LOG_ACTION)
                 return ToolResult.execution_error(tool_request.id, msg)
             assert self._first_param_name is not None
-            kwargs[self._first_param_name] = tool_context
+            kwargs[self._first_param_name] = tool_ctx
 
         # 3. Dispatch sync vs async.
         try:
@@ -147,8 +147,8 @@ class FunctionAsTool(CoreTool):
                 loop = asyncio.get_running_loop()
                 task = loop.run_in_executor(None, lambda: self.func(**kwargs))
 
-            if tool_context is not None and tool_context.cancellation is not None:
-                tool_context.cancellation.link_future(task)
+            if tool_ctx is not None and tool_ctx.cancellation is not None:
+                tool_ctx.cancellation.link_future(task)
 
             result = await asyncio.wait_for(task, timeout=setting.tool_timeout_seconds)
             return ToolResult.success_result(
