@@ -2,7 +2,6 @@ import pytest
 from pydantic import BaseModel
 
 from max_ai.agents.agent import Agent
-from max_ai.base.completion_gate import CompletionBase, CompletionDecision
 from max_ai.capabilities.clients.openrouter import OpenRouterChatCompletionClient
 from max_ai.capabilities.loop import ReactLoop
 from max_ai.capabilities.memory import Memory
@@ -39,7 +38,6 @@ def test_an_agent_takes_its_pieces_and_the_loop_has_a_default():
         ("sandbox", "/tmp", "sandbox must be a SandboxCore"),
         ("prompt_layers", ["Be nice"], "prompt_layers must be a CoreLayer"),
         ("middlewares", [print], "middlewares must be a CoreMiddleware"),
-        ("gates", [1], "gates must be a CompletionBase"),
         ("knowledge", ["docs"], "knowledge must be a CoreKnowledgeRegistry"),
         ("output_format", Answer(city="x"), "output_format must be a pydantic BaseModel class"),
     ],
@@ -47,15 +45,6 @@ def test_an_agent_takes_its_pieces_and_the_loop_has_a_default():
 def test_a_piece_that_is_not_its_core_class_is_refused_by_name(piece, value, said):
     with pytest.raises(TypeError, match=said):
         agent(**{piece: value})
-
-
-def test_an_agent_with_gates_is_not_made_because_they_are_not_built_yet():
-    class Gate(CompletionBase):
-        def on_final_response(self, ctx):
-            return CompletionDecision(status="completed")
-
-    with pytest.raises(NotImplementedError, match="still in progress"):
-        agent(gates=[Gate()])
 
 
 def test_an_agent_without_a_name_is_refused():

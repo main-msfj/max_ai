@@ -15,11 +15,11 @@ from max_ai.capabilities.mcp import (
     StdioMCPServerConfig,
 )
 from max_ai.capabilities.mcp.client_manager import MCPClientManager as _Manager
-
-_unreachable = _Manager._unreachable
 from max_ai.errors.mcp import MCPServerRegistrationError
 from max_ai.types.tool_call import ToolCallRecord
 from max_ai.types.tools import ToolApprovalMode
+
+_unreachable = _Manager._unreachable
 
 READ_ONLY = SimpleNamespace(
     name="search",

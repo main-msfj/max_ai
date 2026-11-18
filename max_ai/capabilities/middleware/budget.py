@@ -37,7 +37,6 @@ from ...base.middleware import (
 )
 from ...base.quota_store import CoreQuotaStore
 from ...core.model.quota import QuotaLimits, QuotaUsage
-from ...errors.middleware import StopRun
 from ...types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
 from ...types.tool_call import ToolCallRecord, ToolCallStatus, ToolResult
 
@@ -83,6 +82,7 @@ class BudgetMiddleware(CoreMiddleware):
 
     component_provider_override = "max_ai.capabilities.middleware.BudgetMiddleware"
     component_schema = BudgetConfig
+    stop_message = "Budget exceeded"
 
     def __init__(
         self,
@@ -177,14 +177,14 @@ class BudgetMiddleware(CoreMiddleware):
         prices stops the turn: it never spends without counting."""
         needs_prices = self.max_cost_usd is not None or (self.quota and self.quota.max_cost_usd)
         if needs_prices and _prices(call.model_config) is None:
-            raise StopRun(
+            raise self.stop(
                 "A cost limit needs input_cost_per_mtok and output_cost_per_mtok "
                 f"in the ModelConfig of {call.model!r}",
-                finish_reason=EXCEEDED,
+                EXCEEDED,
             )
         state = self.state(ctx)
         if (reason := self._exhausted(state)) is not None:
-            raise StopRun(reason, finish_reason=EXCEEDED)
+            raise self.stop(reason, EXCEEDED)
         state["model_calls"] = int(_number(state, "model_calls")) + 1
 
     async def _after_model(self, ctx: RunContext, call: ModelCall, usage: Usage) -> None:
@@ -213,9 +213,9 @@ class BudgetMiddleware(CoreMiddleware):
                 used = await self.quota_used(_user(ctx))
                 state["quota_used"] = used.model_dump()
                 if new_task and (reason := self.quota.exceeded(used, _now(), starting_task=True)):
-                    raise StopRun(reason, finish_reason=EXCEEDED)
+                    raise self.stop(reason, EXCEEDED)
             if (reason := self._exhausted(state)) is not None:
-                raise StopRun(reason, finish_reason=EXCEEDED)
+                raise self.stop(reason, EXCEEDED)
             if new_task:
                 await self._charge(ctx, QuotaUsage(tasks=1))
             # 3. The turn; its time counts only while it runs.

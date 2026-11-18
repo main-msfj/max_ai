@@ -27,9 +27,6 @@ class AgentSpec(BaseModel):
     knowledge: list[dict[str, t.Any]] = Field(default_factory=list)
     toolset: list[dict[str, t.Any]] = Field(default_factory=list)
     mcp: list[StdioMCPServerConfig | HTTPServerConfig] = Field(default_factory=list)
-    gates: list[dict[str, t.Any]] = Field(
-        default_factory=list, description="Completion gates: the framework's and your own.",
-    )
     output_format: dict[str, t.Any] | None = Field(
         default=None, description="JSON Schema of the final answer.",
     )

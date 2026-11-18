@@ -67,13 +67,25 @@ async def test_every_place_goes_through_the_middlewares():
     assert recorder.seen == ["turn start", "model", "tool get_weather: True", "model", "turn end"]
 
 
-async def test_a_stream_reaches_the_middlewares_line_by_line():
+async def test_a_stream_reaches_the_middlewares_as_the_provider_sends_it():
     recorder = Recorder()
+    agent = weather_agent(FakeClient(say("hace sol")), recorder)
+    ctx = RunContext(user_id="u", session_id="s")
+    text = "".join([piece async for piece in agent.run_stream("clima", ctx)])
+    chunks = [seen for seen in recorder.seen if seen.startswith("chunk:")]
+    assert chunks == ["chunk:hac", "chunk:e s", "chunk:ol", "chunk:"] and text == "hace sol"
+
+
+async def test_a_middleware_that_filters_text_gets_whole_lines():
+    class Filter(Recorder):
+        filter_full_text = True
+
+    recorder = Filter()
     agent = weather_agent(FakeClient(say("hace sol\nen Lima\nhoy")), recorder)
     ctx = RunContext(user_id="u", session_id="s")
     text = "".join([piece async for piece in agent.run_stream("clima", ctx)])
     chunks = [seen for seen in recorder.seen if seen.startswith("chunk:")]
-    # Cut every 3 characters by the provider; whole lines for the middleware.
+    # Cut every 3 characters by the provider; whole lines for the filter.
     assert chunks == ["chunk:hace sol\n", "chunk:en Lima\n", "chunk:hoy", "chunk:"]
     assert text == "hace sol\nen Lima\nhoy"
 
@@ -146,11 +158,16 @@ class Broken(CoreMiddleware):
         raise RuntimeError("bug in the middleware")
 
 
-async def test_a_broken_middleware_is_skipped_and_the_model_runs_once():
-    client = FakeClient(say("hace sol"))
-    state, _ = await run(weather_agent(client, Broken()))
-    assert state.message is not None and state.message.text() == "hace sol"
-    assert client.calls == 1
+async def test_a_broken_middleware_stops_the_turn_and_the_agent_goes_on():
+    client = FakeClient(say("hace sol"), say("otra vez"))
+    agent = weather_agent(client, Broken())
+    state, ctx = await run(agent)
+    # The unfiltered answer is not given: the user reads why the turn stopped.
+    assert state.finish_reason == "middleware_error"
+    assert state.message is not None and state.message.text() == "The turn was stopped: Broken failed."
+    # The agent is alive: the next turn starts.
+    again = await agent.run("otra", ctx)
+    assert again.finish_reason == "middleware_error" and client.calls == 2
 
 
 class Refuse(CoreMiddleware):
@@ -168,6 +185,38 @@ async def test_stop_run_ends_the_turn_cleanly():
 
 
 # -------- BUDGET -----------------------------------------------------------------------
+class Sensitive(CoreMiddleware):
+    stop_message = "Sensitive information detected"
+
+    async def tool(self, ctx, record, call_next):
+        raise self.stop("I can't go on: the request holds private data.")
+
+
+async def test_stop_run_in_a_tool_closes_every_open_call_with_the_middleware_s_reason():
+    agent = weather_agent(FakeClient(call("Lima", "Quito"), say("fin")), Sensitive())
+    ctx = RunContext(user_id="u")
+    await agent.run("clima", ctx)
+    # The user reads the detail; the model reads, on each call, who stopped it and why.
+    assert ctx.messages[-1].text() == "I can't go on: the request holds private data."
+    answers = [m.content for m in ctx.messages if isinstance(m, ToolMessage)]
+    assert answers == ["Interrupted by the system: Sensitive information detected."] * 2
+    assert all(record.is_consumed for record in ctx.tool_state.records.values()) and RAN == []
+
+
+async def test_the_summary_of_a_compaction_goes_through_the_middlewares():
+    from max_ai.capabilities.compaction.summary import SummaryCompaction
+    from max_ai.core.messages import UserMessage
+    from max_ai.core.middleware.chain import MiddlewareChain
+
+    budget = BudgetMiddleware(max_tokens=50_000)
+    ctx = RunContext(user_id="u")
+    old = [UserMessage(source="u", content="armar un scraper")]
+    client = FakeClient(say('{"goal": "armar un scraper"}'))
+    summary, _ = await SummaryCompaction().reduce(old, client, None, ctx, MiddlewareChain([budget]))
+    assert summary is not None and summary.goal == "armar un scraper"
+    assert budget.spent(ctx)["tokens"] == 1100  # counted like any other call
+
+
 async def test_budget_stops_before_the_next_model_call():
     state, ctx = await run(weather_agent(FakeClient(call("Lima"), say("nunca llega")), BudgetMiddleware(max_model_calls=1)))
     assert state.finish_reason == "budget_exceeded"

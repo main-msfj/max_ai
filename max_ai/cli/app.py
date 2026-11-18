@@ -844,14 +844,6 @@ class MaxAIApp(App[None]):
             await self._assistant.finish()
             self._assistant = None
 
-    async def _discard_partial(self) -> None:
-        """Remove the answer and thinking streamed so far: the model call
-        starts over and streams them again."""
-        for block in (self._thinking, self._assistant):
-            if block is not None:
-                await block.remove()
-        self._thinking = self._assistant = None
-
     async def _write_thinking(self, chunk: str) -> None:
         if self._thinking is None:
             block = ThinkingBlock()
@@ -886,8 +878,6 @@ class MaxAIApp(App[None]):
                 await self._write_assistant_chunk(event.chunk)
             return
         if isinstance(event, ModelRetryEvent):
-            if event.discard_partial:
-                await self._discard_partial()
             await self._write_system(
                 f"Model call failed ({event.reason}); retrying in {event.delay:.0f}s "
                 f"(attempt {event.attempt + 1} of {event.max_attempts})."

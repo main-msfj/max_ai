@@ -38,6 +38,7 @@ from ...base.middleware import (
     NextTurn,
 )
 from ...core.event_type import ModelResponseEvent, ReasoningCompleteEvent
+from ...errors.middleware import StopRun
 from ...types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
 
 if t.TYPE_CHECKING:
@@ -110,6 +111,15 @@ class TracingMiddleware(CoreMiddleware):
                 elif isinstance(event, ReasoningCompleteEvent):
                     finish = event.finish_reason
                 yield event
+        except StopRun as error:
+            # A middleware ended the turn: a warning with its message, not a failure.
+            span.set_attributes(_clean({
+                "langfuse.trace.output": self._content(error.message),
+                "langfuse.observation.output": self._content(error.message),
+                "max_ai.finish_reason": error.finish_reason,
+                "langfuse.observation.level": "WARNING",
+            }))
+            raise
         except BaseException as error:
             span.record_exception(error)
             span.set_status(Status(StatusCode.ERROR, f"{type(error).__name__}: {error}"))

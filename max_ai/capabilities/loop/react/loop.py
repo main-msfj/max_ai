@@ -156,7 +156,8 @@ class ReactLoop(CoreLoop[ReactLoopConfig]):
                 ):
                     yield event
         except StopRun as error:
-            # 10. A middleware ended the turn: it ends clean, with its message.
+            # 10. A middleware ended the turn: open calls get their answer, then it ends clean.
+            ToolDispatcher.close_interrupted(ctx, f"Interrupted by the system: {error.label}.")
             yield self.end(ctx, state, Stop(reason=error.finish_reason, answer=error.message))
         except Exception as error:
             # 11. The turn failed: the hook may answer for the agent, or the error goes up.

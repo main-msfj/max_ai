@@ -12,6 +12,10 @@ from ....types.completions import Usage
 from ....types.summary import Summary
 from ._model import SummaryCompactionConfig
 
+if t.TYPE_CHECKING:
+    from ....core.middleware.chain import MiddlewareChain
+    from ....types.run_context import RunContext
+
 
 class SummaryCompaction(CoreCompaction[SummaryCompactionConfig]):
     """The old messages leave and a ``Summary`` of them stays, joined with
@@ -50,7 +54,12 @@ class SummaryCompaction(CoreCompaction[SummaryCompactionConfig]):
         self.instructions = instructions  # what to care about, added to the task
 
     async def reduce(
-        self, old: list[Message], client: AnyClient, summary: Summary | None
+        self,
+        old: list[Message],
+        client: AnyClient,
+        summary: Summary | None,
+        ctx: RunContext | None = None,
+        middleware: MiddlewareChain | None = None,
     ) -> tuple[Summary | None, Usage]:
         # 1. The task, the summary kept so far and the messages, as one text.
         parts = [self.TASK]
@@ -61,7 +70,7 @@ class SummaryCompaction(CoreCompaction[SummaryCompactionConfig]):
         parts.append(f"Messages:\n\n{self.transcript(old)}")
         ask: list[Message] = [UserMessage(source=HARNESS_SOURCE, content="\n\n".join(parts))]
         # 2. The model answers in the summary's format.
-        result = await (self.client or client).run(ask, None, Summary)
+        result = await (self.client or client).run(ask, None, Summary, ctx=ctx, middleware=middleware)
         answer = result.message.structured_output
         if not isinstance(answer, Summary):
             answer = Summary.model_validate_json(result.message.text())

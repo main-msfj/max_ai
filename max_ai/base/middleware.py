@@ -9,8 +9,8 @@ Each middleware wraps one place and calls ``call_next`` to go on:
 
 The list runs in order on the way in and in reverse on the way out. A
 middleware may change text (mask it, cut it) or end the turn with
-``StopRun``; it never changes a tool call's parameters. Hooks stop and
-correct; middlewares watch and filter.
+``self.stop()``; it never changes a tool call's parameters. One that
+breaks stops the turn. Hooks stop and correct; middlewares watch and filter.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, JsonValue
 
+from ..errors.middleware import StopRun
 from .component import ComponentBase
 
 if t.TYPE_CHECKING:
@@ -67,6 +68,8 @@ class CoreMiddleware(ComponentBase[MiddlewareConfig]):
 
     component_type = "middleware"
     component_schema: t.ClassVar[type[BaseModel]] = MiddlewareConfig
+    stop_message: t.ClassVar[str] = "Stopped by a middleware"  # why this middleware ends a turn
+    filter_full_text: t.ClassVar[bool] = False  # True: it changes text, so a stream comes in whole lines
 
     async def turn(self, ctx: RunContext, call_next: NextTurn) -> AsyncGenerator[CoreEvent]:
         """Every event of a turn, from the task to the end."""
@@ -82,8 +85,8 @@ class CoreMiddleware(ComponentBase[MiddlewareConfig]):
     async def stream(
         self, ctx: RunContext, call: ModelCall, call_next: NextStream
     ) -> AsyncGenerator[ChatCompletionChunk]:
-        """One streamed call. Each chunk is a whole line; the last one
-        carries the full message."""
+        """One streamed call, chunk by chunk; the last one carries the full
+        message. With ``filter_full_text``, each chunk is a whole line."""
         async for chunk in call_next(call):
             yield chunk
 
@@ -93,6 +96,10 @@ class CoreMiddleware(ComponentBase[MiddlewareConfig]):
         """Every tool call: allowed, denied, waiting or failed. ``record``
         says which; None means it waits for a person."""
         return await call_next(record)
+
+    def stop(self, detail: str = "", finish_reason: str = "stopped") -> StopRun:
+        """The error that ends the turn: ``detail`` is what the user reads."""
+        return StopRun(detail or self.stop_message, finish_reason=finish_reason, label=self.stop_message)
 
     def state(self, ctx: RunContext) -> dict[str, JsonValue]:
         """This middleware's own place in ``ctx``: it survives pause and resume."""
