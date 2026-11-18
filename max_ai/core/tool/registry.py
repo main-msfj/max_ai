@@ -14,6 +14,7 @@ class ToolRegistry:
     def __init__(self, tools: Iterable[CoreTool] = ()) -> None:
         self._tools: dict[str, CoreTool] = {}
         self._tokens: dict[str | None, int] = {}  # by tokenizer; emptied when the tools change
+        self._direct = False  # True: the deferred tools are few and go loaded
         for tool in tools:
             self.register(tool)
 
@@ -40,11 +41,22 @@ class ToolRegistry:
 
     def loaded_tools(self) -> list[CoreTool]:
         """Sent to the model on every request."""
-        return [tool for tool in self._tools.values() if not tool.deferred]
+        return [tool for tool in self._tools.values() if self._direct or not tool.deferred]
 
     def deferred_tools(self) -> list[CoreTool]:
         """Listed in the prompt and found with search_tools."""
-        return [tool for tool in self._tools.values() if tool.deferred]
+        return [tool for tool in self._tools.values() if tool.deferred and not self._direct]
+
+    def load_deferred(self) -> None:
+        """Send the deferred tools on every request too. For when they are
+        few: finding them would cost more than carrying them. The tools
+        themselves are not changed, only how this registry gives them."""
+        self._direct = True
+        self._tokens.clear()
+
+    def deferred_tokens(self, counter: TokenCounter | None = None) -> int:
+        """About how many tokens the deferred tools would take if loaded."""
+        return self._count(self.deferred_tools(), counter)
 
     def definitions(self) -> list[CoreToolDefinition]:
         """What the model receives: name, description and parameters of each
@@ -58,8 +70,13 @@ class ToolRegistry:
         key = counter.tokenizer_base if counter is not None else None
         if key in self._tokens:
             return self._tokens[key]
-        # 2. Count the definitions the way they travel: as JSON.
-        definitions = [definition.model_dump(exclude_none=True) for definition in self.definitions()]
-        text = json.dumps(definitions, ensure_ascii=False, default=str) if definitions else ""
-        self._tokens[key] = TokenCounter.estimate(text, counter)
+        # 2. Count them and keep the number.
+        self._tokens[key] = self._count(self.loaded_tools(), counter)
         return self._tokens[key]
+
+    @staticmethod
+    def _count(tools: list[CoreTool], counter: TokenCounter | None) -> int:
+        """The tokens of ``tools`` the way they travel: their definitions as JSON."""
+        definitions = [tool.build_tool_definition().model_dump(exclude_none=True) for tool in tools]
+        text = json.dumps(definitions, ensure_ascii=False, default=str) if definitions else ""
+        return TokenCounter.estimate(text, counter)

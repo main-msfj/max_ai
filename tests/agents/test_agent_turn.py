@@ -74,3 +74,37 @@ async def test_always_keeps_the_rule_before_any_turn_has_run(tmp_path):
     box = await agent._sandbox(ctx)
     assert box is not None and "bash(npm*)" in (await box.permissions())["allow"]
     await agent.close()
+
+
+# -------- deferred tools: few go loaded, many are searched ---------------------------
+def records(query: str) -> str:
+    """Search the customer records by name or email."""
+    return query
+
+
+async def test_few_deferred_tools_go_loaded_without_the_tools_that_find_them():
+    from max_ai.capabilities.stacks.builder import PromptBuilder
+    from max_ai.capabilities.tools.decorator import tool as as_tool
+
+    few = as_tool(records, name="search_records", deferred=True)
+    agent = Agent("a", "d", "i", FakeClient(say("listo")), toolset=[few])
+    registry = await agent._registry()
+    names = [tool.name for tool in registry.loaded_tools()]
+    # The model gets it on every request, and nothing to search with.
+    assert "search_records" in names and "search_tools" not in names and "call_tool" not in names
+    assert registry.deferred_tools() == []
+    assert PromptBuilder([], registry).tool_variables()["deferred_tools"] == []
+    # The developer's tool is not changed: another agent may still defer it.
+    assert few.deferred
+
+
+async def test_many_deferred_tools_are_found_with_search_tools(monkeypatch):
+    from max_ai.capabilities.tools.decorator import tool as as_tool
+    from max_ai.config import setting
+
+    monkeypatch.setattr(setting, "harness_deferred_tools_min_tokens", 10)
+    many = as_tool(records, name="search_records", deferred=True)
+    registry = await Agent("a", "d", "i", FakeClient(say("listo")), toolset=[many])._registry()
+    names = [tool.name for tool in registry.loaded_tools()]
+    assert "search_records" not in names and {"search_tools", "call_tool"} <= set(names)
+    assert [tool.name for tool in registry.deferred_tools()] == ["search_records"]

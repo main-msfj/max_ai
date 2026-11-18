@@ -55,14 +55,14 @@ class PromptBuilder:
     def tool_variables(self) -> dict[str, t.Any]:
         """What the registry gives the layers; empty lists without one."""
         tools = self.registry.all_tools() if self.registry is not None else []
+        deferred = self.registry.deferred_tools() if self.registry is not None else []
         variables: dict[str, t.Any] = dict(self.tool_names)
         if not any(tool.name == self.tool_names["bash_tool"] for tool in tools):
             variables["bash_tool"] = None  # no commands: layers must not mention it
         # Only the first line: the whole description comes with search_tools.
         variables["deferred_tools"] = [
             {"name": tool.name, "description": tool.description.strip().split("\n")[0]}
-            for tool in tools
-            if tool.deferred
+            for tool in deferred
         ]
         variables["tool_instructions"] = [
             {"name": tool.name, "instructions": text.strip()}

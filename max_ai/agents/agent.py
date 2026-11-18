@@ -405,7 +405,11 @@ class Agent(ComponentBase[AgentSpec]):
         for tool in tools:
             if registry.get(tool.name) is None:
                 registry.register(tool)
-        # 3. Deferred tools are found and called through these two.
+        # 3. Few deferred tools go loaded: the two tools that find and call
+        #    them would cost more than they save.
+        if registry.deferred_tokens() < setting.harness_deferred_tools_min_tokens:
+            registry.load_deferred()
+        # 4. Many are found and called through these two.
         if registry.deferred_tools():
             for extra in (SearchToolsTool(registry), CallToolTool(registry)):
                 if registry.get(extra.name) is None:
