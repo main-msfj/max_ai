@@ -23,8 +23,9 @@ class SaveMemoryTool(CoreTool):
     TOOL_NAME: t.ClassVar[str] = "save_memory"
     DESCRIPTION: t.ClassVar[str] = (
         "Remember a fact for future conversations: who the user is, how they want you "
-        "to work, a decision that will still hold. One fact per call: two facts are two "
-        "calls. A name that is already in your memory updates that fact."
+        "to work, a decision that will still hold. One fact per call: 'I am a backend "
+        "developer and I use uv' is two calls, one for who they are and one for what "
+        "they use. A name that is already in your memory updates that fact."
     )
     TYPES: t.ClassVar[tuple[str, ...]] = ("user", "feedback", "project", "reference")
     NAME: t.ClassVar[str] = r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}"

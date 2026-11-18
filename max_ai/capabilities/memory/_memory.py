@@ -20,7 +20,9 @@ class Memory:
     MAX_DESCRIPTION: t.ClassVar[int] = 150  # characters of each line
     READ: t.ClassVar[str] = (
         "You have a memory that lasts between conversations: one Markdown file per fact, "
-        "in {folder}. Read a file when its line below is relevant to what you are doing."
+        "in {folder}. Each line below is a fact you already know about this user and "
+        "their work: apply them in every answer, without being asked. Read a file when "
+        "you need more than its line."
     )
     WRITE: t.ClassVar[str] = (
         "Save a fact with {tool} when:\n"
