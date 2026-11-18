@@ -110,7 +110,7 @@ async def test_always_allow_keeps_the_rule_in_the_sandbox(tmp_path):
     app = make_app(tmp_path, [BashTool()])
     ctx = RunContext(user_id="u")
     records = [ToolCallRecord(id=i, tool_name="bash", parameters={"command": c, "description": "d"})
-               for i, c in (("a", "npm install left-pad"), ("b", "npm test"), ("c", "rm notes.txt"))]
+               for i, c in (("a", "ls src"), ("b", "ls tests"), ("c", "rm notes.txt"))]
     for record in records:
         ctx.tool_state.add(record)
     first, second, other = records
@@ -121,19 +121,19 @@ async def test_always_allow_keeps_the_rule_in_the_sandbox(tmp_path):
         app._busy = True
         worker = asyncio.create_task(_resolve(app, ctx))
         await pilot.pause()
-        await pilot.press("2")  # Yes, always allow bash(npm*)
+        await pilot.press("2")  # Yes, always allow bash(ls:*)
         for _ in range(40):  # the rule is written to setting.json first
             await pilot.pause(0.05)
             if other.is_pending_approval and not second.is_pending_approval:
                 break
-        # The next npm call is covered; rm still asks, with no "always".
+        # The next ls is covered by the prefix; rm still asks, with no "always".
         assert not first.is_pending_approval and not second.is_pending_approval
         assert not worker.done() and other.is_pending_approval
         await pilot.press("2")  # No, deny
         await asyncio.wait_for(worker, 2)
         assert not other.is_pending_approval and other.status.value != "approved"
     allowed = (await app.agent.sandbox.bind("u").permissions())["allow"]
-    assert "bash(npm*)" in allowed
+    assert allowed == ["bash(ls:*)"]
 
 
 def _ask(text: str, options: list[str]) -> dict:

@@ -22,6 +22,7 @@ class Layout:
 
     FOLDER: t.ClassVar[str] = ".agent"
     SETTINGS: t.ClassVar[str] = "setting.json"
+    SKILLS: t.ClassVar[str] = "skills"
     MEMORY_FILE_BYTES: t.ClassVar[int] = 100_000  # the most a memory file holds
 
     def __init__(self, base: str | PurePosixPath) -> None:
@@ -33,7 +34,7 @@ class Layout:
 
     @property
     def skills(self) -> PurePosixPath:
-        return self.root / "skills"
+        return self.root / self.SKILLS
 
     @property
     def workspace(self) -> PurePosixPath:

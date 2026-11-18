@@ -140,6 +140,7 @@ class MaxAIApp(App[None]):
     """A coding-agent TUI: block transcript, live status, fold-able details."""
 
     TITLE = "MaxAI"
+    RULE_WIDTH = 60  # a rule longer than this is not repeated in the "always" option
     CSS = f"""
     Screen {{ background: {BACKGROUND}; }}
     #body {{ height: 1fr; }}
@@ -1069,6 +1070,9 @@ class MaxAIApp(App[None]):
             record.tool_name, record.parameters
         )
         rule = ", ".join(Permissions.rules_for(record.tool_name, record.parameters))
+        # A long exact command is already on screen: the option only says so.
+        if len(rule) > self.RULE_WIDTH or "\n" in rule:
+            rule = "this exact command"
         options = ["Yes, allow once"]
         if keep:
             options.append(f"Yes, always allow {rule}")
