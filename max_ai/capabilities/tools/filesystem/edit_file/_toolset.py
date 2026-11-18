@@ -74,6 +74,8 @@ class EditFileTool(CoreTool):
 
         # 2. Where this session may write: its workspace, its tmp and the memory; not the skills.
         sandbox = tool_ctx.sandbox
+        if sandbox is None:
+            return ToolResult.execution_error(tool_request.id, "edit_file needs a sandbox.")
         paths = sandbox.session_paths(tool_ctx.session_id)
         allowed = [paths["workspace"], paths["tmp"], str(sandbox.layout.memory)]
         start = FilesSeen.write_start(tool_ctx, paths["workspace"], allowed)

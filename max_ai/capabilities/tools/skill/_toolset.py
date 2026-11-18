@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shlex
 import typing as t
+from pathlib import Path
 
 from ....base.tools import CoreTool, ToolContext
 from ....types.tool_call import ToolCallRecord, ToolResult
 from ....types.tools import ToolApprovalMode
+
+SCRIPT = Path(__file__).with_name("script.py").read_text()  # sent to the sandbox
 
 
 class ReadSkillTool(CoreTool):
@@ -18,7 +22,10 @@ class ReadSkillTool(CoreTool):
     DESCRIPTION: t.ClassVar[str] = "Read the instructions of a skill. Call it before you use a skill."
     FILE: t.ClassVar[str] = "SKILL.md"
     MAX_FILES: t.ClassVar[int] = 100  # files of the skill listed at most
-    MARK: t.ClassVar[str] = "__skill_md__"  # between the list of files and the SKILL.md
+    MISSING: t.ClassVar[dict[str, str]] = {  # what the script found missing → what the model reads
+        "missing": "There is no skill named {!r}.",
+        "no_instructions": "The skill {!r} has no SKILL.md.",
+    }
     SKILL_NAME: t.ClassVar[str] = r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}"
 
     sandbox = True  # the skills are installed there, not on the host
@@ -55,22 +62,24 @@ class ReadSkillTool(CoreTool):
         # 2. The skills live in the sandbox: with sandbox = True the dispatcher
         #    never gets here without one.
         sandbox = tool_ctx.sandbox
+        if sandbox is None:
+            return ToolResult.execution_error(tool_request.id, "read_skill needs a sandbox.")
 
-        # 3. Where the layout puts it: .agent/skills/<name>, with its SKILL.md
-        folder = shlex.quote(str(sandbox.layout.skills / name))
-        read = await sandbox.execute_command(
-            f"cd {folder} && find . -type f | sed 's|^\\./||' | sort | head -n {self.MAX_FILES}"
-            f" && echo {self.MARK} && cat {self.FILE}"
+        # 3. The script runs inside the sandbox, on .agent/skills/<name>.
+        folder = sandbox.layout.skills / name 
+        request: dict[str, t.Any] = {"folder": str(folder), "file": self.FILE, "max_files": self.MAX_FILES}
+        ran = await sandbox.execute_command(
+            f"python3 -c {shlex.quote(SCRIPT)} {shlex.quote(json.dumps(request))}"
         )
+        if ran.exit_code != 0:
+            return ToolResult.execution_error(tool_request.id, f"The skill {name!r} could not be read.")
+        answer = json.loads(ran.stdout)
 
-        # 4. cd or cat fail when it is missing: the skill is not installed.
-        if read.exit_code != 0:
-            return ToolResult.execution_error(
-                tool_request.id, f"There is no skill named {name!r}."
-            )
+        # 4. The script says what is missing: the skill or its instructions.
+        if not answer["ok"]:
+            return ToolResult.execution_error(tool_request.id, self.MISSING[answer["error"]].format(name))
 
         # 5. First the folder and its files, so the model can open them; then the SKILL.md.
-        files, _, instructions = read.stdout.partition(f"{self.MARK}\n")
-        listed = "".join(f"  {file}\n" for file in files.splitlines())
-        header = f"Skill folder: {sandbox.layout.skills / name}\n{listed}"
-        return ToolResult.success_result(tool_request.id, f"{header}\n{instructions}")
+        listed = "".join(f"  {file}\n" for file in answer["files"])
+        header = f"Skill folder: {folder}\n{listed}"
+        return ToolResult.success_result(tool_request.id, f"{header}\n{answer['instructions']}")

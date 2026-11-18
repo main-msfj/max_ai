@@ -44,6 +44,8 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
 
     # True: commands cannot reach the host.
     isolated: t.ClassVar[bool] = False
+    # What only the harness does: these write setting.json or the skills.
+    HARNESS_OPS: t.ClassVar[frozenset[str]] = frozenset({"create", "install", "permit", "unpermit"})
 
     component_type = "sandbox"
 
@@ -61,10 +63,12 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
         *,
         timeout: float = 60,
         stdin: bytes | None = None,
+        harness: bool = False,
     ) -> CommandResult:
         """Run ``command`` with bash in the sandbox, with ``self.variables``
         in its environment. A failing command is an exit code; only
-        infrastructure problems raise."""
+        infrastructure problems raise. ``harness``: it is the harness's own
+        work (it writes the settings or a skill), never a command of the model."""
 
     async def close(self) -> None:
         """Release what the provider started (a container). Nothing by default."""
@@ -164,6 +168,7 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
             f"python3 -c {shlex.quote(SCRIPT)} {shlex.quote(json.dumps(request))}",
             timeout=setting.tool_timeout_seconds,
             stdin=data,
+            harness=op in self.HARNESS_OPS,
         )
         if result.timed_out or result.exit_code != 0:
             raise SandboxError(f"{op} failed in the sandbox: {result.stderr.strip() or 'timed out'}")

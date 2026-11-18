@@ -60,6 +60,8 @@ class WriteFileTool(CoreTool):
 
         # 1. Where this session may write: its workspace, its tmp and the memory; not the skills.
         sandbox = tool_ctx.sandbox
+        if sandbox is None:
+            return ToolResult.execution_error(tool_request.id, "write_file needs a sandbox.")
         paths = sandbox.session_paths(tool_ctx.session_id)
         seen = tool_ctx.run_context.files_seen
         allowed = [paths["workspace"], paths["tmp"], str(sandbox.layout.memory)]

@@ -2,16 +2,21 @@
 through the listed domains (and their subdomains) and nothing else.
 
 Standard library only; runs in its own container:
-``python3 -c <this file> pypi.org files.pythonhosted.org``.
+``python3 -c <this file> 600 pypi.org files.pythonhosted.org``. The first
+argument is how many seconds it lives without a command of the sandbox;
+each command sends USR1.
 """
 
 from __future__ import annotations
 
 import asyncio
+import signal
 import sys
+import time
 from urllib.parse import urlsplit
 
-ALLOWED: list[str] = [domain.lower().strip(".") for domain in sys.argv[1:]]
+IDLE: float = float(sys.argv[1])
+ALLOWED: list[str] = [domain.lower().strip(".") for domain in sys.argv[2:]]
 PORT: int = 3128
 
 
@@ -61,9 +66,16 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> 
 
 
 async def main() -> None:
+    # 1. Each command of the sandbox starts the idle clock again.
+    last = [time.monotonic()]
+    asyncio.get_running_loop().add_signal_handler(
+        signal.SIGUSR1, lambda: last.__setitem__(0, time.monotonic())
+    )
+    # 2. Serve until nobody has used the sandbox for IDLE seconds.
     server = await asyncio.start_server(handle, "0.0.0.0", PORT)
     async with server:
-        await server.serve_forever()
+        while time.monotonic() - last[0] < IDLE:
+            await asyncio.sleep(5)
 
 
 asyncio.run(main())

@@ -3,16 +3,8 @@
 from __future__ import annotations
 
 import math
-import re
 from collections import Counter, defaultdict
-from collections.abc import Collection, Sequence
-
-_WORD = re.compile(r"[^\W_]+")  # letters and digits; "_" splits exa_search
-
-
-def words(text: str, stopwords: Collection[str] = frozenset()) -> list[str]:
-    """The lowercase words of ``text``, without ``stopwords``."""
-    return [word for word in _WORD.findall(text.lower()) if word not in stopwords]
+from collections.abc import Sequence
 
 
 def bm25(

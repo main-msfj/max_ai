@@ -85,6 +85,9 @@ def locked(path):
 def create(request):
     for folder in request["folders"]:
         os.makedirs(folder, exist_ok=True)
+    # Where the harness is another user: the agent's one writes only here.
+    for folder in request.get("open", []):
+        os.chmod(folder, 0o777)
     settings = request["settings"]
     handle, temp = tempfile.mkstemp(dir=os.path.dirname(settings), prefix=INCOMING)
     with os.fdopen(handle, "w", encoding="utf-8") as file:
