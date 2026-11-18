@@ -57,7 +57,10 @@ async def test_it_needs_a_user():
 def test_it_is_stored_with_image_dockerfile_and_networks():
     sandbox = DockerSandbox(dockerfile="Dockerfile", networks=["pypi.org"])
     stored = sandbox.serialize()
-    assert stored.config == {"dockerfile": "Dockerfile", "networks": ["pypi.org"]}
+    assert stored.config == {
+        "dockerfile": "Dockerfile", "networks": ["pypi.org"],
+        "memory": "2g", "cpus": 2.0, "processes": 512,
+    }
     again = SandboxCore.deserialize(stored.model_dump())
     assert isinstance(again, DockerSandbox) and again.networks == ["pypi.org"]
 
@@ -140,3 +143,88 @@ async def test_only_the_listed_domains_are_reached(docker):
         "python3 -c \"import socket; socket.create_connection(('1.1.1.1', 443), timeout=5)\""
     )
     assert direct.exit_code != 0
+
+
+# -------- who the commands run as ------------------------------------------------
+def _inspect(sandbox: DockerSandbox, what: str) -> str:
+    asked = subprocess.run(
+        ["docker", "inspect", "--format", what, sandbox.name], capture_output=True, text=True
+    )
+    return asked.stdout.strip()
+
+
+@needs_docker
+async def test_the_model_s_commands_have_no_privileges(docker):
+    sandbox = docker()
+    await sandbox.prepare()
+    layout = sandbox.layout
+    assert (await sandbox.execute_command("id -u")).stdout.strip() == "1000"
+
+    # It writes where it works...
+    for folder in (layout.workspace, layout.memory, layout.tmp, "/tmp"):
+        wrote = await sandbox.execute_command(f"mkdir -p {folder}/s1 && echo x > {folder}/s1/a.txt")
+        assert wrote.exit_code == 0, wrote.stderr
+    # ...and nowhere the harness decides from, nor in the system.
+    for command in (
+        f"echo '{{}}' > {layout.settings}",
+        f"rm {layout.settings}",
+        f"mkdir {layout.skills}/mine",
+        f"mv {layout.root} {layout.root}.old",
+        "touch /usr/local/bin/python3",
+        "echo x > /etc/own",
+    ):
+        refused = await sandbox.execute_command(command)
+        assert refused.exit_code != 0, command
+    assert (await sandbox.execute_command(f"cat {layout.settings}")).exit_code == 0  # read: yes
+
+
+@needs_docker
+async def test_only_the_harness_writes_the_settings_and_the_skills(docker, skill_archive):
+    sandbox = docker()
+    await sandbox.prepare()
+    await sandbox.add_permission("allow", "bash(ls)")
+    await sandbox.install_skill("pdf", "k1", skill_archive({"SKILL.md": b"# pdf"}))
+    assert (await sandbox.permissions())["allow"] == ["bash(ls)"]
+    # The model's user reads and runs the skill; it cannot change it.
+    skill = sandbox.layout.skills / "pdf"
+    assert (await sandbox.execute_command(f"cat {skill}/SKILL.md")).exit_code == 0
+    assert (await sandbox.execute_command(f"echo x >> {skill}/SKILL.md")).exit_code != 0
+
+
+@needs_docker
+async def test_the_container_is_closed_and_has_limits(docker):
+    sandbox = docker(memory="256m", cpus=1, processes=64)
+    await sandbox.execute_command("true")
+    assert _inspect(sandbox, "{{.Config.User}}") == "1000:1000"
+    assert _inspect(sandbox, "{{.HostConfig.CapDrop}}") == "[ALL]"
+    assert _inspect(sandbox, "{{.HostConfig.ReadonlyRootfs}}") == "true"
+    assert "no-new-privileges" in _inspect(sandbox, "{{.HostConfig.SecurityOpt}}")
+    assert _inspect(sandbox, "{{.HostConfig.Memory}}") == str(256 * 1024 * 1024)
+    assert _inspect(sandbox, "{{.HostConfig.PidsLimit}}") == "64"
+    # Too many processes are refused; the container and the next command go on.
+    await sandbox.execute_command("for i in $(seq 200); do sleep 30 & done; wait", timeout=5)
+    assert (await sandbox.execute_command("echo alive")).stdout.strip() == "alive"
+
+
+@needs_docker
+async def test_the_container_stops_by_itself_when_nobody_uses_it(docker, monkeypatch):
+    from max_ai.config import setting
+
+    monkeypatch.setattr(setting, "harness_sandbox_seconds", 10)
+    sandbox = docker()
+    await sandbox.prepare()
+    await sandbox.upload_file("s1", "a.txt", b"kept")
+
+    # 1. A command before the time is up starts the clock again.
+    await asyncio.sleep(7)
+    await sandbox.execute_command("true")
+    await asyncio.sleep(7)
+    assert _inspect(sandbox, "{{.State.Running}}") == "true"  # 14s old, 7s idle
+
+    # 2. Nobody uses it: it stops and is removed.
+    await asyncio.sleep(16)
+    assert _inspect(sandbox, "{{.State.Running}}") == ""
+
+    # 3. The next command creates it again, with the user's files.
+    read = await sandbox.execute_command(f"cat {sandbox.layout.workspace}/s1/a.txt")
+    assert read.stdout == "kept"

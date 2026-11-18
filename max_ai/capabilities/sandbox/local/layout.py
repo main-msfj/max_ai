@@ -40,9 +40,11 @@ class LocalSandbox(SandboxCore):
         *,
         timeout: float = 60,
         stdin: bytes | None = None,
+        harness: bool = False,
     ) -> CommandResult:
         """Run ``command`` with bash on this computer, starting in ``root``.
-        It sees this process's environment plus ``self.variables``."""
+        It sees this process's environment plus ``self.variables``. Here the
+        harness and the model are the same user: ``harness`` changes nothing."""
         process = await asyncio.create_subprocess_exec(
             "bash", "-c", command,
             cwd=self.layout.root.parent,
