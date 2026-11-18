@@ -73,3 +73,43 @@ def test_separators_inside_quotes_do_not_split_the_command():
     command = "python3 -c \"\nimport csv\nprint('a; b | c')\n\" && head -5 out.csv | wc -l"
     rules = Permissions.rules_for("bash", {"command": command})
     assert rules == ["bash(python3*)", "bash(head*)", "bash(wc*)"]
+
+
+# -------- the files the harness decides from ----------------------------------------
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat ../setting.json",
+        'cat ../sett""ing.json',  # the quotes are gone when bash reads it
+        "cat ../setting*",  # a pattern that can reach it
+        "echo {} > ../setting.jso?",
+        "echo {} >../../setting.json",
+        "sed -i s/a/b/ ../.agent/skills/pdf/SKILL.md",
+        "echo hacked > ../.agent/skills/pdf/SKILL.md",
+        "echo x >>../../skills/pdf/SKILL.md",
+        "cp evil.md /box/.agent/skills/pdf/SKILL.md",
+        "ls && /bin/cp a ../../skills/x",
+        "echo 'never closed",  # it cannot be read
+    ],
+)
+def test_the_settings_and_writing_a_skill_are_always_asked(command):
+    wide = Permissions({"allow": ["bash(cat*)", "bash(echo*)", "bash(sed*)", "bash(cp*)", "bash(ls*)"]})
+    assert wide.decide("bash", {"command": command}) is None
+    assert not Permissions.can_be_kept("bash", {"command": command})
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat notes.txt",
+        "ls *",
+        "cat *.json",  # a pattern in the folder it is in: the settings are not there
+        "python3 /box/.agent/skills/pdf/run.py in.pdf > out.txt",  # a skill is run
+        "cat ../../skills/pdf/SKILL.md",  # and read
+        "sed -n 1,5p /box/.agent/skills/pdf/SKILL.md",
+        "mkdir skills && touch skills/a.py",  # the project's own folder
+        "echo 'a > b' > notes.txt",
+    ],
+)
+def test_reading_and_running_a_skill_is_not_asked_for_that(command):
+    assert not Permissions.dangerous("bash", command)

@@ -3,8 +3,11 @@ the commands the harness never lets run without asking."""
 
 import fnmatch
 import re
+import shlex
 import typing as t
 from collections.abc import Mapping
+
+from ...base.layout import Layout
 
 
 class Permissions:
@@ -15,7 +18,15 @@ class Permissions:
     DEFAULT: t.ClassVar[str] = "default"
     KINDS: t.ClassVar[tuple[str, ...]] = ("allow", "ask", "deny")
     BASH: t.ClassVar[str] = "bash"
-    SETTINGS: t.ClassVar[str] = "setting.json"
+    SETTINGS: t.ClassVar[str] = Layout.SETTINGS
+    # The skills folder as a command names it: under .agent, or reached with "..".
+    SKILLS: t.ClassVar[str] = rf"(^|/)({re.escape(Layout.FOLDER)}|\.\.)/{Layout.SKILLS}(/|$)"
+    # Commands that change the files they are given.
+    WRITERS: t.ClassVar[frozenset[str]] = frozenset({
+        "cp", "mv", "tee", "touch", "rm", "rmdir", "mkdir", "chmod", "chown", "ln",
+        "truncate", "dd", "install", "sed",
+    })
+    GLOB: t.ClassVar[str] = "*?["  # a word with one of these is a pattern, not a name
     # Always asked, whatever the tool or the user's allow list say.
     DANGEROUS: t.ClassVar[tuple[str, ...]] = (
         r"^rm\b", r"^sudo\b", r"^dd\b", r"^mkfs", r"^shutdown\b", r"^reboot\b",
@@ -85,9 +96,49 @@ class Permissions:
             return False
         if any(mark in target for mark in Permissions.UNREADABLE):
             return True
+        if Permissions.protected(target):
+            return True
         # Each part of the command is looked at alone: ``ls && rm x`` has an rm.
         for part in Permissions.parts(target):
             if any(re.search(pattern, part) for pattern in Permissions.DANGEROUS):
+                return True
+        return False
+
+    @staticmethod
+    def protected(command: str) -> bool:
+        """A command that reaches the settings, or writes in the skills: the
+        files the harness decides from. Each word is read as bash would,
+        without its quotes; a pattern counts when it can reach the file."""
+        for part in Permissions.parts(command):
+            # 1. Quotes that do not close: it cannot be read, so it is asked.
+            try:
+                raw = shlex.split(part)
+            except ValueError:
+                return True
+            # 2. A redirection glued to its file (``>file``) is the file's word.
+            words = [word.lstrip("0123456789<>&") for word in raw]
+            into = [
+                words[index] if words[index] else "".join(words[index + 1:index + 2])
+                for index, word in enumerate(raw)
+                if re.match(r"\d*>", word)
+            ]
+            words = [word for word in words if word]
+            if not words:
+                continue
+            # 3. The settings, by name or by a pattern with a folder before it.
+            for word in words:
+                folder, _, name = word.rpartition("/")
+                pattern = any(mark in name for mark in Permissions.GLOB)
+                if fnmatch.fnmatchcase(Permissions.SETTINGS, name) and (folder or not pattern):
+                    return True
+            # 4. The skills are read and run by anyone, and written by the harness
+            #    only: a command that changes files, or output sent into one.
+            if any(re.search(Permissions.SKILLS, word) for word in into):
+                return True
+            name = words[0].rpartition("/")[2]
+            in_place = any(word.startswith(("-i", "--in-place")) for word in words)
+            writes = name in Permissions.WRITERS and (name != "sed" or in_place)
+            if writes and any(re.search(Permissions.SKILLS, word) for word in words):
                 return True
         return False
 
