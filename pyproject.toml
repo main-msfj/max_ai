@@ -95,3 +95,6 @@ tracing = [
 mongodb = [
     "pymongo>=4.13,<5",
 ]
+e2b = [
+    "e2b>=2.64.0",
+]
