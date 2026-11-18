@@ -14,8 +14,9 @@ class TaskAnalysisLayer(Component[StackConfig], CoreLayer):
     Prompt layer that tells the agent how to analyze a task before acting:
     when to proceed directly, when to ask clarification, and when to plan.
 
-    This layer has no template variables — the content is fully static
-    instructions. It is always included in the prompt as-is.
+    Its instructions are static, except one line that reminds the agent to
+    save what is worth remembering: it shows only with ``memory_tool``, the
+    name of the tool that saves a fact.
     """
 
     component_schema = StackConfig
@@ -44,3 +45,6 @@ class TaskAnalysisLayer(Component[StackConfig], CoreLayer):
 
     def _default_template(self) -> str:
         return self._load_file(self._DEFAULT_TEMPLATE_PATH / f"{self.name}.j2")
+
+    def _optional_variables(self) -> set[str]:
+        return {"memory_tool"}

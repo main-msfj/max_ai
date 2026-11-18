@@ -44,6 +44,11 @@ under-specified tasks.
 - The user only sees your final message. It must gather the results of all
   the steps into one complete answer.
 - If new information changes the task, revise the steps.
+{% if memory_tool %}
+- Before your final answer: if the user's message told you something new
+  about them or their work that your memory does not have yet, call
+  {{ memory_tool }} first. If it told you nothing new, do not call it.
+{% endif %}
 </planning_rules>
 
 <examples>

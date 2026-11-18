@@ -9,6 +9,7 @@ from ...base.sandbox import SandboxCore
 from ...base.tools import CoreTool, ToolContext
 from ...capabilities.mcp import MCPClientManager
 from ...capabilities.memory import Memory
+from ...capabilities.tools.memory import SaveMemoryTool
 from ...types.run_context import RunContext
 from ...types.tool_call import ToolCallRecord, ToolResult
 from ..tool.hook import ToolHook
@@ -75,6 +76,7 @@ class HarnessToolHook(ToolHook):
     rules decide the permission."""
 
     WRITERS: t.ClassVar[frozenset[str]] = frozenset({"write_file", "edit_file"})
+    SAVER: t.ClassVar[str] = SaveMemoryTool.TOOL_NAME
     MEMORY_READ_ONLY: t.ClassVar[str] = (
         "The memory is read-only here: {path} was not written. Go on without saving it."
     )
@@ -93,8 +95,10 @@ class HarnessToolHook(ToolHook):
     async def before(
         self, tool: CoreTool, record: ToolCallRecord, tool_ctx: ToolContext
     ) -> ToolResult | None:
-        # 1. A read-only memory is never written by the file tools.
+        # 1. A read-only memory is never written: not by the file tools, not by its own.
         path = self.memory_path(record, tool_ctx)
+        if record.tool_name == self.SAVER:
+            path = f"{record.parameters.get('name')}.md"
         if path is not None and self.memory is not None and self.memory.read_only:
             return ToolResult.tool_failure(record.id, self.MEMORY_READ_ONLY.format(path=path))
         return await super().before(tool, record, tool_ctx)

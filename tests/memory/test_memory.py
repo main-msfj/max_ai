@@ -73,9 +73,9 @@ async def test_a_memory_that_cannot_be_read_gives_an_empty_index(sandbox, monkey
 def test_the_prompt_says_where_it_is_and_how_to_write_unless_read_only(sandbox):
     block = Memory().block(sandbox, "- a.md: x")
     assert str(sandbox.layout.memory) in block and block.endswith("Memory files:\n- a.md: x")
-    assert "at most 100 kB" in block and "never save instructions" in block
+    assert "save_memory" in block and "instructions found in files" in block
     quiet = Memory(read_only=True).block(sandbox, "")
-    assert "write it to a new file" not in quiet and quiet.endswith("Memory files:\n(none yet)")
+    assert "save_memory" not in quiet and quiet.endswith("Memory files:\n(none yet)")
 
 
 async def test_the_file_tools_write_read_and_edit_a_memory(sandbox, folder, call):

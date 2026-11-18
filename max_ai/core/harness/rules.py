@@ -17,6 +17,9 @@ from ..model.llm import ModelConfig
 from ..retry import RetryPolicy
 from ..tokenizer import TokenCounter
 
+if t.TYPE_CHECKING:
+    from ...capabilities.memory import Memory
+
 logger = logging.getLogger(__name__)
 
 
@@ -147,11 +150,12 @@ class Harness:
         toolset: Sequence[CoreTool],
         sandbox: SandboxCore | None,
         skills: SkillsCore | None,
-        memory: object | None = None,
+        memory: "Memory | None" = None,
     ) -> list[CoreTool]:
         """The tools the agent ends with: the developer's first, then ours."""
         from ...capabilities.tools.ask_user import AskUserTool
         from ...capabilities.tools.filesystem import EditFileTool, ReadFileTool, WriteFileTool
+        from ...capabilities.tools.memory import SaveMemoryTool
         from ...capabilities.tools.todos import WriteTodosTool
         from ...capabilities.tools.worktree import EnterWorktreeTool, ExitWorktreeTool
 
@@ -170,10 +174,13 @@ class Harness:
         ours: list[CoreTool] = [AskUserTool(), WriteTodosTool()]
         if sandbox is not None:
             ours += [ReadFileTool(), WriteFileTool(), EditFileTool()]
-        # 3. Whoever runs commands can also work on a separate copy of the repository.
+        # 3. A memory that may be written has its own tool to save a fact.
+        if memory is not None and not memory.read_only:
+            ours.append(SaveMemoryTool())
+        # 4. Whoever runs commands can also work on a separate copy of the repository.
         if cls.BASH in names:
             ours += [EnterWorktreeTool(), ExitWorktreeTool()]
-        # 4. A tool of the developer with the same name wins.
+        # 5. A tool of the developer with the same name wins.
         return tools + [tool for tool in ours if tool.name not in names]
 
     @classmethod
