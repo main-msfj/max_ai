@@ -67,6 +67,8 @@ class ReadFileTool(CoreTool):
 
         # 1. Where this session may read: its workspace, its tmp, the skills and the memory.
         sandbox = tool_ctx.sandbox
+        if sandbox is None:
+            return ToolResult.execution_error(tool_request.id, "read_file needs a sandbox.")
         paths = sandbox.session_paths(tool_ctx.session_id)
         start = FilesSeen.start(tool_ctx, paths["workspace"])
         request = {

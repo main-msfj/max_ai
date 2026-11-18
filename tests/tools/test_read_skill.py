@@ -1,5 +1,7 @@
 """read_skill returns the SKILL.md of a skill installed in the sandbox."""
 
+from pathlib import Path
+
 import pytest
 
 from max_ai.capabilities.sandbox.local import LocalSandbox
@@ -44,6 +46,19 @@ async def test_it_returns_the_instructions_of_the_skill(sandbox):
 async def test_a_skill_that_is_not_installed_says_so(sandbox):
     result = await read(sandbox, "missing")
     assert not result.success and "no skill named 'missing'" in result.error
+
+
+async def test_a_skill_without_its_instructions_says_so(sandbox):
+    Path(sandbox.layout.skills / "empty").mkdir()
+    result = await read(sandbox, "empty")
+    assert not result.success and "has no SKILL.md" in result.error
+
+
+async def test_instructions_that_are_a_link_out_of_the_skill_are_not_read(sandbox, tmp_path):
+    Path(sandbox.layout.skills / "linked").mkdir()
+    Path(sandbox.layout.skills / "linked/SKILL.md").symlink_to(tmp_path / "env/secret.txt")
+    result = await read(sandbox, "linked")
+    assert not result.success and "not a skill" not in str(result.error)
 
 
 @pytest.mark.parametrize("name", ["../secret.txt", "hello/../../secret.txt", "/etc/passwd", ""])

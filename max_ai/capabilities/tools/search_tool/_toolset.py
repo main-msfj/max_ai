@@ -8,10 +8,10 @@ import typing as t
 from ....base.embedding import CoreEmbedding
 from ....base.tools import CoreTool, ToolContext
 from ....core.embeddings import rank
+from ....core.retrieval import bm25, fuse, words
 from ....core.tool.registry import ToolRegistry
 from ....types.tool_call import ToolCallRecord, ToolResult
 from ....types.tools import ToolApprovalMode
-from ._ranking import bm25, fuse, words
 
 logger = logging.getLogger(__name__)
 

@@ -86,6 +86,8 @@ class BashTool(CoreTool):
 
         # 1. The folders of this session, and where the last command ended.
         sandbox, ctx = tool_ctx.sandbox, tool_ctx.run_context
+        if sandbox is None:
+            return ToolResult.execution_error(tool_request.id, "bash needs a sandbox.")
         paths = sandbox.session_paths(tool_ctx.session_id)
         layout = sandbox.layout
         allowed = [paths["workspace"], paths["tmp"], str(layout.skills), str(layout.memory)]
