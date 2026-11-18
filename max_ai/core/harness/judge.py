@@ -16,7 +16,10 @@ logger = logging.getLogger(__name__)
 
 class Judge:
     """Asks a decisions model on OpenRouter how sure it is that a command is
-    safe. Any failure is "not sure": the user is asked, as without a judge."""
+    safe. Any failure is "not sure": the user is asked, as without a judge.
+
+    Off until ``HARNESS_JUDGE_MODEL`` names a model, for example
+    ``typesafe/jev-1.14``; the key is ``OPENROUTER_API_KEY``."""
 
     URL: t.ClassVar[str] = "https://openrouter.ai/api/alpha/decisions"
     API_KEY_ENV: t.ClassVar[str] = "OPENROUTER_API_KEY"  # read on the host at each call
