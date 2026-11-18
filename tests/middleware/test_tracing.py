@@ -109,3 +109,19 @@ def test_configure_langfuse_needs_keys_and_builds_the_exporter(monkeypatch):
     assert exporter._endpoint == "http://localhost:3000/api/public/otel/v1/traces"
     assert exporter._headers["Authorization"].startswith("Basic ")
     provider.shutdown()
+
+
+async def test_a_turn_a_middleware_stopped_is_a_warning_not_an_error(exporter):
+    from max_ai.capabilities.middleware import BudgetMiddleware
+
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracing = TracingMiddleware(tracer_provider=provider)
+    agent = weather_agent(FakeClient(say("uno")), tracing, BudgetMiddleware(max_model_calls=1))
+    ctx = RunContext(user_id="ana", session_id="chat-1")
+    await agent.run("hola", ctx)
+    await agent.run(None, ctx)  # goes on with the budget already used up
+    turn = by_name(exporter)["invoke_agent weather"][-1]
+    assert turn.status.status_code is not StatusCode.ERROR and not turn.events
+    assert turn.attributes["langfuse.observation.level"] == "WARNING"
+    assert turn.attributes["max_ai.finish_reason"] == "budget_exceeded"

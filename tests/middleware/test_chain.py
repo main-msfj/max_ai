@@ -1,6 +1,8 @@
-"""The chain runs the middlewares in order, skips one that breaks, and never runs the inside twice."""
+"""The chain runs the middlewares in order; one that breaks stops the turn."""
 
 from __future__ import annotations
+
+import dataclasses
 
 import pytest
 
@@ -43,10 +45,13 @@ class BrokenAfter(CoreMiddleware):
         raise RuntimeError("bug")
 
 
-async def test_a_middleware_that_breaks_is_skipped_and_the_model_runs_once():
+async def test_a_middleware_that_breaks_stops_the_turn():
     calls: list[int] = []
-    result = await MiddlewareChain([Tag("A"), BrokenAfter()]).model(RunContext(), CALL, _model("x", calls))
-    assert result.message.text() == "xA" and len(calls) == 1
+    with pytest.raises(StopRun) as stopped:
+        await MiddlewareChain([Tag("A"), BrokenAfter()]).model(RunContext(), CALL, _model("x", calls))
+    # Nothing goes on without it: the answer is not given out unfiltered.
+    assert stopped.value.finish_reason == "middleware_error" and len(calls) == 1
+    assert stopped.value.label == "BrokenAfter failed"
 
 
 async def test_the_model_s_own_error_goes_up_and_is_not_retried():
@@ -91,6 +96,8 @@ async def test_a_tool_call_runs_only_with_the_parameters_the_model_sent():
 
 
 class Mask(CoreMiddleware):
+    filter_full_text = True
+
     async def stream(self, ctx, call, call_next):
         async for chunk in call_next(call):
             yield chunk.model_copy(update={"content": chunk.content.replace("sk-123", "*****")})
@@ -115,13 +122,32 @@ class BrokenStream(CoreMiddleware):
             raise RuntimeError("bug")
 
 
-async def test_a_turn_goes_on_from_where_it_was_when_a_middleware_breaks():
+async def test_a_turn_stops_where_a_middleware_breaks():
     async def events():
         for number in range(4):
             yield number
 
-    seen = [e async for e in MiddlewareChain([BrokenStream()]).turn(RunContext(), events)]
-    assert seen == [0, 1, 2, 3]
+    seen: list[int] = []
+    with pytest.raises(StopRun):
+        async for event in MiddlewareChain([BrokenStream()]).turn(RunContext(), events):
+            seen.append(event)
+    assert seen == [0]
+
+
+class Watch(CoreMiddleware):
+    async def stream(self, ctx, call, call_next):
+        async for chunk in call_next(call):
+            yield chunk
+
+
+async def test_a_stream_nobody_filters_passes_as_the_provider_sends_it():
+    async def chunks(call: ModelCall):
+        for piece in ["ho", "la mun", "do"]:
+            yield ChatCompletionChunk(content=piece, is_complete=False)
+        yield ChatCompletionChunk(content="", is_complete=True, message=say("hola mundo"))
+
+    out = [c async for c in MiddlewareChain([Watch()]).stream(RunContext(), CALL, chunks)]
+    assert [c.content for c in out] == ["ho", "la mun", "do", ""]  # no waiting for a line
 
 
 class Count(CoreMiddleware):
@@ -141,6 +167,34 @@ async def test_a_middleware_keeps_its_state_in_the_run_context():
     ctx = RunContext()
     assert [e async for e in MiddlewareChain([Count()]).turn(ctx, events)] == [0, 1, 2]
     assert ctx.middleware_state == {"Count": {"events": 3}}
+
+
+class Swap(CoreMiddleware):
+    async def stream(self, ctx, call, call_next):
+        async for chunk in call_next(dataclasses.replace(call, model="masked")):
+            yield chunk
+
+
+class Sees(CoreMiddleware):
+    def __init__(self) -> None:
+        self.models: list[str] = []
+
+    async def stream(self, ctx, call, call_next):
+        self.models.append(call.model)
+        async for chunk in call_next(call):
+            yield chunk
+
+
+async def test_a_streamed_call_a_middleware_changed_reaches_the_next_ones_and_the_model():
+    got: list[str] = []
+
+    async def chunks(call: ModelCall):
+        got.append(call.model)
+        yield ChatCompletionChunk(content="", is_complete=True, message=say("x"))
+
+    inner = Sees()
+    [c async for c in MiddlewareChain([Swap(), inner]).stream(RunContext(), CALL, chunks)]
+    assert inner.models == ["masked"] and got == ["masked"]
 
 
 def _model(text: str, calls: list[int] | None = None):

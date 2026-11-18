@@ -229,9 +229,6 @@ class TurnView:
         if isinstance(event, ModelRetryEvent):
             note = f"Model call failed ({event.reason}); retrying in {event.delay:.0f}s."
             out = self.flush(force=True)
-            if event.discard_partial and self.answer_id is not None:
-                out.append(self.html.delete(self.answer_id))
-                self.answer_id, self.answer = None, ""
             return out + [self.html.append(parts.note(note, "warn"))]
         if isinstance(event, ModelCallEvent):
             return self.finish()

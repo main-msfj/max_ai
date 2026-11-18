@@ -12,11 +12,16 @@ from ..core.compaction.groups import group_atomic_messages, split_recent_message
 from ..core.messages import CoreMessage, Message, ToolMessage
 from ..core.model.compaction import MessageGroup
 from ..core.tokenizer import TokenCounter, default_counter
+from ..errors.middleware import StopRun
 from ..types.completions import Usage
 from ..types.context import Context
 from ..types.summary import Summary
 from .clients import CoreChatCompletionClient
 from .component import ComponentBase, ConfigT
+
+if t.TYPE_CHECKING:
+    from ..core.middleware.chain import MiddlewareChain
+    from ..types.run_context import RunContext
 
 logger = logging.getLogger(__name__)
 AnyClient = CoreChatCompletionClient[t.Any]
@@ -75,10 +80,16 @@ class CoreCompaction(ComponentBase[ConfigT], ABC):
     # -------- EACH WAY -----------------------------------------------------------
     @abstractmethod
     async def reduce(
-        self, old: list[Message], client: AnyClient, summary: Summary | None
+        self,
+        old: list[Message],
+        client: AnyClient,
+        summary: Summary | None,
+        ctx: RunContext | None = None,
+        middleware: MiddlewareChain | None = None,
     ) -> tuple[Summary | None, Usage]:
         """What is kept of ``old``, the messages that leave, and what it
-        cost; ``summary`` is what was kept before and must not be lost."""
+        cost; ``summary`` is what was kept before and must not be lost.
+        A model call made here takes ``ctx`` and ``middleware``, so it is seen."""
 
     # -------- FOR EVERY WAY ------------------------------------------------------
     def measure(
@@ -112,6 +123,8 @@ class CoreCompaction(ComponentBase[ConfigT], ABC):
         prompt_tokens: int = 0,
         tool_tokens: int = 0,
         force: bool = False,
+        ctx: RunContext | None = None,
+        middleware: MiddlewareChain | None = None,
     ) -> CompactionResult:
         """Make ``messages`` fit beside what else goes in the call (the
         system prompt and the tools, in tokens). ``summary``: what earlier
@@ -146,7 +159,9 @@ class CoreCompaction(ComponentBase[ConfigT], ABC):
 
         # 3. What is kept of them; a failure here never stops the agent.
         try:
-            result.summary, result.usage = await self.reduce(old, client, summary)
+            result.summary, result.usage = await self.reduce(old, client, summary, ctx, middleware)
+        except StopRun:
+            raise  # a middleware ended the turn: that is not a failed summary
         except Exception:
             logger.exception("Compaction could not reduce the old messages; they are dropped")
         result.changed, result.removed = True, len(old)
@@ -192,7 +207,12 @@ class WindowCompaction(CoreCompaction[WindowCompactionConfig]):
     component_provider_override = "max_ai.base.compaction.WindowCompaction"
 
     async def reduce(
-        self, old: list[Message], client: AnyClient, summary: Summary | None
+        self,
+        old: list[Message],
+        client: AnyClient,
+        summary: Summary | None,
+        ctx: RunContext | None = None,
+        middleware: MiddlewareChain | None = None,
     ) -> tuple[Summary | None, Usage]:
         return summary, Usage()
 

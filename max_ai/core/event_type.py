@@ -137,10 +137,6 @@ class ModelRetryEvent(ModelEvent):
     max_attempts: int = Field(..., description="Tries allowed in total")
     delay: float = Field(..., description="Seconds before the next try")
     reason: str = Field(..., description="Why it failed, e.g. rate_limit")
-    discard_partial: bool = Field(
-        default=False,
-        description="Part of the answer was already streamed: drop it, the retry streams it again",
-    )
 
 
 class ModelStreamChunkEvent(ModelEvent):

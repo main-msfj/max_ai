@@ -38,7 +38,7 @@ jobs:
         run: uv sync --group dev
 
       - name: Lint
-        run: uv run ruff check max_ai tests examples deployment/library/verify_release.py
+        run: uv run ruff check max_ai tests deployment/library/verify_release.py
 
       - name: Test
         run: uv run pytest -q

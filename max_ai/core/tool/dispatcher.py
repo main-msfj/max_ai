@@ -173,15 +173,21 @@ class ToolDispatcher:
                 ctx.messages.append(cls.tool_message(record, record.result))
 
     @classmethod
-    def close_interrupted(cls, ctx: RunContext) -> None:
-        """The user stopped the turn: every open call gets its answer, so
-        the conversation can go on."""
-        cls.close_unanswered(ctx)
+    def close_interrupted(cls, ctx: RunContext, reason: str | None = None) -> None:
+        """The turn was stopped: every open call gets its answer, so the
+        conversation can go on. ``reason``: the system stopped it, not the user."""
         state = ctx.tool_state
         open_calls = [r for r in state.records.values() if not r.is_consumed]
+        # 1. Stopped by the system: each call that did not run says why.
+        if reason is not None:
+            for record in open_calls:
+                if not record.is_executing:
+                    record.force_consume(ToolResult.tool_failure(record.id, reason))
+        # 2. Questions nobody answered, calls left running, and the missing answers.
+        cls.close_unanswered(ctx)
         for record in open_calls:
             if record.is_executing:
-                state.fail_stale(record.id, CANCELLED)
+                state.fail_stale(record.id, reason or CANCELLED)
         cls.answer_unanswered(ctx, open_calls)
 
     # -------- ONE CALL -----------------------------------------------------------

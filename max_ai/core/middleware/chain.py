@@ -1,6 +1,6 @@
 """The middleware list, run around each place: in order on the way in, in
-reverse on the way out. A middleware that breaks is logged and skipped;
-``StopRun`` always goes through."""
+reverse on the way out. A middleware that breaks stops the turn: nothing
+runs without it."""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ A = t.TypeVar("A")
 R = t.TypeVar("R")
 Y = t.TypeVar("Y")
 
+BROKEN = "middleware_error"  # the finish reason of a turn a broken middleware stopped
 PARAMETERS_CHANGED = "A middleware changed this call's parameters, so it did not run."
 
 
@@ -45,7 +46,7 @@ class MiddlewareChain:
         call_next: Callable[[None], AsyncGenerator[CoreEvent]] = innermost
         for middleware in reversed(self.middlewares):
             call_next = self._streamed(
-                middleware, call_next, lambda inner, m=middleware: m.turn(ctx, lambda: inner(None))
+                middleware, call_next, lambda _, inner, m=middleware: m.turn(ctx, lambda: inner(None))
             )
         return call_next(None)
 
@@ -59,18 +60,18 @@ class MiddlewareChain:
         return await call_next(call)
 
     def stream(self, ctx: RunContext, call: ModelCall, action: NextStream) -> AsyncGenerator[ChatCompletionChunk]:
-        """One streamed model call; the middlewares see it line by line."""
-        # 1. Nobody watching: the chunks go out as the provider sends them.
-        if not self.middlewares:
-            return action(call)
-        # 2. Whole lines, so a word cut in two can't slip past a filter.
+        """One streamed model call. The chunks pass as the provider sends
+        them; with a middleware that filters text, as whole lines."""
+        whole_lines = any(middleware.filter_full_text for middleware in self.middlewares)
+
+        # Whole lines, so a word cut in two can't slip past a filter.
         def innermost(given: ModelCall) -> AsyncGenerator[ChatCompletionChunk]:
-            return self.lines(action(given))
+            return self.lines(action(given)) if whole_lines else action(given)
 
         call_next: NextStream = innermost
         for middleware in reversed(self.middlewares):
             call_next = self._streamed(
-                middleware, call_next, lambda inner, m=middleware: m.stream(ctx, call, inner)
+                middleware, call_next, lambda given, inner, m=middleware: m.stream(ctx, given, inner)
             )
         return call_next(call)
 
@@ -99,34 +100,30 @@ class MiddlewareChain:
         inner: Callable[[A], Awaitable[R]],
         run: Callable[[A, Callable[[A], Awaitable[R]]], Awaitable[R]],
     ) -> Callable[[A], Awaitable[R]]:
-        """One middleware around ``inner``. If it breaks on its own, the call
-        goes on without it, and what is inside never runs twice."""
+        """One middleware around ``inner``. If it breaks on its own, the turn
+        is stopped: nothing goes on without a middleware."""
 
         async def layer(given: A) -> R:
-            done: list[R] = []
             failed: list[BaseException] = []
 
-            # 1. What is inside (the model, the tool), remembered.
+            # 1. What is inside (the model, the tool); its own error is remembered.
             async def call_next(value: A) -> R:
                 try:
-                    result = await inner(value)
+                    return await inner(value)
                 except BaseException as error:
                     failed.append(error)
                     raise
-                done.append(result)
-                return result
 
             try:
                 return await run(given, call_next)
             except StopRun:
                 raise
-            except Exception:
-                # 2. The model or the tool failed: that error goes up.
-                if failed:
+            except Exception as error:
+                # 2. The model or the tool failed: that error goes up as it is.
+                if failed and error is failed[-1]:
                     raise
-                # 3. The middleware's own error: logged, and the call goes on.
-                logger.exception("Middleware %s failed; skipped", type(middleware).__name__)
-                return done[-1] if done else await inner(given)
+                # 3. The middleware's own error: the turn ends.
+                raise MiddlewareChain._broken(middleware, error) from error
 
         return layer
 
@@ -134,40 +131,41 @@ class MiddlewareChain:
     def _streamed(
         middleware: CoreMiddleware,
         inner: Callable[[A], AsyncGenerator[Y]],
-        run: Callable[[Callable[[A], AsyncGenerator[Y]]], AsyncGenerator[Y]],
+        run: Callable[[A, Callable[[A], AsyncGenerator[Y]]], AsyncGenerator[Y]],
     ) -> Callable[[A], AsyncGenerator[Y]]:
-        """The same for what comes piece by piece: if the middleware breaks,
-        the rest comes straight from inside, from where it was."""
+        """The same for what comes piece by piece."""
 
         async def layer(given: A) -> AsyncGenerator[Y]:
-            source: list[AsyncGenerator[Y]] = []
             failed: list[BaseException] = []
 
-            # 1. What is inside, kept so it can go on without the middleware.
             async def call_next(value: A) -> AsyncGenerator[Y]:
-                source.append(pieces := inner(value))
                 try:
-                    async for piece in pieces:
+                    async for piece in inner(value):
                         yield piece
                 except BaseException as error:
                     failed.append(error)
                     raise
 
             try:
-                async for piece in run(call_next):
+                async for piece in run(given, call_next):
                     yield piece
-                return
             except StopRun:
                 raise
-            except Exception:
-                if failed:
+            except Exception as error:
+                if failed and error is failed[-1]:
                     raise
-                logger.exception("Middleware %s failed; skipped", type(middleware).__name__)
-            # 2. The rest, straight from inside.
-            async for piece in source[0] if source else inner(given):
-                yield piece
+                raise MiddlewareChain._broken(middleware, error) from error
 
         return layer
+
+    @staticmethod
+    def _broken(middleware: CoreMiddleware, error: Exception) -> StopRun:
+        """A middleware failed: logged, and the turn stops as if it had asked to."""
+        name = type(middleware).__name__
+        logger.error("Middleware %s failed; the turn is stopped", name, exc_info=error)
+        return StopRun(
+            f"The turn was stopped: {name} failed.", finish_reason=BROKEN, label=f"{name} failed"
+        )
 
     # -------- LINES --------------------------------------------------------------------
     @staticmethod

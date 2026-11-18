@@ -22,7 +22,7 @@ jobs:
         run: uv sync --group dev
 
       - name: Lint
-        run: uv run ruff check max_ai tests examples
+        run: uv run ruff check max_ai tests
 
       # The multilingual embedding model (~220MB) used by a few tests.
       - uses: actions/cache@v4

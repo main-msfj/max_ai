@@ -474,7 +474,7 @@ class CoreLoop(ComponentBase[ConfigT], ABC):
         result = await self.compaction.compact(
             ctx.messages, client, summary=ctx.summary,
             prompt_tokens=count.count_text(self.system(ctx, prompt)), tool_tokens=tools,
-            force=force,
+            force=force, ctx=ctx, middleware=dispatcher.middleware,
         )
         ctx.context = result.context
         if not result.changed:
