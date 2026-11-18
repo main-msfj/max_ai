@@ -31,13 +31,20 @@ class Permissions:
     DANGEROUS: t.ClassVar[tuple[str, ...]] = (
         r"^rm\b", r"^sudo\b", r"^dd\b", r"^mkfs", r"^shutdown\b", r"^reboot\b",
         r"^(chmod|chown)\s+(-\w*R|--recursive)", r"^git\s+push\b.*(--force|-f\b)",
-        r"^git\s+reset\s+--hard", r"^git\s+clean\b", r"^kill(all)?\b", r"^eval\b",
-        r"^(sh|bash|zsh|python3?)$",  # something is piped into an interpreter
+        r"^git\s+reset\s+--hard", r"^git\s+clean\b", r"^kill(all)?\b", r"^eval\b", r"^doas\b",
+        r"^find\b.*\s-(delete|exec|execdir|ok|okdir)\b",  # find that deletes or runs a command
+        # Something is piped into an interpreter: alone, or told to read its input.
+        r"^(sh|bash|zsh|python3?)(\s+-)?$", r"^(sh|bash|zsh)\s+-s\b",
     )
+    # Commands that only run another one: what they run is what counts.
+    WRAPPERS: t.ClassVar[frozenset[str]] = frozenset({
+        "timeout", "env", "nohup", "nice", "command", "time", "xargs", "exec", "stdbuf", "ionice",
+    })
+    SHELLS: t.ClassVar[frozenset[str]] = frozenset({"sh", "bash", "zsh", "dash"})
     # What cannot be read safely: a command built while it runs.
     UNREADABLE: t.ClassVar[tuple[str, ...]] = ("$(", "`", "<(")
     # Separators split commands only outside quotes: ``python3 -c "a\nb"`` is one.
-    PIECES: t.ClassVar[str] = r"""(?P<text>'[^']*'|"(?:\\.|[^"\\])*"|\\.)|(?P<sep>&&|\|\||;|\||\n)"""
+    PIECES: t.ClassVar[str] = r"""(?P<text>'[^']*'|"(?:\\.|[^"\\])*"|\\.)|(?P<sep>&&|\|\||;|\||\n|(?<![>&])&(?![>&]))"""
     # The text a heredoc feeds a command is data, not commands.
     HEREDOC: t.ClassVar[str] = r"<<-?\s*['\"]?(\w+)['\"]?[^\n]*\n.*?\n\s*\1[ \t]*(?=\n|$)"
     HARMLESS: t.ClassVar[frozenset[str]] = frozenset({"cd"})  # never asked on its own
@@ -100,9 +107,40 @@ class Permissions:
             return True
         # Each part of the command is looked at alone: ``ls && rm x`` has an rm.
         for part in Permissions.parts(target):
-            if any(re.search(pattern, part) for pattern in Permissions.DANGEROUS):
-                return True
+            for command in Permissions.bare(part):
+                if any(re.search(pattern, command) for pattern in Permissions.DANGEROUS):
+                    return True
         return False
+
+    @staticmethod
+    def bare(part: str) -> list[str]:
+        """The commands one part of a command really runs, without what
+        hides them: brackets, variables set before it, the path of the
+        program, a command that only runs another, a shell given its text."""
+        # 1. Brackets around it, and the variables set before the program.
+        text = part.strip().lstrip("({! \t").rstrip(")} \t")
+        try:
+            words = shlex.split(text)
+        except ValueError:
+            return [text]
+        while words and re.fullmatch(r"\w+=.*", words[0], flags=re.S):
+            words = words[1:]
+        if not words:
+            return []
+        # 2. The program by its name, not its path: /bin/rm is rm.
+        words[0] = words[0].rpartition("/")[2]
+        found = [" ".join(words)]
+        # 3. A shell given its text with -c: the text is a command of its own.
+        if words[0] in Permissions.SHELLS and "-c" in words[:-1]:
+            inner = words[words.index("-c") + 1]
+            found += [command for piece in Permissions.parts(inner) for command in Permissions.bare(piece)]
+        # 4. A command that only runs another: every word after it may be that one.
+        elif words[0] in Permissions.WRAPPERS:
+            for start in range(1, len(words)):
+                rest = words[start:]
+                rest[0] = rest[0].rpartition("/")[2]
+                found.append(" ".join(rest))
+        return found
 
     @staticmethod
     def protected(command: str) -> bool:
