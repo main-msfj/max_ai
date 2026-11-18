@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import os
 import shlex
 import typing as t
@@ -115,6 +116,7 @@ class E2BSandbox(SandboxCore):
         creating it if needed. `timeout` runs inside, so nothing is left
         running. The model's commands run without sudo; only ``harness``
         work runs as root."""
+        self._ready()
         from e2b import CommandExitException, SandboxException
 
         box = await self._start()
@@ -162,6 +164,7 @@ class E2BSandbox(SandboxCore):
     async def close(self) -> None:
         """Pause the user's machine: it costs no running time and keeps
         ``.agent/``. A machine that cannot pause now pauses at its timeout."""
+        self._ready()
         from e2b import AsyncSandbox, SandboxException, SandboxState
 
         try:
@@ -174,6 +177,7 @@ class E2BSandbox(SandboxCore):
 
     async def remove(self) -> None:
         """Delete the user's machine and everything in it, ``.agent/`` too."""
+        self._ready()
         from e2b import AsyncSandbox, SandboxException, SandboxState
 
         try:
@@ -230,6 +234,13 @@ class E2BSandbox(SandboxCore):
         query = SandboxQuery(metadata={OWNER: self.name}, state=states)
         found = await AsyncSandbox.list(query=query, limit=1, **self._key()).next_items()
         return found[0].sandbox_id if found else None
+
+    def _ready(self) -> None:
+        """Say what is missing in words, before anything of E2B is used:
+        the user, the key or the ``e2b`` package."""
+        _, _ = self.name, self._key()
+        if importlib.util.find_spec("e2b") is None:
+            raise SandboxError("E2BSandbox needs the e2b package: install max_ai[e2b]")
 
     def _key(self) -> dict[str, t.Any]:
         """The E2B key, read from this machine's environment when it is used."""

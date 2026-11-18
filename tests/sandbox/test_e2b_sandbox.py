@@ -2,6 +2,7 @@
 need ``E2B_API_KEY`` and are ``integration``: they cost money."""
 
 import asyncio
+import importlib.util
 import os
 
 import pytest
@@ -12,7 +13,10 @@ from max_ai.capabilities.sandbox.e2b import E2BSandbox
 from max_ai.errors.sandbox import SandboxError
 
 load_dotenv()
-needs_e2b = pytest.mark.skipif(not os.environ.get("E2B_API_KEY"), reason="E2B_API_KEY is not set")
+needs_e2b = pytest.mark.skipif(
+    not os.environ.get("E2B_API_KEY") or importlib.util.find_spec("e2b") is None,
+    reason="E2B_API_KEY is not set or the e2b extra is not installed",
+)
 FETCH = "python3 -c \"import urllib.request as u; print(u.urlopen('{}', timeout=15).status)\""
 
 
@@ -46,6 +50,13 @@ async def test_it_needs_the_key_and_says_which_variable(monkeypatch):
     monkeypatch.delenv("NO_SUCH_KEY", raising=False)
     with pytest.raises(SandboxError, match="NO_SUCH_KEY"):
         await E2BSandbox(api_key_env="NO_SUCH_KEY").bind("user-1").execute_command("true")
+
+
+async def test_without_the_e2b_package_it_says_how_to_install_it(monkeypatch):
+    monkeypatch.setenv("E2B_API_KEY", "e2b_secret")
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
+    with pytest.raises(SandboxError, match=r"max_ai\[e2b\]"):
+        await E2BSandbox().bind("user-1").execute_command("true")
 
 
 def test_it_is_stored_with_the_name_of_the_key_never_the_key(monkeypatch):
