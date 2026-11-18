@@ -5,6 +5,7 @@ from max_ai.agents.agent import Agent
 from max_ai.capabilities.clients.openrouter import OpenRouterChatCompletionClient
 from max_ai.capabilities.loop import ReactLoop
 from max_ai.capabilities.memory import Memory
+from max_ai.capabilities.sandbox.local import LocalSandbox
 from max_ai.capabilities.tools.decorator import tool as as_tool
 
 
@@ -20,10 +21,11 @@ def agent(**pieces):
     return Agent("helper", "Answers questions.", "Be brief.", pieces.pop("client", client()), **pieces)
 
 
-def test_an_agent_takes_its_pieces_and_the_loop_has_a_default():
-    made = agent(memory=Memory(read_only=True))
+def test_an_agent_takes_its_pieces_and_the_loop_has_a_default(tmp_path):
+    made = agent(memory=Memory(read_only=True), sandbox=LocalSandbox(str(tmp_path)))
     assert isinstance(made.reasoning, ReactLoop)
-    assert made.toolset == [] and made.sandbox is None and made.memory.read_only
+    assert made.toolset == [] and made.memory.read_only
+    assert agent().sandbox is None
 
 
 @pytest.mark.parametrize(
@@ -52,11 +54,11 @@ def test_an_agent_without_a_name_is_refused():
         Agent("  ", "d", "i", client())
 
 
-def test_an_agent_is_stored_and_built_again(monkeypatch):
+def test_an_agent_is_stored_and_built_again(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-env")  # only the variable's name is stored
     made = agent(
         reasoning=ReactLoop(max_iterations=7), memory=Memory(read_only=True),
-        output_format=Answer,
+        sandbox=LocalSandbox(str(tmp_path)), output_format=Answer,
     )
     stored = made.serialize().model_dump_json()
     assert "sk-test" not in stored  # the key never leaves the object

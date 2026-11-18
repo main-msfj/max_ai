@@ -64,6 +64,9 @@ class Harness:
         "A tool may run {tool:.0f} seconds (tool_timeout_seconds) but a sandbox lives "
         "{sandbox:.0f} (harness_sandbox_seconds); lower the first or raise the second."
     )
+    MEMORY_NEEDS_SANDBOX: t.ClassVar[str] = (
+        "The memory is kept in a sandbox: pass sandbox=... to the agent."
+    )
     SKILLS_NEED_SANDBOX: t.ClassVar[str] = (
         "Skills are read and run in a sandbox: pass sandbox=... to the agent."
     )
@@ -144,6 +147,7 @@ class Harness:
         toolset: Sequence[CoreTool],
         sandbox: SandboxCore | None,
         skills: SkillsCore | None,
+        memory: object | None = None,
     ) -> list[CoreTool]:
         """The tools the agent ends with: the developer's first, then ours."""
         from ...capabilities.tools.ask_user import AskUserTool
@@ -153,7 +157,9 @@ class Harness:
 
         tools = list(toolset)
         names = {tool.name for tool in tools}
-        # 1. Commands and skills run in a sandbox; skills also need bash.
+        # 1. Commands, skills and the memory live in a sandbox; skills also need bash.
+        if memory is not None and sandbox is None:
+            raise HarnessError(cls.MEMORY_NEEDS_SANDBOX)
         if skills is not None and sandbox is None:
             raise HarnessError(cls.SKILLS_NEED_SANDBOX)
         if cls.BASH in names and sandbox is None:

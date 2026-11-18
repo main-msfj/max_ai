@@ -94,7 +94,29 @@ async def test_a_memory_file_has_a_size_limit_and_other_files_do_not(sandbox, fo
     assert not (folder / "big.md").exists()
     assert (await call("write_file", path="big.txt", content=big)).success  # the workspace has none
     # An edit that would pass the limit is refused and the file stays as it was.
-    assert (await call("write_file", path=f"{folder}/small.md", content="word\n")).success
-    grown = await call("edit_file", path=f"{folder}/small.md", old_text="word", new_text=big)
+    assert (await call("write_file", path=f"{folder}/small.md", content=PYTEST)).success
+    grown = await call("edit_file", path=f"{folder}/small.md", old_text="Always", new_text=big)
     assert not grown.success and "at most 100 kB" in grown.error
-    assert (folder / "small.md").read_text() == "word\n"
+    assert (folder / "small.md").read_text() == PYTEST
+
+
+async def test_a_memory_file_must_say_what_it_holds(folder, call):
+    # 1. Without its header it is refused, and the answer shows the header.
+    for content in ("just text\n", "---\nname: x\n---\ntext\n", PYTEST.replace("feedback", "other")):
+        refused = await call("write_file", path=f"{folder}/fact.md", content=content)
+        assert not refused.success and "description: one line saying what it holds" in refused.error
+    assert not (folder / "fact.md").exists()
+    # 2. An edit that breaks the header is refused and the file stays as it was.
+    assert (await call("write_file", path=f"{folder}/fact.md", content=PYTEST)).success
+    broken = await call("edit_file", path=f"{folder}/fact.md", old_text="type: feedback\n", new_text="")
+    assert not broken.success and (folder / "fact.md").read_text() == PYTEST
+    # 3. An edit of the body is a normal edit.
+    assert (await call("edit_file", path=f"{folder}/fact.md", old_text="Always", new_text="Only")).success
+
+
+async def test_a_path_that_only_looks_like_the_memory_is_refused(sandbox, folder, call):
+    refused = await call("write_file", path=".agent/memory/fact.md", content=PYTEST)
+    assert not refused.success
+    # The answer gives the path to use, and nothing was written in the session's folder.
+    assert f"write to {folder}/fact.md" in refused.error
+    assert not Path(sandbox.session_paths("s1")["workspace"], ".agent").exists()

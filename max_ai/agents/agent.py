@@ -208,7 +208,9 @@ class Agent(ComponentBase[AgentSpec]):
         # 3. What the harness adds: tracing and its own tools.
         self.middlewares = Harness.middleware_rules(self.middlewares, self.name)
         self._chain = MiddlewareChain(self.middlewares)
-        self.tools = Harness.tool_combination(self.toolset, self.sandbox, self.skills)
+        self.tools = Harness.tool_combination(
+            self.toolset, self.sandbox, self.skills, self.memory
+        )
 
     # -------- WHAT THE APPLICATION CALLS -------------------------------------
 
