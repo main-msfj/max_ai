@@ -72,7 +72,7 @@ async def test_always_keeps_the_rule_before_any_turn_has_run(tmp_path):
         id="a", tool_name="bash", parameters={"command": "npm test", "description": "d"}))
     assert await agent.approve(ctx, "a", always=True) is True
     box = await agent._sandbox(ctx)
-    assert box is not None and "bash(npm*)" in (await box.permissions())["allow"]
+    assert box is not None and (await box.permissions())["allow"] == ["bash(npm test)"]
     await agent.close()
 
 

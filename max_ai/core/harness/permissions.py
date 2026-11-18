@@ -11,9 +11,12 @@ from ...base.layout import Layout
 
 
 class Permissions:
-    """Rules are ``tool`` or ``tool(pattern)``; the pattern is matched with
-    the bash command or the path of a file tool. ``decide`` answers False
-    (denied), None (ask the user), True (run) or ``DEFAULT`` (no rule)."""
+    """Rules are ``tool`` or ``tool(pattern)``. For a file tool the pattern
+    is matched with the path. For bash an allow rule is the exact command,
+    ``bash(pytest -q)``, or a prefix that ends where a word ends,
+    ``bash(git status:*)``; ask and deny rules may also use wildcards.
+    ``decide`` answers False (denied), None (ask the user), True (run) or
+    ``DEFAULT`` (no rule)."""
 
     DEFAULT: t.ClassVar[str] = "default"
     KINDS: t.ClassVar[tuple[str, ...]] = ("allow", "ask", "deny")
@@ -41,6 +44,20 @@ class Permissions:
         "timeout", "env", "nohup", "nice", "command", "time", "xargs", "exec", "stdbuf", "ionice",
     })
     SHELLS: t.ClassVar[frozenset[str]] = frozenset({"sh", "bash", "zsh", "dash"})
+    PREFIX: t.ClassVar[str] = ":*"  # how a rule that allows a prefix ends
+    # Commands that only read: "always allow" keeps them as a prefix.
+    READERS: t.ClassVar[tuple[str, ...]] = (
+        "ls", "pwd", "wc", "cat", "head", "tail", "grep",
+        "git status", "git diff", "git log", "git show",
+    )
+    # They run code the model writes: approved once, never kept.
+    NEVER_KEPT: t.ClassVar[frozenset[str]] = WRAPPERS | SHELLS | frozenset({
+        "python", "python3", "node", "deno", "bun", "perl", "ruby", "php", "eval", "source", ".",
+    })
+    # Loops and blocks: several commands in one that cannot be told apart.
+    BLOCKS: t.ClassVar[frozenset[str]] = frozenset({
+        "for", "while", "until", "if", "case", "select", "function", "do", "done", "then", "fi",
+    })
     # What cannot be read safely: a command built while it runs.
     UNREADABLE: t.ClassVar[tuple[str, ...]] = ("$(", "`", "<(")
     # Separators split commands only outside quotes: ``python3 -c "a\nb"`` is one.
@@ -61,14 +78,17 @@ class Permissions:
         target = str(parameters.get("command") or parameters.get("path") or "")
         parts = self.parts(target) if tool_name == self.BASH else [target]
         # 1. The user's deny list, for the whole call or any part of it.
-        if any(self.matches(self.deny, tool_name, part) for part in [target, *parts]):
+        if any(self.matches(self.deny, tool_name, part, wide=True) for part in [target, *parts]):
             return False
         # 2. What the harness always asks, and the user's ask list.
         if self.dangerous(tool_name, target):
             return None
-        if any(self.matches(self.ask, tool_name, part) for part in [target, *parts]):
+        if any(self.matches(self.ask, tool_name, part, wide=True) for part in [target, *parts]):
             return None
-        # 3. Every part allowed (a lone cd always is); else the tool's own way.
+        # 3. The whole command as the user approved it; or every part allowed
+        #    (a lone cd always is). Else the tool's own way.
+        if self.matches(self.allow, tool_name, target):
+            return True
         if all(self.harmless(tool_name, part) or self.matches(self.allow, tool_name, part)
                for part in parts or [target]):
             return True
@@ -181,33 +201,79 @@ class Permissions:
         return False
 
     @staticmethod
-    def matches(rules: list[str], tool_name: str, target: str) -> bool:
-        """Whether one of ``rules`` names this tool and, when it has a pattern, this target."""
+    def matches(rules: list[str], tool_name: str, target: str, *, wide: bool = False) -> bool:
+        """Whether one of ``rules`` names this tool and, when it has a pattern,
+        this target. ``wide``: a bash pattern may use wildcards too (ask and
+        deny, where matching more only asks or denies more)."""
+        target = target.strip()
         for rule in rules:
             name, _, pattern = rule.partition("(")
             if name.strip() != tool_name:
                 continue
-            if not pattern or fnmatch.fnmatchcase(target.strip(), pattern.rstrip(")")):
+            pattern = pattern[:-1] if pattern.endswith(")") else pattern
+            if not pattern:
+                return True
+            # 1. Any other tool: a pattern for its path.
+            if tool_name != Permissions.BASH:
+                if fnmatch.fnmatchcase(target, pattern):
+                    return True
+                continue
+            # 2. bash: a prefix up to the end of a word, for a command that
+            #    sends its output nowhere; or the exact command.
+            if pattern.endswith(Permissions.PREFIX):
+                prefix = pattern[: -len(Permissions.PREFIX)]
+                starts = target == prefix or target.startswith(prefix + " ")
+                if starts and not Permissions.redirects(target):
+                    return True
+            elif target == pattern.strip():
+                return True
+            if wide and fnmatch.fnmatchcase(target, pattern):
                 return True
         return False
 
     @staticmethod
+    def redirects(part: str) -> bool:
+        """The command sends its output to a file (``>``, ``--output``): it writes."""
+        try:
+            words = shlex.split(part)
+        except ValueError:
+            return True
+        return any(re.match(r"\d*&?>", word) or word.startswith("--output") for word in words)
+
+    @staticmethod
     def rules_for(tool_name: str, parameters: Mapping[str, t.Any]) -> list[str]:
-        """The rules "always allow" keeps: one per command of a bash call, by
-        its first word (a lone cd needs none); any other tool whole."""
+        """The rule "always allow" keeps: for bash, a prefix when the command
+        only reads, else the exact command (none for a lone cd); any other
+        tool whole."""
         if tool_name != Permissions.BASH:
             return [tool_name]
-        rules: list[str] = []
-        for part in Permissions.parts(str(parameters.get("command") or "")):
-            rule = f"{tool_name}({part.split()[0]}*)"
-            if not Permissions.harmless(tool_name, part) and rule not in rules:
-                rules.append(rule)
-        return rules
+        command = str(parameters.get("command") or "").strip()
+        parts = [part for part in Permissions.parts(command) if not Permissions.harmless(tool_name, part)]
+        if not parts:
+            return []
+        # 1. One command that only reads and writes nowhere: its prefix.
+        if len(parts) == 1 and not Permissions.redirects(parts[0]):
+            for reader in Permissions.READERS:
+                if parts[0] == reader or parts[0].startswith(reader + " "):
+                    return [f"{tool_name}({reader}{Permissions.PREFIX})"]
+        # 2. Anything else: what the user saw, whole.
+        return [f"{tool_name}({command})"]
 
     @staticmethod
     def can_be_kept(tool_name: str, parameters: Mapping[str, t.Any]) -> bool:
         """Whether "always allow" may be offered: never for a dangerous call,
-        nor when there is no rule to keep."""
+        for what runs code the model writes, for loops and blocks, nor when
+        there is no rule to keep."""
         target = str(parameters.get("command") or parameters.get("path") or "")
-        rules = Permissions.rules_for(tool_name, parameters)
-        return bool(rules) and not Permissions.dangerous(tool_name, target)
+        if not Permissions.rules_for(tool_name, parameters) or Permissions.dangerous(tool_name, target):
+            return False
+        if tool_name != Permissions.BASH:
+            return True
+        for part in Permissions.parts(target):
+            # 1. A loop or a block: its commands cannot be told apart.
+            if part.startswith(("(", "{")) or part.split()[0] in Permissions.BLOCKS:
+                return False
+            # 2. An interpreter, or a command that only runs another.
+            if any(command.split()[0] in Permissions.NEVER_KEPT for command in Permissions.bare(part)):
+                return False
+        return True
