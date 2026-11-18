@@ -59,7 +59,7 @@ def test_it_is_stored_with_image_dockerfile_and_networks():
     stored = sandbox.serialize()
     assert stored.config == {
         "dockerfile": "Dockerfile", "networks": ["pypi.org"],
-        "memory": "2g", "cpus": 2.0, "processes": 512,
+        "memory": "2g", "cpus": 2.0, "processes": 512, "extra_env": [],
     }
     again = SandboxCore.deserialize(stored.model_dump())
     assert isinstance(again, DockerSandbox) and again.networks == ["pypi.org"]
@@ -76,6 +76,14 @@ async def test_commands_run_in_the_users_container(docker):
     ]
     assert (await sandbox.execute_command("cat", stdin=b"hello")).stdout == "hello"
     assert (await sandbox.execute_command("exit 3")).exit_code == 3
+
+
+@needs_docker
+async def test_only_the_variables_named_in_extra_env_enter_the_container(docker, monkeypatch):
+    monkeypatch.setenv("MY_API_KEY", "secret-value")
+    monkeypatch.setenv("OTHER_KEY", "other-value")
+    seen = (await docker(extra_env=["MY_API_KEY"]).execute_command("env")).stdout
+    assert "MY_API_KEY=secret-value" in seen and "other-value" not in seen
 
 
 @needs_docker

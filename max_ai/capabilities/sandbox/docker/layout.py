@@ -37,6 +37,7 @@ class DockerSandboxConfig(BaseModel):
     memory: str = "2g"
     cpus: float = 2
     processes: int = 512
+    extra_env: list[str] = Field(default_factory=list)
 
 
 class DockerSandbox(SandboxCore):
@@ -63,6 +64,9 @@ class DockerSandbox(SandboxCore):
     The container stops by itself after ``harness_sandbox_seconds`` without
     a command and is created again by the next one; the volume stays.
 
+    ``extra_env`` names variables of this machine that the commands also
+    see; nothing else of this machine's environment enters the container.
+
     Use it bound: ``sandbox.bind(identifier)``.
     """
 
@@ -78,8 +82,9 @@ class DockerSandbox(SandboxCore):
         memory: str = "2g",
         cpus: float = 2,
         processes: int = 512,
+        extra_env: list[str] | None = None,
     ) -> None:
-        super().__init__(HOME)
+        super().__init__(HOME, extra_env)
         self.image = image
         self.dockerfile = dockerfile
         self.networks = list(networks or [])
@@ -91,6 +96,7 @@ class DockerSandbox(SandboxCore):
         return DockerSandboxConfig(
             image=self.image, dockerfile=self.dockerfile, networks=self.networks,
             memory=self.memory, cpus=self.cpus, processes=self.processes,
+            extra_env=self.extra_env,
         )
 
     @classmethod
@@ -119,7 +125,8 @@ class DockerSandbox(SandboxCore):
         await self._start()
         # "-e NAME" takes the value from this call's environment, so the
         # values never show in the process list.
-        variables = [arg for name in self.variables for arg in ("-e", name)]
+        shown = self.environment()
+        variables = [arg for name in shown for arg in ("-e", name)]
         # Its home is a folder it may write: pip and git keep their files there.
         user = ["--user", ROOT] if harness else ["--user", AGENT, "-e", f"HOME={self.layout.tmp}"]
         mark = f"run-{short_id()}"  # an extra argument, only to find the command later
@@ -127,7 +134,7 @@ class DockerSandbox(SandboxCore):
             code, stdout, stderr = await self._docker(
                 "exec", "-i", *user, *variables, self.name,
                 "timeout", "-k", "2", str(timeout), "bash", "-c", command, mark,
-                stdin=stdin, env={**os.environ, **self.variables},
+                stdin=stdin, env={**os.environ, **shown},
             )
         except asyncio.CancelledError:
             # Stopped from outside: the command would go on inside the container.

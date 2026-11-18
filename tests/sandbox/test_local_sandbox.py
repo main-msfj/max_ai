@@ -13,7 +13,7 @@ def test_building_it_creates_nothing(tmp_path):
 
 def test_it_is_stored_with_the_root_as_given():
     sandbox = LocalSandbox(root=".")
-    assert sandbox.serialize().config == {"root": "."}
+    assert sandbox.serialize().config == {"root": ".", "extra_env": []}
     again = SandboxCore.deserialize(sandbox.serialize().model_dump())
     assert isinstance(again, LocalSandbox) and again.layout.root == sandbox.layout.root
 
@@ -28,6 +28,41 @@ async def test_a_command_reads_stdin_and_sees_the_bound_variables(tmp_path):
     sandbox = LocalSandbox(root=str(tmp_path)).bind("user-1", {"MY_VARIABLE": "x"})
     assert (await sandbox.execute_command("cat", stdin=b"hello")).stdout == "hello"
     assert (await sandbox.execute_command("echo $MY_VARIABLE")).stdout.strip() == "x"
+
+
+async def test_a_command_never_sees_this_machine_s_secrets(tmp_path, monkeypatch):
+    monkeypatch.setenv("MY_API_KEY", "secret-value")
+    monkeypatch.setenv("GIT_DIR", "/somewhere/else")
+    sandbox = LocalSandbox(root=str(tmp_path)).bind("user-1", {"MY_VARIABLE": "x"})
+    seen = (await sandbox.execute_command("env")).stdout
+    assert "secret-value" not in seen and "GIT_DIR" not in seen
+    # What bash needs is there: programs are found and the home is the user's.
+    assert (await sandbox.execute_command("command -v python3 && echo $HOME")).exit_code == 0
+    assert "PATH=" in seen and "HOME=" in seen and "MY_VARIABLE=x" in seen
+
+
+async def test_extra_env_names_what_else_a_command_sees(tmp_path, monkeypatch):
+    monkeypatch.setenv("MY_API_KEY", "secret-value")
+    monkeypatch.delenv("NOT_SET", raising=False)
+    sandbox = LocalSandbox(root=str(tmp_path), extra_env=["MY_API_KEY", "NOT_SET"])
+    # Stored by name; the value is read when the command runs.
+    assert "secret-value" not in sandbox.serialize().model_dump_json()
+    again = SandboxCore.deserialize(sandbox.serialize().model_dump())
+    seen = (await again.execute_command("echo $MY_API_KEY; env")).stdout
+    assert seen.startswith("secret-value\n") and "NOT_SET" not in seen
+
+
+async def test_git_never_takes_the_repository_above_the_session(tmp_path):
+    sandbox = LocalSandbox(root=str(tmp_path)).bind("user-1")
+    await sandbox.prepare()
+    session = sandbox.session_paths("s1")["workspace"]
+    await sandbox.execute_command(f"git init -q . && mkdir -p {session}")  # the project's own
+    # 1. From the session's folder, the project's repository is not found.
+    above = await sandbox.execute_command(f"cd {session} && git status")
+    assert above.exit_code != 0 and "not a git repository" in above.stderr
+    # 2. A repository the model makes there works as always.
+    own = await sandbox.execute_command(f"cd {session} && git init -q . && git status")
+    assert own.exit_code == 0
 
 
 async def test_a_command_stops_at_its_timeout(tmp_path):

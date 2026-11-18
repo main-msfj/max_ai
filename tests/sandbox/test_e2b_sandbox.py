@@ -63,7 +63,7 @@ def test_it_is_stored_with_the_name_of_the_key_never_the_key(monkeypatch):
     monkeypatch.setenv("E2B_API_KEY", "e2b_secret")
     stored = E2BSandbox(networks=["pypi.org"]).serialize()
     assert stored.config == {
-        "networks": ["pypi.org"], "api_key_env": "E2B_API_KEY",
+        "networks": ["pypi.org"], "api_key_env": "E2B_API_KEY", "extra_env": [],
     }
     assert "e2b_secret" not in stored.model_dump_json()
     again = SandboxCore.deserialize(stored.model_dump())
@@ -73,8 +73,10 @@ def test_it_is_stored_with_the_name_of_the_key_never_the_key(monkeypatch):
 # -------- with E2B ---------------------------------------------------------------
 @needs_e2b
 @pytest.mark.integration
-async def test_commands_run_in_the_users_machine(e2b):
-    sandbox = e2b()
+async def test_commands_run_in_the_users_machine(e2b, monkeypatch):
+    monkeypatch.setenv("MY_API_KEY", "secret-value")
+    monkeypatch.setenv("OTHER_KEY", "other-value")
+    sandbox = e2b(extra_env=["MY_API_KEY"])
     await sandbox.prepare()
     result = await sandbox.execute_command("pwd; echo $MY_VARIABLE; ls .agent")
     assert result.stdout.split() == [
@@ -83,7 +85,10 @@ async def test_commands_run_in_the_users_machine(e2b):
     assert (await sandbox.execute_command("cat", stdin=b"hello")).stdout == "hello"
     assert (await sandbox.execute_command("exit 3")).exit_code == 3
     # The E2B key stays on this machine.
-    assert "E2B_API_KEY" not in (await sandbox.execute_command("env")).stdout
+    seen = (await sandbox.execute_command("env")).stdout
+    assert "E2B_API_KEY" not in seen and "other-value" not in seen
+    # Only what extra_env names comes from this machine.
+    assert "MY_API_KEY=secret-value" in seen
 
 
 @needs_e2b
