@@ -62,7 +62,8 @@ class DockerSandbox(SandboxCore):
     and ``processes`` are the most a container may use.
 
     The container stops by itself after ``harness_sandbox_seconds`` without
-    a command and is created again by the next one; the volume stays.
+    a command and is created again by the next one; the volume stays
+    until ``remove()``.
 
     ``extra_env`` names variables of this machine that the commands also
     see; nothing else of this machine's environment enters the container.
@@ -168,6 +169,14 @@ class DockerSandbox(SandboxCore):
         volume, with ``.agent/``, stays."""
         await self._docker("rm", "-f", self.name, f"{self.name}-proxy")
         await self._docker("network", "rm", f"{self.name}-net")
+
+    async def remove(self) -> None:
+        """Delete everything of the user: the container, its proxy, their
+        network and the volume, with ``.agent/`` in it."""
+        await self.close()
+        code, _, error = await self._docker("volume", "rm", "-f", self.name)
+        if code != 0:
+            raise SandboxError(f"could not remove the volume of {self.name}: {error.strip()}")
 
     async def _start(self) -> None:
         """Make sure the container runs and tell it a command comes: it stops

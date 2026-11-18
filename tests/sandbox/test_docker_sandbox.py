@@ -25,7 +25,7 @@ FETCH = "python3 -c \"import urllib.request as u; print(u.urlopen('{}', timeout=
 
 @pytest.fixture
 async def docker(request):
-    """Bound sandboxes that are removed, with their volumes, after the test."""
+    """Bound sandboxes that are removed, with their files, after the test."""
     made: list[DockerSandbox] = []
 
     def build(**options) -> DockerSandbox:
@@ -35,8 +35,7 @@ async def docker(request):
 
     yield build
     for sandbox in made:
-        await sandbox.close()
-        subprocess.run(["docker", "volume", "rm", "-f", sandbox.name], capture_output=True)
+        await sandbox.remove()
 
 
 # -------- without Docker ---------------------------------------------------------
@@ -119,6 +118,21 @@ async def test_files_and_skills_survive_the_container(docker, skill_archive):
     assert await sandbox.outdated_skills({"pdf": "k1"}) == []
     size = await sandbox.execute_command("wc -c < .agent/workspace/s1/a.bin")
     assert size.stdout.strip() == "2"
+
+
+@needs_docker
+async def test_remove_leaves_nothing_of_the_user(docker):
+    sandbox = docker(networks=["pypi.org"])
+    await sandbox.prepare()
+    await sandbox.remove()
+    for kind in ("container", "volume", "network"):
+        listed = subprocess.run(
+            ["docker", kind, "ls", "--format", "{{.Name}}{{.Names}}", *(["-a"] if kind == "container" else [])],
+            capture_output=True, text=True,
+        )
+        assert sandbox.name not in listed.stdout, kind
+    # The next command starts from nothing.
+    assert (await sandbox.execute_command("ls -A")).stdout.strip() == ""
 
 
 @needs_docker
