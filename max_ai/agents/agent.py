@@ -475,8 +475,7 @@ class Agent(ComponentBase[AgentSpec]):
             reasoning=dump(self.reasoning, "reasoning"),
             toolset=[dump(tool, "tool") for tool in self.toolset],
             mcp=json.loads(serialize_mcp_servers(self.mcp)),
-            # Memory has no settings of its own beyond this one.
-            memory={"read_only": self.memory.read_only} if self.memory is not None else None,
+            memory=dump(self.memory, "memory") if self.memory is not None else None,
             knowledge=[dump(source, "knowledge") for source in self.knowledge],
             skills=dump(self.skills, "skills") if self.skills is not None else None,
             middlewares=[dump(item, "middleware") for item in self.middlewares],
@@ -498,7 +497,7 @@ class Agent(ComponentBase[AgentSpec]):
             reasoning=load(config.reasoning),
             toolset=[load(tool) for tool in config.toolset],
             mcp=list(config.mcp),
-            memory=Memory(**config.memory) if config.memory is not None else None,
+            memory=load(config.memory),
             knowledge=[load(source) for source in config.knowledge],
             skills=load(config.skills),
             middlewares=[load(item) for item in config.middlewares],
