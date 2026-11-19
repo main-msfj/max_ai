@@ -42,9 +42,6 @@ from ..capabilities.stacks import (
     ToolsLayer,
     WorkspaceLayer,
 )
-from ..capabilities.tools.call_tool import CallToolTool
-from ..capabilities.tools.search_tool import SearchToolsTool
-from ..capabilities.tools.skill import ReadSkillTool
 from ..config import setting
 from ..core.event_type import CoreEvent, FatalErrorEvent, ModelStreamChunkEvent
 from ..core.harness.hooks import HarnessLoopHook, HarnessToolHook
@@ -177,6 +174,9 @@ class Agent(ComponentBase[AgentSpec]):
         Harness.model_rules(self.client.config)
         if self.sandbox is not None:
             Harness.sandbox_rules()
+
+        # 7. What needs a sandbox has one, and skills have bash.
+        Harness.combination_rules(self.toolset, self.sandbox, self.skills, self.memory)
 
     @staticmethod
     def _check(value: object, kind: type, what: str) -> None:
@@ -395,27 +395,21 @@ class Agent(ComponentBase[AgentSpec]):
     async def _registry(self) -> ToolRegistry:
         """The tools of a run: the agent's, the MCP servers' and what reaches them."""
         tools = list(self.tools)
+
         # 1. MCP servers connect once; one that is down is skipped.
         if self.mcp:
             async with self._mcp_lock:
                 await self._mcp.connect_all()
             tools += self._mcp.get_tools()
-        if self.skills is not None:
-            tools.append(ReadSkillTool())
+
         # 2. A tool with a name already taken is left out: the first one wins.
         registry = ToolRegistry()
         for tool in tools:
             if registry.get(tool.name) is None:
                 registry.register(tool)
-        # 3. Few deferred tools go loaded: the two tools that find and call
-        #    them would cost more than they save.
-        if registry.deferred_tokens() < setting.harness_deferred_tools_min_tokens:
-            registry.load_deferred()
-        # 4. Many are found and called through these two.
-        if registry.deferred_tools():
-            for extra in (SearchToolsTool(registry), CallToolTool(registry)):
-                if registry.get(extra.name) is None:
-                    registry.register(extra)
+
+        # 3. Few deferred tools go loaded; many are found and called through two tools.
+        Harness.deferred_rules(registry)
         return registry
 
     async def _dispatcher(self, registry: ToolRegistry, box: SandboxCore | None) -> ToolDispatcher:

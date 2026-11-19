@@ -19,6 +19,7 @@ from ..tokenizer import TokenCounter
 
 if t.TYPE_CHECKING:
     from ...capabilities.memory import Memory
+    from ..tool.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -145,23 +146,15 @@ class Harness:
 
     # -------- RULES THAT COMPLETE ------------------------------------------------
     @classmethod
-    def tool_combination(
+    def combination_rules(
         cls,
         toolset: Sequence[CoreTool],
         sandbox: SandboxCore | None,
         skills: SkillsCore | None,
         memory: "Memory | None" = None,
-    ) -> list[CoreTool]:
-        """The tools the agent ends with: the developer's first, then ours."""
-        from ...capabilities.tools.ask_user import AskUserTool
-        from ...capabilities.tools.filesystem import EditFileTool, ReadFileTool, WriteFileTool
-        from ...capabilities.tools.memory import SaveMemoryTool
-        from ...capabilities.tools.todos import WriteTodosTool
-        from ...capabilities.tools.worktree import EnterWorktreeTool, ExitWorktreeTool
-
-        tools = list(toolset)
-        names = {tool.name for tool in tools}
-        # 1. Commands, skills and the memory live in a sandbox; skills also need bash.
+    ) -> None:
+        """Commands, skills and the memory live in a sandbox; skills also need bash."""
+        names = {tool.name for tool in toolset}
         if memory is not None and sandbox is None:
             raise HarnessError(cls.MEMORY_NEEDS_SANDBOX)
         if skills is not None and sandbox is None:
@@ -170,18 +163,60 @@ class Harness:
             raise HarnessError(cls.BASH_NEEDS_SANDBOX)
         if skills is not None and cls.BASH not in names:
             raise HarnessError(cls.SKILLS_NEED_BASH)
-        # 2. Ours: files only with a sandbox; the question and the list always.
+
+    @classmethod
+    def tool_combination(
+        cls,
+        toolset: Sequence[CoreTool],
+        sandbox: SandboxCore | None,
+        skills: SkillsCore | None,
+        memory: "Memory | None" = None,
+    ) -> list[CoreTool]:
+        """The tools the agent ends with: the developer's first, then ours.
+        ``combination_rules`` already said the pieces go together."""
+        from ...capabilities.tools.ask_user import AskUserTool
+        from ...capabilities.tools.filesystem import EditFileTool, ReadFileTool, WriteFileTool
+        from ...capabilities.tools.memory import SaveMemoryTool
+        from ...capabilities.tools.skill import ReadSkillTool
+        from ...capabilities.tools.todos import WriteTodosTool
+        from ...capabilities.tools.worktree import EnterWorktreeTool, ExitWorktreeTool
+
+        tools = list(toolset)
+        names = {tool.name for tool in tools}
+
+        # 1. Ours: files only with a sandbox; the question and the list always.
         ours: list[CoreTool] = [AskUserTool(), WriteTodosTool()]
         if sandbox is not None:
             ours += [ReadFileTool(), WriteFileTool(), EditFileTool()]
-        # 3. A memory that may be written has its own tool to save a fact.
+
+        # 2. A memory that may be written has its own tool to save a fact.
         if memory is not None and not memory.read_only:
             ours.append(SaveMemoryTool())
+
+        # 3. An agent with skills reads their instructions with its own tool.
+        if skills is not None:
+            ours.append(ReadSkillTool())
+
         # 4. Whoever runs commands can also work on a separate copy of the repository.
         if cls.BASH in names:
             ours += [EnterWorktreeTool(), ExitWorktreeTool()]
+
         # 5. A tool of the developer with the same name wins.
         return tools + [tool for tool in ours if tool.name not in names]
+
+    @classmethod
+    def deferred_rules(cls, registry: "ToolRegistry") -> None:
+        """Few deferred tools go loaded: the two tools that find and call them
+        would cost more than they save. Many are reached through those two."""
+        from ...capabilities.tools.call_tool import CallToolTool
+        from ...capabilities.tools.search_tool import SearchToolsTool
+
+        if registry.deferred_tokens() < setting.harness_deferred_tools_min_tokens:
+            registry.load_deferred()
+        if registry.deferred_tools():
+            for extra in (SearchToolsTool(registry), CallToolTool(registry)):
+                if registry.get(extra.name) is None:
+                    registry.register(extra)
 
     @classmethod
     def middleware_rules(
