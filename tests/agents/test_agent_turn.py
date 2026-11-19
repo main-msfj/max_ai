@@ -108,3 +108,22 @@ async def test_many_deferred_tools_are_found_with_search_tools(monkeypatch):
     names = [tool.name for tool in registry.loaded_tools()]
     assert "search_records" not in names and {"search_tools", "call_tool"} <= set(names)
     assert [tool.name for tool in registry.deferred_tools()] == ["search_records"]
+
+
+# -------- skills: the tools get the ones the agent was given, no other ---------------
+async def test_the_tools_are_told_which_skills_the_agent_was_given(tmp_path):
+    for name in ("pdf", "other"):
+        (tmp_path / "source" / name).mkdir(parents=True)
+        (tmp_path / "source" / name / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: Work with {name}\n---\n")
+    (tmp_path / "work").mkdir()
+    agent = Agent("a", "d", "i", FakeClient(), toolset=[BashTool()],
+                  sandbox=LocalSandbox(str(tmp_path / "work")),
+                  skills=LocalSkills(str(tmp_path / "source"), ["pdf"]))
+    box = await agent._sandbox(RunContext(user_id="u"))
+    dispatcher = await agent._dispatcher(await agent._registry(), box)
+    assert dispatcher.skills == ("pdf",)
+    # Without skills the tools are told there is none to read.
+    plain = Agent("a", "d", "i", FakeClient(), sandbox=LocalSandbox(str(tmp_path / "work")))
+    assert (await plain._dispatcher(await plain._registry(), None)).skills == ()
+    await agent.close()

@@ -7,7 +7,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Iterable
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Iterable, Sequence
 
 from ...base.tools import CoreTool, ToolContext
 from ...loggers import ScopedLogger
@@ -64,6 +64,7 @@ class ToolDispatcher:
         hook: ToolHook | None = None,
         middleware: MiddlewareChain | None = None,
         deps: dict[str, Any] | None = None,
+        skills: Sequence[str] = (),
         timeout: float = 360,
         max_parallel: int = 8,
     ) -> None:
@@ -73,6 +74,7 @@ class ToolDispatcher:
         self.middleware = middleware
         self.source = "tool_dispatcher"  # who the events say they come from
         self.deps = deps or {}  # the developer's own objects, handed to every tool
+        self.skills = tuple(skills)  # the skills loaded for this agent, handed to every tool
         self.timeout = timeout  # seconds one call may run
         self.max_parallel = max_parallel  # read-only calls that may run at once
         self._active: set[str] = set()
@@ -258,7 +260,9 @@ class ToolDispatcher:
         tool = self._check(record)
         if isinstance(tool, ToolResult):
             return tool
-        tool_ctx = ToolContext(ctx, self.sandbox, emit, dict(self.deps), cancellation_token)
+        tool_ctx = ToolContext(
+            ctx, self.sandbox, emit, dict(self.deps), cancellation_token, self.skills
+        )
 
         # 1. before: the hook may stop the call here.
         if (answered := await self.hook.before(tool, record, tool_ctx)) is not None:

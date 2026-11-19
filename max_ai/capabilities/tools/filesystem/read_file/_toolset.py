@@ -16,7 +16,7 @@ SCRIPT = Path(__file__).with_name("script.py").read_text()  # sent to the sandbo
 
 
 class ReadFileTool(CoreTool):
-    """Reads lines of a file inside the session's workspace, tmp or skills."""
+    """Reads lines of a file inside the session's workspace, tmp, memory or loaded skills."""
 
     TOOL_NAME: t.ClassVar[str] = "read_file"
     DESCRIPTION: t.ClassVar[str] = (
@@ -65,7 +65,8 @@ class ReadFileTool(CoreTool):
         first = tool_request.parameters.get("offset", 1)
         limit = min(tool_request.parameters.get("limit", self.MAX_LINES), self.MAX_LINES)
 
-        # 1. Where this session may read: its workspace, its tmp, the skills and the memory.
+        # 1. Where this session may read: its workspace, its tmp, the memory and
+        #    the folders of the skills loaded for this agent, no other skill.
         sandbox = tool_ctx.sandbox
         if sandbox is None:
             return ToolResult.execution_error(tool_request.id, "read_file needs a sandbox.")
@@ -75,8 +76,8 @@ class ReadFileTool(CoreTool):
             "path": path, "cwd": start, "first": first, "limit": limit,
             "width": self.MAX_LINE_CHARS,
             "allowed": [
-                paths["workspace"], paths["tmp"],
-                str(sandbox.layout.skills), str(sandbox.layout.memory),
+                paths["workspace"], paths["tmp"], str(sandbox.layout.memory),
+                *(str(sandbox.layout.skills / name) for name in tool_ctx.skills),
             ],
         }
 

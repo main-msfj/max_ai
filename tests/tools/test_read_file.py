@@ -36,10 +36,11 @@ async def sandbox(tmp_path):
     return bound
 
 
-async def read(sandbox, **parameters):
+async def read(sandbox, loaded=(), **parameters):
     record = ToolCallRecord(tool_name="read_file", parameters=parameters)
     ctx = CTX[0]
-    return await ToolDispatcher(ToolRegistry([ReadFileTool()]), sandbox).dispatch(record, ctx)
+    dispatcher = ToolDispatcher(ToolRegistry([ReadFileTool()]), sandbox, skills=loaded)
+    return await dispatcher.dispatch(record, ctx)
 
 
 async def test_code_comes_back_with_its_line_numbers(sandbox):
@@ -104,3 +105,21 @@ async def test_a_link_pointing_outside_is_refused(sandbox, tmp_path):
     os.symlink(tmp_path / "host.txt", f"{sandbox.session_paths('s1')['workspace']}/shortcut.txt")
     result = await read(sandbox, path="shortcut.txt")
     assert not result.success and "outside the folders" in result.error
+
+
+async def test_only_the_files_of_a_loaded_skill_are_read(sandbox):
+    from pathlib import Path
+
+    for name in ("pdf", "other"):
+        Path(sandbox.layout.skills / name).mkdir()
+        Path(sandbox.layout.skills / name / "SKILL.md").write_text(f"how to {name}\n")
+    mine, theirs = (f"{sandbox.layout.skills}/{name}/SKILL.md" for name in ("pdf", "other"))
+    # The agent was given pdf: its files open, the other skill's do not.
+    assert "how to pdf" in (await read(sandbox, loaded=("pdf",), path=mine)).result
+    assert not (await read(sandbox, loaded=("pdf",), path=theirs)).success
+    # A link in the workspace that points at the other skill is followed and refused.
+    link = Path((sandbox.session_paths("s1"))["workspace"]) / "link.md"
+    link.symlink_to(theirs)
+    assert not (await read(sandbox, loaded=("pdf",), path="link.md")).success
+    # Without skills, nothing in the folder is read.
+    assert not (await read(sandbox, path=mine)).success

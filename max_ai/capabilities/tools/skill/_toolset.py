@@ -26,6 +26,7 @@ class ReadSkillTool(CoreTool):
         "missing": "There is no skill named {!r}.",
         "no_instructions": "The skill {!r} has no SKILL.md.",
     }
+    NOT_LOADED: t.ClassVar[str] = "The skill {!r} is not loaded for this agent."
     SKILL_NAME: t.ClassVar[str] = r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}"
 
     sandbox = True  # the skills are installed there, not on the host
@@ -59,14 +60,18 @@ class ReadSkillTool(CoreTool):
         if not re.fullmatch(self.SKILL_NAME, name):
             return ToolResult.execution_error(tool_request.id, f"{name!r} is not a skill name.")
 
-        # 2. The skills live in the sandbox: with sandbox = True the dispatcher
+        # 2. Only a skill the agent was given: a folder someone left there is not one.
+        if name not in tool_ctx.skills:
+            return ToolResult.execution_error(tool_request.id, self.NOT_LOADED.format(name))
+
+        # 3. The skills live in the sandbox: with sandbox = True the dispatcher
         #    never gets here without one.
         sandbox = tool_ctx.sandbox
         if sandbox is None:
             return ToolResult.execution_error(tool_request.id, "read_skill needs a sandbox.")
 
-        # 3. The script runs inside the sandbox, on .agent/skills/<name>.
-        folder = sandbox.layout.skills / name 
+        # 4. The script runs inside the sandbox, on .agent/skills/<name>.
+        folder = sandbox.layout.skills / name
         request: dict[str, t.Any] = {"folder": str(folder), "file": self.FILE, "max_files": self.MAX_FILES}
         ran = await sandbox.execute_command(
             f"python3 -c {shlex.quote(SCRIPT)} {shlex.quote(json.dumps(request))}"
@@ -75,11 +80,11 @@ class ReadSkillTool(CoreTool):
             return ToolResult.execution_error(tool_request.id, f"The skill {name!r} could not be read.")
         answer = json.loads(ran.stdout)
 
-        # 4. The script says what is missing: the skill or its instructions.
+        # 5. The script says what is missing: the skill or its instructions.
         if not answer["ok"]:
             return ToolResult.execution_error(tool_request.id, self.MISSING[answer["error"]].format(name))
 
-        # 5. First the folder and its files, so the model can open them; then the SKILL.md.
+        # 6. First the folder and its files, so the model can open them; then the SKILL.md.
         listed = "".join(f"  {file}\n" for file in answer["files"])
         header = f"Skill folder: {folder}\n{listed}"
         return ToolResult.success_result(tool_request.id, f"{header}\n{answer['instructions']}")
