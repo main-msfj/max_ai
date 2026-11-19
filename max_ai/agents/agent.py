@@ -82,6 +82,22 @@ class Agent(ComponentBase[AgentSpec]):
     COMPONENT_HINT: t.ClassVar[str] = "give it a component_schema, _to_config and _from_config."
     CLOSED: t.ClassVar[str] = "The agent is closed"
     SANDBOX_LOCK: t.ClassVar[str] = "\0sandbox"  # never a session id: those are validated
+    # What each piece must be; True when the agent may go without it.
+    PIECES: t.ClassVar[tuple[tuple[str, type, bool], ...]] = (
+        ("client", CoreChatCompletionClient, False),
+        ("reasoning", CoreLoop, False),
+        ("memory", Memory, True),
+        ("skills", SkillsCore, True),
+        ("sandbox", SandboxCore, True),
+    )
+    # What every element of each list must be.
+    LISTS: t.ClassVar[tuple[tuple[str, type], ...]] = (
+        ("toolset", CoreTool),
+        ("mcp", MCPServerConfig),
+        ("knowledge", CoreKnowledgeRegistry),
+        ("prompt_layers", CoreLayer),
+        ("middlewares", CoreMiddleware),
+    )
 
     def __init__(
         self,
@@ -141,51 +157,28 @@ class Agent(ComponentBase[AgentSpec]):
 
     def _validate(self) -> None:
         """Every piece must come from its Core class; the error names the one that does not."""
-        self._validate_directives()
-        self._validate_capabilities()
-        self._validate_runtime()
-
-    def _validate_directives(self) -> None:
-        """Who the agent is and how it answers: name, description, instructions, output format."""
         # 1. The three texts.
         for what in ("name", "description", "instructions"):
             if not isinstance(getattr(self, what), str):
                 raise TypeError(f"{what} must be text")
         if not self.name.strip():
             raise ValueError("name cannot be empty")
+
         # 2. The answer's format is a class, not an object.
         form = t.cast("object", self.output_format)
         if form is not None and not (isinstance(form, type) and issubclass(form, BaseModel)):
             raise TypeError("output_format must be a pydantic BaseModel class")
 
-    def _validate_capabilities(self) -> None:
-        """What the agent can do: tools, MCP, memory, knowledge, skills and prompt layers."""
-        # 1. The ones that are a single object.
-        if self.memory is not None:
-            self._check(self.memory, Memory, "memory")
-        if self.skills is not None:
-            self._check(self.skills, SkillsCore, "skills")
-        # 2. The ones that are a list: each element is checked.
-        lists: tuple[tuple[Sequence[object], type, str], ...] = (
-            (self.toolset, CoreTool, "toolset"),
-            (self.mcp, MCPServerConfig, "mcp"),
-            (self.knowledge, CoreKnowledgeRegistry, "knowledge"),
-            (self.prompt_layers, CoreLayer, "prompt_layers"),
-        )
-        for values, kind, what in lists:
-            for value in values:
+        # 3. The pieces that are one object.
+        for what, kind, optional in self.PIECES:
+            value = getattr(self, what)
+            if value is not None or not optional:
                 self._check(value, kind, what)
 
-    def _validate_runtime(self) -> None:
-        """What runs the agent: client, loop, middlewares and sandbox."""
-        # 1. The model and the loop are always there.
-        self._check(self.client, CoreChatCompletionClient, "client")
-        self._check(self.reasoning, CoreLoop, "reasoning")
-        # 2. The sandbox is optional; middlewares are a list.
-        if self.sandbox is not None:
-            self._check(self.sandbox, SandboxCore, "sandbox")
-        for value in self.middlewares:
-            self._check(value, CoreMiddleware, "middlewares")
+        # 4. The pieces that are a list: each element is checked.
+        for what, kind in self.LISTS:
+            for value in getattr(self, what):
+                self._check(value, kind, what)
 
     @staticmethod
     def _check(value: object, kind: type, what: str) -> None:
