@@ -99,7 +99,8 @@ async def test_install_unpacks_the_skill_and_records_its_key(tmp_path, sandbox, 
     skill = tmp_path / ".agent/skills/pdf"
     assert (skill / "SKILL.md").read_bytes() == b"pdf"
     assert (skill / "scripts/run.sh").read_bytes() == b"echo"
-    assert settings(tmp_path) == {"skills": {"pdf": {"key": "k1", "description": ""}}}
+    kept = settings(tmp_path)["skills"]["pdf"]
+    assert len(kept.pop("hash")) == 64 and kept == {"key": "k1", "description": ""}
 
 
 async def test_a_new_version_replaces_the_whole_folder(tmp_path, sandbox, skill_archive):
