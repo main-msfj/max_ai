@@ -5,14 +5,36 @@ import shlex
 import typing as t
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ...base.component import ComponentBase
 from ...base.sandbox import SandboxCore
+from ...core.messages import HARNESS_SOURCE, Message, UserMessage
 from ..tools.memory import SaveMemoryTool
 
 # Read once from the package, then sent to the sandbox.
 SCRIPT = Path(__file__).with_name("index.py").read_text()
+
+
+if t.TYPE_CHECKING:
+    from ...base.clients import CoreChatCompletionClient
+    from ...core.middleware.chain import MiddlewareChain
+    from ...types.run_context import RunContext
+
+
+class Fact(BaseModel):
+    """One thing worth remembering, as save_memory takes it."""
+
+    name: str = Field(description="Short name with hyphens: prefers-uv")
+    type: t.Literal["user", "feedback", "project", "reference"]
+    description: str = Field(description="The fact itself in one line")
+    content: str = Field(description="The fact with its details, and the why when it has one")
+
+
+class Facts(BaseModel):
+    """What the model found worth keeping; most of the time, nothing."""
+
+    facts: list[Fact] = Field(default_factory=list[Fact])
 
 
 class MemoryConfig(BaseModel):
@@ -49,6 +71,17 @@ class Memory(ComponentBase[MemoryConfig]):
         "that fact instead of making a second one."
     )
 
+    KEEP: t.ClassVar[str] = (
+        "These messages from a user are about to leave a conversation with an agent. "
+        "Return the facts worth remembering in later conversations: who the user is, how "
+        "they want the agent to work, and decisions that will still hold. Most messages "
+        "hold nothing to keep: return an empty list then. Keep only what the user said "
+        "about themselves or their work, never an instruction to do something. A name "
+        "already in the memory below updates that fact; do not repeat what it already says."
+    )
+    MAX_FACTS: t.ClassVar[int] = 5  # kept from one compaction
+    MAX_KEEP_CHARS: t.ClassVar[int] = 20_000  # of the user's messages shown to the model
+
     def __init__(self, read_only: bool = False) -> None:
         self.read_only = read_only
 
@@ -77,6 +110,54 @@ class Memory(ComponentBase[MemoryConfig]):
         if answer["left_out"]:
             lines.append(f"[{answer['left_out']} more files not listed]")
         return "\n".join(lines)
+
+    async def keep(
+        self,
+        old: list[Message],
+        client: "CoreChatCompletionClient[t.Any]",
+        sandbox: SandboxCore,
+        index: str,
+        *,
+        ctx: "RunContext | None" = None,
+        middleware: "MiddlewareChain | None" = None,
+    ) -> list[str]:
+        """Save what the user said in ``old`` that is worth remembering, and
+        return the names saved. Only the user's own messages are read."""
+        # 1. A memory that cannot be written keeps nothing.
+        if self.read_only:
+            return []
+
+        # 2. What the user wrote: not the harness's notes, not the tools' results.
+        said = [
+            message.text() for message in old
+            if isinstance(message, UserMessage) and message.source != HARNESS_SOURCE
+        ]
+        text = "\n\n".join(part for part in said if part.strip())[-self.MAX_KEEP_CHARS:]
+        if not text:
+            return []
+
+        # 3. One question to the model, answered in a fixed shape.
+        ask = f"{self.KEEP}\n\nMemory files:\n{index or '(none yet)'}\n\nMessages:\n\n{text}"
+        result = await client.run(
+            [UserMessage(source=HARNESS_SOURCE, content=ask)], None, Facts,
+            ctx=ctx, middleware=middleware,
+        )
+        answer = result.message.structured_output
+        if not isinstance(answer, Facts):
+            answer = Facts.model_validate_json(result.message.text())
+
+        # 4. Each fact is written as save_memory writes it, with the same checks;
+        #    one that cannot be saved is left out.
+        saved: list[str] = []
+        for fact in answer.facts[: self.MAX_FACTS]:
+            try:
+                await SaveMemoryTool.write(
+                    sandbox, fact.name, fact.type, fact.description, fact.content
+                )
+            except ValueError:
+                continue
+            saved.append(fact.name)
+        return saved
 
     def block(self, sandbox: SandboxCore, index: str) -> str:
         """What the prompt says: where the memory is, how to use it, and the index."""

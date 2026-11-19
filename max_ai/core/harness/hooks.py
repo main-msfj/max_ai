@@ -4,15 +4,18 @@ import logging
 import os
 import typing as t
 
-from ...base.loop import LoopHook, LoopState
+from ...base.loop import AnyClient, LoopHook, LoopState
 from ...base.sandbox import SandboxCore
 from ...base.tools import CoreTool, ToolContext
 from ...capabilities.mcp import MCPClientManager
 from ...capabilities.memory import Memory
 from ...capabilities.tools.memory import SaveMemoryTool
+from ...config import setting
+from ...errors.middleware import StopRun
 from ...types.run_context import RunContext
 from ...types.tool_call import ToolCallRecord, ToolResult
-from ..messages import HARNESS_SOURCE, UserMessage
+from ..messages import HARNESS_SOURCE, Message, UserMessage
+from ..middleware.chain import MiddlewareChain
 from ..tool.hook import ToolHook
 from .judge import Judge
 from .permissions import Permissions
@@ -35,6 +38,7 @@ class HarnessLoopHook(LoopHook):
         memory: Memory | None = None,
         sandbox: SandboxCore | None = None,  # already bound to the user
         mcp: MCPClientManager | None = None,
+        keeper: AnyClient | None = None,  # the model that keeps the memory; None = the agent's
         warn_before: int = 3,
         max_repeats: int = 3,
     ) -> None:
@@ -42,11 +46,40 @@ class HarnessLoopHook(LoopHook):
         self.memory = memory
         self.sandbox = sandbox
         self.mcp = mcp
+        self.keeper = keeper
 
     async def refresh_memory(self, ctx: RunContext) -> None:
         """Read the memory index again; also called when a session opens."""
         if self.memory is not None and self.sandbox is not None:
             ctx.memory_index = await self.memory.index(self.sandbox)
+
+    async def leaving(
+        self,
+        ctx: RunContext,
+        old: list[Message],
+        client: AnyClient,
+        middleware: MiddlewareChain | None,
+    ) -> None:
+        # 1. Only with a memory that can be written, in a sandbox, and when it is on.
+        if self.memory is None or self.sandbox is None or self.memory.read_only:
+            return
+        if not setting.harness_memory_at_compaction:
+            return
+
+        # 2. What the user said that is worth remembering goes to the memory;
+        #    a cheap model is enough, and without one the agent's own does it.
+        try:
+            saved = await self.memory.keep(
+                old, self.keeper or client, self.sandbox, ctx.memory_index or "",
+                ctx=ctx, middleware=middleware,
+            )
+        except StopRun:
+            raise
+        except Exception:
+            logger.exception("The memory could not keep what was leaving")
+            return
+        if saved:
+            logger.info("Kept in the memory at compaction: %s", ", ".join(saved))
 
     async def after_compact(self, ctx: RunContext, state: LoopState) -> None:
         # The model forgot what it saved: show it the memory as it is now.

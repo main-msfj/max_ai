@@ -200,3 +200,88 @@ def test_each_part_counts_itself_and_the_window_is_known_before_the_first_messag
     context = ReactLoop().measure(ctx, builder.build(), Model(window=10_000), ToolDispatcher(registry))
     assert ctx.context is context and context.messages == 0
     assert (context.prompt, context.tools) == (builder.tokens(counter=counter), one)
+
+
+# -------- the messages that leave: someone may look at them while they are summarized ----
+async def test_who_asked_gets_the_messages_that_leave():
+    got = []
+
+    async def look(old):
+        got.extend(old)
+
+    messages = conversation(8)
+    result = await SummaryCompaction().compact(messages, Model(Summary(goal="g")), leaving=look)
+    # The oldest ones, in order (their long results already cut).
+    assert result.removed == len(got) > 0
+    assert [m.role for m in got] == [m.role for m in messages[: len(got)]]
+    assert got[0].content == "question 0"
+    # A conversation that fits has nothing leaving: nobody is called.
+    got.clear()
+    await SummaryCompaction().compact(conversation(1, size=5), Model(), leaving=look)
+    assert got == []
+
+
+async def test_a_failure_looking_at_them_does_not_stop_the_summary_nor_the_other_way():
+    async def breaks(old):
+        raise RuntimeError("the memory is down")
+
+    kept = await SummaryCompaction().compact(
+        conversation(8), Model(Summary(goal="build fizz")), leaving=breaks
+    )
+    assert kept.summary == Summary(goal="build fizz") and kept.removed > 0
+
+    looked = []
+
+    async def look(old):
+        looked.append(len(old))
+
+    failed = await SummaryCompaction().compact(
+        conversation(8), Model(ClientError.authentication_failed("x")), leaving=look
+    )
+    assert failed.removed > 0 and looked == [failed.removed]
+
+
+async def test_at_compaction_what_the_user_said_goes_to_the_memory(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from max_ai.capabilities.memory import Memory
+    from max_ai.capabilities.sandbox.local import LocalSandbox
+    from max_ai.config import setting
+    from max_ai.core.harness.hooks import HarnessLoopHook
+
+    sandbox = LocalSandbox(root=str(tmp_path)).bind("u")
+    await sandbox.prepare()
+    fact = (
+        '{"facts": [{"name": "uses-uv", "type": "user", '
+        '"description": "Installs packages with uv, never pip", "content": "Uses uv."}]}'
+    )
+
+    async def run(keeper, memory=None):
+        ctx = RunContext(user_id="u", session_id="s", messages=conversation(8))
+        hook = HarnessLoopHook(memory=memory or Memory(), sandbox=sandbox, keeper=keeper)
+        model = Model(Summary(goal="build fizz"), "all done")
+        loop = ReactLoop(compaction=SummaryCompaction())
+        async for _ in loop.run(ctx, "p", model, ToolDispatcher(ToolRegistry([])), hook=hook, state=LoopState()):
+            pass
+        return ctx
+
+    # 1. The cheap model is asked once, with the user's messages only.
+    keeper = Model(fact)
+    ctx = await run(keeper)
+    asked = keeper.asked[0][0][0].content
+    assert "question 0" in asked and "line 0" not in asked and "answer 0" not in asked
+    saved = Path(str(sandbox.layout.memory), "uses-uv.md")
+    assert "Installs packages with uv, never pip" in saved.read_text()
+    # 2. The model sees the new fact at once: the index is read again after compacting.
+    assert "uses-uv.md" in (ctx.memory_index or "") and ctx.summary == Summary(goal="build fizz")
+
+    # 3. A keeper that fails changes nothing for the turn.
+    broken = await run(Model(RuntimeError("down")))
+    assert broken.summary == Summary(goal="build fizz") and broken.messages[-1].content == "all done"
+
+    # 4. Read-only, or turned off: the model is not even asked.
+    quiet = Model(fact)
+    await run(quiet, Memory(read_only=True))
+    monkeypatch.setattr(setting, "harness_memory_at_compaction", False)
+    await run(quiet)
+    assert quiet.asked == []
