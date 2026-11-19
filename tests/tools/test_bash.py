@@ -138,3 +138,84 @@ async def test_the_output_cannot_fake_where_the_command_ended(sandbox, ctx):
 
 async def test_an_empty_command_is_refused(sandbox, ctx):
     assert not (await bash(sandbox, ctx, "   ")).success
+
+
+# -------- files the model had read and a command changed -----------------------------
+async def read_and_write(sandbox, ctx):
+    from max_ai.capabilities.tools.filesystem import ReadFileTool, WriteFileTool
+
+    dispatcher = ToolDispatcher(
+        ToolRegistry([ReadFileTool(), WriteFileTool()]), sandbox, hook=Approves()
+    )
+    # The workspace of a session is made by its first command.
+    Path(sandbox.session_paths("s1")["workspace"]).mkdir(parents=True, exist_ok=True)
+
+    async def call(tool_name, **parameters):
+        record = ToolCallRecord(tool_name=tool_name, parameters=parameters)
+        return await dispatcher.dispatch(record, ctx)
+
+    return call
+
+
+async def test_a_command_that_changes_a_file_the_model_read_says_so(sandbox, ctx, workspace):
+    call = await read_and_write(sandbox, ctx)
+    (workspace / "app.py").write_text("a = 1\n")
+    (workspace / "other.py").write_text("b = 2\n")
+    await call("read_file", path="app.py")
+
+    # A file it never read changes: nothing to say.
+    quiet = await bash(sandbox, ctx, "echo c >> other.py; cat app.py")
+    assert quiet.result == "exit code: 0\na = 1"
+
+    # The one it read changes: told at once, by name.
+    told = await bash(sandbox, ctx, "sed -i s/1/9/ app.py")
+    path = str(workspace / "app.py")
+    assert told.result == (
+        f"exit code: 0\n[this command changed 1 file(s) you had read: {path}. "
+        "Read them again before you edit them.]"
+    )
+    # It is told once, and writing the file over asks to read it first.
+    assert "changed" not in (await bash(sandbox, ctx, "true")).result
+    refused = await call("write_file", path="app.py", content="a = 2\n")
+    assert not refused.success and "read" in refused.error.lower(), refused.error
+    assert (workspace / "app.py").read_text() == "a = 9\n"
+    await call("read_file", path="app.py")
+    assert (await call("write_file", path="app.py", content="a = 2\n")).success
+
+
+async def test_a_command_that_deletes_a_file_the_model_read_says_so(sandbox, ctx, workspace):
+    call = await read_and_write(sandbox, ctx)
+    (workspace / "app.py").write_text("a = 1\n")
+    await call("read_file", path="app.py")
+    told = await bash(sandbox, ctx, "rm app.py")
+    assert told.result == (
+        f"exit code: 0\n[this command deleted 1 file(s) you had read: {workspace / 'app.py'}.]"
+    )
+    assert ctx.files_seen == {}
+
+
+async def test_many_changed_files_are_counted_not_all_named(sandbox, ctx, workspace):
+    call = await read_and_write(sandbox, ctx)
+    for number in range(12):
+        (workspace / f"f{number:02}.txt").write_text("old\n")
+        await call("read_file", path=f"f{number:02}.txt")
+    told = await bash(sandbox, ctx, "for f in f*.txt; do echo new > $f; done")
+    assert "changed 12 file(s) you had read" in told.result and told.result.count(".txt") == 10
+    assert told.result.endswith("f09.txt and 2 more. Read them again before you edit them.]")
+
+
+async def test_a_command_stopped_by_the_time_limit_still_says_what_it_changed(sandbox, ctx, workspace):
+    call = await read_and_write(sandbox, ctx)
+    (workspace / "app.py").write_text("a = 1\n")
+    await call("read_file", path="app.py")
+    told = await bash(sandbox, ctx, "echo x >> app.py; sleep 30", timeout=1)
+    assert "[stopped after 1 seconds]" in told.result
+    assert "changed 1 file(s) you had read" in told.result
+
+
+def test_a_check_that_gave_no_answer_changes_nothing():
+    seen = {"/w/app.py": "abc"}
+    assert BashTool.forget(seen, "") == [] and BashTool.forget(seen, "not json") == []
+    # A path the model never read is not taken as told by the sandbox.
+    assert BashTool.forget(seen, '{"changed": ["/etc/passwd"], "deleted": []}') == []
+    assert seen == {"/w/app.py": "abc"}

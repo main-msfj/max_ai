@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shlex
 import typing as t
 from pathlib import Path, PurePosixPath
@@ -13,6 +14,7 @@ from ....core.ids import short_id
 from ....types.tool_call import ToolCallRecord, ToolResult
 
 SCRIPT = Path(__file__).with_name("script.sh").read_text()  # sent to the sandbox
+CHECK = Path(__file__).with_name("check.py").read_text()  # run by the script when the command ends
 
 
 class BashToolConfig(BaseModel):
@@ -34,6 +36,13 @@ class BashTool(CoreTool):
     MAX_OUTPUT_BYTES: t.ClassVar[int] = 30_000  # more is cut in the middle
     DEFAULT_TIMEOUT: t.ClassVar[int] = 120  # seconds, when the model gives none
     MAX_TIMEOUT: t.ClassVar[int] = 600  # seconds the model can ask for
+    MAX_SEEN: t.ClassVar[int] = 200  # files checked after a command; the rest, when written
+    MAX_NAMED: t.ClassVar[int] = 10  # files a note names; the rest are counted
+    CHANGED: t.ClassVar[str] = (
+        "[this command changed {count} file(s) you had read: {names}. "
+        "Read them again before you edit them.]"
+    )
+    DELETED: t.ClassVar[str] = "[this command deleted {count} file(s) you had read: {names}.]"
 
     sandbox = True  # commands never run on the host
     timeout = MAX_TIMEOUT + 10  # the dispatcher waits a bit longer than the command
@@ -93,16 +102,19 @@ class BashTool(CoreTool):
         allowed = [paths["workspace"], paths["tmp"], str(layout.skills), str(layout.memory)]
         mark = f"__cwd_{short_id()}__"
         log = f"{paths['tmp']}/tool_results/{short_id()}.log"
+        # The last files the model read, with the hash it saw of each.
+        seen = dict(list(ctx.files_seen.items())[-self.MAX_SEEN:])
         values = {
             "__start": ctx.cwd or paths["workspace"], "__workspace": paths["workspace"],
             "__log": log, "__max": str(self.MAX_OUTPUT_BYTES), "__mark": mark,
-            "__command": command,
+            "__check": CHECK, "__seen": json.dumps(seen), "__command": command,
         }
 
         # 2. The script with its values on top, each one quoted.
         script = "".join(f"{name}={shlex.quote(value)}\n" for name, value in values.items())
         ran = await sandbox.execute_command(script + SCRIPT, timeout=limit)
-        output, found, cwd = ran.stdout.rpartition(mark)
+        rest, _, checked = ran.stdout.rpartition(mark)
+        output, found, cwd = rest.rpartition(mark)
         code = ran.exit_code
         notes: list[str] = []
 
@@ -113,6 +125,11 @@ class BashTool(CoreTool):
             )
             output, code = rest.stdout, 124
             notes.append(f"[stopped after {limit} seconds]")
+            # The script was killed before its check: ask for it now.
+            again = await sandbox.execute_command(
+                f"python3 -c {shlex.quote(CHECK)} {shlex.quote(json.dumps(seen))}"
+            )
+            checked = again.stdout
 
         # 4. Keep the folder for the next call only if it is an allowed one.
         elif found and self.within(cwd, allowed):
@@ -123,9 +140,34 @@ class BashTool(CoreTool):
                 f"[you left the allowed folders ({cwd}); the next command starts in the workspace]"
             )
 
-        # 5. Exit code first, then the output, then the notes.
+        # 5. Files the model had read and the command changed: it is told now,
+        #    and they count as not seen, so an edit asks to read them first.
+        notes += self.forget(ctx.files_seen, checked)
+
+        # 6. Exit code first, then the output, then the notes.
         parts = [f"exit code: {code}", output.strip("\n"), *notes]
         return ToolResult.success_result(tool_request.id, "\n".join(p for p in parts if p))
+
+    @classmethod
+    def forget(cls, files_seen: dict[str, str], checked: str) -> list[str]:
+        """Take out of ``files_seen`` what the check found changed or gone,
+        and return the notes that tell the model."""
+        # 1. No answer from the check: nothing is said, a write still notices.
+        try:
+            answer: dict[str, list[str]] = json.loads(checked)
+        except ValueError:
+            return []
+        notes: list[str] = []
+        for kind, text in (("changed", cls.CHANGED), ("deleted", cls.DELETED)):
+            paths = [path for path in answer.get(kind, []) if files_seen.pop(path, None) is not None]
+            if not paths:
+                continue
+            # 2. A few by name, the rest counted.
+            names = ", ".join(paths[: cls.MAX_NAMED])
+            if len(paths) > cls.MAX_NAMED:
+                names += f" and {len(paths) - cls.MAX_NAMED} more"
+            notes.append(text.format(count=len(paths), names=names))
+        return notes
 
     @staticmethod
     def within(folder: str, allowed: list[str]) -> bool:
