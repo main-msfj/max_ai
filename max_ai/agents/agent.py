@@ -137,26 +137,13 @@ class Agent(ComponentBase[AgentSpec]):
         self.sandbox = sandbox
 
         self._validate()
-        self._run_harness_validation()
-        # What the runs share: MCP connections and one lock per session.
-        self._mcp = MCPClientManager()
-        for server in self.mcp:
-            self._mcp.add_server(server)
-        self._mcp_lock = asyncio.Lock()
-        self._locks: weakref.WeakValueDictionary[tuple[str, str], asyncio.Lock] = (
-            weakref.WeakValueDictionary()
-        )
-        self._closed = False
-        self._boxes: dict[str, SandboxCore] = {}  # one sandbox per user, closed by close()
-        # close() waits for the runs that are still going.
-        self._active = 0
-        self._idle = asyncio.Event()
-        self._idle.set()
+        self._build()
 
     # -------- CHECKS WHEN IT IS BUILT ----------------------------------------
 
     def _validate(self) -> None:
-        """Every piece must come from its Core class; the error names the one that does not."""
+        """Every piece must come from its Core class and keep the harness's
+        rules; the error names what is wrong. Nothing is built here."""
         # 1. The three texts.
         for what in ("name", "description", "instructions"):
             if not isinstance(getattr(self, what), str):
@@ -180,6 +167,17 @@ class Agent(ComponentBase[AgentSpec]):
             for value in getattr(self, what):
                 self._check(value, kind, what)
 
+        # 5. The harness's rules for what the developer wrote.
+        Harness.description_rules(self.description)
+        Harness.instruction_rules(self.instructions)
+        Harness.custom_prompt_rules(self.prompt_layers)
+        Harness.tool_rules(self.toolset)
+
+        # 6. The model's limits and the sandbox's time are the harness's.
+        Harness.model_rules(self.client.config)
+        if self.sandbox is not None:
+            Harness.sandbox_rules()
+
     @staticmethod
     def _check(value: object, kind: type, what: str) -> None:
         """Raise when ``value`` is not a ``kind``, saying what was given."""
@@ -187,23 +185,34 @@ class Agent(ComponentBase[AgentSpec]):
             given = type(value).__name__
             raise TypeError(f"{what} must be a {kind.__name__}; got {given}")
 
-    def _run_harness_validation(self) -> None:
-        """Apply the harness's rules: an error names the rule that is broken."""
-        # 1. The texts and the tools the developer wrote.
-        Harness.description_rules(self.description)
-        Harness.instruction_rules(self.instructions)
-        Harness.custom_prompt_rules(self.prompt_layers)
-        Harness.tool_rules(self.toolset)
-        # 2. The model's limits and the sandbox's time are the harness's.
-        Harness.model_rules(self.client.config)
-        if self.sandbox is not None:
-            Harness.sandbox_rules()
-        # 3. What the harness adds: tracing and its own tools.
+    # -------- WHAT IT IS MADE OF ---------------------------------------------
+
+    def _build(self) -> None:
+        """What the agent is made of once its pieces are known to be right."""
+        # 1. What the harness adds: tracing first, and its own tools.
         self.middlewares = Harness.middleware_rules(self.middlewares, self.name)
         self._chain = MiddlewareChain(self.middlewares)
         self.tools = Harness.tool_combination(
             self.toolset, self.sandbox, self.skills, self.memory
         )
+
+        # 2. The MCP servers, connected when a run first needs them.
+        self._mcp = MCPClientManager()
+        for server in self.mcp:
+            self._mcp.add_server(server)
+        self._mcp_lock = asyncio.Lock()
+
+        # 3. What the runs share: one lock per session, one sandbox per user.
+        self._locks: weakref.WeakValueDictionary[tuple[str, str], asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
+        self._boxes: dict[str, SandboxCore] = {}  # closed by close()
+        self._closed = False
+
+        # 4. close() waits for the runs that are still going.
+        self._active = 0
+        self._idle = asyncio.Event()
+        self._idle.set()
 
     # -------- WHAT THE APPLICATION CALLS -------------------------------------
 
