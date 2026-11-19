@@ -29,19 +29,7 @@ from ..capabilities.mcp._model import (
     serialize_mcp_servers,
 )
 from ..capabilities.memory import Memory
-from ..capabilities.stacks import (
-    STANDARD_ORDER,
-    AgentPolicyLayer,
-    KnowledgeLayer,
-    MemoryFilesLayer,
-    PromptBuilder,
-    RenderingLayer,
-    SessionLayer,
-    SkillsLayer,
-    TaskAnalysisLayer,
-    ToolsLayer,
-    WorkspaceLayer,
-)
+from ..capabilities.stacks import NativePrompt
 from ..config import setting
 from ..core.event_type import CoreEvent, FatalErrorEvent, ModelStreamChunkEvent
 from ..core.harness.hooks import HarnessLoopHook, HarnessToolHook
@@ -424,37 +412,20 @@ class Agent(ComponentBase[AgentSpec]):
         )
 
     async def _prompt(self, ctx: RunContext, box: SandboxCore | None, registry: ToolRegistry) -> str:
-        """The system prompt: the native layers always, then the developer's,
-        in the standard order. Name, description and instructions go in the
-        agent policy layer."""
-        # 1. The native layers; each optional one only when the agent has its piece.
-        layers: list[CoreLayer] = [
-            AgentPolicyLayer(), TaskAnalysisLayer(), RenderingLayer(), ToolsLayer(), SessionLayer(),
-        ]
-        variables: dict[str, t.Any] = {
+        """The system prompt: who the agent is and the pieces it has. Which
+        layer goes with each piece is the prompt stack's to know."""
+        variables = {
             "name": self.name, "description": self.description,
             "instructions": self.instructions,
             "current_date": datetime.now(UTC).date().isoformat(),
         }
-        if box is not None:
-            layers.append(WorkspaceLayer())
-            variables.update(box.session_paths(ctx.session_id or ctx.run_id))
-            if self.skills is not None:
-                layers.append(SkillsLayer())
-                installed = await box.installed_skills()
-                variables["skills"] = [
-                    {"name": name, "description": installed[name]["description"]}
-                    for name in self.skills.skills
-                    if name in installed
-                ]
-            if self.memory is not None:
-                layers.append(MemoryFilesLayer())
-                variables["memory"] = self.memory.block(box, ctx.memory_index or "")
-        if self.knowledge:
-            layers.append(KnowledgeLayer())
-        # 2. The developer's layers join them, all in the standard order.
-        builder = PromptBuilder([*layers, *self.prompt_layers], registry, order=STANDARD_ORDER)
-        return builder.build(variables)
+        return await NativePrompt.build(
+            registry, variables,
+            session=ctx.session_id or ctx.run_id,
+            sandbox=box, skills=self.skills, memory=self.memory,
+            memory_index=ctx.memory_index or "",
+            knowledge=bool(self.knowledge), extra=self.prompt_layers,
+        )
 
     # -------- STORED AND BUILT AGAIN -----------------------------------------
 

@@ -21,7 +21,7 @@ class PromptBuilder:
 
     Order matters for the provider's cache: it keeps the prompt up to the
     first character that changes. Put first what never changes and last what
-    changes during a conversation (``STANDARD_ORDER`` does). Arranging the
+    changes during a conversation (``NativePrompt.ORDER`` does). Arranging the
     layers another way is up to whoever passes them.
 
     Each layer receives only the variables it declares, and one that
