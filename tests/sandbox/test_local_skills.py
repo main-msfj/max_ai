@@ -70,7 +70,10 @@ async def test_the_settings_keep_key_and_description(tmp_path, source, sandbox):
     skills = LocalSkills(str(source), ["pdf"])
     await skills.sync(sandbox)
     settings = json.loads((tmp_path / "env/.agent/setting.json").read_text())
-    assert settings["skills"]["pdf"] == {
+    kept = settings["skills"]["pdf"]
+    # The hash of the installed files goes with them: a later change is noticed.
+    assert len(kept.pop("hash")) == 64
+    assert kept == {
         "key": await skills.get_or_update_key("pdf"),
         "description": "Work with pdf files",
     }

@@ -31,7 +31,7 @@ class ToolContext:
     it may use and how to tell the outside what happens. The dispatcher
     builds it; who it is for comes from ``run_context``."""
 
-    __slots__ = ("run_context", "sandbox", "emit_event", "deps", "cancellation")
+    __slots__ = ("run_context", "sandbox", "emit_event", "deps", "cancellation", "skills")
 
     def __init__(
         self,
@@ -40,12 +40,14 @@ class ToolContext:
         emit_event: t.Callable[[t.Any], None] | None = None,
         deps: dict[str, t.Any] | None = None,
         cancellation: CancellationToken | None = None,
+        skills: t.Sequence[str] = (),
     ) -> None:
         self.run_context = run_context
         self.sandbox = sandbox  # already bound to the user
         self.emit_event = emit_event
         self.deps = deps or {}  # the developer's own objects
         self.cancellation = cancellation  # for tools that leave something running
+        self.skills = tuple(skills)  # the skills loaded for this agent: only these are read
 
     @property
     def cancelled(self) -> bool:

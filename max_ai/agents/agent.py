@@ -420,8 +420,11 @@ class Agent(ComponentBase[AgentSpec]):
         """Who runs the tools of a run, watched by the harness's hook with the user's rules."""
         rules = Permissions(await box.permissions()) if box is not None else None
         hook = HarnessToolHook(memory=self.memory, agent=self.name, permissions=rules)
+        # Only the skills this agent was given can be read, whatever is in the folder.
+        loaded = self.skills.skills if self.skills is not None else []
         return ToolDispatcher(
-            registry, box, hook=hook, middleware=self._chain, timeout=setting.tool_timeout_seconds
+            registry, box, hook=hook, middleware=self._chain, skills=loaded,
+            timeout=setting.tool_timeout_seconds,
         )
 
     async def _prompt(self, ctx: RunContext, box: SandboxCore | None, registry: ToolRegistry) -> str:

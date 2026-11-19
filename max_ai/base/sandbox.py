@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 import os
 import posixpath
 import shlex
@@ -23,6 +24,8 @@ from ..errors.sandbox import SandboxError
 from .component import ComponentBase
 from .layout import SCRIPT, Layout
 from .session_store import validate_id
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -122,9 +125,28 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
 
     async def outdated_skills(self, wanted: dict[str, str]) -> list[str]:
         """The skills of ``wanted`` (name → hash or commit) that are not
-        installed or whose key in ``setting.json`` is another one."""
+        installed, whose key in ``setting.json`` is another one, or whose
+        files are no longer the ones that were installed."""
+        if not wanted:
+            return []
+        # 1. What the settings say, and what is really on disk.
         installed = await self.installed_skills()
-        return [name for name, key in wanted.items() if installed.get(name, {}).get("key") != key]
+        answer = await self._run("hashes", folder=str(self.layout.skills), names=list(wanted))
+        on_disk: dict[str, str | None] = answer["hashes"]
+        outdated: list[str] = []
+        for name, key in wanted.items():
+            known = installed.get(name, {})
+            # 2. Another version, or never installed.
+            if known.get("key") != key:
+                outdated.append(name)
+            # 3. The same version, but someone changed its files in the sandbox.
+            elif known.get("hash") != on_disk.get(name):
+                logger.warning(
+                    "The skill %s was changed inside the sandbox of %s; it is installed again.",
+                    name, self.identifier,
+                )
+                outdated.append(name)
+        return outdated
 
     async def permissions(self) -> dict[str, list[str]]:
         """The user's rules in ``setting.json``: ``allow``, ``ask`` and ``deny``."""

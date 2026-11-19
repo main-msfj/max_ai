@@ -153,6 +153,34 @@ def unpack(packed, folder):
                 os.chmod(full, 0o755 if member.mode & 0o100 else 0o644)
 
 
+def digest(folder):
+    """One hash of everything in ``folder``: each file's path, whether it
+    runs, and its content. None when the folder is not there."""
+    if not os.path.isdir(folder):
+        return None
+    total = hashlib.sha256()
+    for root, folders, files in os.walk(folder):
+        folders.sort()
+        for name in sorted(files + [f for f in folders if os.path.islink(os.path.join(root, f))]):
+            full = os.path.join(root, name)
+            total.update(os.path.relpath(full, folder).encode() + b"\0")
+            # A link counts as where it points, never as what is there.
+            if os.path.islink(full):
+                total.update(b"link\0" + os.readlink(full).encode() + b"\0")
+                continue
+            total.update(b"x\0" if os.lstat(full).st_mode & 0o100 else b"-\0")
+            with open(full, "rb") as file:
+                for chunk in iter(lambda: file.read(1 << 20), b""):
+                    total.update(chunk)
+            total.update(b"\0")
+    return total.hexdigest()
+
+
+def hashes(request):
+    """The hash of each skill folder asked for, as it is on disk now."""
+    return {"hashes": {name: digest(os.path.join(request["folder"], name)) for name in request["names"]}}
+
+
 def install(request):
     name, key, target = request["name"], request["key"], request["folder"]
     parent = os.path.dirname(target)
@@ -165,8 +193,11 @@ def install(request):
             sweep(os.path.dirname(request["settings"]))
             current = read_settings(request["settings"])
             skills = current.setdefault("skills", {})
-            # Someone installed it while this call waited for the lock.
-            if (skills.get(name) or {}).get("key") == key and os.path.isdir(target):
+            # Someone installed it while this call waited for the lock, and
+            # what is on disk is still what was installed.
+            known = skills.get(name) or {}
+            found = digest(target)
+            if known.get("key") == key and found is not None and known.get("hash") == found:
                 return {"installed": False}
 
             fresh = tempfile.mkdtemp(dir=parent, prefix=INCOMING)
@@ -188,8 +219,11 @@ def install(request):
                 os.replace(target, old)
             os.replace(fresh, target)
             shutil.rmtree(old, ignore_errors=True)
-            # 3. Record the new key, with what the prompt says of the skill.
-            skills[name] = {"key": key, "description": request.get("description", "")}
+            # 3. Record the new key, what the prompt says of the skill, and the
+            #    hash of its files: a later change to them is noticed.
+            skills[name] = {
+                "key": key, "description": request.get("description", ""), "hash": digest(target),
+            }
             write_settings(request["settings"], current)
     finally:
         with contextlib.suppress(OSError):
@@ -211,7 +245,7 @@ def sweep(folder):
 
 
 OPERATIONS = {"create": create, "settings": settings, "upload": upload, "install": install,
-              "permit": permit, "unpermit": unpermit}
+              "hashes": hashes, "permit": permit, "unpermit": unpermit}
 
 
 def main():

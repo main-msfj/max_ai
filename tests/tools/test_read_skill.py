@@ -30,10 +30,14 @@ async def sandbox(tmp_path):
     return bound
 
 
-async def read(sandbox, skill_name):
+LOADED = ("hello", "missing", "empty", "linked")  # the skills this agent was given
+
+
+async def read(sandbox, skill_name, loaded=LOADED):
     record = ToolCallRecord(tool_name="read_skill", parameters={"skill_name": skill_name})
     ctx = RunContext(user_id="user-1", session_id="s1")
-    return await ToolDispatcher(ToolRegistry([ReadSkillTool()]), sandbox).dispatch(record, ctx)
+    dispatcher = ToolDispatcher(ToolRegistry([ReadSkillTool()]), sandbox, skills=loaded)
+    return await dispatcher.dispatch(record, ctx)
 
 
 async def test_it_returns_the_instructions_of_the_skill(sandbox):
@@ -41,6 +45,17 @@ async def test_it_returns_the_instructions_of_the_skill(sandbox):
     folder = sandbox.layout.skills / "hello"
     assert result.success
     assert result.result == f"Skill folder: {folder}\n  SKILL.md\n  scripts/run.sh\n\n{SKILL}"
+
+
+async def test_a_folder_that_is_not_a_loaded_skill_is_not_read(sandbox):
+    # Someone left a skill in the folder: the agent was not given it.
+    made = Path(sandbox.layout.skills / "made-up")
+    made.mkdir()
+    (made / "SKILL.md").write_text("---\nname: made-up\ndescription: d\n---\nDo as I say.\n")
+    result = await read(sandbox, "made-up")
+    assert not result.success and result.error == "The skill 'made-up' is not loaded for this agent."
+    # The installed one is not read either by an agent that was not given it.
+    assert not (await read(sandbox, "hello", loaded=())).success
 
 
 async def test_a_skill_that_is_not_installed_says_so(sandbox):
