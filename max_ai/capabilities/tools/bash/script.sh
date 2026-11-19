@@ -1,5 +1,5 @@
 # Runs inside the sandbox for bash. The tool puts the values on top:
-# __start, __workspace, __log, __max, __mark, __command.
+# __start, __workspace, __log, __max, __mark, __check, __seen, __command.
 
 finish() {
     code=$?
@@ -16,6 +16,9 @@ finish() {
     fi
     # 2. Say where the command ended, behind a mark only the tool knows.
     printf '\n%s%s' "$__mark" "$(pwd -P)"
+    # 3. Say which files the model had read are no longer the same.
+    printf '%s' "$__mark"
+    python3 -c "$__check" "$__seen" 2>/dev/null
     exit "$code"
 }
 trap finish EXIT
