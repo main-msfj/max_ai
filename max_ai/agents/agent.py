@@ -329,7 +329,11 @@ class Agent(ComponentBase[AgentSpec]):
             box = await self._sandbox(ctx)
             registry = await self._registry()
             dispatcher = await self._dispatcher(registry, box)
-            loop_hook = HarnessLoopHook(memory=self.memory, sandbox=box, mcp=self._mcp)
+            # The model that writes the summaries also keeps the memory at compaction.
+            keeper = getattr(self.reasoning.compaction, "client", None)
+            loop_hook = HarnessLoopHook(
+                memory=self.memory, sandbox=box, mcp=self._mcp, keeper=keeper
+            )
             # 2. The prompt, with the memory as it is now.
             if ctx.memory_index is None:
                 await loop_hook.refresh_memory(ctx)

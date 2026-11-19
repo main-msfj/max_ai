@@ -108,6 +108,17 @@ class LoopHook:
         self.warn_before = warn_before  # calls left when the model is told; 0 = never
         self.max_repeats = max_repeats  # same calls in a row before they stop running
 
+    async def leaving(
+        self,
+        ctx: RunContext,
+        old: list[Message],
+        client: AnyClient,
+        middleware: MiddlewareChain | None,
+    ) -> None:
+        """Messages are about to leave the conversation: the last chance to
+        keep something of them. It runs while they are summarized. As it
+        is, nothing."""
+
     async def after_compact(self, ctx: RunContext, state: LoopState) -> None:
         """The loop compacted the conversation: renew what the model no
         longer sees (the memory index), save ``ctx``."""
@@ -475,6 +486,7 @@ class CoreLoop(ComponentBase[ConfigT], ABC):
             ctx.messages, client, summary=ctx.summary,
             prompt_tokens=count.count_text(self.system(ctx, prompt)), tool_tokens=tools,
             force=force, ctx=ctx, middleware=dispatcher.middleware,
+            leaving=lambda old: hook.leaving(ctx, old, client, dispatcher.middleware),
         )
         ctx.context = result.context
         if not result.changed:

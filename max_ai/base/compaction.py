@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import typing as t
 from abc import ABC, abstractmethod
@@ -25,6 +26,8 @@ if t.TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 AnyClient = CoreChatCompletionClient[t.Any]
+# A caller that wants the messages that leave, while they are summarized.
+Leaving = t.Callable[[list[Message]], t.Awaitable[None]]
 
 
 class CompactionResult(BaseModel):
@@ -125,10 +128,12 @@ class CoreCompaction(ComponentBase[ConfigT], ABC):
         force: bool = False,
         ctx: RunContext | None = None,
         middleware: MiddlewareChain | None = None,
+        leaving: Leaving | None = None,
     ) -> CompactionResult:
         """Make ``messages`` fit beside what else goes in the call (the
         system prompt and the tools, in tokens). ``summary``: what earlier
-        compactions kept. ``force`` compacts even under the threshold."""
+        compactions kept. ``force`` compacts even under the threshold.
+        ``leaving`` gets the messages that leave, while they are summarized."""
         context = self.measure(messages, client, prompt_tokens, tool_tokens)
         limit, before = context.capacity, context.messages
         result = CompactionResult(
@@ -157,13 +162,25 @@ class CoreCompaction(ComponentBase[ConfigT], ABC):
         if not old:
             return self.done(result, recent)
 
-        # 3. What is kept of them; a failure here never stops the agent.
-        try:
-            result.summary, result.usage = await self.reduce(old, client, summary, ctx, middleware)
-        except StopRun:
-            raise  # a middleware ended the turn: that is not a failed summary
-        except Exception:
-            logger.exception("Compaction could not reduce the old messages; they are dropped")
+        # 3. What is kept of them, while whoever asked looks at them too;
+        #    a failure in either never stops the agent.
+        reduced, looked = await asyncio.gather(
+            self.reduce(old, client, summary, ctx, middleware),
+            leaving(old) if leaving is not None else asyncio.sleep(0),
+            return_exceptions=True,
+        )
+        for outcome in (reduced, looked):
+            # A middleware ended the turn: that is not a failure to swallow.
+            if isinstance(outcome, (StopRun, asyncio.CancelledError)):
+                raise outcome
+        if isinstance(reduced, BaseException):
+            logger.error(
+                "Compaction could not reduce the old messages; they are dropped", exc_info=reduced
+            )
+        else:
+            result.summary, result.usage = reduced
+        if isinstance(looked, BaseException):
+            logger.error("Who looked at the messages that leave failed", exc_info=looked)
         result.changed, result.removed = True, len(old)
         return self.done(result, recent)
 

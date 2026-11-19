@@ -95,6 +95,12 @@ class Settings(BaseSettings):
         validation_alias="SUMMARY_MODEL",
         description="OpenRouter model that writes the summaries; empty: the agent's own.",
     )
+    harness_memory_at_compaction: bool = Field(
+        default=True,
+        validation_alias="HARNESS_MEMORY_AT_COMPACTION",
+        description="When messages leave, what the user said that is worth remembering "
+        "is saved to the memory.",
+    )
     harness_judge_model: str = Field(
         default="",
         validation_alias="HARNESS_JUDGE_MODEL",
