@@ -29,22 +29,7 @@ from ..capabilities.mcp._model import (
     serialize_mcp_servers,
 )
 from ..capabilities.memory import Memory
-from ..capabilities.stacks import (
-    STANDARD_ORDER,
-    AgentPolicyLayer,
-    KnowledgeLayer,
-    MemoryFilesLayer,
-    PromptBuilder,
-    RenderingLayer,
-    SessionLayer,
-    SkillsLayer,
-    TaskAnalysisLayer,
-    ToolsLayer,
-    WorkspaceLayer,
-)
-from ..capabilities.tools.call_tool import CallToolTool
-from ..capabilities.tools.search_tool import SearchToolsTool
-from ..capabilities.tools.skill import ReadSkillTool
+from ..capabilities.stacks import NativePrompt
 from ..config import setting
 from ..core.event_type import CoreEvent, FatalErrorEvent, ModelStreamChunkEvent
 from ..core.harness.hooks import HarnessLoopHook, HarnessToolHook
@@ -82,6 +67,22 @@ class Agent(ComponentBase[AgentSpec]):
     COMPONENT_HINT: t.ClassVar[str] = "give it a component_schema, _to_config and _from_config."
     CLOSED: t.ClassVar[str] = "The agent is closed"
     SANDBOX_LOCK: t.ClassVar[str] = "\0sandbox"  # never a session id: those are validated
+    # What each piece must be; True when the agent may go without it.
+    PIECES: t.ClassVar[tuple[tuple[str, type, bool], ...]] = (
+        ("client", CoreChatCompletionClient, False),
+        ("reasoning", CoreLoop, False),
+        ("memory", Memory, True),
+        ("skills", SkillsCore, True),
+        ("sandbox", SandboxCore, True),
+    )
+    # What every element of each list must be.
+    LISTS: t.ClassVar[tuple[tuple[str, type], ...]] = (
+        ("toolset", CoreTool),
+        ("mcp", MCPServerConfig),
+        ("knowledge", CoreKnowledgeRegistry),
+        ("prompt_layers", CoreLayer),
+        ("middlewares", CoreMiddleware),
+    )
 
     def __init__(
         self,
@@ -121,71 +122,49 @@ class Agent(ComponentBase[AgentSpec]):
         self.sandbox = sandbox
 
         self._validate()
-        self._run_harness_validation()
-        # What the runs share: MCP connections and one lock per session.
-        self._mcp = MCPClientManager()
-        for server in self.mcp:
-            self._mcp.add_server(server)
-        self._mcp_lock = asyncio.Lock()
-        self._locks: weakref.WeakValueDictionary[tuple[str, str], asyncio.Lock] = (
-            weakref.WeakValueDictionary()
-        )
-        self._closed = False
-        self._boxes: dict[str, SandboxCore] = {}  # one sandbox per user, closed by close()
-        # close() waits for the runs that are still going.
-        self._active = 0
-        self._idle = asyncio.Event()
-        self._idle.set()
+        self._build()
 
     # -------- CHECKS WHEN IT IS BUILT ----------------------------------------
 
     def _validate(self) -> None:
-        """Every piece must come from its Core class; the error names the one that does not."""
-        self._validate_directives()
-        self._validate_capabilities()
-        self._validate_runtime()
-
-    def _validate_directives(self) -> None:
-        """Who the agent is and how it answers: name, description, instructions, output format."""
+        """Every piece must come from its Core class and keep the harness's
+        rules; the error names what is wrong. Nothing is built here."""
         # 1. The three texts.
         for what in ("name", "description", "instructions"):
             if not isinstance(getattr(self, what), str):
                 raise TypeError(f"{what} must be text")
         if not self.name.strip():
             raise ValueError("name cannot be empty")
+
         # 2. The answer's format is a class, not an object.
         form = t.cast("object", self.output_format)
         if form is not None and not (isinstance(form, type) and issubclass(form, BaseModel)):
             raise TypeError("output_format must be a pydantic BaseModel class")
 
-    def _validate_capabilities(self) -> None:
-        """What the agent can do: tools, MCP, memory, knowledge, skills and prompt layers."""
-        # 1. The ones that are a single object.
-        if self.memory is not None:
-            self._check(self.memory, Memory, "memory")
-        if self.skills is not None:
-            self._check(self.skills, SkillsCore, "skills")
-        # 2. The ones that are a list: each element is checked.
-        lists: tuple[tuple[Sequence[object], type, str], ...] = (
-            (self.toolset, CoreTool, "toolset"),
-            (self.mcp, MCPServerConfig, "mcp"),
-            (self.knowledge, CoreKnowledgeRegistry, "knowledge"),
-            (self.prompt_layers, CoreLayer, "prompt_layers"),
-        )
-        for values, kind, what in lists:
-            for value in values:
+        # 3. The pieces that are one object.
+        for what, kind, optional in self.PIECES:
+            value = getattr(self, what)
+            if value is not None or not optional:
                 self._check(value, kind, what)
 
-    def _validate_runtime(self) -> None:
-        """What runs the agent: client, loop, middlewares and sandbox."""
-        # 1. The model and the loop are always there.
-        self._check(self.client, CoreChatCompletionClient, "client")
-        self._check(self.reasoning, CoreLoop, "reasoning")
-        # 2. The sandbox is optional; middlewares are a list.
+        # 4. The pieces that are a list: each element is checked.
+        for what, kind in self.LISTS:
+            for value in getattr(self, what):
+                self._check(value, kind, what)
+
+        # 5. The harness's rules for what the developer wrote.
+        Harness.description_rules(self.description)
+        Harness.instruction_rules(self.instructions)
+        Harness.custom_prompt_rules(self.prompt_layers)
+        Harness.tool_rules(self.toolset)
+
+        # 6. The model's limits and the sandbox's time are the harness's.
+        Harness.model_rules(self.client.config)
         if self.sandbox is not None:
-            self._check(self.sandbox, SandboxCore, "sandbox")
-        for value in self.middlewares:
-            self._check(value, CoreMiddleware, "middlewares")
+            Harness.sandbox_rules()
+
+        # 7. What needs a sandbox has one, and skills have bash.
+        Harness.combination_rules(self.toolset, self.sandbox, self.skills, self.memory)
 
     @staticmethod
     def _check(value: object, kind: type, what: str) -> None:
@@ -194,23 +173,34 @@ class Agent(ComponentBase[AgentSpec]):
             given = type(value).__name__
             raise TypeError(f"{what} must be a {kind.__name__}; got {given}")
 
-    def _run_harness_validation(self) -> None:
-        """Apply the harness's rules: an error names the rule that is broken."""
-        # 1. The texts and the tools the developer wrote.
-        Harness.description_rules(self.description)
-        Harness.instruction_rules(self.instructions)
-        Harness.custom_prompt_rules(self.prompt_layers)
-        Harness.tool_rules(self.toolset)
-        # 2. The model's limits and the sandbox's time are the harness's.
-        Harness.model_rules(self.client.config)
-        if self.sandbox is not None:
-            Harness.sandbox_rules()
-        # 3. What the harness adds: tracing and its own tools.
+    # -------- WHAT IT IS MADE OF ---------------------------------------------
+
+    def _build(self) -> None:
+        """What the agent is made of once its pieces are known to be right."""
+        # 1. What the harness adds: tracing first, and its own tools.
         self.middlewares = Harness.middleware_rules(self.middlewares, self.name)
         self._chain = MiddlewareChain(self.middlewares)
         self.tools = Harness.tool_combination(
             self.toolset, self.sandbox, self.skills, self.memory
         )
+
+        # 2. The MCP servers, connected when a run first needs them.
+        self._mcp = MCPClientManager()
+        for server in self.mcp:
+            self._mcp.add_server(server)
+        self._mcp_lock = asyncio.Lock()
+
+        # 3. What the runs share: one lock per session, one sandbox per user.
+        self._locks: weakref.WeakValueDictionary[tuple[str, str], asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
+        self._boxes: dict[str, SandboxCore] = {}  # closed by close()
+        self._closed = False
+
+        # 4. close() waits for the runs that are still going.
+        self._active = 0
+        self._idle = asyncio.Event()
+        self._idle.set()
 
     # -------- WHAT THE APPLICATION CALLS -------------------------------------
 
@@ -393,27 +383,21 @@ class Agent(ComponentBase[AgentSpec]):
     async def _registry(self) -> ToolRegistry:
         """The tools of a run: the agent's, the MCP servers' and what reaches them."""
         tools = list(self.tools)
+
         # 1. MCP servers connect once; one that is down is skipped.
         if self.mcp:
             async with self._mcp_lock:
                 await self._mcp.connect_all()
             tools += self._mcp.get_tools()
-        if self.skills is not None:
-            tools.append(ReadSkillTool())
+
         # 2. A tool with a name already taken is left out: the first one wins.
         registry = ToolRegistry()
         for tool in tools:
             if registry.get(tool.name) is None:
                 registry.register(tool)
-        # 3. Few deferred tools go loaded: the two tools that find and call
-        #    them would cost more than they save.
-        if registry.deferred_tokens() < setting.harness_deferred_tools_min_tokens:
-            registry.load_deferred()
-        # 4. Many are found and called through these two.
-        if registry.deferred_tools():
-            for extra in (SearchToolsTool(registry), CallToolTool(registry)):
-                if registry.get(extra.name) is None:
-                    registry.register(extra)
+
+        # 3. Few deferred tools go loaded; many are found and called through two tools.
+        Harness.deferred_rules(registry)
         return registry
 
     async def _dispatcher(self, registry: ToolRegistry, box: SandboxCore | None) -> ToolDispatcher:
@@ -428,37 +412,20 @@ class Agent(ComponentBase[AgentSpec]):
         )
 
     async def _prompt(self, ctx: RunContext, box: SandboxCore | None, registry: ToolRegistry) -> str:
-        """The system prompt: the native layers always, then the developer's,
-        in the standard order. Name, description and instructions go in the
-        agent policy layer."""
-        # 1. The native layers; each optional one only when the agent has its piece.
-        layers: list[CoreLayer] = [
-            AgentPolicyLayer(), TaskAnalysisLayer(), RenderingLayer(), ToolsLayer(), SessionLayer(),
-        ]
-        variables: dict[str, t.Any] = {
+        """The system prompt: who the agent is and the pieces it has. Which
+        layer goes with each piece is the prompt stack's to know."""
+        variables = {
             "name": self.name, "description": self.description,
             "instructions": self.instructions,
             "current_date": datetime.now(UTC).date().isoformat(),
         }
-        if box is not None:
-            layers.append(WorkspaceLayer())
-            variables.update(box.session_paths(ctx.session_id or ctx.run_id))
-            if self.skills is not None:
-                layers.append(SkillsLayer())
-                installed = await box.installed_skills()
-                variables["skills"] = [
-                    {"name": name, "description": installed[name]["description"]}
-                    for name in self.skills.skills
-                    if name in installed
-                ]
-            if self.memory is not None:
-                layers.append(MemoryFilesLayer())
-                variables["memory"] = self.memory.block(box, ctx.memory_index or "")
-        if self.knowledge:
-            layers.append(KnowledgeLayer())
-        # 2. The developer's layers join them, all in the standard order.
-        builder = PromptBuilder([*layers, *self.prompt_layers], registry, order=STANDARD_ORDER)
-        return builder.build(variables)
+        return await NativePrompt.build(
+            registry, variables,
+            session=ctx.session_id or ctx.run_id,
+            sandbox=box, skills=self.skills, memory=self.memory,
+            memory_index=ctx.memory_index or "",
+            knowledge=bool(self.knowledge), extra=self.prompt_layers,
+        )
 
     # -------- STORED AND BUILT AGAIN -----------------------------------------
 
@@ -473,8 +440,7 @@ class Agent(ComponentBase[AgentSpec]):
             reasoning=dump(self.reasoning, "reasoning"),
             toolset=[dump(tool, "tool") for tool in self.toolset],
             mcp=json.loads(serialize_mcp_servers(self.mcp)),
-            # Memory has no settings of its own beyond this one.
-            memory={"read_only": self.memory.read_only} if self.memory is not None else None,
+            memory=dump(self.memory, "memory") if self.memory is not None else None,
             knowledge=[dump(source, "knowledge") for source in self.knowledge],
             skills=dump(self.skills, "skills") if self.skills is not None else None,
             middlewares=[dump(item, "middleware") for item in self.middlewares],
@@ -496,7 +462,7 @@ class Agent(ComponentBase[AgentSpec]):
             reasoning=load(config.reasoning),
             toolset=[load(tool) for tool in config.toolset],
             mcp=list(config.mcp),
-            memory=Memory(**config.memory) if config.memory is not None else None,
+            memory=load(config.memory),
             knowledge=[load(source) for source in config.knowledge],
             skills=load(config.skills),
             middlewares=[load(item) for item in config.middlewares],

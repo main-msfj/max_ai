@@ -74,15 +74,21 @@ def test_our_tools_are_added_and_the_developers_win(tmp_path):
 
 def test_skills_need_a_sandbox_and_bash(tmp_path):
     skills = object.__new__(type("S", (), {}))  # only its presence matters here
+    sandbox = LocalSandbox(str(tmp_path))
+    # The rules only check; the list of tools is made after them.
     with pytest.raises(HarnessError, match="pass sandbox"):
-        Harness.tool_combination([], None, skills)
+        Harness.combination_rules([], None, skills)
     with pytest.raises(HarnessError, match="bash runs its commands in a sandbox"):
-        Harness.tool_combination([BashTool()], None, None)
+        Harness.combination_rules([BashTool()], None, None)
     with pytest.raises(HarnessError, match="memory is kept in a sandbox"):
-        Harness.tool_combination([], None, None, Memory())
+        Harness.combination_rules([], None, None, Memory())
     with pytest.raises(HarnessError, match="add BashTool"):
-        Harness.tool_combination([], LocalSandbox(str(tmp_path)), skills)
-    assert "bash" in names(Harness.tool_combination([BashTool()], LocalSandbox(str(tmp_path)), skills))
+        Harness.combination_rules([], sandbox, skills)
+    Harness.combination_rules([BashTool()], sandbox, skills)
+    # An agent with skills gets the tool that reads them, before the worktree ones.
+    got = names(Harness.tool_combination([BashTool()], sandbox, skills))
+    assert got[0] == "bash" and got.index("read_skill") < got.index("enter_worktree")
+    assert "read_skill" not in names(Harness.tool_combination([BashTool()], sandbox, None))
 
 
 def test_tracing_is_added_once():

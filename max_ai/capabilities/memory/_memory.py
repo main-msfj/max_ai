@@ -5,6 +5,9 @@ import shlex
 import typing as t
 from pathlib import Path
 
+from pydantic import BaseModel
+
+from ...base.component import ComponentBase
 from ...base.sandbox import SandboxCore
 from ..tools.memory import SaveMemoryTool
 
@@ -12,9 +15,19 @@ from ..tools.memory import SaveMemoryTool
 SCRIPT = Path(__file__).with_name("index.py").read_text()
 
 
-class Memory:
+class MemoryConfig(BaseModel):
+    """What is stored of a memory."""
+
+    read_only: bool = False
+
+
+class Memory(ComponentBase[MemoryConfig]):
     """Builds the index of the memory folder and what the prompt says about it.
     ``read_only``: the model reads the memory but cannot save to it."""
+
+    component_type = "memory"
+    component_schema = MemoryConfig
+    component_provider_override = "max_ai.capabilities.memory.Memory"
 
     MAX_ENTRIES: t.ClassVar[int] = 200  # lines of the index
     MAX_DESCRIPTION: t.ClassVar[int] = 150  # characters of each line
@@ -38,6 +51,13 @@ class Memory:
 
     def __init__(self, read_only: bool = False) -> None:
         self.read_only = read_only
+
+    def _to_config(self) -> MemoryConfig:
+        return MemoryConfig(read_only=self.read_only)
+
+    @classmethod
+    def _from_config(cls, config: MemoryConfig) -> t.Self:
+        return cls(read_only=config.read_only)
 
     async def index(self, sandbox: SandboxCore) -> str:
         """One line per memory file, as they are now in ``sandbox``."""
