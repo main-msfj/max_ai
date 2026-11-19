@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     harness_deferred_tools_min_tokens: int = Field(
         default=5_000,
         ge=0,
+        validation_alias="HARNESS_DEFERRED_TOOLS_MIN_TOKENS",
         description="Deferred tools that take less than this together are loaded directly.",
     )
     harness_prompt_min_tokens: int = Field(
@@ -84,22 +85,34 @@ class Settings(BaseSettings):
         description="Tries in total for one model call: the first one plus its retries.",
     )
     harness_sandbox_seconds: float = Field(
-        default=600, gt=0, description="How long a sandbox lives; no tool may run longer."
+        default=600,
+        gt=0,
+        validation_alias="HARNESS_SANDBOX_SECONDS",
+        description="How long a sandbox lives; no tool may run longer.",
     )
     summary_model: str = Field(
         default="",
+        validation_alias="SUMMARY_MODEL",
         description="OpenRouter model that writes the summaries; empty: the agent's own.",
     )
     harness_judge_model: str = Field(
         default="",
+        validation_alias="HARNESS_JUDGE_MODEL",
         description="OpenRouter decisions model that judges bash commands without a rule; "
         "empty: no judge, the user is asked.",
     )
     harness_judge_min_safe: float = Field(
-        default=0.9, ge=0.5, le=1, description="How sure the judge must be to run a command."
+        default=0.9,
+        ge=0.5,
+        le=1,
+        validation_alias="HARNESS_JUDGE_MIN_SAFE",
+        description="How sure the judge must be to run a command.",
     )
     harness_judge_seconds: float = Field(
-        default=3, gt=0, description="Most the judge may take; after it the user is asked."
+        default=3,
+        gt=0,
+        validation_alias="HARNESS_JUDGE_SECONDS",
+        description="Most the judge may take; after it the user is asked.",
     )
 
     # -------- COMPACTION -------------------------------------------------------
