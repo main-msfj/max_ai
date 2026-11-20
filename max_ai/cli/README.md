@@ -38,7 +38,7 @@ stack of widgets, not a text log, so every piece of a turn stays live:
 | `@relative/path` | attach a workspace file |
 | `!command` | run a shell command in the workspace |
 | `/` then `↑↓`, `tab`, `enter` | command menu: move, complete, run |
-| `/help` `/skills` `/tools` `/resume` `/new` `/session` `/clear` `/thinking` `/verbose` `/files` `/exit` | commands |
+| `/help` `/skills` `/tools` `/mcp` `/resume` `/new` `/session` `/clear` `/thinking` `/verbose` `/files` `/exit` | commands |
 | `/<skill-name> [args]` | run a skill (every loaded skill is listed in the menu) |
 | `esc` · `ctrl+t` · `ctrl+o` · `ctrl+b` · `ctrl+l` · `pgup/pgdn` | interrupt · thinking · verbose events · files · clear screen · scroll |
 
@@ -46,7 +46,8 @@ The CLI is a host like any other: it receives an already built `Agent`
 and only adds where conversations are saved and whose they are.
 
 ```python
-from max_ai.cli import run_cli
+from max_ai.capabilities.session_store import LocalSessionStore
+from max_ai.cli import run_cli          # pip install "maxai[cli]"
 
 await run_cli(                              # closes the agent at the end
     agent,
@@ -59,3 +60,6 @@ await run_cli(                              # closes the agent at the end
 `/resume` picks a saved conversation, `/new` (or `/clear`) starts a new
 session and `/session` shows the current one. A resumed conversation that
 was waiting for an approval or an answer asks it again.
+
+The same agent can be served in the browser with
+`max_ai.web.run_web(agent, store=..., user_id=...)`.

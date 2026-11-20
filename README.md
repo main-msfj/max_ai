@@ -1,619 +1,480 @@
 # Max AI
 
-Max AI is a Python framework for building tool-using LLM agents. It separates agent orchestration, prompt composition, model providers, tools, runtime execution, skills, memory, knowledge, and UI delivery into small components with clear contracts.
-
-The default behavior is a ReAct-style agent loop:
-
-1. Build and validate the agent configuration.
-2. Load capabilities such as tools, skills, memory, routines, knowledge, and context.
-3. Render a layered system prompt.
-4. Call the LLM through a provider adapter.
-5. Execute requested tools through a tool executor.
-6. Feed tool results back into the conversation.
-7. Repeat until the model produces a final answer, requests approval, errors, or reaches the configured iteration limit.
-
-## Architecture
-
-```text
-                                  USER / APP / CLI / UI
-                                           |
-                                           v
-                               +----------------------+
-                               |  Agent.run*() APIs   |
-                               |----------------------|
-                               | run()                |
-                               | run_stream()         |
-                               | run_stream_events()  |
-                               +----------+-----------+
-                                          |
-                                          v
-+--------------------------------------------------------------------------------+
-|                                  Agent                                         |
-|--------------------------------------------------------------------------------|
-| Owns configuration, lifecycle, prompt stack, capabilities, sandbox, client,     |
-| reasoning loop, compaction strategy, middleware, and final AgentResponse.       |
-+-----+----------------+------------------+------------------+-------------------+
-      |                |                  |                  |
-      | prepare()      | runtime setup    | prompt ctx       | reasoning
-      v                v                  v                  v
-+-------------+  +-------------+  +----------------+  +--------------------------+
-|Capabilities |  | Workspace   |  | Prompt Stack   |  | Reasoning Loop           |
-|Manager      |  | Registry    |  | LayerContainer |  | ReActLoop by default     |
-+------+------+  +------+------+  +-------+--------+  +------------+-------------+
-       |                |                 |                        |
-       | collects       | materializes    | renders                | calls
-       v                v                 v                        v
-+-------------+  +-------------+  +----------------+  +--------------------------+
-| Tools       |  | user runtime|  | PromptCtx       |  | Chat Client              |
-| Memory      |  | tools/      |  | rendered layers |  | OpenAI, OpenRouter,      |
-| Skills      |  | skills/     |  | layer usage     |  | Ollama adapters included |
-| Knowledge   |  | artifacts/  |  | token counts    |  +------------+-------------+
-| Workspace   |  +-------------+  +----------------+               |
-+------+------+                                                   |
-       |                                                          |
-       | exposes tools / metadata                                 |
-       v                                                          |
-+-----------------------------+                                   |
-| ToolExecutor                |<----------------------------------+
-|-----------------------------|       LLM returns tool calls
-| resolves tool names         |
-| validates parameters        |
-| handles approval states     |
-| runs middleware             |
-| dispatches execution        |
-+-------------+---------------+
-              |
-              v
-   +----------------------+       +----------------------+
-   | LocalSandbox         |       | DockerSandbox        |
-   | this machine         |       | one container        |
-   +----------------------+       | per user             |
-                                  +----------+-----------+
-                                             |
-                                             v
-                                  +------------------------+
-                                  | /workspaces/<user_id>/ |
-                                  |   workspace/           |
-                                  |   scratchpad/          |
-                                  |   skills/              |
-                                  +------------------------+
-```
-
-## How the Components Talk
-
-The `Agent` is the orchestration root. It receives a model client, optional tools, optional capability registries, optional custom prompt layers, an optional sandbox, and an optional reasoning loop. It normalizes everything during construction, prepares async resources before execution, then drives one run through `run_stream_events()`.
-
-The agent manages capabilities (memory, skills, knowledge) and tool registration. It validates tool-name uniqueness, loads skill metadata during `prepare()`, and exposes the final tool list to the dispatcher.
-
-The `LayerContainer` stores the prompt stack. Default layers (always included or conditionally added based on configuration):
-
-```text
-AgentPolicyLayer
-TaskAnalysisLayer
-RenderingLayer
-SkillsLayer         (if skills are configured)
-KnowledgeLayer      (if knowledge is configured)
-MemoryLayer         (if memory is configured)
-SessionStateLayer
-```
-
-Each layer is a Jinja2-backed `CoreLayer`. Layers validate their template variables at construction time, so broken prompt contracts fail before the agent runs. During `Agent.prepare()`, the layers are rendered with variables collected from the agent's capabilities into a `PromptCtx`.
-
-The `CoreChatCompletionClient` is the provider boundary. The agent and reasoning loop do not know provider wire formats. A concrete client decides how to combine rendered layers and chat history into provider messages, convert `CoreMessage` objects to API payloads, convert `CoreTool` objects to provider tool schemas, normalize token usage, and perform streaming or non-streaming completions.
-
-Included clients: `OpenAIChatCompletionClient` (OpenAI API), `OpenRouterChatCompletionClient` (OpenRouter), and `OllamaChatCompletionClient` (local Ollama). Each supports tool calling, streaming, and structured output.
-
-The `ReActLoop` is the default reasoning engine. On each iteration it calls the client, appends the assistant message to `RunContext.messages`, registers any tool calls into `ctx.tool_state`, sends executable records to `ToolExecutor`, appends returned `ToolMessage` objects, and repeats. It stops when there are no tool calls, approval is needed, cancellation happens, no model result is returned, or the configured loop limit is reached.
-
-The `ToolExecutor` is the tool-call pipeline. It receives `ToolCallRecord` objects from the reasoning loop, resolves tool names, validates parameters against each tool's JSON schema, emits approval events when needed, runs middleware around the execution step, dispatches execution to the tool (commands go to the sandbox), and returns both observability events and `ToolMessage` results for the LLM.
-
-The sandbox controls where `bash` and the file tools run: `LocalSandbox` on this machine, `DockerSandbox` in one container per user. Without a sandbox the agent has no bash.
-
-The workspace creates per-user runtime directories: local disk (`LocalWorkspace`) or object storage (`AzureBlobWorkspace`, `MinIOWorkspace`). Each run materializes the user's directory, copies the selected skills into it, and gives the file tools and `bash` the same `$WORKSPACE`, `$SCRATCHPAD` and `$SKILLS` paths.
-
-## Runtime Flow
-
-```text
-User task
-   |
-   v
-Agent.run_stream_events(task)
-   |
-   +--> prepare()
-   |      |
-   |      +--> capabilities.prepare()
-   |      |      +--> load skill metadata
-   |      |      +--> validate final tool catalog
-   |      |
-   |      +--> PromptVariablesBuilder.collect(layer)
-   |      +--> CoreLayer.render(...)
-   |      +--> store rendered_layers + prompt token usage
-   |
-   +--> normalize task into RunContext.messages
-   |
-   +--> materialize workspace if tools or skills need runtime files
-   |
-   +--> build ToolExecutor(all_tools, middlewares, sandbox)
-   |
-   +--> optionally compact old context
-   |
-   +--> ReActLoop.execute_reasoning_loop(...)
-          |
-          +--> client.run(ctx, prompts, tools)
-          |
-          +--> assistant message
-          |
-          +--> no tool calls?
-          |      |
-          |      +--> final AgentResponse
-          |
-          +--> register tool calls in ctx.tool_state
-          |
-          +--> ToolExecutor.execute_tool_call(...)
-                 |
-                 +--> approval check
-                 +--> parameter validation
-                 +--> middleware chain
-                 +--> the tool, in LocalSandbox or DockerSandbox
-                 +--> ToolMessage returned to ReActLoop
-```
-
-## Key Concepts
-
-### Agent
-
-`max_ai.agents.Agent` is the main public abstraction. It exposes three APIs:
-
-- `run_stream_events()` yields every `CoreEvent` and then one final `AgentResponse`.
-- `run_stream()` yields assistant text chunks only.
-- `run()` consumes the event stream and returns the final `AgentResponse`.
-
-Use `run_stream_events()` for UIs, tracing, approvals, and debugging. Use `run_stream()` for chat-like text streaming. Use `run()` for scripts and tests.
-
-### RunContext
-
-`RunContext` carries per-run state: messages, user/session identifiers, run identifiers, and tool state. The reasoning loop mutates it as the turn progresses. Tool results are appended as `ToolMessage` instances so the model can reason over the outcome on the next iteration.
-
-### Prompt Layers
-
-Prompt layers are small, typed prompt fragments. Each layer declares required and optional variables, validates its Jinja2 template, and renders once during `prepare()`. Provider clients decide how rendered layers are assembled into the final model request.
-
-Override default layers by passing `prompt_layers` to `Agent`. An override of the same concrete type replaces the default. A new layer type is appended.
-
-### Capabilities
-
-Capabilities are registries that expose tools or prompt metadata:
-
-- memory: persistent user facts and memory tools;
-- skills: selected `SKILL.md` packages and runtime files;
-- logbook/context: session summaries and conversation context;
-- routines: reusable procedures exposed through search/fetch tools;
-- knowledge: retrieval backends and their tools;
-- workspace: per-user runtime filesystem.
-
-The agent collects these automatically from constructor arguments.
-
-### Tools
-
-MCP servers are configured separately from `toolset`. Pass one or more
-serializable server configurations through `mcp`:
-
-```python
-from max_ai.agents import Agent
-from max_ai.capabilities.mcp import (
-    HTTPServerConfig, StdioMCPServerConfig,
-    serialize_mcp_servers, deserialize_mcp_servers,
-)
-
-servers = [
-    HTTPServerConfig(server_id="docs", url="https://example.com/mcp"),
-    StdioMCPServerConfig(
-        server_id="local", command="uvx", args=["mcp-server-fetch"],
-    ),
-]
-payload = serialize_mcp_servers(servers)
-restored = deserialize_mcp_servers(payload)
-
-agent = Agent(
-    name="assistant", description="Uses MCP", instructions="Help the user",
-    client=client, toolset=[local_tool], mcp=restored,
-)
-```
-
-The agent discovers MCP tools when the first run starts, prefixes their names
-with the server ID, executes them in the host process, and shares the
-connections with every run until `agent.close()`. The Max AI client uses MCP 2.x
-and negotiates with both current and earlier protocol versions.
-
-Servers connect in parallel, each within `connect_timeout_seconds` (30 by
-default). A server that fails or does not answer never blocks the others: the
-run goes on without it, its known tools answer that it is unavailable, and it is
-retried after `retry_after_seconds` (60 by default). Set `required=True` on a
-server the agent cannot work without, so the run fails with a clear error
-instead.
-
-Network errors while connecting are retried with backoff inside that 30 s.
-Calls stop after `TOOL_TIMEOUT_SECONDS`, like every tool. If the connection
-drops during a call, read-only tools and resource reads reconnect and run
-again; any other tool returns an error saying it may or may not have run, and
-is never sent twice.
-
-Tools implement `CoreTool` or are regular Python callables wrapped by `FunctionAsTool`. Pass the wrapped tool in `toolset`:
-
-```python
-from max_ai.capabilities.tools.function_as_tool import FunctionAsTool
-from max_ai.types.tools import ToolApprovalMode
-
-
-def get_weather(city: str, unit: str = "celsius") -> dict[str, str | int]:
-    """Return a weather report for a city."""
-    return {
-        "city": city,
-        "condition": "sunny",
-        "temperature": 24,
-        "unit": unit,
-    }
-
-agent = Agent(
-    name="assistant",
-    description="Uses tools",
-    instructions="Help the user",
-    client=client,
-    toolset=[
-        FunctionAsTool(get_weather, approval_mode=ToolApprovalMode.ASK_APPROVED),
-    ],
-)
-```
-
-`FunctionAsTool` derives a tool name, description, and JSON schema from the Python function signature. Use approval modes for tools that can mutate state, access external systems, spend money, or expose sensitive data.
-
-### Skills
-
-Skills are local packages with a `SKILL.md` file and optional resources such as scripts or references.
-
-```text
-LocalSkills/
-  create-report/
-    SKILL.md
-    scripts/
-      create_report.py
-  create-ppt/
-    SKILL.md
-    scripts/
-      create_ppt.py
-```
-
-`LocalSkillRegistry` selects named skills from a source directory, caches them under `var/skills`, reads frontmatter metadata from `SKILL.md`, adds skill descriptions to the prompt through `SkillsLayer`, and materializes the selected skills into the runtime workspace before execution.
-
-`GithubSkillRegistry` does the same from a Git repository. It shallow-clones the repo once, then copies each named top-level folder:
-
-```python
-from max_ai.capabilities.skills.github import GithubSkillRegistry
-
-skills = GithubSkillRegistry(
-    "org/agent-skills",          # or a full https / git@ / ssh:// URL
-    ["create-invoice"],
-    ref="v1.2.0",                # branch or tag
-    token_env="SKILLS_GH_TOKEN", # private repos only: the env var name, never the token
-)
-
-# Skills nested in a folder of the repo:
-GithubSkillRegistry("trailofbits/skills-curated", ["openai-spreadsheet"],
-                    path="plugins/openai-spreadsheet/skills")
-```
-
-Check each skill's license before using it. Some public skill repos mix open-source skills with proprietary ones.
-
-The token is read from the environment when the repo is cloned. It is never serialized or placed on the command line. The host needs `git` installed.
-
-Skills run their scripts with `bash`, so they need a sandbox: the harness adds `bash` and the file tools when the agent has one, and refuses skills without it.
-
-### Sandbox
-
-Commands and file tools run in the user's sandbox, never in the agent's process. Each user gets their own (`sandbox.bind(user_id)`, done by the agent on every run), with `.agent/` inside: workspace, memory, skills and `setting.json`.
-
-`LocalSandbox(root=...)` keeps everything in a folder on this machine. It is fast and simple, for local development only: commands run as your user, so it is not isolation.
-
-`DockerSandbox` runs one container per user, named `docker-sandbox-<user_id>`, with a volume of the same name, so files and skills survive the container. No host path is mounted and only the variables the sandbox declares enter it. With no `networks` it has no network at all; `networks=[...]` lists the domains it may reach, through a proxy.
-
-```python
-from max_ai.capabilities.sandbox.docker import DockerSandbox
-from max_ai.capabilities.sandbox.local import LocalSandbox
-
-LocalSandbox(root="./box")                          # this machine, not isolated
-DockerSandbox()                                     # our image: python and pypdf
-DockerSandbox(dockerfile="./coding.Dockerfile")     # your Dockerfile, built once per content
-DockerSandbox(networks=["pypi.org", "files.pythonhosted.org"])  # pip, nothing else
-```
-
-### Workspace
-
-`LocalWorkspace` (the default) keeps each user's files on local disk. For serverless or multi-host deployments, a remote workspace keeps them in object storage. It downloads the user's files before a run and uploads only what changed at the end:
-
-```python
-from max_ai.capabilities.workspace import AzureBlobWorkspace, MinIOWorkspace
-
-AzureBlobWorkspace("https://acct.blob.core.windows.net/agents", api_key_env="AZURE_STORAGE_KEY")
-MinIOWorkspace("http://localhost:9000", bucket="agents",
-               access_key_env="MINIO_ACCESS_KEY", secret_key_env="MINIO_SECRET_KEY")
-```
-
-Install with `maxai[azure-blob]` or `maxai[minio]`. As everywhere else, configs store env var names, never credentials.
-
-### Middleware
-
-`CoreMiddleware` is a serializable component with optional async hooks: run lifecycle (`on_run_start`, `on_final_response`, `on_run_end`, `on_run_error`), model calls (`on_model_request`, `on_model_chunk`, `on_model_response`, `on_model_error`), and approved tool calls (`on_tool_request`, `on_tool_response`). Raise `StopRun(message)` from `on_run_start` or a model hook to end the turn cleanly (`response.stop_message`); a tool hook blocks a single call by returning a `ToolResult` instead. Pass middlewares via `Agent(..., middlewares=[...])`. Built-ins: `LoggingMiddleware`, `BudgetMiddleware(max_tokens=..., max_cost_usd=..., max_seconds=..., quota=QuotaLimits(...), quota_store=LocalQuotaStore(...))`, `TracingMiddleware()` with `configure_langfuse()` for OpenTelemetry → Langfuse.
-
-### Embeddings
-
-`CoreEmbedding` (`max_ai.base.embedding`) turns text into vectors, in batches and with a cache. `FastEmbedEmbedding` (`pip install 'maxai[embeddings]'`) runs a local multilingual model; `OpenAIEmbedding` needs no download (better for serverless). Memory and knowledge registries use `FastEmbedEmbedding` when `embedding` isn't passed, so `search_memory` and knowledge search match by meaning, in any language. Pass your own (`embedding=OpenAIEmbedding()`) to change it, or `embedding=None` for memory search by words only. MongoDB backends use `$vectorSearch` (Atlas, or the Atlas Local image in `docker-infra/`). `SQLiteMemoryRegistry` and `SQLiteKnowledgeRegistry` (`max_ai.capabilities.memory.sqlite`, `max_ai.capabilities.knowledge.sqlite`) store each vector next to its text, so stored memories and documents are never embedded again, even after a restart; knowledge is loaded with `upsert_block(block_id, KnowledgeBlock(...))`.
-
-### Context Compaction
-
-Compaction runs inside the loop before model calls when the window fills up. No default strategy (compaction=None means never compact). Strategies in max_ai.capabilities.compaction: `SummaryCompaction(threshold=0.8, keep_ratio=0.4)` (LLM summary of old turns; summary survives in prompt) and `SlidingWindowCompaction` (drops oldest turns without LLM).
-
-### Events and Responses
-
-The event stream exposes model calls, streamed chunks, reasoning iterations, tool calls, tool responses, approval pauses, compaction, and errors. The final item is always an `AgentResponse` unless the caller cancels.
-
-`AgentResponse` contains the final `RunContext`, agent name, usage, and finish reason: `stop`, `max_iterations`, `output_limit`, `budget_exceeded`, `stopped`, `approval_needed`, `tool_denied`, `tool_direct_return`, `input_needed`, `no_result`, `error`, `incomplete`, `waiting`, or `cancelled`.
-
-### Completion Gates
-
-Gates accept or reject the model's proposed final response before the turn ends. The framework's `RuntimeCompletionGate` is always added; pass `RuntimeCompletionGate(RuntimeGateConfig(plan_must_close=False))` in `gates=[...]` to change its options. It nudges the model once (then only notes it) when the plan is still open, a bash command failed and wasn't fixed, or the turn left files in a `tmp/`, `temp/` or `scratch/` folder; it never deletes them. Custom gates subclass `CompletionBase` and implement `on_final_response(ctx) -> CompletionDecision`.
-
-### Sessions
-
-The host loads/saves runs: `ctx = await store.load(user_id, session_id)` (or new `RunContext(user_id=..., session_id=...)`), `response = await agent.run(text, run_context=ctx)`, `await store.save(response.context)`. `LocalSessionStore` (JSON files) and `MongoDBSessionStore` (shared by every process or serverless invocation; `uri_env="MONGODB_URI"`) in max_ai.capabilities.session_store. The Agent never touches the store.
-
-### Concurrency
-
-One Agent instance serves many users at once. Runs of different `(user_id, session_id)` execute in parallel; messages of the same session wait for each other. Memory is bound per run to `run_context.user_id` and `session_id`.
-
-### Parallel Tools
-
-Read-only tool calls of one model reply run at the same time (`FunctionAsTool(fn, read_only=True)`). Built-in read-only file tools and MCP tools with readOnlyHint already are. Other calls run alone, in order. Cap: env `MAX_PARALLEL_TOOLS` (default 8).
-
-### Structured Output
-
-`Agent(..., output_format=MyPydanticModel)` shapes only the final accepted answer. Read it from `response.final_message.structured_output`.
-
-### Serialization
-
-An agent (or any component) is plain data. `agent.to_yaml()` / `agent.to_json()` write it compactly: each component keeps its `provider` and only the settings that differ from the defaults, so the file reads like one written by hand. `Agent.from_yaml(Path("agent.yaml"))` or `Agent.from_yaml(text)` rebuilds it (same for JSON).
-
-```yaml
-provider: maxai.agents.Agent
-config:
-  name: helper
-  description: Answers questions.
-  instructions: |
-    Be brief. Cite your sources.
-  client:
-    provider: maxai.llm.OpenRouterChatCompletionClient
-    config: {model: nvidia/nemotron-3.5-lightning:free}
-```
-
-Anything left out takes its default when loaded, so a later default change reaches stored agents. `to_yaml(full=True)` (or `agent.serialize().model_dump_json()`, `Agent.deserialize(row)`) keeps every setting instead. See `example-for-deployment/agents/`. Stored configs hold no secrets (clients store `api_key_env`, the env var name). Python-function tools can't be serialized—expose them through MCP. Third-party components need `from max_ai.base import allow_providers; allow_providers("my_pkg.")`.
+Max AI is a Python framework (3.11+) for building tool-using LLM agents. One
+`Agent` instance serves many users: the conversation lives in a `RunContext`
+that your application keeps and saves, not in the agent. A built-in *harness*
+checks the agent when it is built, adds the tools it needs, decides which tool
+calls may run, and compacts the conversation when the context window fills.
+
+Status: alpha (0.1.0, unreleased). The core was rewritten in November 2026 and
+the API may still change. See [Status and known gaps](#status-and-known-gaps).
 
 ## Installation
 
-This project targets Python 3.11 or newer.
-
 ```bash
-pip install maxai
+pip install maxai                       # the package is "maxai", the import is "max_ai"
+pip install "maxai[cli,embeddings,tracing,mongodb,e2b]"
 ```
 
-Or with optional features:
+| Extra | Adds | For |
+|---|---|---|
+| `cli` | textual | the terminal UI (`max_ai.cli.run_cli`) |
+| `embeddings` | fastembed | local embeddings (`FastEmbedEmbedding`) |
+| `tracing` | OpenTelemetry SDK + OTLP exporter | sending traces to Langfuse or any OTLP backend |
+| `mongodb` | pymongo | `MongoDBSessionStore`, MongoDB quota store and knowledge |
+| `e2b` | e2b | `E2BSandbox` |
 
-```bash
-pip install "maxai[cli,embeddings,tracing,mongodb]"
-```
+The web UI (`max_ai.web.run_web`) uses Starlette and Uvicorn, which come with
+the `mcp` dependency. For development: `uv sync --group dev`.
 
-For development:
-
-```bash
-uv sync --group dev
-```
-
-## Minimal Agent
+## Quick start
 
 ```python
 import asyncio
 
-from max_ai.agents import Agent
-from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
-from max_ai.capabilities.tools.function_as_tool import FunctionAsTool
-from max_ai.core.model.llm import ModelConfig
-from max_ai.types.tools import ToolApprovalMode
+from max_ai import Agent, OpenAIChatCompletionClient, tool
+from max_ai.types.run_context import RunContext
 
 
+@tool(read_only=True)
 def add(a: int, b: int) -> int:
     """Add two integers."""
     return a + b
 
 
 async def main() -> None:
-    client = OpenAIChatCompletionClient(
-        model="gpt-4o-mini",
-        config=ModelConfig(
-            supports_function_calling=True,
-            max_context_window=128000,
-        ),
-    )
-
     agent = Agent(
-        name="Sara",
-        description="A helpful assistant.",
-        instructions="Be concise and useful.",
-        client=client,
-        toolset=[FunctionAsTool(add, approval_mode=ToolApprovalMode.AUTO_APPROVED)],
+        name="helper",
+        description="A small assistant that can add numbers.",
+        instructions="Answer briefly.",
+        client=OpenAIChatCompletionClient(model="gpt-4o-mini"),  # reads OPENAI_API_KEY
+        toolset=[add],
     )
-
-    response = await agent.run("What is 21 + 21?")
-    print(response.finish_reason)
-    print(response.context.messages[-1].content)
+    ctx = RunContext(user_id="ana", session_id="first")
+    state = await agent.run("What is 21 + 21?", ctx)
+    print(state.finish_reason, state.message.text() if state.message else "")
+    await agent.close()
 
 
 asyncio.run(main())
 ```
 
-## Full-Featured Agent Example
+`run()` returns a `LoopState`: the last assistant message (`state.message`),
+why the turn ended (`state.finish_reason`), the token `usage` and the number of
+model calls (`iteration`). The conversation stays in `ctx`; pass the same `ctx`
+to continue it.
 
-`example-for-deployment/cli_global_agent_openai.py` demonstrates a complete agent with memory, knowledge, skills, and the CLI:
+### With a sandbox, skills and memory
 
 ```python
-from pathlib import Path
+from max_ai import Agent, OpenRouterChatCompletionClient
+from max_ai.capabilities.memory import Memory
+from max_ai.capabilities.sandbox.docker import DockerSandbox
+from max_ai.capabilities.skills import GitHubSkills
+from max_ai.capabilities.tools import BashTool
 
-from max_ai.agents import Agent
-from max_ai.base.knowledge import KnowledgeToolMode
-from max_ai.base.memory import MemoryToolMode
-from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
-from max_ai.capabilities.compaction import SummaryCompaction
-from max_ai.capabilities.knowledge.local import LocalKnowledgeRegistry
-from max_ai.capabilities.memory.local import LocalMemoryRegistry
-from max_ai.capabilities.skills.local import LocalSkillRegistry
-from max_ai.capabilities.tools.function_as_tool import FunctionAsTool
-from max_ai.capabilities.middleware import TracingMiddleware
-from max_ai.cli import run_cli
-from max_ai.core.model.llm import ModelConfig
-from max_ai.types.tools import ToolApprovalMode
+agent = Agent(
+    name="analyst",
+    description="Builds reports from the user's files.",
+    instructions="Work in the session folder. Say what you changed.",
+    client=OpenRouterChatCompletionClient(model="openai/gpt-4o-mini"),  # OPENROUTER_API_KEY
+    toolset=[BashTool()],                       # skills need bash
+    sandbox=DockerSandbox(networks=["pypi.org", "files.pythonhosted.org"]),
+    skills=GitHubSkills("org/agent-skills", ["create-report"]),  # GITHUB_TOKEN for private repos
+    memory=Memory(),
+)
+```
 
+## The Agent
+
+```python
+Agent(
+    name, description, instructions, client,
+    *, toolset=None, mcp=None, memory=None, knowledge=None, skills=None,
+    reasoning=None, middlewares=None, output_format=None, prompt_layers=None,
+    sandbox=None,
+)
+```
+
+| Argument | Type | Notes |
+|---|---|---|
+| `client` | `CoreChatCompletionClient` | `OpenAIChatCompletionClient` or `OpenRouterChatCompletionClient` |
+| `toolset` | list of `CoreTool` | your tools, `FunctionAsTool` / `@tool`, `BashTool()` |
+| `mcp` | `StdioMCPServerConfig` / `HTTPServerConfig` | tools from MCP servers |
+| `sandbox` | `SandboxCore` | `LocalSandbox`, `DockerSandbox`, `E2BSandbox` |
+| `skills` | `SkillsCore` | `LocalSkills`, `GitHubSkills`; needs a sandbox and `BashTool()` |
+| `memory` | `Memory` | Markdown files in the sandbox; needs a sandbox |
+| `reasoning` | `CoreLoop` | default `ReactLoop(compaction=SummaryCompaction(...))` |
+| `middlewares` | list of `CoreMiddleware` | `LoggingMiddleware`, `BudgetMiddleware`, `TracingMiddleware` |
+| `output_format` | pydantic `BaseModel` class | structured final answer in `state.message.structured_output` |
+| `prompt_layers` | list of `CoreLayer` | your own prompt text, e.g. `CustomLayer("...")` |
+| `knowledge` | list of `CoreKnowledgeRegistry` | accepted but not wired yet, see known gaps |
+
+Methods:
+
+- `await agent.run(task, ctx)` runs one turn and returns a `LoopState`.
+- `agent.run_stream(task, ctx)` yields only the text of the answer as it is written.
+- `agent.run_stream_events(task, ctx, stream=False)` yields every `CoreEvent`
+  (model calls, chunks, tool calls and results, compaction, errors), for UIs and debugging.
+- `await agent.approve(ctx, call_id, always=False)` approves a call that waits
+  for the user; then call `agent.run(None, ctx)` to continue. With `always=True`
+  the rule is saved in the user's `setting.json` (never for a dangerous command).
+- `await agent.close()` refuses new runs, waits for running ones, then closes MCP
+  connections, the users' sandboxes and the client. `Agent` has no `async with`.
+
+Pausing for the user:
+
+```python
+state = await agent.run("Clean the build folder", ctx)
+if state.finish_reason == "waiting_for_user":
+    for record in ctx.tool_state.pending_approvals:
+        await agent.approve(ctx, record.id)       # or record.reject()
+    state = await agent.run(None, ctx)
+```
+
+Questions from `ask_user` are in `ctx.tool_state.pending_user_input`; answer
+with `record.store_result(AskUserTool.answer(record, answers))` and run with
+`None`. If the user sends a new message instead, the waiting calls are closed
+without running.
+
+The constructor checks every piece and raises a clear error: wrong types,
+skills or memory without a sandbox, skills without `BashTool()`, bash without a
+sandbox, and the harness token limits below.
+
+## How a turn runs
+
+1. Turns of the same `(user_id, session_id)` wait for each other; other
+   sessions run in parallel on the same agent.
+2. The task goes into `ctx.inbox`; the middlewares wrap the whole turn.
+3. Getting ready: the user's sandbox is bound (`sandbox.bind(user_id)`) and
+   prepared once per user, and the skills are synced into it. The tool
+   registry is built from your tools, the harness's tools and the MCP servers'
+   tools (first name wins). The permission rules are read from `setting.json`,
+   the memory index is read, and the system prompt is built from the prompt
+   layers. The harness checks the prompt and tool sizes.
+4. `ReactLoop` calls the model (with retries and middleware), runs the
+   requested tools (read-only calls of one reply in parallel, up to 8), and
+   repeats until the model answers without tools, a call waits for the user,
+   `max_iterations` (50) is reached, or a rule stops it (repeated calls, empty
+   answers). Before each model call it compacts the conversation if the window
+   is filling.
+5. `state.finish_reason` says why it ended: the model's own reason (`stop`,
+   `length`), `waiting_for_user`, `max_iterations`, `cancelled`, `error`, or the
+   reason a middleware or hook gave.
+
+## The harness
+
+`max_ai/core/harness/` holds the rules applied to every agent.
+
+**Rules when the agent is built** (`rules.py`): description and instructions
+at most about 100 tokens each, each tool description at most 100, your prompt
+layers at most 1,500 together; at run time all loaded tools at most 20,000 and
+the system prompt at most 10% of the window (a prompt under 2,000 tokens only
+logs a warning). The harness also sets the model limits: `max_context_window`
+and `max_output_tokens` you pass are replaced by its own defaults, with a warning.
+
+**Tools it adds** (`Harness.tool_combination`):
+
+| Tool | When |
+|---|---|
+| `ask_user`, `write_todos` | always |
+| `read_file`, `write_file`, `edit_file` | with a sandbox |
+| `save_memory` | with a memory that is not `read_only` |
+| `read_skill` | with skills |
+| `enter_worktree`, `exit_worktree` | when `bash` is in the toolset |
+| `search_tools`, `call_tool` | when deferred tools (`deferred=True`) take 5,000 tokens or more; below that they are loaded directly |
+
+`bash` itself is never added: pass `BashTool()` in `toolset`. A tool of yours
+with the same name wins. `TracingMiddleware` is always added first.
+
+**Permissions** (`permissions.py`): each user's rules live in
+`.agent/setting.json` in their sandbox under `permissions`, with `allow`, `ask`
+and `deny` lists. A rule is `tool` or `tool(pattern)`: a path pattern for file
+tools; for bash the exact command, `bash(pytest -q)`, or a word prefix,
+`bash(git status:*)`. Deny wins, then ask, then allow; a compound command needs
+every part allowed. Some calls are always asked whatever the rules say:
+`rm`, `sudo`, `git push --force`, `git reset --hard`, `find -delete`, command
+substitution, anything touching `setting.json` or writing to the skills
+folder. Without a matching rule, the tool's own `approval_mode` decides
+(`BashTool` asks, the file tools run).
+
+**Judge (optional, off by default)** (`judge.py`): set `HARNESS_JUDGE_MODEL`
+(and `OPENROUTER_API_KEY`) and a bash command that would otherwise ask is sent
+to that model on OpenRouter's decisions endpoint. If it is at least
+`HARNESS_JUDGE_MIN_SAFE` (0.9) sure the command is safe, it runs without asking.
+It only removes questions; it never overrides deny, ask or dangerous rules, and
+any failure falls back to asking. **Data flow:** each judged call sends the
+command, the model's description of it, and the user's last message (up to
+4,000 characters each) to OpenRouter.
+
+**Memory at compaction** (`hooks.py`): when messages leave the window, a model
+extracts up to 5 facts the user stated about themselves or their work and saves
+them to the memory (`HARNESS_MEMORY_AT_COMPACTION=false` turns it off).
+
+## Capabilities
+
+### Clients
+
+`OpenAIChatCompletionClient(model, api_key=None, base_url=None, ...)` and
+`OpenRouterChatCompletionClient(model, ..., fallback_models=None, provider=None)`,
+both on the Chat Completions API. Without `api_key` they read `OPENAI_API_KEY`
+/ `OPENROUTER_API_KEY`; the serialized config stores only the variable name.
+`options={...}` is sent as is (temperature, top_p...). There is no Ollama
+client; an OpenAI-compatible server can be used through `base_url`.
+
+### Tools
+
+```python
+from max_ai import FunctionAsTool, ToolApprovalMode, tool
+
+@tool(approval_mode=ToolApprovalMode.ASK_APPROVED)
+def send_invoice(customer_id: str) -> str:
+    """Send the open invoice to a customer."""
+    ...
 
 def get_weather(city: str) -> dict:
     """Return the current weather for a city."""
-    return {"city": city, "condition": "sunny", "temp_c": 24}
+    ...
 
-
-async def main() -> None:
-    client = OpenAIChatCompletionClient(
-        model="gpt-4o-mini",
-        config=ModelConfig(supports_function_calling=True, max_context_window=128000),
-    )
-
-    agent = Agent(
-        name="Assistant",
-        description="A helpful agent with memory and skills.",
-        instructions="Help the user with their tasks.",
-        client=client,
-        toolset=[FunctionAsTool(get_weather, approval_mode=ToolApprovalMode.AUTO_APPROVED)],
-        memory=LocalMemoryRegistry(base_path=Path("./local")),
-        knowledge=[
-            LocalKnowledgeRegistry(
-                name="docs",
-                description="Project documentation",
-                base_path=Path("./local"),
-                tool_mode=KnowledgeToolMode.FULL,
-            )
-        ],
-        skills=LocalSkillRegistry(source=Path("./LocalSkills"), skills=["create-report"]),
-        compaction=SummaryCompaction(threshold=0.8),
-        middlewares=[TracingMiddleware()],
-    )
-
-    async with agent:
-        await run_cli(agent, user_id="user_001")
+weather = FunctionAsTool(get_weather, read_only=True, deferred=True)
 ```
 
-## Extending the Framework
+Name, description and JSON schema come from the signature and docstring.
+`@tool` defaults to `AUTO_APPROVED`; `FunctionAsTool` and `CoreTool` default
+to `ASK_APPROVED`. `read_only=True` lets calls run in parallel; `deferred=True`
+keeps the tool out of the prompt until found with `search_tools`.
 
-### Add a Provider Client
+### MCP
 
-Subclass `CoreChatCompletionClient` and implement:
+```python
+from max_ai.capabilities.mcp import HTTPServerConfig, StdioMCPServerConfig
 
-- `format_messages()`
-- `build_api_messages()`
-- `build_tool_schema()`
-- `normalize_usage_stats()`
-- `complete()`
-- `stream()`
+mcp = [
+    HTTPServerConfig(server_id="docs", url="https://example.com/mcp", token_env="DOCS_TOKEN"),
+    StdioMCPServerConfig(server_id="fetch", command="uvx", args=["mcp-server-fetch"]),
+]
+```
 
-Keep provider-specific schema and message conversion inside the client. The agent, reasoning loop, and tool executor should continue to speak only in framework types.
+Servers connect on the first run and are shared until `agent.close()`. Each has
+`connect_timeout_seconds` (30), `retry_after_seconds` (60) and `required`
+(fail the run instead of skipping a server that is down). MCP tools default to
+`ASK_APPROVED` (`approval_mode`, `tool_approval_modes`) and run in the host
+process, not in the sandbox.
 
-### Add a Prompt Layer
+### Sandbox
 
-Subclass `CoreLayer`, define a default template, and declare required or optional variables. Pass an instance through `framework_layers`. If the type matches a default layer, it replaces that default. Otherwise it is appended.
+Commands, file tools, skills and memory live in the user's sandbox, in an
+`.agent/` folder with `setting.json`, `skills/`, `workspace/<session>/`,
+`tmp/<session>/` and `memory/`.
 
-### Add a Reasoning Loop
+```python
+from max_ai.capabilities.sandbox.local import LocalSandbox
+from max_ai.capabilities.sandbox.docker import DockerSandbox
+from max_ai.capabilities.sandbox.e2b import E2BSandbox
 
-Subclass `BaseReasoning`, declare a `LOOP_STATE_CLS`, and implement `execute_reasoning_loop()`. The agent will bind runtime dependencies with `bind(name, client, tool_executor, middleware_chain)` before execution.
+LocalSandbox(root="./box")                                  # this machine, not isolated
+DockerSandbox()                                             # built from our Dockerfile
+DockerSandbox(dockerfile="./coding.Dockerfile", networks=["pypi.org"])
+E2BSandbox(networks=["pypi.org"])                           # E2B_API_KEY, maxai[e2b]
+```
 
-### Add a Capability Registry
+Security:
 
-Subclass `CoreAgentCapabilities` or one of the specific registry contracts. A capability can provide tools, prompt metadata, persistent data, or runtime materialization behavior. `AgentCapabilities` discovers known registry types and merges their tools into the final catalog.
+- **`LocalSandbox` is not isolation.** Commands run as you, on your machine.
+  The environment is filtered (API keys in your process are not passed), but a
+  command can still read any file you can, including `.env` and `~/.ssh`. All
+  users of one `LocalSandbox` share the same `root/.agent`. Use it for local
+  development only. Use `DockerSandbox` or `E2BSandbox` for untrusted users or
+  content (web pages, uploaded files, third-party skills).
+- **`DockerSandbox`** runs one container per user (`docker-sandbox-<user_id>`)
+  with a volume of the same name. The model's commands run as uid 1000 with
+  `--cap-drop ALL`, `no-new-privileges` and a read-only root filesystem; they can
+  write only the workspace, tmp and memory, not `setting.json` or the skills.
+  With no `networks` there is no network; `networks=[...]` is an allowlist of
+  domains reached through a proxy (HTTP(S) clients that honour `HTTPS_PROXY`).
+  An open domain such as github.com is also a way to send files out. Limits:
+  `memory="2g"`, `cpus=2`, `processes=512`. The host needs the `docker` CLI.
+- **`E2BSandbox`** runs a cloud machine per user; commands run as a user
+  without sudo, with the same network allowlist model.
+- Only variables named in `extra_env` (and the skills' `skill_env`) reach the
+  commands.
+
+### Skills
+
+A skill is a folder with a `SKILL.md` (frontmatter `name`, `description`) and
+optional scripts. `LocalSkills(path, skills=[...])` reads `<path>/<name>/`;
+`GitHubSkills(url, skills=[...])` downloads each folder through the GitHub API
+(`url` may be `org/repo` or `https://github.com/org/repo/tree/<branch>/<folder>`;
+token from `token=` or `GITHUB_TOKEN`, never serialized). Skills are
+installed into the sandbox and updated when their hash or git id changes; the
+prompt lists their descriptions and the model reads one with `read_skill`.
+`skill_env={"NAME_IN_SKILL": "NAME_IN_YOUR_ENV"}` passes values to their
+commands. Check each skill's license.
+
+### Memory
+
+`Memory(read_only=False)` keeps one Markdown file per fact in `.agent/memory/`.
+An index of the files (one line each, up to 200) is shown in the system prompt;
+the model saves facts with `save_memory` and reads files with `read_file`. With
+`read_only=True` there is no `save_memory` and writes to the folder are refused.
+
+### Compaction
+
+`ReactLoop(max_iterations=50, compaction=...)`. The default loop uses
+`SummaryCompaction`: when the messages fill `threshold` (0.8) of the room, long
+old tool results are cut, then old messages are replaced by a summary. The
+summary model is `SUMMARY_MODEL` on OpenRouter if that variable and
+`OPENROUTER_API_KEY` are set, otherwise the agent's own model.
+`SlidingWindowCompaction` drops old messages without a summary. Both are in
+`max_ai.capabilities.compaction`.
+
+### Prompt layers
+
+The system prompt is built by `NativePrompt` from layers in a fixed order (stable
+parts first, for provider caching): task analysis, rendering, agent policy,
+your layers, tools, skills, knowledge, workspace, memory, session. Add your
+own text with `prompt_layers=[CustomLayer("Our refund policy: ...")]`
+(`from max_ai.capabilities.stacks import CustomLayer`).
+
+### Middleware
+
+Subclass `CoreMiddleware` and override any of `turn`, `model`, `stream` and
+`tool`; each receives `call_next`. Keep per-turn data in `self.state(ctx)`,
+never on `self`, and raise `self.stop(...)` to end the turn. Built-ins in
+`max_ai.capabilities.middleware`: `LoggingMiddleware`, `BudgetMiddleware`
+(tokens, cost, seconds, model and tool calls per turn; per-user quotas with
+`quota=` and a `LocalQuotaStore` / `MongoDBQuotaStore`), and
+`TracingMiddleware` with `configure_langfuse()`.
+
+### Sessions
+
+The host loads and saves conversations; the agent never touches the store.
+
+```python
+from max_ai.capabilities.session_store import LocalSessionStore
+
+store = LocalSessionStore("./sessions")             # or MongoDBSessionStore (maxai[mongodb])
+ctx = await store.load("ana", "first") or RunContext(user_id="ana", session_id="first")
+await agent.run("Continue.", ctx)
+await store.save(ctx)
+```
+
+### Serialization
+
+Every component is plain data with no secrets: `agent.serialize()`,
+`Agent.deserialize(data)`, `agent.to_yaml()` / `Agent.from_yaml(path_or_text)`,
+`to_json()` / `from_json()`. Python-function tools cannot be stored; expose
+them through MCP. Classes outside `max_ai` load only after
+`allow_providers("my_pkg.")` or `MAXAI_ALLOWED_PROVIDERS`.
+
+### CLI and web UI
+
+```python
+from max_ai.cli import run_cli      # maxai[cli]
+from max_ai.web import run_web
+
+await run_cli(agent, store=LocalSessionStore("./sessions"), user_id="ana")
+await run_web(agent, store=LocalSessionStore("./sessions"), user_id="ana", port=8000)
+```
+
+Both close the agent when they end. See [max_ai/cli/README.md](max_ai/cli/README.md).
+
+## Configuration
+
+Settings are read from the environment or `.env` (`max_ai/config.py`). The
+ones the code uses today:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `OPENAI_API_KEY`, `OPENROUTER_API_KEY` | | client keys |
+| `TOOL_TIMEOUT_SECONDS` | 360 | most one tool call may run |
+| `HARNESS_SANDBOX_SECONDS` | 600 | idle life of a sandbox; must be at least the tool timeout |
+| `HARNESS_RETRY_ATTEMPTS` | 3 | tries per model call |
+| `HARNESS_TOOLS_MAX_TOKENS` | 20000 | most all loaded tools may take |
+| `HARNESS_DEFERRED_TOOLS_MIN_TOKENS` | 5000 | below this, deferred tools are loaded directly |
+| `HARNESS_PROMPT_MAX_SHARE` | 0.10 | most of the window the system prompt may take |
+| `HARNESS_CUSTOM_PROMPT_MAX_TOKENS` | 1500 | most your prompt layers may take |
+| `SUMMARY_MODEL` | empty | OpenRouter model for compaction summaries |
+| `HARNESS_MEMORY_AT_COMPACTION` | true | save user facts when messages leave |
+| `HARNESS_JUDGE_MODEL` | empty | OpenRouter model that judges bash commands (off when empty) |
+| `HARNESS_JUDGE_MIN_SAFE`, `HARNESS_JUDGE_SECONDS` | 0.9, 3 | judge threshold and timeout |
+| `GITHUB_TOKEN`, `E2B_API_KEY` | | `GitHubSkills`, `E2BSandbox` |
+| `MAXAI_ALLOWED_PROVIDERS` | | extra packages `deserialize` may load |
+
+## Status and known gaps
+
+Checked against the code on this branch:
+
+- **`knowledge=` is not wired.** The agent validates and serializes knowledge
+  registries (local, SQLite, MongoDB), but never adds their `search_knowledge`
+  tool to the registry, and the knowledge prompt layer receives no tool names,
+  so it renders empty. The model cannot query knowledge today.
+- **Completion gates are not used.** `max_ai/capabilities/completion_gate` and
+  `base/completion_gate.py` still exist, but no loop calls them and `Agent`
+  has no `gates` argument.
+- **`AgentResponse` is not returned.** It is still exported from `max_ai`, but
+  `run()` returns a `LoopState`.
+- **Quota stores** (`LocalQuotaStore`, `MongoDBQuotaStore`) are used only by
+  `BudgetMiddleware(quota=..., quota_store=...)`; nothing else reads them.
+- **Some settings are not read:** `MAX_LOOP_ITERATIONS` (use
+  `ReactLoop(max_iterations=...)`), `MAX_PARALLEL_TOOLS` (fixed at 8),
+  `MAX_TOOL_RESULT_CHARS`, `HOST_WORKSPACE`, and several `COMPACTION_*` fields.
+- **Serializing custom prompt layers:** `CustomLayer` (and the tools, session
+  and workspace layers) declare providers like `maxai.stacks.CustomLayer` that
+  are missing from the alias table in `base/component.py`. Reading the code,
+  `Agent.deserialize` and the compact `to_yaml()` of an agent with
+  `prompt_layers=[CustomLayer(...)]` fail; not verified by running.
+- **Examples:** most files in `examples/` use the old API. See
+  [examples/README.md](examples/README.md).
+
+## Repository map
+
+```text
+max_ai/
+  agents/           Agent
+  base/             contracts: clients, tools, loop, compaction, sandbox, skills, middleware, layers
+  core/harness/     rules, permissions, judge, hooks
+  core/             messages, events, tool registry and dispatcher, middleware chain, retry
+  capabilities/
+    clients/        OpenAI, OpenRouter
+    loop/react/     ReactLoop
+    compaction/     SummaryCompaction, SlidingWindowCompaction
+    sandbox/        local, docker, e2b
+    skills/         local, github
+    memory/         Memory (Markdown files in the sandbox)
+    tools/          bash, files, ask_user, todos, worktree, search/call_tool, read_skill, save_memory
+    stacks/         prompt layers
+    mcp/            MCP client
+    middleware/     logging, budget, tracing
+    session_store/  local, mongodb
+    quota_store/    local, mongodb (used by BudgetMiddleware)
+    knowledge/      local, sqlite, mongodb (not wired, see above)
+    completion_gate/  not used by the current loop
+  cli/              Textual terminal UI
+  web/              browser UI
+  types/            RunContext and other runtime types
+examples/           see examples/README.md (mostly outdated)
+docker-infra/       MongoDB Atlas Local, MCP server, Langfuse
+tests/
+```
 
 ## Testing
 
 ```bash
 uv run pytest
+uv run pytest -m "not integration"
 ```
-
-Focused examples:
-
-```bash
-uv run pytest tests/tools
-uv run pytest tests/reasoning
-uv run pytest tests/sandbox
-```
-
-## Repository Map
-
-```text
-max_ai/
-  agents/            Agent orchestration and lifecycle
-  base/              Core contracts: clients, tools, layers, reasoning, capabilities
-  capabilities/      Local capability implementations
-    clients/         Provider adapters (OpenAI, OpenRouter)
-    compaction/      Context compaction strategies
-    completion_gate/ Completion decision gates
-    knowledge/       Knowledge registries and retrieval
-    memory/          Memory registries and persistence
-    middleware/      Logging, budget, tracing middleware
-    mcp/             MCP server client integration
-    loop/            ReAct loop implementation
-    sandbox/         Where commands run (Local, Docker)
-    session_store/   Session persistence
-    skills/          Skill registry and management
-    tools/           Built-in tools (filesystem, bash, approval)
-    workspace/       Workspace registry and runtime
-  cli/               Textual terminal UI
-  core/              Messages, events, tool state, primitives
-  types/             Pydantic types used across runtime boundaries
-examples/
-  basic/             One feature per file: tools, approvals, memory, MCP, skills, tracing...
-  advance/           Custom backends, middleware, layers, embeddings, serialization
-example-for-deployment/
-  full_test.py       Web search (Exa MCP), GitHub skill, sandbox, memory, Langfuse
-  coding_agent.py    Coding agent on Docker with git and worktrees
-  cli_global_agent_openai.py / _openrouter.py   Full agents with memory, knowledge and skills
-tests/               Unit, integration, sandbox, reasoning, and tool tests
-```
-
-## Design Principles
-
-- Provider adapters own provider quirks.
-- Reasoning loops own turn strategy, not prompt formatting.
-- Prompt layers are validated before runtime.
-- Tools are schema-validated before execution.
-- Approval is represented as state, not as an exception.
-- Sandboxed execution is required for skills.
-- Events are first-class so UIs and debuggers can observe a run without scraping text output.
 
 ## Roadmap
 
-Planned, not started. Order is not a commitment.
+Planned, not started; order is not a commitment.
 
-- **Multi-agent** — agents that delegate to other agents, designed on the
-  stateless `Agent` (replaces the removed `AgentAsTool`).
-- **Native clients** — Anthropic first (prompt caching, extended thinking),
-  then Gemini and Azure OpenAI. Today: OpenAI, OpenRouter, Ollama.
-- **Session store versioning** — optimistic concurrency so two processes
-  saving the same conversation never overwrite each other silently.
-- **Search past conversations** — a tool backed by the session store and
-  `CoreEmbedding`.
-- **Guardrails** — middleware for PII and prompt injection with a pluggable
-  classifier.
+- Wire knowledge search into the agent, or remove it.
+- Multi-agent delegation on the stateless `Agent`.
+- Native clients: Anthropic first, then Gemini and Azure OpenAI.
+- Optimistic concurrency in session stores.
+- Guardrail middleware for PII and prompt injection.
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
