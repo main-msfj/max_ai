@@ -125,6 +125,7 @@ class HarnessToolHook(ToolHook):
         permissions: Permissions | None = None,  # the user's rules, read from setting.json
         judge: Judge | None = None,  # as given; without one, what the settings ask for
     ) -> None:
+        self.max_result_chars = setting.harness_tool_result_chars
         self.permissions = permissions or Permissions()
         self.judge = judge or Judge.configured()
         self.memory = memory

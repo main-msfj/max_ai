@@ -412,19 +412,10 @@ Checked against the code on this branch:
 - **Completion gates are not used.** `max_ai/capabilities/completion_gate` and
   `base/completion_gate.py` still exist, but no loop calls them and `Agent`
   has no `gates` argument.
-- **`AgentResponse` is not returned.** It is still exported from `max_ai`, but
-  `run()` returns a `LoopState`.
 - **Quota stores** (`LocalQuotaStore`, `MongoDBQuotaStore`) are used only by
   `BudgetMiddleware(quota=..., quota_store=...)`; nothing else reads them.
-- **Some settings are not read:** `MAX_LOOP_ITERATIONS` (use
-  `ReactLoop(max_iterations=...)`), `MAX_PARALLEL_TOOLS` (fixed at 8),
-  `MAX_TOOL_RESULT_CHARS`, `HOST_WORKSPACE`, and several `COMPACTION_*` fields.
-- **Serializing custom prompt layers:** `CustomLayer` (and the tools, session
-  and workspace layers) declare providers like `maxai.stacks.CustomLayer` that
-  are missing from the alias table in `base/component.py`. Reading the code,
-  `Agent.deserialize` and the compact `to_yaml()` of an agent with
-  `prompt_layers=[CustomLayer(...)]` fail; not verified by running.
-- **Examples:** most files in `examples/` use the old API. See
+- **Examples:** most files in `examples/` use the old API, and
+  `advance/04_custom_middleware.py` imports the removed `AgentResponse`. See
   [examples/README.md](examples/README.md).
 
 ## Repository map

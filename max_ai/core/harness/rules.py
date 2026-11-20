@@ -18,6 +18,7 @@ from ..retry import RetryPolicy
 from ..tokenizer import TokenCounter
 
 if t.TYPE_CHECKING:
+    from ...capabilities.loop import ReactLoop
     from ...capabilities.memory import Memory
     from ..tool.registry import ToolRegistry
 
@@ -234,6 +235,16 @@ class Harness:
         return [tracing, *(item for item in given if item is not tracing)]
 
     @classmethod
+    def loop_rules(cls) -> "ReactLoop":
+        """The loop of an agent that was given none: ``harness_max_iterations``
+        model calls a turn, and a summary of the messages that leave."""
+        from ...capabilities.loop import ReactLoop
+
+        return ReactLoop(
+            max_iterations=setting.harness_max_iterations, compaction=cls.compaction_rules()
+        )
+
+    @classmethod
     def compaction_rules(cls) -> CoreCompaction[t.Any]:
         """A summary written by ``setting.summary_model`` through OpenRouter,
         whatever model the agent uses; by the agent's own model when no model
@@ -241,10 +252,19 @@ class Harness:
         from ...capabilities.clients.openrouter import OpenRouterChatCompletionClient
         from ...capabilities.compaction import SummaryCompaction
 
+        # 1. The summary model of the settings, when it has its key.
         key = os.environ.get(OpenRouterChatCompletionClient.API_KEY_ENV or "")
+        client = None
         if setting.summary_model and key:
-            return SummaryCompaction(client=OpenRouterChatCompletionClient(setting.summary_model))
-        return SummaryCompaction()
+            client = OpenRouterChatCompletionClient(setting.summary_model)
+
+        # 2. The limits are the settings'.
+        return SummaryCompaction(
+            client=client,
+            keep_groups=setting.compaction_keep_groups,
+            max_result_chars=setting.compaction_result_chars,
+            max_share=setting.compaction_summary_max_share,
+        )
 
     @classmethod
     def retry_rules(cls, given: RetryPolicy) -> RetryPolicy:

@@ -3,8 +3,10 @@ import logging
 import pytest
 
 from max_ai.agents.agent import Agent
+from max_ai.base.tools import ToolContext
 from max_ai.capabilities.clients.openrouter import OpenRouterChatCompletionClient
 from max_ai.capabilities.compaction import SummaryCompaction
+from max_ai.capabilities.loop import ReactLoop
 from max_ai.capabilities.memory import Memory
 from max_ai.capabilities.middleware.tracing import TracingMiddleware
 from max_ai.capabilities.sandbox.local import LocalSandbox
@@ -12,9 +14,12 @@ from max_ai.capabilities.stacks.custom_layer import CustomLayer
 from max_ai.capabilities.tools.bash import BashTool
 from max_ai.capabilities.tools.decorator import tool as as_tool
 from max_ai.config import Settings, setting
+from max_ai.core.harness.hooks import HarnessToolHook
 from max_ai.core.harness.rules import Harness
 from max_ai.core.model.llm import ModelConfig
 from max_ai.errors.harness import HarnessError
+from max_ai.types.run_context import RunContext
+from max_ai.types.tool_call import ToolCallRecord, ToolResult
 
 
 def weather(city: str) -> str:
@@ -140,3 +145,38 @@ def test_a_model_call_is_tried_three_times_at_most_and_the_waits_are_kept():
 
     made = Harness.retry_rules(RetryPolicy(attempts=10, base_delay=0.5))
     assert (made.attempts, made.base_delay) == (3, 0.5)
+
+
+def test_an_agent_given_no_loop_gets_the_harness_one(monkeypatch):
+    monkeypatch.setattr(setting, "harness_max_iterations", 7)
+    client = OpenRouterChatCompletionClient("openai/gpt-test", api_key="sk-test")
+
+    made = Agent("helper", "Answers questions.", "Be brief.", client)
+    own = Agent("helper", "Answers questions.", "Be brief.", client, reasoning=ReactLoop(3))
+
+    assert made.reasoning.max_iterations == 7
+    assert isinstance(made.reasoning.compaction, SummaryCompaction)
+    assert own.reasoning.max_iterations == 3
+
+
+async def test_the_harness_hook_shortens_a_result_longer_than_the_setting(monkeypatch):
+    monkeypatch.setattr(setting, "harness_tool_result_chars", 1_000)
+    record = ToolCallRecord(id="c1", tool_name="weather", parameters={})
+    ctx = ToolContext(RunContext(user_id="u", session_id="s"))
+
+    short = ToolResult(tool_call_id="c1", success=True, result="a" * 900)
+    long = ToolResult(tool_call_id="c1", success=True, result="a" * 1_500)
+    hook = HarnessToolHook()
+
+    assert await hook.shorten(record, ctx, short) is short
+    assert "500 characters" in (await hook.shorten(record, ctx, long)).result
+
+
+def test_the_harness_compaction_takes_its_limits_from_the_settings(monkeypatch):
+    monkeypatch.setattr(setting, "compaction_keep_groups", 4)
+    monkeypatch.setattr(setting, "compaction_result_chars", 500)
+    monkeypatch.setattr(setting, "compaction_summary_max_share", 0.05)
+
+    made = Harness.compaction_rules()
+
+    assert (made.keep_groups, made.max_result_chars, made.max_share) == (4, 500, 0.05)

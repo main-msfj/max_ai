@@ -67,8 +67,5 @@ First public version. The core was rewritten between 2026-11-15 and
 
 ### Known gaps
 - `knowledge=` is accepted and serialized but no tool queries it.
-- Completion gates and `AgentResponse` remain in the package but the loop does
-  not use them.
-- `MAX_LOOP_ITERATIONS`, `MAX_PARALLEL_TOOLS` and some other settings are not
-  read.
+- Completion gates remain in the package but the loop does not use them.
 - Most files in `examples/` still use the old API.
