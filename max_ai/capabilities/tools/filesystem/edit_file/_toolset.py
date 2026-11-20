@@ -101,6 +101,10 @@ class EditFileTool(CoreTool):
         # 5. The model knows what the file holds now: it edited it.
         tool_ctx.run_context.files_seen[FilesSeen.key(start, path)] = answer["sha256"]
 
-        # 6. Say how many places changed.
+        # 6. Say how many places changed and where the first begins: the
+        #    line also goes apart, for whoever shows the change.
         places = "1 place" if answer["replaced"] == 1 else f"{answer['replaced']} places"
-        return ToolResult.success_result(tool_request.id, f"Edited {path}: {places} changed.")
+        return ToolResult.success_result(
+            tool_request.id, f"Edited {path}: {places} changed, from line {answer['line']}.",
+            metadata={"line": answer["line"]},
+        )

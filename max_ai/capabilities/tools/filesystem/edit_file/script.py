@@ -97,7 +97,9 @@ def edit(request: dict[str, Any]) -> dict[str, Any]:
         handle.write(edited)
     shutil.copymode(file, partial)  # a script stays executable
     os.replace(partial, file)
-    return {"replaced": found, "sha256": hashlib.sha256(edited).hexdigest()}
+    # 6. Where the first change begins, counted in lines.
+    line = content[: content.index(old)].count("\n") + 1
+    return {"replaced": found, "line": line, "sha256": hashlib.sha256(edited).hexdigest()}
 
 
 def main() -> None:
