@@ -91,7 +91,15 @@ class Refuse(BaseModel):
         super().__init__(text=text, rule=rule)
 
 
-Decision = Note | Refuse | Stop | Continue | None
+class Wrap(BaseModel):
+    """A hook's order to close the turn: the model is told ``text`` and gets
+    one call more, without tools, to answer the user."""
+
+    text: str
+    reason: str  # the turn's finish reason
+
+
+Decision = Note | Refuse | Wrap | Stop | Continue | None
 
 
 class LoopHook:
@@ -100,7 +108,8 @@ class LoopHook:
 
     Each moment answers None (go on as usual), ``Note`` (told to the
     model), ``Refuse`` (the tools it asked for do not run and get that text
-    as their answer), ``Continue`` (the turn goes on, nothing is told) or
+    as their answer), ``Continue`` (the turn goes on, nothing is told),
+    ``Wrap`` (the model gets one call more, without tools, to answer) or
     ``Stop`` (the turn ends)."""
 
     # What the model is told. Replace a text to say it another way.
@@ -110,6 +119,13 @@ class LoopHook:
     NEAR_LIMIT: t.ClassVar[str] = (
         "You have {left} model calls left in this turn. Finish what is essential and "
         "then answer saying what you did and what is missing."
+    )
+    LAST_ROUND: t.ClassVar[str] = (
+        "One tool round is left in this turn. After it, please give the final answer."
+    )
+    NO_ROUNDS: t.ClassVar[str] = (
+        "The turn has no tool rounds left. Please give the final answer now, saying what "
+        "was done and what is missing."
     )
     OPEN_TODOS: t.ClassVar[str] = (
         "{open} items of your list are still open. Finish them, or update the list if "
@@ -162,13 +178,17 @@ class LoopHook:
         """Before each model call."""
         # 1. What the user wrote while the turn ran enters the conversation.
         self.take_inbox(ctx)
-        # 2. The turn reached its limit of model calls.
+
+        # 2. The turn reached its limit: one call more, without tools, to answer.
         if state.iteration >= state.limit:
-            return Stop(reason="max_iterations")
-        # 3. Few calls left: the model is told once.
+            return Wrap(text=self.NO_ROUNDS, reason="max_iterations")
+
+        # 3. Few calls left: the model is told once, and once more at the last one.
         left = state.limit - state.iteration
         if left == self.warn_before and state.limit > left and not state.notices.get("near_limit"):
             return Note(self.NEAR_LIMIT.format(left=left), rule="near_limit")
+        if left == 1 and state.limit > 1 and not state.notices.get("last_round"):
+            return Note(self.LAST_ROUND, rule="last_round")
         return None
 
     async def after_model(self, ctx: RunContext, state: LoopState) -> Decision:
@@ -309,12 +329,13 @@ class CoreLoop(ComponentBase[ConfigT], ABC):
         output_format: type[BaseModel] | None = None,
         stream: bool = False,
         retry: RetryPolicy | None = None,
+        tools: bool = True,  # False: the model can only answer
     ) -> t.AsyncGenerator[CoreEvent]:
         """One model call. Its answer is added to ``ctx.messages`` and left
         in ``state.message``; a call that is cut adds nothing."""
         # 1. What the model sees: the conversation and the loaded tools.
         messages = client.format_messages(ctx, self.system(ctx, prompt))
-        tools = dispatcher.registry.definitions()
+        given = dispatcher.registry.definitions() if tools else []
         yield ModelCallEvent(source=self.SOURCE, model=client.model, input_messages=messages)
 
         # 2. Each try that fails is told when the call gives the control back.
@@ -332,7 +353,7 @@ class CoreLoop(ComponentBase[ConfigT], ABC):
         message, usage, finish = None, Usage(), None
         if stream:
             pieces = client.stream(
-                messages, tools, output_format, retry=retry, on_retry=on_retry,
+                messages, given, output_format, retry=retry, on_retry=on_retry,
                 ctx=ctx, middleware=dispatcher.middleware,
             )
             async for chunk in pieces:
@@ -346,7 +367,7 @@ class CoreLoop(ComponentBase[ConfigT], ABC):
                     message, usage, finish = chunk.message, chunk.usage or usage, chunk.finish_reason
         else:
             result = await client.run(
-                messages, tools, output_format, retry=retry, on_retry=on_retry,
+                messages, given, output_format, retry=retry, on_retry=on_retry,
                 ctx=ctx, middleware=dispatcher.middleware,
             )
             message, usage, finish = result.message, result.usage, result.finish_reason
@@ -480,6 +501,31 @@ class CoreLoop(ComponentBase[ConfigT], ABC):
     def notice(self, rule: str, text: str = "") -> LoopNoticeEvent:
         """The event that says a rule spoke: which one, and what it said."""
         return LoopNoticeEvent(source=self.SOURCE, kind=rule, message=text)
+
+    async def wrap(
+        self,
+        ctx: RunContext,
+        prompt: str,
+        client: AnyClient,
+        dispatcher: ToolDispatcher,
+        state: LoopState,
+        hook: LoopHook,
+        said: Wrap,
+        **options: t.Any,
+    ) -> t.AsyncGenerator[CoreEvent]:
+        """Close the turn as the hook ordered: the model is told why, and
+        answers the user in one call without tools."""
+        yield self.note(ctx, state, Note(said.text, rule=said.reason))
+        state.iteration += 1
+        async for event in self.ask_model(
+            ctx, prompt, client, dispatcher, state, hook, tools=False, **options
+        ):
+            yield event
+        # A model that asks for tools anyway gets them closed: none was offered.
+        if state.message is not None:
+            for record in self.new_records(ctx, state.message):
+                self.close(ctx, record, self.TURN_ENDED)
+        state.finish_reason = said.reason
 
     def end(self, ctx: RunContext, state: LoopState, stop: Stop) -> LoopNoticeEvent:
         """End the turn as the hook ordered; its answer becomes the agent's."""

@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from ....base.compaction import CoreCompaction
 from ....base.component import ComponentBase
-from ....base.loop import AnyClient, CoreLoop, LoopHook, LoopState, Note, Refuse, Stop
+from ....base.loop import AnyClient, CoreLoop, LoopHook, LoopState, Note, Refuse, Stop, Wrap
 from ....core.event_type import (
     CoreEvent,
     FatalErrorEvent,
@@ -100,6 +100,13 @@ class ReactLoop(CoreLoop[ReactLoopConfig]):
                 decision = await hook.before_model(ctx, state)
                 if isinstance(decision, Stop):
                     yield self.end(ctx, state, decision)
+                    break
+                if isinstance(decision, Wrap):
+                    async for event in self.wrap(
+                        ctx, prompt, client, dispatcher, state, hook, decision,
+                        stream=stream, retry=retry,
+                    ):
+                        yield event
                     break
                 if isinstance(decision, (Note, Refuse)):
                     yield self.note(ctx, state, decision)

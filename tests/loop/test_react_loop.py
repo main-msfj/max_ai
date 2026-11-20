@@ -124,16 +124,24 @@ async def test_a_stream_gives_the_text_in_pieces_and_the_whole_message():
 
 async def test_the_turn_stops_at_its_limit_of_model_calls():
     ctx, tools = setup()
+    again = [asks((f"c{n}", "weather", {"city": str(n)})) for n in range(2)]
+    model, state = Model(*again, says("I checked two cities; the third is missing.")), LoopState()
+    events = await run(ReactLoop(max_iterations=2), ctx, model, tools, state=state)
+    # The tools of the last round ran, and one call more, without tools, answered.
+    assert WEATHER == ["0", "1"] and (state.iteration, state.finish_reason) == (3, "max_iterations")
+    assert kinds(events) == ["last_round", "max_iterations"]
+    assert model.sent[1][1] != [] and model.sent[2][1] == []
+    assert "no tool rounds left" in notes(ctx)[-1] and state.message.text().startswith("I checked")
+    # A model that asks for tools in that call gets them closed, not run.
+    ctx, tools = setup()
     again = [asks((f"c{n}", "weather", {"city": "Lima"})) for n in range(5)]
-    state = LoopState()
-    await run(ReactLoop(max_iterations=2), ctx, Model(*again), tools, state=state)
-    assert (state.iteration, state.finish_reason) == (2, "max_iterations")
-    assert ctx.messages[-1].role == "tool"  # every call has its answer
+    await run(ReactLoop(max_iterations=2), ctx, Model(*again), tools, state=LoopState())
+    assert ctx.messages[-1].role == "tool" and "turn ended" in ctx.messages[-1].content
     # Given in the call, the limit wins over the loop's own.
     ctx, tools = setup()
     state = LoopState()
     await run(ReactLoop(max_iterations=2), ctx, Model(*again), tools, state=state, max_iterations=1)
-    assert state.iteration == 1
+    assert state.iteration == 2
 
 
 async def test_a_tool_that_waits_for_a_person_ends_the_turn_and_the_next_one_resumes():
@@ -277,7 +285,7 @@ async def test_near_the_limit_the_model_is_told_how_many_calls_it_has_left():
     ctx, tools = setup()
     again = [asks((f"c{n}", "weather", {"city": str(n)})) for n in range(5)]
     events = await run(ReactLoop(max_iterations=5), ctx, Model(*again), tools, hook=LoopHook(warn_before=2))
-    assert kinds(events) == ["near_limit", "max_iterations"]
+    assert kinds(events) == ["near_limit", "last_round", "max_iterations"]
     assert "You have 2 model calls left" in notes(ctx)[0]
     assert [m.role for m in ctx.messages].index("user", 1) == 7  # after the third round
 
