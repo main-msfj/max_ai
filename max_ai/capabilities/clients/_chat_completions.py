@@ -35,6 +35,8 @@ class ChatCompletionsClient(OpenAISDKClient[ConfigT]):
     format. A subclass is one service: its address, its key, its config and
     what it does differently (``body``, ``thinking``, ``check``)."""
 
+    JOINED: t.ClassVar[frozenset[str]] = frozenset({"text", "summary"})  # fields that arrive in parts
+
     # -------- MESSAGES ---------------------------------------------------------------
     def build_api_messages(self, messages: list[Message]) -> list[dict[str, t.Any]]:
         return [self.message(message) for message in messages]
@@ -58,6 +60,7 @@ class ChatCompletionsClient(OpenAISDKClient[ConfigT]):
                     }
                     for call in message.tool_calls
                 ]
+            said.update(self.reasoning_back(message))
             return said
         raise ClientError.unsupported_feature(f"message type {type(message).__name__}", self.model)
 
@@ -128,6 +131,7 @@ class ChatCompletionsClient(OpenAISDKClient[ConfigT]):
             message=AssistantMessage(
                 source="llm", content=content, thinking=self.thinking(message), tool_calls=calls,
                 structured_output=self.structured(content, output_format),
+                reasoning_state=self.reasoning_state(self.reasoning_pieces(message)),
             ),
             usage=usage,
             model=self.get(response, "model") or self.model,
@@ -145,6 +149,7 @@ class ChatCompletionsClient(OpenAISDKClient[ConfigT]):
         text: list[str] = []
         thoughts: list[str] = []
         calls: dict[int, dict[str, t.Any]] = {}  # a tool call arrives in pieces, by its index
+        reasoning: list[dict[str, t.Any]] = []  # what must go back, also in pieces
         usage, finish = Usage(), None
 
         async for chunk in await self.call(request):
@@ -161,6 +166,7 @@ class ChatCompletionsClient(OpenAISDKClient[ConfigT]):
                 continue
 
             # 2. Thinking and text go out as they arrive.
+            reasoning += self.reasoning_pieces(delta)
             if thought := self.thinking(delta):
                 thoughts.append(thought)
                 yield LLMChunk(content="", thinking=thought, is_complete=False)
@@ -199,6 +205,7 @@ class ChatCompletionsClient(OpenAISDKClient[ConfigT]):
             message=AssistantMessage(
                 source="llm", content=content, thinking="".join(thoughts) or None,
                 tool_calls=self.tool_calls(whole), structured_output=structured,
+                reasoning_state=self.reasoning_state(reasoning),
             ),
         )
 
@@ -238,6 +245,30 @@ class ChatCompletionsClient(OpenAISDKClient[ConfigT]):
 
     def check(self, payload: t.Any) -> None:
         """Raise if an answer or a piece carries an error inside. Nothing here."""
+
+    def reasoning_pieces(self, message: t.Any) -> list[dict[str, t.Any]]:
+        """What a message or a piece brings that the service needs back to go
+        on reasoning. Nothing in this format; a service that has it says how."""
+        return []
+
+    def reasoning_back(self, message: AssistantMessage) -> dict[str, t.Any]:
+        """The fields that give an assistant message's reasoning back to the
+        service. Nothing in this format."""
+        return {}
+
+    def reasoning_state(self, pieces: list[dict[str, t.Any]]) -> dict[str, list[dict[str, t.Any]]]:
+        """``pieces`` joined into whole items, under this service's name.
+        Pieces of one item share index and type: their texts are joined in
+        order, and of the other fields the last one given stays."""
+        whole: dict[tuple[t.Any, t.Any], dict[str, t.Any]] = {}
+        for piece in pieces:
+            item = whole.setdefault((piece.get("index"), piece.get("type")), {})
+            for key, value in piece.items():
+                if key in self.JOINED and isinstance(value, str):
+                    item[key] = item.get(key, "") + value
+                elif value is not None:
+                    item[key] = value
+        return {self.PROVIDER_NAME.lower(): list(whole.values())} if whole else {}
 
     # -------- READING THE ANSWER -------------------------------------------------------
     def thinking(self, message: t.Any) -> str | None:

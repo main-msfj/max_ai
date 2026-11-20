@@ -109,3 +109,33 @@ def test_without_a_key_it_cannot_be_built(monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     with pytest.raises(ValueError, match="OPENROUTER_API_KEY"):
         OpenRouterChatCompletionClient("openai/gpt-test")
+
+
+async def test_the_reasoning_the_service_needs_back_is_kept_and_sent_again():
+    encrypted = {"type": "reasoning.encrypted", "data": "gAAA", "format": "openai-responses-v1", "id": "rs_1", "index": 0}
+    whole = answer("hi")
+    whole["choices"][0]["message"]["reasoning_details"] = [encrypted]
+    made = client(whole, answer("again"))
+    first = await made.run([UserMessage(source="u", content="hola")])
+    assert first.message.reasoning_state == {"openrouter": [encrypted]}
+
+    # The next call gives it back as it came, with the assistant message.
+    await made.run([UserMessage(source="u", content="hola"), first.message])
+    assert made.sent[1]["messages"][1]["reasoning_details"] == [encrypted]
+
+
+async def test_reasoning_that_arrives_in_parts_is_joined_by_index_and_type():
+    def piece(**delta):
+        return {"choices": [{"delta": delta, "finish_reason": None}]}
+
+    stream = [
+        piece(reasoning_details=[{"type": "reasoning.text", "text": "The user ", "format": "unknown", "index": 0}]),
+        piece(reasoning_details=[{"type": "reasoning.text", "text": "asks.", "format": "unknown", "index": 0}]),
+        piece(reasoning_details=[{"type": "reasoning.encrypted", "data": "gAAA", "id": "rs_1", "index": 1}]),
+        piece(content="hi"),
+    ]
+    chunks = [chunk async for chunk in client(stream).stream([UserMessage(source="u", content="hola")])]
+    assert chunks[-1].message.reasoning_state == {"openrouter": [
+        {"type": "reasoning.text", "text": "The user asks.", "format": "unknown", "index": 0},
+        {"type": "reasoning.encrypted", "data": "gAAA", "id": "rs_1", "index": 1},
+    ]}
