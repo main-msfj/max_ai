@@ -147,6 +147,18 @@ class LoopHook:
         "What was just sent was taken out of the conversation; please say it another way."
     )
     REMOVED: t.ClassVar[str] = "[removed: the provider blocked a request that held this content]"
+    # What the user reads when a rule ends the turn.
+    ANSWER_BLOCKED: t.ClassVar[str] = (
+        "The provider blocked the answer because of its content, so there is nothing to "
+        "show. Please ask in another way."
+    )
+    STUCK: t.ClassVar[str] = (
+        "I kept making the same tool call with the same result, so I stopped. Tell me how "
+        "to go on, or ask in another way."
+    )
+    NO_ANSWER: t.ClassVar[str] = (
+        "The model answered with nothing twice, so the turn ended. Please try again."
+    )
     GIVE_UP_AFTER: t.ClassVar[int] = 2  # rounds refused as repeated before the turn ends
 
     def __init__(self, warn_before: int = 3, max_repeats: int = 3) -> None:
@@ -198,13 +210,14 @@ class LoopHook:
             return None
         # 1. The provider blocked the answer: asking again gives the same.
         if state.finish_reason == "content_filter":
-            return Stop(reason="content_filter")
+            self.drop_blocked_answer(ctx, message)
+            return Stop(reason="content_filter", answer=self.ANSWER_BLOCKED)
         # 2. It asked for tools: cut arguments and repeated calls are not run.
         if message.tool_calls:
             if state.finish_reason == "length":
                 return Refuse(self.ARGUMENTS_CUT, rule="arguments_cut")
             if state.repeats >= self.max_repeats + self.GIVE_UP_AFTER:
-                return Stop(reason="repetition")
+                return Stop(reason="repetition", answer=self.STUCK)
             if state.repeats >= self.max_repeats:
                 return Refuse(self.REPEATED, rule="repetition")
             return None
@@ -214,7 +227,7 @@ class LoopHook:
         # 4. An empty answer is asked again once; then the turn ends.
         if not message.text().strip():
             if state.notices.get("empty_answer"):
-                return Stop(reason="empty_answer")
+                return Stop(reason="empty_answer", answer=self.NO_ANSWER)
             return Note(self.EMPTY_ANSWER, rule="empty_answer")
         # 5. It wants to end with items of its list still open: reminded once.
         still_open = sum(1 for todo in ctx.todos if todo.status != "done")
@@ -234,6 +247,13 @@ class LoopHook:
             return None
         self.remove_blocked(ctx)
         return Stop(reason="content_filter", answer=self.BLOCKED)
+
+    @staticmethod
+    def drop_blocked_answer(ctx: RunContext, message: AssistantMessage) -> None:
+        """Take the answer the provider blocked out of the conversation: it
+        is empty or cut. One that asked for tools stays, for their answers."""
+        if not message.tool_calls and ctx.messages and ctx.messages[-1] is message:
+            ctx.messages.pop()
 
     @classmethod
     def remove_blocked(cls, ctx: RunContext) -> None:

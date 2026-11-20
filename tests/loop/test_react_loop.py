@@ -220,6 +220,7 @@ async def test_an_empty_answer_is_asked_again_once_and_then_the_turn_ends():
     state = LoopState()
     await run(ReactLoop(), ctx, Model(says(" "), says("")), tools, state=state)
     assert (state.finish_reason, state.iteration) == ("empty_answer", 2)
+    assert state.message.text() == LoopHook.NO_ANSWER  # the user is told
 
 
 async def test_an_answer_the_provider_blocked_is_not_asked_again():
@@ -228,6 +229,9 @@ async def test_an_answer_the_provider_blocked_is_not_asked_again():
     model.reasons[1] = "content_filter"
     events = await run(ReactLoop(), ctx, model, tools, state=state)
     assert (state.finish_reason, state.iteration, kinds(events)) == ("content_filter", 1, ["content_filter"])
+    # The blocked answer leaves; the user is told in its place.
+    assert [m.role for m in ctx.messages] == ["user", "assistant"]
+    assert ctx.messages[-1].content == LoopHook.ANSWER_BLOCKED
 
 
 async def test_the_hook_can_answer_for_the_agent_when_the_turn_cannot_go_on():
@@ -272,6 +276,7 @@ async def test_the_same_call_stops_running_at_the_third_time_and_ends_the_turn_a
     assert WEATHER == ["Lima", "Lima"]  # the third was answered without running
     assert (state.finish_reason, state.iteration) == ("repetition", 5)
     assert kinds(events) == ["repetition"] * 3  # two refusals, then the end
+    assert state.message.text() == LoopHook.STUCK  # the user is told
     answers = [m for m in ctx.messages if m.role == "tool"]
     assert len(answers) == 5 and "Not run: this is the same call" in answers[2].content
     # Another call in between starts the count again.
