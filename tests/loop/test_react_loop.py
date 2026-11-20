@@ -337,6 +337,30 @@ async def test_tool_calls_cut_at_the_output_limit_are_answered_without_running()
     assert "arrived incomplete" in ctx.messages[2].content and state.finish_reason == "stop"
 
 
+async def test_a_request_the_provider_blocks_ends_the_turn_and_leaves_the_conversation_usable():
+    # The user's message is blocked: it leaves, and the user is told.
+    ctx, tools = setup()
+    ctx.messages.append(UserMessage(source="u", content="something the provider refuses"))
+    blocked = ClientError.blocked("Echo", ["some_pattern"])
+    state = LoopState()
+    events = await run(ReactLoop(), ctx, Model(blocked), tools, state=state)
+    assert state.finish_reason == "content_filter" and kinds(events) == ["content_filter"]
+    assert [m.role for m in ctx.messages] == ["assistant"] and "another way" in ctx.messages[0].content
+    assert "some_pattern" not in ctx.messages[0].content
+
+    # A tool result is blocked: it keeps its place, without its content.
+    ctx, tools = setup()
+    state = LoopState()
+    await run(ReactLoop(), ctx, Model(asks(("c1", "weather", {"city": "Lima"})), blocked), tools, state=state)
+    assert [m.role for m in ctx.messages] == ["user", "assistant", "tool", "assistant"]
+    assert ctx.messages[2].content == LoopHook.REMOVED and state.finish_reason == "content_filter"
+
+    # Any other error still goes up.
+    ctx, tools = setup()
+    with pytest.raises(ClientError):
+        await run(ReactLoop(), ctx, Model(ClientError.authentication_failed("x")), tools)
+
+
 async def test_refuse_answers_the_tools_without_running_them_and_note_lets_them_run():
     class Says(LoopHook):
         def __init__(self, decision):

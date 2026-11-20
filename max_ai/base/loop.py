@@ -123,6 +123,14 @@ class LoopHook:
         "Not run: your answer was cut at the output limit, so the arguments of this "
         "call arrived incomplete. Send less content in each call."
     )
+    # What the user reads when the provider refused the request, and what is
+    # left of a tool result that may have caused it. Neither names what was
+    # found: said again in the conversation, it could be refused again.
+    BLOCKED: t.ClassVar[str] = (
+        "The provider blocked this request because of its content, so I could not answer. "
+        "What was just sent was taken out of the conversation; please say it another way."
+    )
+    REMOVED: t.ClassVar[str] = "[removed: the provider blocked a request that held this content]"
     GIVE_UP_AFTER: t.ClassVar[int] = 2  # rounds refused as repeated before the turn ends
 
     def __init__(self, warn_before: int = 3, max_repeats: int = 3) -> None:
@@ -200,7 +208,30 @@ class LoopHook:
     async def on_error(self, ctx: RunContext, state: LoopState, error: Exception) -> Stop | None:
         """The turn failed. Return ``Stop`` to end it with an answer for the
         user; None lets the error go up."""
-        return None
+        # The provider refused the request for its content: the turn ends
+        # clean, and what caused it leaves so the next turn is not refused too.
+        if getattr(error, "kind", None) != "content_filter":
+            return None
+        self.remove_blocked(ctx)
+        return Stop(reason="content_filter", answer=self.BLOCKED)
+
+    @classmethod
+    def remove_blocked(cls, ctx: RunContext) -> None:
+        """Take out what entered the conversation since the model last
+        answered: only that can be new to the provider. What the user wrote
+        leaves; a tool result keeps its place, without its content."""
+        # 1. Where the model last answered.
+        last = max(
+            (n for n, message in enumerate(ctx.messages) if isinstance(message, AssistantMessage)),
+            default=-1,
+        )
+
+        # 2. After it: tool results are emptied, the rest leaves.
+        kept = ctx.messages[: last + 1]
+        for message in ctx.messages[last + 1 :]:
+            if isinstance(message, ToolMessage):
+                kept.append(message.model_copy(update={"content": cls.REMOVED}))
+        ctx.messages[:] = kept
 
     @staticmethod
     def take_inbox(ctx: RunContext) -> int:
