@@ -21,7 +21,7 @@ import base64
 import importlib
 import typing as t
 from datetime import datetime, timezone
-from typing import Annotated, Literal, Union
+from typing import Annotated, Any, Literal, Union
 
 from pydantic import (
     BaseModel,
@@ -286,6 +286,9 @@ class AssistantMessage(CoreMessage):
 
     tool_calls: list[ToolCall] = Field(default_factory=list)
     thinking: str | None = Field(default=None, description="Reasoning")
+    # What a provider needs back to go on reasoning, by the format that wrote
+    # it ("responses"): opaque, never shown, sent again only in that format.
+    reasoning_state: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     # A final answer that a loop guard vetoed (e.g. the model stopped
     # mid-plan and was steered to continue). It stays in the transcript
     # so the model keeps its own context, but UIs should hide or collapse

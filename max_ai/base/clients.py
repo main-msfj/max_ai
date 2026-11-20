@@ -15,7 +15,7 @@ from ..core.messages import Message
 from ..core.model.llm import ModelConfig
 from ..core.retry import RetryPolicy, rate_limited, retrying
 from ..errors.client import ClientError
-from ..types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
+from ..types.completions import LLMChunk, LLMResponse, Usage
 from ..types.run_context import RunContext
 from ..types.tools import CoreToolDefinition
 from .component import ComponentBase, ConfigT
@@ -28,12 +28,12 @@ if t.TYPE_CHECKING:
 OnRetry = t.Callable[[int, BaseException, float], t.Any]
 
 
-class CoreChatCompletionClient(ComponentBase[ConfigT], ABC):
+class CoreLLMClient(ComponentBase[ConfigT], ABC):
     """One provider's chat endpoint. Subclasses say how that provider wants
     its messages and tools, and make the call. How the model thinks is
     ``config.thinking``: the provider's own fields, sent as they are.
 
-    A subclass names its config: ``CoreChatCompletionClient[MyConfig]``. That
+    A subclass names its config: ``CoreLLMClient[MyConfig]``. That
     is what lets ``_to_config`` and ``_from_config`` use ``MyConfig``."""
 
     PROVIDER_NAME: t.ClassVar[str] = "The provider"  # how its errors name it
@@ -73,16 +73,16 @@ class CoreChatCompletionClient(ComponentBase[ConfigT], ABC):
         on_retry: OnRetry | None = None,
         ctx: RunContext | None = None,
         middleware: MiddlewareChain | None = None,
-    ) -> ChatCompletionResult:
+    ) -> LLMResponse:
         """One answer for ``messages``. A passing failure (rate limit, timeout,
         5xx) is tried again; ``retry`` given here wins over the client's own.
         With ``middleware``, each middleware sees the call and its answer."""
 
         # 1. The call itself, as the middlewares left it.
-        async def action(call: ModelCall) -> ChatCompletionResult:
+        async def action(call: ModelCall) -> LLMResponse:
             api_messages, api_tools = self._request(call.messages, call.tools)
 
-            async def once() -> ChatCompletionResult:
+            async def once() -> LLMResponse:
                 try:
                     return await self.complete(api_messages, api_tools, call.output_format)
                 except Exception as error:
@@ -108,7 +108,7 @@ class CoreChatCompletionClient(ComponentBase[ConfigT], ABC):
         on_retry: OnRetry | None = None,
         ctx: RunContext | None = None,
         middleware: MiddlewareChain | None = None,
-    ) -> t.AsyncGenerator[ChatCompletionChunk, None]:
+    ) -> t.AsyncGenerator[LLMChunk, None]:
         """The answer for ``messages``, piece by piece. It is tried again only
         while nothing has come out: after that the caller decides. With
         ``middleware``, each middleware sees it line by line."""
@@ -122,7 +122,7 @@ class CoreChatCompletionClient(ComponentBase[ConfigT], ABC):
 
     async def _attempts(
         self, call: ModelCall, retry: RetryPolicy | None, on_retry: OnRetry | None
-    ) -> t.AsyncGenerator[ChatCompletionChunk, None]:
+    ) -> t.AsyncGenerator[LLMChunk, None]:
         """The streamed call, tried again while nothing has come out."""
         api_messages, api_tools = self._request(call.messages, call.tools)
         policy = retry or self.retry
@@ -245,7 +245,7 @@ class CoreChatCompletionClient(ComponentBase[ConfigT], ABC):
         messages: list[dict[str, t.Any]],
         tools: list[dict[str, t.Any]],
         output_format: type[BaseModel] | None,
-    ) -> ChatCompletionResult:
+    ) -> LLMResponse:
         """Make the call and return the whole answer."""
 
     @abstractmethod
@@ -254,5 +254,5 @@ class CoreChatCompletionClient(ComponentBase[ConfigT], ABC):
         messages: list[dict[str, t.Any]],
         tools: list[dict[str, t.Any]],
         output_format: type[BaseModel] | None,
-    ) -> t.AsyncGenerator[ChatCompletionChunk, None]:
+    ) -> t.AsyncGenerator[LLMChunk, None]:
         """Make the call and yield the answer as it arrives."""

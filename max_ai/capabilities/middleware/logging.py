@@ -35,7 +35,7 @@ from ...loggers import ScopedLogger
 if t.TYPE_CHECKING:
     from ...core.event_type import CoreEvent
     from ...core.messages import AssistantMessage
-    from ...types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
+    from ...types.completions import LLMChunk, LLMResponse, Usage
     from ...types.run_context import RunContext
     from ...types.tool_call import ToolCallRecord, ToolResult
 
@@ -75,7 +75,7 @@ class LoggingMiddleware(CoreMiddleware):
                 seconds=round(time.monotonic() - started, 1),
             )
 
-    async def model(self, ctx: RunContext, call: ModelCall, call_next: NextModel) -> ChatCompletionResult:
+    async def model(self, ctx: RunContext, call: ModelCall, call_next: NextModel) -> LLMResponse:
         started = self._model_call(ctx, call)
         try:
             result = await call_next(call)
@@ -87,7 +87,7 @@ class LoggingMiddleware(CoreMiddleware):
 
     async def stream(
         self, ctx: RunContext, call: ModelCall, call_next: NextStream
-    ) -> AsyncGenerator[ChatCompletionChunk]:
+    ) -> AsyncGenerator[LLMChunk]:
         started = self._model_call(ctx, call)
         try:
             async for chunk in call_next(call):

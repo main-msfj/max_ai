@@ -7,6 +7,7 @@ import typing as t
 
 import httpx
 
+from ....core.messages import AssistantMessage
 from ....core.model.llm import ModelConfig
 from ....core.retry import RetryPolicy
 from ....errors.client import ClientError
@@ -94,6 +95,17 @@ class OpenRouterChatCompletionClient(ChatCompletionsClient[OpenRouterChatComplet
     def thinking(self, message: t.Any) -> str | None:
         """OpenRouter sends the thinking text as ``reasoning``."""
         return self.get(message, "reasoning") or None
+
+    def reasoning_pieces(self, message: t.Any) -> list[dict[str, t.Any]]:
+        """OpenRouter sends ``reasoning_details``: the text in parts, the
+        encrypted reasoning whole. Seen live 2026-11-20."""
+        details: list[t.Any] = self.get(message, "reasoning_details") or []
+        return [dict(t.cast("dict[str, t.Any]", item)) for item in details if isinstance(item, dict)]
+
+    def reasoning_back(self, message: AssistantMessage) -> dict[str, t.Any]:
+        """Given back as they came, so the model goes on from its own reasoning."""
+        kept = message.reasoning_state.get(self.PROVIDER_NAME.lower())
+        return {"reasoning_details": kept} if kept else {}
 
     def blocked(self, error: Exception) -> list[str] | None:
         """A guardrail of the account refused the request: HTTP 403, "Request

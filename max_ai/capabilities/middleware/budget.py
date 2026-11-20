@@ -37,7 +37,7 @@ from ...base.middleware import (
 )
 from ...base.quota_store import CoreQuotaStore
 from ...core.model.quota import QuotaLimits, QuotaUsage
-from ...types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
+from ...types.completions import LLMChunk, LLMResponse, Usage
 from ...types.tool_call import ToolCallRecord, ToolCallStatus, ToolResult
 
 if t.TYPE_CHECKING:
@@ -225,7 +225,7 @@ class BudgetMiddleware(CoreMiddleware):
             state["seconds"] = self._spent_seconds(state)
             state.pop("segment_start", None)
 
-    async def model(self, ctx: RunContext, call: ModelCall, call_next: NextModel) -> ChatCompletionResult:
+    async def model(self, ctx: RunContext, call: ModelCall, call_next: NextModel) -> LLMResponse:
         self._before_model(ctx, call)
         result = await call_next(call)
         await self._after_model(ctx, call, result.usage)
@@ -233,7 +233,7 @@ class BudgetMiddleware(CoreMiddleware):
 
     async def stream(
         self, ctx: RunContext, call: ModelCall, call_next: NextStream
-    ) -> AsyncGenerator[ChatCompletionChunk]:
+    ) -> AsyncGenerator[LLMChunk]:
         self._before_model(ctx, call)
         async for chunk in call_next(call):
             if chunk.is_complete:

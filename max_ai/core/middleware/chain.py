@@ -11,7 +11,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 
 from ...base.middleware import CoreMiddleware, ModelCall, NextModel, NextStream, NextTool, NextTurn
 from ...errors.middleware import StopRun
-from ...types.completions import ChatCompletionChunk, ChatCompletionResult
+from ...types.completions import LLMChunk, LLMResponse
 from ...types.tool_call import ToolCallRecord, ToolResult
 
 if t.TYPE_CHECKING:
@@ -50,7 +50,7 @@ class MiddlewareChain:
             )
         return call_next(None)
 
-    async def model(self, ctx: RunContext, call: ModelCall, action: NextModel) -> ChatCompletionResult:
+    async def model(self, ctx: RunContext, call: ModelCall, action: NextModel) -> LLMResponse:
         """One whole model call, through each middleware."""
         call_next = action
         for middleware in reversed(self.middlewares):
@@ -59,13 +59,13 @@ class MiddlewareChain:
             )
         return await call_next(call)
 
-    def stream(self, ctx: RunContext, call: ModelCall, action: NextStream) -> AsyncGenerator[ChatCompletionChunk]:
+    def stream(self, ctx: RunContext, call: ModelCall, action: NextStream) -> AsyncGenerator[LLMChunk]:
         """One streamed model call. The chunks pass as the provider sends
         them; with a middleware that filters text, as whole lines."""
         whole_lines = any(middleware.filter_full_text for middleware in self.middlewares)
 
         # Whole lines, so a word cut in two can't slip past a filter.
-        def innermost(given: ModelCall) -> AsyncGenerator[ChatCompletionChunk]:
+        def innermost(given: ModelCall) -> AsyncGenerator[LLMChunk]:
             return self.lines(action(given)) if whole_lines else action(given)
 
         call_next: NextStream = innermost
@@ -169,7 +169,7 @@ class MiddlewareChain:
 
     # -------- LINES --------------------------------------------------------------------
     @staticmethod
-    async def lines(chunks: AsyncGenerator[ChatCompletionChunk]) -> AsyncGenerator[ChatCompletionChunk]:
+    async def lines(chunks: AsyncGenerator[LLMChunk]) -> AsyncGenerator[LLMChunk]:
         """The provider's chunks as whole lines; the final chunk goes last, as it is."""
         text = thinking = ""
         async for chunk in chunks:
@@ -177,13 +177,13 @@ class MiddlewareChain:
             # 1. The end: what is left goes out, then the chunk with the whole message.
             if chunk.is_complete:
                 if text or thinking:
-                    yield ChatCompletionChunk(content=text, thinking=thinking or None, is_complete=False)
+                    yield LLMChunk(content=text, thinking=thinking or None, is_complete=False)
                 yield chunk.model_copy(update={"content": "", "thinking": None})
                 return
             # 2. Up to the last line break goes out; the rest waits for its line.
             cut, cut_thinking = text.rfind("\n") + 1, thinking.rfind("\n") + 1
             if cut or cut_thinking:
-                yield ChatCompletionChunk(
+                yield LLMChunk(
                     content=text[:cut], thinking=thinking[:cut_thinking] or None, is_complete=False
                 )
                 text, thinking = text[cut:], thinking[cut_thinking:]

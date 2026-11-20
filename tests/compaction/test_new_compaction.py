@@ -12,7 +12,7 @@ from max_ai.core.model.llm import ModelConfig
 from max_ai.core.retry import RetryPolicy
 from max_ai.core.tool import ToolDispatcher, ToolRegistry
 from max_ai.errors.client import ClientError
-from max_ai.types.completions import ChatCompletionResult, Usage
+from max_ai.types.completions import LLMResponse, Usage
 from max_ai.types.run_context import RunContext
 from max_ai.types.summary import Summary
 from max_ai.types.todos import Todo
@@ -41,7 +41,7 @@ class Model:
             reply = AssistantMessage(source="llm", content=reply.model_dump_json(), structured_output=reply)
         elif isinstance(reply, str):
             reply = AssistantMessage(source="llm", content=reply)
-        return ChatCompletionResult(message=reply, usage=Usage(llm_calls=1), model="m", finish_reason="stop")
+        return LLMResponse(message=reply, usage=Usage(llm_calls=1), model="m", finish_reason="stop")
 
 
 def exchange(n: int, size: int = 400) -> list:

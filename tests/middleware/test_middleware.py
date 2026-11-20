@@ -12,7 +12,7 @@ from max_ai.capabilities.middleware import BudgetMiddleware, LoggingMiddleware
 from max_ai.core.messages import AssistantMessage, ToolMessage
 from max_ai.core.model.llm import ModelConfig
 from max_ai.errors.middleware import StopRun
-from max_ai.types.completions import ChatCompletionResult, Usage
+from max_ai.types.completions import LLMResponse, Usage
 from max_ai.types.run_context import RunContext
 from max_ai.types.tool_call import ToolResult
 
@@ -144,7 +144,7 @@ class Fallback(CoreMiddleware):
         try:
             return await call_next(call)
         except Exception:
-            return ChatCompletionResult(message=say("respaldo"), usage=Usage(), model="backup", finish_reason="stop")
+            return LLMResponse(message=say("respaldo"), usage=Usage(), model="backup", finish_reason="stop")
 
 
 async def test_a_failed_model_call_can_be_recovered():
