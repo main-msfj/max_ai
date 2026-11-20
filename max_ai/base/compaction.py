@@ -17,7 +17,7 @@ from ..errors.middleware import StopRun
 from ..types.completions import Usage
 from ..types.context import Context
 from ..types.summary import Summary
-from .clients import CoreChatCompletionClient
+from .clients import CoreLLMClient
 from .component import ComponentBase, ConfigT
 
 if t.TYPE_CHECKING:
@@ -25,7 +25,7 @@ if t.TYPE_CHECKING:
     from ..types.run_context import RunContext
 
 logger = logging.getLogger(__name__)
-AnyClient = CoreChatCompletionClient[t.Any]
+AnyClient = CoreLLMClient[t.Any]
 # A caller that wants the messages that leave, while they are summarized.
 Leaving = t.Callable[[list[Message]], t.Awaitable[None]]
 

@@ -98,7 +98,7 @@ Agent(
 
 | Argument | Type | Notes |
 |---|---|---|
-| `client` | `CoreChatCompletionClient` | `OpenAIChatCompletionClient` or `OpenRouterChatCompletionClient` |
+| `client` | `CoreLLMClient` | `OpenAIChatCompletionClient` or `OpenRouterChatCompletionClient` |
 | `toolset` | list of `CoreTool` | your tools, `FunctionAsTool` / `@tool`, `BashTool()` |
 | `mcp` | `StdioMCPServerConfig` / `HTTPServerConfig` | tools from MCP servers |
 | `sandbox` | `SandboxCore` | `LocalSandbox`, `DockerSandbox`, `E2BSandbox` |

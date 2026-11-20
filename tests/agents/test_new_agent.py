@@ -31,7 +31,7 @@ def test_an_agent_takes_its_pieces_and_the_loop_has_a_default(tmp_path):
 @pytest.mark.parametrize(
     ("piece", "value", "said"),
     [
-        ("client", "gpt", "client must be a CoreChatCompletionClient; got str"),
+        ("client", "gpt", "client must be a CoreLLMClient; got str"),
         ("reasoning", object(), "reasoning must be a CoreLoop"),
         ("toolset", [len], "toolset must be a CoreTool"),
         ("mcp", [{"url": "x"}], "mcp must be a MCPServerConfig; got dict"),
@@ -80,7 +80,7 @@ def test_a_python_function_as_tool_cannot_be_stored():
 async def test_the_agent_runs_a_turn_with_its_tools_in_a_sandbox(tmp_path):
     from max_ai.capabilities.sandbox.local import LocalSandbox
     from max_ai.core.messages import AssistantMessage, ToolCall
-    from max_ai.types.completions import ChatCompletionResult, Usage
+    from max_ai.types.completions import LLMResponse, Usage
     from max_ai.types.run_context import RunContext
 
     answers = [
@@ -95,7 +95,7 @@ async def test_the_agent_runs_a_turn_with_its_tools_in_a_sandbox(tmp_path):
         seen.append((messages, [tool.name for tool in tools or []]))
         message = answers.pop(0)
         reason = "tool_calls" if message.tool_calls else "stop"
-        return ChatCompletionResult(message=message, finish_reason=reason, usage=Usage(), model="m")
+        return LLMResponse(message=message, finish_reason=reason, usage=Usage(), model="m")
 
     made = agent(sandbox=LocalSandbox(str(tmp_path)), memory=Memory())
     made.client.run = model
@@ -120,7 +120,7 @@ async def test_close_waits_for_a_run_that_is_still_going():
     import asyncio
 
     from max_ai.core.messages import AssistantMessage
-    from max_ai.types.completions import ChatCompletionResult, Usage
+    from max_ai.types.completions import LLMResponse, Usage
 
     started, release = asyncio.Event(), asyncio.Event()
 
@@ -128,7 +128,7 @@ async def test_close_waits_for_a_run_that_is_still_going():
         started.set()
         await release.wait()
         message = AssistantMessage(source="m", content="Done.")
-        return ChatCompletionResult(message=message, finish_reason="stop", usage=Usage(), model="m")
+        return LLMResponse(message=message, finish_reason="stop", usage=Usage(), model="m")
 
     made = agent()
     made.client.run = model
@@ -146,13 +146,13 @@ async def test_close_waits_for_a_run_that_is_still_going():
 
 async def test_run_stream_gives_only_the_text_as_it_is_written():
     from max_ai.core.messages import AssistantMessage
-    from max_ai.types.completions import ChatCompletionChunk, Usage
+    from max_ai.types.completions import LLMChunk, Usage
 
     async def model(messages, tools=None, output_format=None, **options):
         for piece in ("Hel", "lo"):
-            yield ChatCompletionChunk(content=piece, model="m", is_complete=False)
+            yield LLMChunk(content=piece, model="m", is_complete=False)
         message = AssistantMessage(source="m", content="Hello")
-        yield ChatCompletionChunk(
+        yield LLMChunk(
             content="", model="m", finish_reason="stop", usage=Usage(), message=message,
             is_complete=True,
         )

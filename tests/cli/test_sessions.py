@@ -14,7 +14,7 @@ from max_ai.capabilities.session_store import LocalSessionStore
 from max_ai.cli.app import MaxAIApp
 from max_ai.cli.blocks import AssistantBlock, PastSummaryBlock, QuestionForm, UserBlock
 from max_ai.core.messages import AssistantMessage, UserMessage
-from max_ai.types.completions import ChatCompletionChunk, Usage
+from max_ai.types.completions import LLMChunk, Usage
 from max_ai.types.run_context import RunContext
 from max_ai.types.summary import Summary
 
@@ -29,8 +29,8 @@ class EchoLLM(OpenRouterChatCompletionClient):
         last = next(m["content"] for m in reversed(messages) if m["role"] == "user")
         text = last if isinstance(last, str) else "".join(part.get("text", "") for part in last)
         reply = f"re: {text}"
-        yield ChatCompletionChunk(content=reply, is_complete=False)
-        yield ChatCompletionChunk(content="", is_complete=True, usage=Usage(tokens_input=10),
+        yield LLMChunk(content=reply, is_complete=False)
+        yield LLMChunk(content="", is_complete=True, usage=Usage(tokens_input=10),
                                   message=AssistantMessage(source="llm", content=reply), finish_reason="stop")
 
 

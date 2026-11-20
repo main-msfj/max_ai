@@ -37,9 +37,10 @@ class Usage(BaseModel):
         )
 
 
-# -------- CHAT COMPLETION -----------------------------------------------------------
-class ChatCompletionResult(BaseModel):
-    """Standardized response form BaseChatCompletion API."""
+# -------- WHAT A MODEL ANSWERS -----------------------------------------------------------
+class LLMResponse(BaseModel):
+    """What every client gives back, whatever the format of its provider
+    (Chat Completions, Responses, Messages)."""
 
     message: AssistantMessage = Field(..., description="The LLM's response")
     usage: Usage = Field(..., description="Token consumption and timing metrics")
@@ -47,8 +48,8 @@ class ChatCompletionResult(BaseModel):
     finish_reason: str = Field(..., description="Completion status")
 
 
-class ChatCompletionChunk(BaseModel):
-    """Streaming response chunk for BaseChatCompletion API."""
+class LLMChunk(BaseModel):
+    """One piece of a streamed answer, the same for every client."""
 
     content: str = Field(..., description="Partial content from stream")
     thinking: str | None = Field(default=None, description="Reasoning")

@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel
 
-from ..base.clients import CoreChatCompletionClient
+from ..base.clients import CoreLLMClient
 from ..base.component import ComponentBase
 from ..base.knowledge import CoreKnowledgeRegistry
 from ..base.layer import CoreLayer
@@ -41,7 +41,7 @@ from ..core.tool import ToolDispatcher, ToolRegistry
 from ..errors.middleware import StopRun
 from ..types.run_context import RunContext
 
-AnyClient = CoreChatCompletionClient[t.Any]
+AnyClient = CoreLLMClient[t.Any]
 AnyLoop = CoreLoop[t.Any]
 ServerConfig = StdioMCPServerConfig | HTTPServerConfig
 
@@ -68,7 +68,7 @@ class Agent(ComponentBase[AgentSpec]):
     SANDBOX_LOCK: t.ClassVar[str] = "\0sandbox"  # never a session id: those are validated
     # What each piece must be; True when the agent may go without it.
     PIECES: t.ClassVar[tuple[tuple[str, type, bool], ...]] = (
-        ("client", CoreChatCompletionClient, False),
+        ("client", CoreLLMClient, False),
         ("reasoning", CoreLoop, False),
         ("memory", Memory, True),
         ("skills", SkillsCore, True),

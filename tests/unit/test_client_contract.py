@@ -2,17 +2,17 @@
 
 import pytest
 
-from max_ai.base.clients import CoreChatCompletionClient
+from max_ai.base.clients import CoreLLMClient
 from max_ai.core.messages import AssistantMessage, SystemMessage, UserMessage
 from max_ai.core.model.llm import ModelConfig
 from max_ai.core.retry import RetryPolicy
 from max_ai.errors.client import ClientError
-from max_ai.types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
+from max_ai.types.completions import LLMChunk, LLMResponse, Usage
 from max_ai.types.run_context import RunContext
 from max_ai.types.tools import CoreToolDefinition
 
 
-class Echo(CoreChatCompletionClient):
+class Echo(CoreLLMClient):
     """A provider that answers with what it was sent."""
 
     API_KEY_ENV = "ECHO_API_KEY"
@@ -56,12 +56,12 @@ class Echo(CoreChatCompletionClient):
         self.fail_if_told()
         self.sent = {"messages": messages, "tools": tools, **(self.config.thinking or {})}
         said = AssistantMessage(source="echo", content=messages[-1]["content"])
-        return ChatCompletionResult(message=said, usage=Usage(), model=self.model, finish_reason="stop")
+        return LLMResponse(message=said, usage=Usage(), model=self.model, finish_reason="stop")
 
     async def complete_stream(self, messages, tools, output_format):
         self.fail_if_told()
         for word in messages[-1]["content"].split():
-            yield ChatCompletionChunk(content=word, is_complete=False)
+            yield LLMChunk(content=word, is_complete=False)
             if word == "boom":
                 raise RuntimeError("busy")
 
@@ -191,7 +191,7 @@ def test_the_parent_maps_and_asks_each_provider_for_the_cases_it_reacts_to():
 
 def test_a_client_that_does_not_say_how_it_is_blocked_cannot_be_created():
     class Lazy(Echo):
-        blocked = CoreChatCompletionClient.blocked  # left as the parent's: abstract
+        blocked = CoreLLMClient.blocked  # left as the parent's: abstract
 
     with pytest.raises(TypeError, match="blocked"):
         Lazy("lazy-1")

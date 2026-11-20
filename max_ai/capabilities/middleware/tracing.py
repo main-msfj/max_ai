@@ -39,7 +39,7 @@ from ...base.middleware import (
 )
 from ...core.event_type import ModelResponseEvent, ReasoningCompleteEvent
 from ...errors.middleware import StopRun
-from ...types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
+from ...types.completions import LLMChunk, LLMResponse, Usage
 
 if t.TYPE_CHECKING:
     from opentelemetry.sdk.trace import TracerProvider
@@ -141,7 +141,7 @@ class TracingMiddleware(CoreMiddleware):
             span.end()
 
     # -------- MODEL --------------------------------------------------------------------
-    async def model(self, ctx: RunContext, call: ModelCall, call_next: NextModel) -> ChatCompletionResult:
+    async def model(self, ctx: RunContext, call: ModelCall, call_next: NextModel) -> LLMResponse:
         span = self._model_span(ctx, call)
         try:
             result = await call_next(call)
@@ -153,7 +153,7 @@ class TracingMiddleware(CoreMiddleware):
 
     async def stream(
         self, ctx: RunContext, call: ModelCall, call_next: NextStream
-    ) -> AsyncGenerator[ChatCompletionChunk]:
+    ) -> AsyncGenerator[LLMChunk]:
         span, ended = self._model_span(ctx, call), False
         try:
             async for chunk in call_next(call):

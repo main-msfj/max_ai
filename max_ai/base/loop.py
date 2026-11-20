@@ -33,14 +33,14 @@ from ..types.completions import Usage
 from ..types.context import Context
 from ..types.run_context import RunContext
 from ..types.tool_call import ToolCallRecord, ToolResult
-from .clients import CoreChatCompletionClient
+from .clients import CoreLLMClient
 from .compaction import CoreCompaction, WindowCompaction
 from .component import ComponentBase, ConfigT
 
 if t.TYPE_CHECKING:
     from ..core.middleware.chain import MiddlewareChain
 
-AnyClient = CoreChatCompletionClient[t.Any]
+AnyClient = CoreLLMClient[t.Any]
 
 
 class LoopState(BaseModel):

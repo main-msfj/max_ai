@@ -14,7 +14,7 @@ from max_ai.core.model.llm import ModelConfig
 from max_ai.core.retry import RetryPolicy
 from max_ai.core.tool import ToolDispatcher, ToolHook, ToolRegistry
 from max_ai.errors.client import ClientError
-from max_ai.types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
+from max_ai.types.completions import LLMChunk, LLMResponse, Usage
 from max_ai.types.run_context import RunContext
 from max_ai.types.todos import Todo
 
@@ -62,13 +62,13 @@ class Model:
             on_retry(1, TimeoutError("slow"), 0.5)
         reason = self.reasons.get(len(self.sent)) or ("tool_calls" if message.tool_calls else "stop")
         usage = Usage(llm_calls=1, tokens_input=10, tokens_output=2)
-        return ChatCompletionResult(message=message, usage=usage, model=self.model, finish_reason=reason)
+        return LLMResponse(message=message, usage=usage, model=self.model, finish_reason=reason)
 
     async def stream(self, messages, tools=None, output_format=None, *, retry=None, on_retry=None, **options):
         message = self._next(messages, tools)
         for word in (message.content or "").split():
-            yield ChatCompletionChunk(content=word, is_complete=False)
-        yield ChatCompletionChunk(
+            yield LLMChunk(content=word, is_complete=False)
+        yield LLMChunk(
             content="", is_complete=True, message=message, finish_reason="stop",
             usage=Usage(llm_calls=1, tokens_output=2),
         )

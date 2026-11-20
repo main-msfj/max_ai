@@ -20,7 +20,7 @@ from openai import (
 )
 from pydantic import BaseModel
 
-from ...base.clients import CoreChatCompletionClient
+from ...base.clients import CoreLLMClient
 from ...base.component import ConfigT
 from ...core.ids import short_id
 from ...core.messages import (
@@ -36,14 +36,14 @@ from ...core.messages import (
 from ...core.model.llm import ModelConfig
 from ...core.retry import RetryPolicy
 from ...errors.client import ClientError
-from ...types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
+from ...types.completions import LLMChunk, LLMResponse, Usage
 from ...types.run_context import RunContext
 from ...types.tools import CoreToolDefinition
 
 logger = logging.getLogger(__name__)
 
 
-class ChatCompletionsClient(CoreChatCompletionClient[ConfigT]):
+class ChatCompletionsClient(CoreLLMClient[ConfigT]):
     """Messages, tools, the call and the answer in the Chat Completions
     format. A subclass is one service: its address, its key, its config and
     what it does differently (``body``, ``thinking``, ``check``)."""
@@ -194,7 +194,7 @@ class ChatCompletionsClient(CoreChatCompletionClient[ConfigT]):
         messages: list[dict[str, t.Any]],
         tools: list[dict[str, t.Any]],
         output_format: type[BaseModel] | None,
-    ) -> ChatCompletionResult:
+    ) -> LLMResponse:
         start = time.monotonic()
         request = self.request(messages, tools, output_format, stream=False)
         response = await self.call(request)
@@ -212,7 +212,7 @@ class ChatCompletionsClient(CoreChatCompletionClient[ConfigT]):
         usage = self.normalize_usage_stats(self.get(response, "usage"))
         usage.duration_ms = int((time.monotonic() - start) * 1000)
         usage.llm_calls, usage.tool_calls = 1, len(calls)
-        return ChatCompletionResult(
+        return LLMResponse(
             message=AssistantMessage(
                 source="llm", content=content, thinking=self.thinking(message), tool_calls=calls,
                 structured_output=self.structured(content, output_format),
@@ -227,7 +227,7 @@ class ChatCompletionsClient(CoreChatCompletionClient[ConfigT]):
         messages: list[dict[str, t.Any]],
         tools: list[dict[str, t.Any]],
         output_format: type[BaseModel] | None,
-    ) -> t.AsyncGenerator[ChatCompletionChunk, None]:
+    ) -> t.AsyncGenerator[LLMChunk, None]:
         start = time.monotonic()
         request = self.request(messages, tools, output_format, stream=True)
         text: list[str] = []
@@ -251,10 +251,10 @@ class ChatCompletionsClient(CoreChatCompletionClient[ConfigT]):
             # 2. Thinking and text go out as they arrive.
             if thought := self.thinking(delta):
                 thoughts.append(thought)
-                yield ChatCompletionChunk(content="", thinking=thought, is_complete=False)
+                yield LLMChunk(content="", thinking=thought, is_complete=False)
             if piece := self.get(delta, "content"):
                 text.append(piece)
-                yield ChatCompletionChunk(content=piece, is_complete=False)
+                yield LLMChunk(content=piece, is_complete=False)
 
             # 3. Tool calls are put together until the end.
             raw_calls: list[t.Any] = self.get(delta, "tool_calls") or []
@@ -276,12 +276,12 @@ class ChatCompletionsClient(CoreChatCompletionClient[ConfigT]):
             if call["name"]
         ]
         for call in whole:
-            yield ChatCompletionChunk(content="", is_complete=False, tool_call_chunk=call)
+            yield LLMChunk(content="", is_complete=False, tool_call_chunk=call)
         usage.duration_ms = int((time.monotonic() - start) * 1000)
         usage.llm_calls, usage.tool_calls = 1, len(whole)
         content = "".join(text)
         structured = self.structured(content, output_format)
-        yield ChatCompletionChunk(
+        yield LLMChunk(
             content="", is_complete=True, usage=usage, finish_reason=finish,
             structured_output=structured,
             message=AssistantMessage(

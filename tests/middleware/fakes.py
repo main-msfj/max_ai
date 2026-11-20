@@ -8,7 +8,7 @@ from max_ai.capabilities.clients.openrouter import OpenRouterChatCompletionClien
 from max_ai.capabilities.tools.function_as_tool import FunctionAsTool
 from max_ai.core.messages import AssistantMessage, ToolCall
 from max_ai.core.model.llm import ModelConfig
-from max_ai.types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
+from max_ai.types.completions import LLMChunk, LLMResponse, Usage
 from max_ai.types.tools import ToolApprovalMode
 
 RAN: list[str] = []  # cities the tool really ran for
@@ -50,15 +50,15 @@ class FakeClient(OpenRouterChatCompletionClient):
         message = self.replies.pop(0) if self.replies else say(f"respuesta {self.calls}")
         reason = "tool_calls" if message.tool_calls else "stop"
         usage = Usage(tokens_input=1000, tokens_output=100)
-        return ChatCompletionResult(message=message, usage=usage, model="fake-model-2026", finish_reason=reason)
+        return LLMResponse(message=message, usage=usage, model="fake-model-2026", finish_reason=reason)
 
     async def complete_stream(self, messages, tools, output_format):  # type: ignore[override]
         # The text comes in pieces cut anywhere, as providers send it.
         result = await self.complete(messages, tools, output_format)
         text = result.message.text()
         for start in range(0, len(text), 3):
-            yield ChatCompletionChunk(content=text[start:start + 3], is_complete=False)
-        yield ChatCompletionChunk(
+            yield LLMChunk(content=text[start:start + 3], is_complete=False)
+        yield LLMChunk(
             content="", is_complete=True, message=result.message, usage=result.usage,
             finish_reason=result.finish_reason,
         )

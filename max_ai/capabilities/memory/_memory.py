@@ -17,7 +17,7 @@ SCRIPT = Path(__file__).with_name("index.py").read_text()
 
 
 if t.TYPE_CHECKING:
-    from ...base.clients import CoreChatCompletionClient
+    from ...base.clients import CoreLLMClient
     from ...core.middleware.chain import MiddlewareChain
     from ...types.run_context import RunContext
 
@@ -114,7 +114,7 @@ class Memory(ComponentBase[MemoryConfig]):
     async def keep(
         self,
         old: list[Message],
-        client: "CoreChatCompletionClient[t.Any]",
+        client: "CoreLLMClient[t.Any]",
         sandbox: SandboxCore,
         index: str,
         *,

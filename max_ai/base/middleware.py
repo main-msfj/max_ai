@@ -3,8 +3,8 @@
 Each middleware wraps one place and calls ``call_next`` to go on:
 
     turn    every event of a turn                Agent._turn
-    model   one model call, whole                CoreChatCompletionClient.run
-    stream  one model call, line by line         CoreChatCompletionClient.stream
+    model   one model call, whole                CoreLLMClient.run
+    stream  one model call, line by line         CoreLLMClient.stream
     tool    every tool call, whatever happens    ToolDispatcher.dispatch
 
 The list runs in order on the way in and in reverse on the way out. A
@@ -28,7 +28,7 @@ if t.TYPE_CHECKING:
     from ..core.event_type import CoreEvent
     from ..core.messages import Message
     from ..core.model.llm import ModelConfig
-    from ..types.completions import ChatCompletionChunk, ChatCompletionResult
+    from ..types.completions import LLMChunk, LLMResponse
     from ..types.run_context import RunContext
     from ..types.tool_call import ToolCallRecord, ToolResult
     from ..types.tools import CoreToolDefinition
@@ -50,8 +50,8 @@ class ModelCall:
 
 
 NextTurn = Callable[[], AsyncGenerator["CoreEvent"]]
-NextModel = Callable[[ModelCall], Awaitable["ChatCompletionResult"]]
-NextStream = Callable[[ModelCall], AsyncGenerator["ChatCompletionChunk"]]
+NextModel = Callable[[ModelCall], Awaitable["LLMResponse"]]
+NextStream = Callable[[ModelCall], AsyncGenerator["LLMChunk"]]
 NextTool = Callable[["ToolCallRecord"], Awaitable["ToolResult | None"]]
 
 
@@ -78,13 +78,13 @@ class CoreMiddleware(ComponentBase[MiddlewareConfig]):
 
     async def model(
         self, ctx: RunContext, call: ModelCall, call_next: NextModel
-    ) -> ChatCompletionResult:
+    ) -> LLMResponse:
         """One model call: what goes in (``call``) and what comes back."""
         return await call_next(call)
 
     async def stream(
         self, ctx: RunContext, call: ModelCall, call_next: NextStream
-    ) -> AsyncGenerator[ChatCompletionChunk]:
+    ) -> AsyncGenerator[LLMChunk]:
         """One streamed call, chunk by chunk; the last one carries the full
         message. With ``filter_full_text``, each chunk is a whole line."""
         async for chunk in call_next(call):

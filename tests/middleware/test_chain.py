@@ -9,7 +9,7 @@ import pytest
 from max_ai.base.middleware import CoreMiddleware, ModelCall
 from max_ai.core.middleware.chain import MiddlewareChain
 from max_ai.errors.middleware import StopRun
-from max_ai.types.completions import ChatCompletionChunk, ChatCompletionResult, Usage
+from max_ai.types.completions import LLMChunk, LLMResponse, Usage
 from max_ai.types.run_context import RunContext
 from max_ai.types.tool_call import ToolCallRecord, ToolResult
 
@@ -18,8 +18,8 @@ from .fakes import say
 CALL = ModelCall(messages=[], tools=[], output_format=None, model="m")
 
 
-def answer(text: str) -> ChatCompletionResult:
-    return ChatCompletionResult(message=say(text), usage=Usage(), model="m", finish_reason="stop")
+def answer(text: str) -> LLMResponse:
+    return LLMResponse(message=say(text), usage=Usage(), model="m", finish_reason="stop")
 
 
 class Tag(CoreMiddleware):
@@ -57,7 +57,7 @@ async def test_a_middleware_that_breaks_stops_the_turn():
 async def test_the_model_s_own_error_goes_up_and_is_not_retried():
     calls: list[int] = []
 
-    async def failing(call: ModelCall) -> ChatCompletionResult:
+    async def failing(call: ModelCall) -> LLMResponse:
         calls.append(1)
         raise ConnectionError("provider down")
 
@@ -106,8 +106,8 @@ class Mask(CoreMiddleware):
 async def test_a_stream_is_seen_line_by_line_so_a_split_word_is_caught():
     async def chunks(call: ModelCall):
         for piece in ["hola sk-", "123 mundo\nseg", "unda"]:
-            yield ChatCompletionChunk(content=piece, thinking=piece, is_complete=False)
-        yield ChatCompletionChunk(content="", is_complete=True, message=say("hola sk-123 mundo\nsegunda"))
+            yield LLMChunk(content=piece, thinking=piece, is_complete=False)
+        yield LLMChunk(content="", is_complete=True, message=say("hola sk-123 mundo\nsegunda"))
 
     out = [c async for c in MiddlewareChain([Mask()]).stream(RunContext(), CALL, chunks)]
     assert [c.content for c in out] == ["hola ***** mundo\n", "segunda", ""]
@@ -143,8 +143,8 @@ class Watch(CoreMiddleware):
 async def test_a_stream_nobody_filters_passes_as_the_provider_sends_it():
     async def chunks(call: ModelCall):
         for piece in ["ho", "la mun", "do"]:
-            yield ChatCompletionChunk(content=piece, is_complete=False)
-        yield ChatCompletionChunk(content="", is_complete=True, message=say("hola mundo"))
+            yield LLMChunk(content=piece, is_complete=False)
+        yield LLMChunk(content="", is_complete=True, message=say("hola mundo"))
 
     out = [c async for c in MiddlewareChain([Watch()]).stream(RunContext(), CALL, chunks)]
     assert [c.content for c in out] == ["ho", "la mun", "do", ""]  # no waiting for a line
@@ -190,7 +190,7 @@ async def test_a_streamed_call_a_middleware_changed_reaches_the_next_ones_and_th
 
     async def chunks(call: ModelCall):
         got.append(call.model)
-        yield ChatCompletionChunk(content="", is_complete=True, message=say("x"))
+        yield LLMChunk(content="", is_complete=True, message=say("x"))
 
     inner = Sees()
     [c async for c in MiddlewareChain([Swap(), inner]).stream(RunContext(), CALL, chunks)]
@@ -198,7 +198,7 @@ async def test_a_streamed_call_a_middleware_changed_reaches_the_next_ones_and_th
 
 
 def _model(text: str, calls: list[int] | None = None):
-    async def model(call: ModelCall) -> ChatCompletionResult:
+    async def model(call: ModelCall) -> LLMResponse:
         if calls is not None:
             calls.append(1)
         return answer(text)
