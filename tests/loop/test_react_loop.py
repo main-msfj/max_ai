@@ -6,7 +6,7 @@ import pytest
 from pydantic import BaseModel
 
 from max_ai.base.component import ComponentBase
-from max_ai.base.loop import LoopHook, LoopState, Stop
+from max_ai.base.loop import LoopHook, LoopState, Note, Refuse, Stop
 from max_ai.capabilities.loop import ReactLoop
 from max_ai.capabilities.tools.decorator import tool as as_tool
 from max_ai.core.messages import AssistantMessage, ToolCall, UserMessage
@@ -300,7 +300,7 @@ async def test_the_harness_can_keep_the_turn_going_or_end_it():
         async def after_model(self, ctx, state):
             if not self.said:
                 self.said = True
-                return "The user added: also in Cusco."
+                return Note("The user added: also in Cusco.")
             return await super().after_model(ctx, state)
 
     ctx, tools = setup()
@@ -335,6 +335,31 @@ async def test_tool_calls_cut_at_the_output_limit_are_answered_without_running()
     events = await run(ReactLoop(), ctx, model, tools, state=state)
     assert WEATHER == [] and kinds(events) == ["arguments_cut"]
     assert "arrived incomplete" in ctx.messages[2].content and state.finish_reason == "stop"
+
+
+async def test_refuse_answers_the_tools_without_running_them_and_note_lets_them_run():
+    class Says(LoopHook):
+        def __init__(self, decision):
+            super().__init__()
+            self.decision = decision
+
+        async def after_model(self, ctx, state):
+            decision, self.decision = self.decision, None
+            return decision
+
+    # Refuse: the tool does not run and gets the text; the rule is counted.
+    ctx, tools = setup()
+    model, state = Model(asks(("c1", "weather", {"city": "Lima"})), says("ok")), LoopState()
+    events = await run(ReactLoop(), ctx, model, tools, hook=Says(Refuse("Not now.", rule="mine")), state=state)
+    assert WEATHER == [] and ctx.messages[2].content == "Not now."
+    assert kinds(events) == ["mine"] and state.notices == {"mine": 1}
+
+    # Note: the tool runs and the note is told after its answer.
+    ctx, tools = setup()
+    model, state = Model(asks(("c1", "weather", {"city": "Lima"})), says("ok")), LoopState()
+    events = await run(ReactLoop(), ctx, model, tools, hook=Says(Note("Be quick.", rule="mine")), state=state)
+    assert WEATHER == ["Lima"] and [m.role for m in ctx.messages][2:4] == ["tool", "user"]
+    assert notes(ctx) == ["[harness] Be quick."] and state.notices == {"mine": 1}
 
 
 async def test_a_new_message_closes_the_calls_that_waited_for_the_user():

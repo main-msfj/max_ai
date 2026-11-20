@@ -53,7 +53,6 @@ class LoopState(BaseModel):
     limit: int = 0  # model calls allowed in this run
     notices: dict[str, int] = Field(default_factory=dict[str, int])  # times each rule spoke
     compactions: int = 0  # times the conversation was compacted in this run
-    notice: str = ""  # the rule that spoke last
     last_calls: str = ""  # the tool calls of the last round, as text
     repeats: int = 0  # rounds in a row with those same calls
 
@@ -70,17 +69,39 @@ class Continue(BaseModel):
     """A hook's order to go on with the turn without telling the model anything."""
 
 
-Decision = str | Stop | Continue | None
+class Note(BaseModel):
+    """A hook's order to tell the model something. The turn goes on; tools
+    the model asked for still run, and the note is told after them."""
+
+    text: str
+    rule: str = "hook"  # the rule that speaks: counted in ``state.notices``
+
+    def __init__(self, text: str, rule: str = "hook") -> None:
+        super().__init__(text=text, rule=rule)
+
+
+class Refuse(BaseModel):
+    """A hook's order not to run the tools the model asked for: each one
+    gets ``text`` as its answer."""
+
+    text: str
+    rule: str = "hook"  # the rule that speaks: counted in ``state.notices``
+
+    def __init__(self, text: str, rule: str = "hook") -> None:
+        super().__init__(text=text, rule=rule)
+
+
+Decision = Note | Refuse | Stop | Continue | None
 
 
 class LoopHook:
     """What a loop asks at each moment of a turn. Inherit and write only the
     moments you need; as it is, the usual rules.
 
-    Each moment answers None (go on as usual), a text (told to the model;
-    if it asked for tools, they get that text as their answer and do not
-    run), ``Continue`` (the turn goes on, nothing is told) or ``Stop``
-    (the turn ends)."""
+    Each moment answers None (go on as usual), ``Note`` (told to the
+    model), ``Refuse`` (the tools it asked for do not run and get that text
+    as their answer), ``Continue`` (the turn goes on, nothing is told) or
+    ``Stop`` (the turn ends)."""
 
     # What the model is told. Replace a text to say it another way.
     EMPTY_ANSWER: t.ClassVar[str] = (
@@ -139,7 +160,7 @@ class LoopHook:
         # 3. Few calls left: the model is told once.
         left = state.limit - state.iteration
         if left == self.warn_before and state.limit > left and not state.notices.get("near_limit"):
-            return self.tell(state, "near_limit", self.NEAR_LIMIT.format(left=left))
+            return Note(self.NEAR_LIMIT.format(left=left), rule="near_limit")
         return None
 
     async def after_model(self, ctx: RunContext, state: LoopState) -> Decision:
@@ -153,11 +174,11 @@ class LoopHook:
         # 2. It asked for tools: cut arguments and repeated calls are not run.
         if message.tool_calls:
             if state.finish_reason == "length":
-                return self.tell(state, "arguments_cut", self.ARGUMENTS_CUT)
+                return Refuse(self.ARGUMENTS_CUT, rule="arguments_cut")
             if state.repeats >= self.max_repeats + self.GIVE_UP_AFTER:
                 return Stop(reason="repetition")
             if state.repeats >= self.max_repeats:
-                return self.tell(state, "repetition", self.REPEATED)
+                return Refuse(self.REPEATED, rule="repetition")
             return None
         # 3. The user wrote while the model answered: the turn goes on with that.
         if self.take_inbox(ctx):
@@ -166,11 +187,11 @@ class LoopHook:
         if not message.text().strip():
             if state.notices.get("empty_answer"):
                 return Stop(reason="empty_answer")
-            return self.tell(state, "empty_answer", self.EMPTY_ANSWER)
+            return Note(self.EMPTY_ANSWER, rule="empty_answer")
         # 5. It wants to end with items of its list still open: reminded once.
         still_open = sum(1 for todo in ctx.todos if todo.status != "done")
         if still_open and not state.notices.get("open_todos"):
-            return self.tell(state, "open_todos", self.OPEN_TODOS.format(open=still_open))
+            return Note(self.OPEN_TODOS.format(open=still_open), rule="open_todos")
         return None
 
     async def after_tools(self, ctx: RunContext, state: LoopState) -> None:
@@ -189,13 +210,6 @@ class LoopHook:
         while ctx.inbox:
             ctx.messages.append(UserMessage(source=ctx.user_id, content=ctx.inbox.pop(0)))
         return taken
-
-    @staticmethod
-    def tell(state: LoopState, kind: str, text: str) -> str:
-        """``text``, counted as said by the rule ``kind``."""
-        state.notices[kind] = state.notices.get(kind, 0) + 1
-        state.notice = kind
-        return text
 
 
 class CoreLoop(ComponentBase[ConfigT], ABC):
@@ -416,23 +430,33 @@ class CoreLoop(ComponentBase[ConfigT], ABC):
                     self.close(ctx, record, self.NOT_ANSWERED)
 
     # -------- WHAT THE HOOK DECIDES ----------------------------------------------
-    def note(self, ctx: RunContext, state: LoopState, text: str) -> LoopNoticeEvent:
-        """Tell the model ``text`` as a harness message."""
-        ctx.messages.append(self.harness(text))
-        return self.notice(state, text)
+    def note(self, ctx: RunContext, state: LoopState, said: Note | Refuse) -> LoopNoticeEvent:
+        """Tell the model what a rule said, as a harness message; the rule is counted."""
+        ctx.messages.append(self.harness(said.text))
+        state.notices[said.rule] = state.notices.get(said.rule, 0) + 1
+        return self.notice(said.rule, said.text)
 
-    def notice(self, state: LoopState, text: str = "") -> LoopNoticeEvent:
+    def refuse(
+        self, ctx: RunContext, state: LoopState, records: list[ToolCallRecord], said: Refuse
+    ) -> LoopNoticeEvent:
+        """Answer every call of ``records`` with what a rule said, without
+        running it; the rule is counted."""
+        for record in records:
+            self.close(ctx, record, said.text)
+        state.notices[said.rule] = state.notices.get(said.rule, 0) + 1
+        return self.notice(said.rule, said.text)
+
+    def notice(self, rule: str, text: str = "") -> LoopNoticeEvent:
         """The event that says a rule spoke: which one, and what it said."""
-        kind, state.notice = state.notice or "hook", ""
-        return LoopNoticeEvent(source=self.SOURCE, kind=kind, message=text)
+        return LoopNoticeEvent(source=self.SOURCE, kind=rule, message=text)
 
     def end(self, ctx: RunContext, state: LoopState, stop: Stop) -> LoopNoticeEvent:
         """End the turn as the hook ordered; its answer becomes the agent's."""
-        state.finish_reason, state.notice = stop.reason, stop.reason
+        state.finish_reason = stop.reason
         if stop.answer:
             state.message = AssistantMessage(source=HARNESS_SOURCE, content=stop.answer)
             ctx.messages.append(state.message)
-        return self.notice(state, stop.answer or "")
+        return self.notice(stop.reason, stop.answer or "")
 
     async def ask_model(
         self,
@@ -448,8 +472,7 @@ class CoreLoop(ComponentBase[ConfigT], ABC):
         conversation compacted if needed; if the model still refuses it as
         too long, it is compacted by force and the call is made once more."""
         for text in await hook.notes(ctx, state):
-            state.notice = "note"
-            yield self.note(ctx, state, text)
+            yield self.note(ctx, state, Note(text, rule="note"))
         if event := await self.compact(ctx, prompt, client, dispatcher, state, hook):
             yield event
         try:
@@ -589,8 +612,7 @@ class CoreLoop(ComponentBase[ConfigT], ABC):
                 ctx.messages[:] = [state.message if m is answer else m for m in ctx.messages]
                 return
             # 3. It does not: the model is told why and tries once more.
-            state.notice = "invalid_format"
-            yield self.notice(state, problem)
+            yield self.notice("invalid_format", problem)
             if not last:
                 asked += [result.message, self.harness(self.INVALID_FORMAT.format(error=problem))]
         state.finish_reason = "invalid_format"

@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from ....base.compaction import CoreCompaction
 from ....base.component import ComponentBase
-from ....base.loop import AnyClient, CoreLoop, LoopHook, LoopState, Stop
+from ....base.loop import AnyClient, CoreLoop, LoopHook, LoopState, Note, Refuse, Stop
 from ....core.event_type import (
     CoreEvent,
     FatalErrorEvent,
@@ -101,7 +101,7 @@ class ReactLoop(CoreLoop[ReactLoopConfig]):
                 if isinstance(decision, Stop):
                     yield self.end(ctx, state, decision)
                     break
-                if isinstance(decision, str):
+                if isinstance(decision, (Note, Refuse)):
                     yield self.note(ctx, state, decision)
 
                 # 4. The loop's own stop, for a hook that did not end the turn at its limit.
@@ -136,31 +136,33 @@ class ReactLoop(CoreLoop[ReactLoopConfig]):
                     if decision is None:
                         answered = True
                         break
-                    if isinstance(decision, str):
+                    if isinstance(decision, (Note, Refuse)):
                         yield self.note(ctx, state, decision)
                     continue
 
-                # 8. Tools: answered with the hook's text, or run.
-                if isinstance(decision, str):
-                    for record in records:
-                        self.close(ctx, record, decision)
-                    yield self.notice(state, decision)
+                # 8. Tools: refused with the hook's text, or run.
+                if isinstance(decision, Refuse):
+                    yield self.refuse(ctx, state, records, decision)
                     continue
                 async for event in self.run_tools(ctx, dispatcher, records):
                     yield event
 
-            # 9. The final answer, in the format asked: one call more, without tools.
+                # 9. A note with tools: told after them, unless one waits for a person.
+                if isinstance(decision, Note) and not self.waiting(records):
+                    yield self.note(ctx, state, decision)
+
+            # 10. The final answer, in the format asked: one call more, without tools.
             if answered and output_format is not None:
                 async for event in self.format_answer(
                     ctx, prompt, client, state, output_format, retry, dispatcher.middleware
                 ):
                     yield event
         except StopRun as error:
-            # 10. A middleware ended the turn: open calls get their answer, then it ends clean.
+            # 11. A middleware ended the turn: open calls get their answer, then it ends clean.
             ToolDispatcher.close_interrupted(ctx, f"Interrupted by the system: {error.label}.")
             yield self.end(ctx, state, Stop(reason=error.finish_reason, answer=error.message))
         except Exception as error:
-            # 11. The turn failed: the hook may answer for the agent, or the error goes up.
+            # 12. The turn failed: the hook may answer for the agent, or the error goes up.
             stop = await hook.on_error(ctx, state, error)
             if stop is None:
                 state.finish_reason = "error"
