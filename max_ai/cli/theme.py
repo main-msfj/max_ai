@@ -1,7 +1,7 @@
 """MaxAI terminal palette, logo and the two color effects (gradient, shimmer), in the spirit of Grok Build's GrokNight theme.
 
-Gray base, one lilac accent; the other colors only carry meaning (ok, error,
-path, command). Change a value once and the whole interface follows.
+Gray base, one lilac accent; green, amber and red only say how something went
+(ok, warning, error). Paths and commands are plain bright text. Change a value once and the whole interface follows.
 """
 
 from rich.text import Text
@@ -26,8 +26,8 @@ ERROR = "#f7768e"
 
 # -------- MEANING (for blocks) ----------------------------------------------
 SYSTEM = "#7aa2f7"  # harness and system notices
-PATH = "#ff9e64"  # file paths in tool headers
-COMMAND = "#e0af68"  # shell commands
+PATH = TEXT  # file paths in tool headers
+COMMAND = TEXT  # shell commands
 MODEL = "#1abc9c"  # model name in the status line
 CODE = "#7dcfff"  # inline code
 GRADIENT = ("#bb9af7", "#7aa2f7", "#7dcfff")  # logo: lilac → blue → cyan

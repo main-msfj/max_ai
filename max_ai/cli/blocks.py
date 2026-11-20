@@ -17,8 +17,11 @@ from textual.widgets._markdown import MarkdownFence, MarkdownStream
 from ..core.tool.display import (  # noqa: F401 — the CLI's app imports them from here
     BASH,
     _first_line,  # pyright: ignore[reportPrivateUsage]
+    changes,
     exit_code,
+    first_line,
     result_text,
+    tool_label,
     tool_summary,
 )
 from ..types.todos import Todo
@@ -276,9 +279,9 @@ class ThinkingBlock(FoldBlock):
 
 
 _TODO_STYLES = {
-    "done": ("◆", f"{DIM} strike"),
-    "in_progress": ("◈", f"bold {PRIMARY}"),
-    "pending": ("◇", TEXT),
+    "done": ("[x]", f"{DIM} strike"),
+    "in_progress": ("[>]", f"bold {PRIMARY}"),
+    "pending": ("[ ]", TEXT),
 }
 
 
@@ -826,11 +829,13 @@ class ToolBlock(Vertical):
     """
 
     MAX_OUTPUT = 6000
+    DIFF_LINES = 12  # lines of a change shown before the block is opened
 
     def __init__(self, tool_name: str, parameters: dict[str, t.Any]) -> None:
         super().__init__()
         self.tool_name = tool_name
         self.parameters = parameters
+        self.changed = changes(tool_name, parameters)  # the lines a file tool changes
         self.result: ToolResult | None = None
         self._waiting = False
         self._summary = Text()
@@ -877,15 +882,22 @@ class ToolBlock(Vertical):
             if summary:
                 dot.append(f"  {summary}", style=MUTED)
             return dot
-        dot.append(self.tool_name, style=f"bold {TEXT}")
+        dot.append(tool_label(self.tool_name), style=f"bold {TEXT}")
         if summary:
-            dot.append(" ")
+            dot.append("  ")
             dot.append(summary, style=self._argument_color(self.parameters))
+
+        # A file tool says how many lines it puts in and takes out.
+        marks = [mark for mark, _ in self.changed]
+        if marks:
+            dot.append(f"  +{marks.count('+')}", style=SUCCESS)
+            if "-" in marks:
+                dot.append(f" −{marks.count('-')}", style=ERROR)
         return dot
 
     @staticmethod
     def _argument_color(parameters: dict[str, t.Any]) -> str:
-        """Paths orange, commands amber, searches blue: the argument says what it is."""
+        """Paths and commands in plain text, searches blue: the argument says what it is."""
         if any(key in parameters for key in ("file_path", "path")):
             return PATH
         if "command" in parameters:
@@ -894,8 +906,30 @@ class ToolBlock(Vertical):
             return SYSTEM
         return MUTED
 
+    def _diff(self) -> Text:
+        """The lines a file tool changes: red out, green in, each with its
+        line of the file once it is known. Folded, only the first ``DIFF_LINES``."""
+        lines = self.changed if self.has_class("-expanded") else self.changed[: self.DIFF_LINES]
+        # A line that leaves is counted in the old file; the others in the new one.
+        start = first_line(self.tool_name, self.result)
+        old = new = start or 0
+        shown = Text()
+        for index, (mark, line) in enumerate(lines):
+            shown.append("\n" if index else "")
+            if start is not None:
+                shown.append(f"{old if mark == '-' else new:>4} ", style=DIM)
+            old, new = old + (mark != "+"), new + (mark != "-")
+            style = {"+": SUCCESS, "-": ERROR}.get(mark, MUTED)
+            shown.append(f"{'−' if mark == '-' else mark} {line}", style=style)
+        if len(lines) < len(self.changed):
+            shown.append(f"\n… (+{len(self.changed) - len(lines)} lines)", style=DIM)
+        return shown
+
     def _input(self) -> Text:
-        """``$ command``: the whole command once expanded, its first line before."""
+        """``$ command``: the whole command once expanded, its first line
+        before. For a file tool, the lines it changes."""
+        if self.changed:
+            return self._diff()
         if not self.is_bash:
             return Text()
         command = str(self.parameters.get("command") or "")
@@ -921,7 +955,7 @@ class ToolBlock(Vertical):
         if title is None or summary is None or output is None or given is None:
             return
         title.update(self._title())
-        given.display = self.is_bash
+        given.display = self.is_bash or bool(self.changed)
         given.update(self._input())
         summary.update(self._summary_line())
         output.update(Text(self._output))

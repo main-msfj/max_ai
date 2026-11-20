@@ -3,6 +3,7 @@ and its output as text. Shared by the CLI and the web UI."""
 
 from __future__ import annotations
 
+import difflib
 import json
 import re
 import typing as t
@@ -10,6 +11,35 @@ import typing as t
 from ...types.tool_call import ToolResult
 
 BASH = "bash"
+EDIT_FILE = "edit_file"
+WRITE_FILE = "write_file"
+# How a tool is named to a person; the rest keep their own name.
+LABELS = {BASH: "Bash", EDIT_FILE: "Edit", WRITE_FILE: "Write", "read_file": "Read"}
+
+
+def tool_label(tool_name: str) -> str:
+    """The tool's name as a person reads it: ``Edit``, not ``edit_file``."""
+    return LABELS.get(tool_name, tool_name)
+
+
+def changes(tool_name: str, parameters: dict[str, t.Any]) -> list[tuple[str, str]]:
+    """The lines a call to a file tool takes out and puts in, each with its
+    mark: ``-`` out, ``+`` in, a space for one that stays. Empty for any
+    other call. Read from the call itself, so it is known before it runs."""
+    if tool_name == WRITE_FILE:
+        return [("+", line) for line in str(parameters.get("content") or "").splitlines()]
+    if tool_name != EDIT_FILE:
+        return []
+    old = str(parameters.get("old_text") or "").splitlines()
+    new = str(parameters.get("new_text") or "").splitlines()
+    marked: list[tuple[str, str]] = []
+    for kind, a, b, c, d in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
+        if kind == "equal":
+            marked += [(" ", line) for line in old[a:b]]
+            continue
+        marked += [("-", line) for line in old[a:b]]
+        marked += [("+", line) for line in new[c:d]]
+    return marked
 # The bash tool's answer starts with this line; the rest is what it printed.
 _EXIT_LINE = re.compile(r"^exit code: (-?\d+|None)\n?")
 
@@ -31,6 +61,15 @@ def _first_line(text: str, limit: int = 100) -> str:
     lines = text.strip().splitlines() or [""]
     first = lines[0] if len(lines[0]) <= limit else lines[0][: limit - 1] + "…"
     return f"{first} … (+{len(lines) - 1} lines)" if len(lines) > 1 else first
+
+
+def first_line(tool_name: str, result: ToolResult | None) -> int | None:
+    """The line of the file where the lines of ``changes`` begin: 1 for a
+    written file, what the tool said for an edit, None while it is not known."""
+    if tool_name == WRITE_FILE:
+        return 1
+    line = result.metadata.get("line") if result is not None else None
+    return line if isinstance(line, int) else None
 
 
 def exit_code(result: ToolResult | None) -> int | None:
