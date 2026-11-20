@@ -7,46 +7,68 @@ the API.
 
 ## [Unreleased] — 0.1.0
 
-First public version.
+First public version. The core was rewritten between 2026-11-15 and
+2026-11-19 (PRs #28–#39); this entry describes the code as it is now.
 
 ### Added
-- `Agent`: stateless; one instance serves many users concurrently (runs of
-  different sessions overlap, messages of one session queue). Memory is bound
-  per run to the `RunContext` user and session.
-- Clients: OpenAI, OpenRouter and Ollama. Configs store the env var name of
-  the API key, never the key. Output capped at 32K tokens; replies cut at the
-  limit are explained to the model instead of silently dropped.
-- Tools: function tools, bash (allow/ask/deny permissions), workspace file
-  tools, plan, ask_user, and MCP servers (stdio and HTTP) shared by all runs.
-  Read-only calls of one model reply run in parallel (`read_only=True`).
-- Reasoning: `ReactLoop` with loop guards; completion gates (`gates=[...]`)
-  decide when a turn may end; approvals and questions pause and resume a run.
-- Memory, knowledge and skills: local JSON, SQLite and MongoDB backends;
-  `CoreEmbedding` (`FastEmbedEmbedding`, `OpenAIEmbedding`) for search by
-  meaning; SQLite backends store vectors next to their text; MongoDB uses
-  `$vectorSearch`. Registries use `FastEmbedEmbedding` when `embedding` isn't
-  passed; `embedding=None` keeps memory search by words only.
-- Skills from Git: `GithubSkillRegistry(source, skills, ref=..., token_env=...)`
-  shallow-clones a repo (public, or private with a token read from an env var)
-  and copies the named skills. Edits the agent makes to a materialized skill
-  are kept; changes at the source are picked up.
-- Workspaces: `LocalWorkspace`, plus `AzureBlobWorkspace` and `MinIOWorkspace`
-  that download a user's files before a run and upload only what changed.
-- Executors: `LocalExecutor`, `DockerExecutor` (non-root, read-only, no
-  network by default, resource limits; image in
-  `max_ai/capabilities/executor/docker/Dockerfile`) and `ModalExecutor`.
-- Context compaction: `SummaryCompaction` and `SlidingWindowCompaction`.
-- Sessions: `CoreSessionStore`, `LocalSessionStore` and `MongoDBSessionStore`;
-  the host loads, runs and saves.
-- Serialization: `agent.serialize()` / `Agent.deserialize()` with no secrets
-  and an allowlist for third-party components (`allow_providers`).
-- Structured output: `output_format` shapes only the accepted final answer.
-- Middleware: hooks for the run, every model call and every tool call;
-  `LoggingMiddleware`, `BudgetMiddleware` (per-task limits and per-user quotas
-  in local or MongoDB stores) and `TracingMiddleware` (OpenTelemetry, Langfuse).
-- Terminal UI: `run_cli(agent, store=..., user_id=..., session_id=...)` with
-  `/resume`, approvals, questions, plans and a context-window bar.
-- `docker-infra/`: MongoDB Atlas Local (vector search), MinIO, Azurite,
-  Ollama, an MCP server and Langfuse.
-- Examples: `examples/basic/` (one feature per file) and `examples/advance/`
-  (custom backends, middleware, layers, embeddings, serialization).
+- `Agent(name, description, instructions, client, *, toolset, mcp, memory,
+  knowledge, skills, reasoning, middlewares, output_format, prompt_layers,
+  sandbox)` with `run`, `run_stream`, `run_stream_events`, `approve` and
+  `close`. `run` returns a `LoopState` (`message`, `finish_reason`, `usage`).
+  One instance serves many users; turns of one session queue, other sessions
+  run in parallel. The conversation lives in the `RunContext` the host keeps.
+- Harness (`max_ai/core/harness`): token limits on description, instructions,
+  tools, prompt layers and the system prompt; the tools it adds (`ask_user`,
+  `write_todos`, file tools, `save_memory`, `read_skill`, worktree tools,
+  `search_tools`/`call_tool` for deferred tools); `TracingMiddleware` always
+  first; retries per model call.
+- Permissions: per-user `allow` / `ask` / `deny` rules in the sandbox's
+  `.agent/setting.json`; dangerous commands are always asked; "always allow"
+  saves a rule through `agent.approve(..., always=True)`.
+- Optional judge (`HARNESS_JUDGE_MODEL`): an OpenRouter decisions model may let
+  a bash command run without asking. It receives the command, the model's
+  description of it and the user's last message.
+- Clients: `OpenAIChatCompletionClient` and `OpenRouterChatCompletionClient`.
+  Configs store the env var name of the API key, never the key.
+- `ReactLoop(max_iterations=50, compaction=...)` with guards for repeated
+  calls, empty answers and the iteration limit; approvals and `ask_user`
+  questions pause the turn (`waiting_for_user`) and `run(None, ctx)` resumes it.
+- Compaction: `SummaryCompaction` (default; `SUMMARY_MODEL` on OpenRouter or
+  the agent's model) and `SlidingWindowCompaction`. At compaction, facts the
+  user stated are saved to the memory (`HARNESS_MEMORY_AT_COMPACTION`).
+- Sandboxes: `LocalSandbox` (not isolated), `DockerSandbox` (one container per
+  user, uid 1000, all capabilities dropped, read-only root, network only to an
+  allowlist through a proxy) and `E2BSandbox` (`maxai[e2b]`).
+- Skills: `LocalSkills` and `GitHubSkills` (GitHub API, token from
+  `GITHUB_TOKEN`), installed into the sandbox and updated when they change.
+- Memory: `Memory(read_only=False)`, one Markdown file per fact in the
+  sandbox, an index in the prompt and the `save_memory` tool.
+- Tools: `@tool` / `FunctionAsTool` (`read_only`, `deferred`), `BashTool`, file
+  tools, MCP servers over stdio and HTTP shared by all runs.
+- Prompt layers built by `NativePrompt` in a cache-friendly order;
+  `CustomLayer` for your own text.
+- Middleware with `turn`, `model`, `stream` and `tool` hooks;
+  `LoggingMiddleware`, `BudgetMiddleware` (per-turn limits and per-user quotas
+  in `LocalQuotaStore` / `MongoDBQuotaStore`) and `TracingMiddleware`
+  (OpenTelemetry, Langfuse).
+- Sessions: `LocalSessionStore` and `MongoDBSessionStore`; the host loads and
+  saves.
+- Serialization with no secrets: `serialize` / `deserialize`, `to_yaml` /
+  `from_yaml`, `to_json` / `from_json`, and an allowlist for third-party
+  classes (`allow_providers`, `MAXAI_ALLOWED_PROVIDERS`).
+- Terminal UI (`run_cli`, `maxai[cli]`) and web UI (`run_web`).
+- `docker-infra/`: MongoDB Atlas Local, an MCP server and Langfuse.
+
+### Removed (compared with the pre-rewrite code)
+- Ollama client, `Workspace` / `WorkspaceRegistry` (including Azure Blob and
+  MinIO workspaces), `ToolExecutor` / `LocalExecutor` / `DockerExecutor` /
+  `ModalExecutor`, `CapabilitiesManager`, routines, the old memory registries
+  and the `gates=[...]` argument.
+
+### Known gaps
+- `knowledge=` is accepted and serialized but no tool queries it.
+- Completion gates and `AgentResponse` remain in the package but the loop does
+  not use them.
+- `MAX_LOOP_ITERATIONS`, `MAX_PARALLEL_TOOLS` and some other settings are not
+  read.
+- Most files in `examples/` still use the old API.
