@@ -11,8 +11,10 @@ from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
 from max_ai.capabilities.clients.openrouter import OpenRouterChatCompletionClient
 from max_ai.capabilities.knowledge.mongodb import MongoDBKnowledgeRegistry
 from max_ai.capabilities.mcp import (
+    HTTPSecret,
     HTTPServerConfig,
     StdioMCPServerConfig,
+    StdioSecret,
     serialize_mcp_servers,
 )
 from max_ai.capabilities.sandbox.local.layout import LocalSandbox
@@ -56,10 +58,10 @@ def test_components_store_env_var_names(component):
 
 def test_mcp_servers_store_env_var_names():
     payload = serialize_mcp_servers([
-        HTTPServerConfig(server_id="a", url="https://x/mcp", token_env="MCP_TOKEN",
-                         headers_env={"X-Key": "MCP_KEY"}),
+        HTTPServerConfig(server_id="a", url="https://x/mcp",
+                         secret=HTTPSecret(type="bearer", keys={"MCP_TOKEN": SECRETS["MCP_TOKEN"]})),
         StdioMCPServerConfig(server_id="b", command="uvx", args=["srv"],
-                             env_from={"API_KEY": "MCP_KEY"}),
+                             secret=StdioSecret(keys={"MCP_KEY": SECRETS["MCP_KEY"]})),
     ])
     assert_clean(payload)
 

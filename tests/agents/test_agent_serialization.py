@@ -12,7 +12,7 @@ from max_ai.agents import Agent
 from max_ai.base import component
 from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
 from max_ai.capabilities.loop import ReactLoop
-from max_ai.capabilities.mcp import HTTPServerConfig
+from max_ai.capabilities.mcp import HTTPSecret, HTTPServerConfig
 from max_ai.capabilities.memory import Memory
 from max_ai.capabilities.middleware import BudgetMiddleware
 from max_ai.capabilities.sandbox.local import LocalSandbox
@@ -48,7 +48,8 @@ def full_agent(tmp_path, **extra) -> Agent:
         reasoning=ReactLoop(max_iterations=12),
         middlewares=[BudgetMiddleware(max_tokens=5000)],
         output_format=Invoice,
-        mcp=[HTTPServerConfig(server_id="docs", url="http://localhost:9000/mcp", token_env="DOCS_TOKEN")],
+        mcp=[HTTPServerConfig(server_id="docs", url="http://localhost:9000/mcp",
+                              secret=HTTPSecret(type="bearer", keys={"DOCS_TOKEN": "tok-never-stored"}))],
         **extra,
     )
 
@@ -61,7 +62,7 @@ def test_an_agent_round_trips_through_json(tmp_path):
     assert isinstance(agent.sandbox, LocalSandbox) and agent.memory is not None and agent.memory.read_only
     assert isinstance(agent.reasoning, ReactLoop) and agent.reasoning.max_iterations == 12
     assert isinstance(agent.middlewares[1], BudgetMiddleware) and agent.middlewares[1].max_tokens == 5000
-    assert agent.mcp[0].token_env == "DOCS_TOKEN"
+    assert list(agent.mcp[0].secret.keys) == ["DOCS_TOKEN"] and "tok-never-stored" not in row
     assert agent.serialize().model_dump_json() == row  # stable
 
 

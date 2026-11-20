@@ -5,25 +5,87 @@ from __future__ import annotations
 import os
 import typing as t
 
-from pydantic import BaseModel, Field, TypeAdapter, field_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    TypeAdapter,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 from ...errors.mcp import MCPServerConfigError
 from ...types.tools import ToolApprovalMode
 
 TransportProtocol = t.Literal["stdio", "sse", "streamable-http"]
 HTTPTransportProtocol = t.Literal["sse", "streamable-http"]
-def _read_env(server_id: str, name: str) -> str:
-    value = os.getenv(name)
-    if not value:
-        raise MCPServerConfigError(f"MCP server {server_id!r} needs env var {name}.")
-    return value
+class MCPSecretBase(BaseModel):
+    """What an MCP server needs to know who we are. ``keys`` maps the name of
+    an environment variable to its value. Only the names are stored; loading
+    a stored config looks each name up in the environment again."""
+
+    keys: dict[str, str | None] = Field(min_length=1, repr=False)
+
+    @field_validator("keys", mode="before")
+    @classmethod
+    def _from_names(cls, value: t.Any) -> t.Any:
+        """A stored config brings only the names: their values are read here."""
+        if isinstance(value, (list, tuple)):
+            names = t.cast("t.Sequence[str]", value)
+            return {name: os.getenv(name) for name in names}
+        return value
+
+    @field_serializer("keys")
+    def _only_names(self, keys: dict[str, str | None]) -> list[str]:
+        return list(keys)
+
+    def __repr_args__(self) -> t.Iterable[tuple[str | None, t.Any]]:
+        yield from super().__repr_args__()
+        yield "keys", list(self.keys)
+
+    def values(self, server_id: str) -> dict[str, str]:
+        """The values, when connecting; an empty one is named in the error."""
+        missing = [name for name, value in self.keys.items() if not value]
+        if missing:
+            raise MCPServerConfigError(
+                f"MCP server {server_id!r} needs the env var(s): {', '.join(missing)}."
+            )
+        return {name: value for name, value in self.keys.items() if value}
+
+
+class StdioSecret(MCPSecretBase):
+    """For a server we start as a process: it gets ``keys`` as environment
+    variables, with these same names, and nothing else of our environment."""
+
+
+class HTTPSecret(MCPSecretBase):
+    """For a server reached by URL: the one value of ``keys`` goes in a
+    header of every request."""
+
+    type: t.Literal["bearer", "api_key"]  # bearer: Authorization; api_key: ``header``
+    header: str | None = None  # where an api_key goes, e.g. "x-api-key"
+
+    @model_validator(mode="after")
+    def _one_way(self) -> t.Self:
+        if len(self.keys) != 1:
+            raise MCPServerConfigError("An HTTP secret has exactly one key.")
+        if (self.type == "api_key") != bool(self.header):
+            raise MCPServerConfigError('type="api_key" needs a header; type="bearer" takes none.')
+        return self
+
+    def headers(self, server_id: str) -> dict[str, str]:
+        """The header that carries the secret."""
+        (value,) = self.values(server_id).values()
+        if self.type == "bearer":
+            return {"Authorization": f"Bearer {value}"}
+        return {t.cast("str", self.header): value}
 
 
 class MCPServerConfig(BaseModel):
     """Base configuration for one MCP server.
 
-    Secrets never live in a serialized config: ``*_env`` fields name the
-    env vars that hold them, resolved when the connection opens.
+    Secrets never live in a serialized config: ``secret`` stores the names
+    of the env vars that hold them, read when the connection opens.
     """
 
     server_id: str
@@ -62,18 +124,13 @@ class StdioMCPServerConfig(MCPServerConfig):
     transport_protocol: t.Literal["stdio"] = "stdio"
     command: str
     args: list[str] = Field(default_factory=list)
-    env_from: dict[str, str] = Field(
-        default_factory=dict,
-        description="Child process env var → host env var holding its (secret) value.",
-    )
+    secret: StdioSecret | None = None  # None: the process gets no credentials
 
     @property
     def process_env(self) -> dict[str, str]:
-        """The child's env with ``env_from`` secrets resolved (call when connecting)."""
-        env = dict(self.env)
-        for child, name in self.env_from.items():
-            env[child] = _read_env(self.server_id, name)
-        return env
+        """The child's env with the secret's values (call when connecting)."""
+        given = self.secret.values(self.server_id) if self.secret else {}
+        return {**self.env, **given}
 
     @field_validator("command")
     @classmethod
@@ -89,12 +146,7 @@ class HTTPServerConfig(MCPServerConfig):
     transport_protocol: HTTPTransportProtocol = "streamable-http"
     url: str
     headers: dict[str, str] = Field(default_factory=dict)
-    headers_env: dict[str, str] = Field(
-        default_factory=dict, description="Header name → env var holding its (secret) value.",
-    )
-    token_env: str | None = Field(default=None, description="Env var holding the bearer token.")
-    # In-code only: never dumped, and serialize_mcp_servers refuses it.
-    token: str | None = Field(default=None, exclude=True, repr=False)
+    secret: HTTPSecret | None = None  # None: the server is used without authentication
 
     @field_validator("url")
     @classmethod
@@ -105,34 +157,18 @@ class HTTPServerConfig(MCPServerConfig):
 
     @property
     def request_headers(self) -> dict[str, str]:
-        """Headers with secrets resolved (call when connecting)."""
-        headers = dict(self.headers)
-        for header, name in self.headers_env.items():
-            headers[header] = _read_env(self.server_id, name)
-        token = self.token or (_read_env(self.server_id, self.token_env) if self.token_env else None)
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        return headers
+        """Headers with the secret's value (call when connecting)."""
+        given = self.secret.headers(self.server_id) if self.secret else {}
+        return {**self.headers, **given}
 
 
 _server_list_adapter = TypeAdapter(list[StdioMCPServerConfig | HTTPServerConfig])
-
-
-def ensure_serializable(config: MCPServerConfig) -> None:
-    """Refuse configs whose secret would be lost or leaked when stored."""
-    if isinstance(config, HTTPServerConfig) and config.token:
-        raise MCPServerConfigError(
-            f"MCP server {config.server_id!r} has a literal token: use token_env "
-            "so the stored config names the env var instead of the secret."
-        )
 
 
 def serialize_mcp_servers(
     configs: t.Sequence[StdioMCPServerConfig | HTTPServerConfig],
 ) -> str:
     """Serialize a mixed server list as JSON, including its transport types."""
-    for config in configs:
-        ensure_serializable(config)
     return _server_list_adapter.dump_json(list(configs)).decode("utf-8")
 
 
