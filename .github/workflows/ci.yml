@@ -32,3 +32,6 @@ jobs:
 
       - name: Test
         run: uv run pytest -q
+        env:
+          # The skills tests read GitHub: without a token the runner's shared IP runs out of calls.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
