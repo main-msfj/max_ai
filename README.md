@@ -247,13 +247,32 @@ keeps the tool out of the prompt until found with `search_tools`.
 ### MCP
 
 ```python
-from max_ai.capabilities.mcp import HTTPServerConfig, StdioMCPServerConfig
+import os
+
+from max_ai.capabilities.mcp import (
+    HTTPSecret, HTTPServerConfig, StdioMCPServerConfig, StdioSecret,
+)
 
 mcp = [
-    HTTPServerConfig(server_id="docs", url="https://example.com/mcp", token_env="DOCS_TOKEN"),
+    # A server reached by URL: the key goes in a header of every request.
+    HTTPServerConfig(
+        server_id="docs", url="https://example.com/mcp",
+        secret=HTTPSecret(type="bearer", keys={"DOCS_TOKEN": os.getenv("DOCS_TOKEN")}),
+    ),
+    # A server started as a process: it gets the keys as environment variables.
+    StdioMCPServerConfig(
+        server_id="crm", command="uvx", args=["crm-mcp"],
+        secret=StdioSecret(keys={"CRM_KEY": os.getenv("CRM_KEY")}),
+    ),
     StdioMCPServerConfig(server_id="fetch", command="uvx", args=["mcp-server-fetch"]),
 ]
 ```
+
+A secret stores only the names of its keys (`keys: [DOCS_TOKEN]` in JSON and
+YAML), so each key must be named after the environment variable that holds it:
+loading a stored agent reads the values from the environment again.
+`HTTPSecret(type="api_key", header="x-api-key", keys=...)` sends the key in
+another header.
 
 Servers connect on the first run and are shared until `agent.close()`. Each has
 `connect_timeout_seconds` (30), `retry_after_seconds` (60) and `required`
