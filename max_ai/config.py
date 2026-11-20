@@ -1,7 +1,7 @@
 """Global settings for MaxAI.
 
 Every field can be set in the environment or ``.env`` with its uppercase
-name, e.g. ``MAX_LOOP_ITERATIONS=30``. ``root_dir`` reads ``HOST_WORKSPACE``.
+name, e.g. ``HARNESS_MAX_ITERATIONS=30``. ``root_dir`` reads ``HOST_WORKSPACE``.
 """
 
 from __future__ import annotations
@@ -31,14 +31,9 @@ class Settings(BaseSettings):
     )
 
     # -------- LOOP -------------------------------------------------------------
-    max_loop_iterations: int = Field(default=20, ge=1)
     environment_idle_timeout: float = Field(default=300, ge=0)
 
     # -------- TOOLS ------------------------------------------------------------
-    max_parallel_tools: int = Field(
-        default=8, ge=1, description="Read-only calls of one reply that may run at once."
-    )
-    max_tool_result_chars: int = Field(default=30_000, ge=1_000)
     tool_timeout_seconds: float = Field(
         default=360, gt=0, description="Max seconds one bash command may run."
     )
@@ -47,6 +42,24 @@ class Settings(BaseSettings):
     tool_description_max_tokens: int = Field(default=150, ge=1)
 
     # -------- HARNESS ----------------------------------------------------------
+    harness_max_iterations: int = Field(
+        default=50,
+        ge=1,
+        validation_alias="HARNESS_MAX_ITERATIONS",
+        description="Model calls one turn may make, in the loop the harness creates.",
+    )
+    harness_parallel_tools: int = Field(
+        default=8,
+        ge=1,
+        validation_alias="HARNESS_PARALLEL_TOOLS",
+        description="Read-only calls of one reply that may run at once.",
+    )
+    harness_tool_result_chars: int = Field(
+        default=40_000,
+        ge=1_000,
+        validation_alias="HARNESS_TOOL_RESULT_CHARS",
+        description="A tool result longer than this is saved to a file and shown cut.",
+    )
     harness_tool_description_max_tokens: int = Field(default=100, ge=1)
     harness_tools_max_tokens: int = Field(
         default=20_000,

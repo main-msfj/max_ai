@@ -20,7 +20,6 @@ from ..base.middleware import CoreMiddleware
 from ..base.sandbox import SandboxCore
 from ..base.skills import SkillsCore
 from ..base.tools import CoreTool
-from ..capabilities.loop import ReactLoop
 from ..capabilities.mcp import MCPClientManager
 from ..capabilities.mcp._model import (
     HTTPServerConfig,
@@ -112,10 +111,8 @@ class Agent(ComponentBase[AgentSpec]):
         self.memory = memory
         self.knowledge = list(knowledge or ())
         self.skills = skills
-        # The loop the harness gives when none is passed compacts with a summary.
-        self.reasoning: AnyLoop = (
-            reasoning if reasoning is not None else ReactLoop(compaction=Harness.compaction_rules())
-        )
+        # The loop the harness gives when none is passed.
+        self.reasoning: AnyLoop = reasoning if reasoning is not None else Harness.loop_rules()
         self.middlewares = list(middlewares or ())
         self.output_format = output_format
         self.prompt_layers = list(prompt_layers or ())
@@ -412,7 +409,7 @@ class Agent(ComponentBase[AgentSpec]):
         loaded = self.skills.skills if self.skills is not None else []
         return ToolDispatcher(
             registry, box, hook=hook, middleware=self._chain, skills=loaded,
-            timeout=setting.tool_timeout_seconds,
+            timeout=setting.tool_timeout_seconds, max_parallel=setting.harness_parallel_tools,
         )
 
     async def _prompt(self, ctx: RunContext, box: SandboxCore | None, registry: ToolRegistry) -> str:

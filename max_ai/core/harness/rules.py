@@ -18,6 +18,7 @@ from ..retry import RetryPolicy
 from ..tokenizer import TokenCounter
 
 if t.TYPE_CHECKING:
+    from ...capabilities.loop import ReactLoop
     from ...capabilities.memory import Memory
     from ..tool.registry import ToolRegistry
 
@@ -232,6 +233,16 @@ class Harness:
             tracing = TracingMiddleware()
         tracing.agent = agent
         return [tracing, *(item for item in given if item is not tracing)]
+
+    @classmethod
+    def loop_rules(cls) -> "ReactLoop":
+        """The loop of an agent that was given none: ``harness_max_iterations``
+        model calls a turn, and a summary of the messages that leave."""
+        from ...capabilities.loop import ReactLoop
+
+        return ReactLoop(
+            max_iterations=setting.harness_max_iterations, compaction=cls.compaction_rules()
+        )
 
     @classmethod
     def compaction_rules(cls) -> CoreCompaction[t.Any]:

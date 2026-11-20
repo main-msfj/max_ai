@@ -14,7 +14,6 @@ from ...types.tools import ToolApprovalMode
 if t.TYPE_CHECKING:
     from ...base.tools import CoreTool, ToolContext
 
-MAX_RESULT_CHARS = 40_000
 PREVIEW_CHARS = 2_000  # shown from each end when the rest went to a file
 
 # What the model reads after a result that was too long.
@@ -32,6 +31,8 @@ class ToolHook:
     """Inherit and write only the moments you need. As it is, every call
     goes on, a tool runs alone only if it says so, and a result too long
     is shortened."""
+
+    max_result_chars: int = 40_000  # a longer result is saved to a file and shown cut
 
     async def before(
         self, tool: CoreTool, record: ToolCallRecord, tool_ctx: ToolContext
@@ -90,13 +91,13 @@ class ToolHook:
         """A result too long to show: saved whole in the sandbox when there
         is one, cut in the middle when there is not."""
         text = _as_text(result)
-        if len(text) <= MAX_RESULT_CHARS:
+        if len(text) <= self.max_result_chars:
             return result
         path = await _save(text.encode(), f"{_safe(record.id)}.txt", tool_ctx)
         if path is not None:
             keep, note = PREVIEW_CHARS, SAVED.format(size=len(text), path=path)
         else:
-            keep = MAX_RESULT_CHARS // 2
+            keep = self.max_result_chars // 2
             note = CUT.format(size=len(text), cut=len(text) - 2 * keep)
         shown = f"{text[:keep]}\n\n[...]\n\n{text[-keep:]}\n\n{note}"
         return result.model_copy(update={"result" if result.success else "error": shown})
