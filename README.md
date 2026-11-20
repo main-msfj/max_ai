@@ -419,11 +419,6 @@ Checked against the code on this branch:
 - **Some settings are not read:** `MAX_LOOP_ITERATIONS` (use
   `ReactLoop(max_iterations=...)`), `MAX_PARALLEL_TOOLS` (fixed at 8),
   `MAX_TOOL_RESULT_CHARS`, `HOST_WORKSPACE`, and several `COMPACTION_*` fields.
-- **Serializing custom prompt layers:** `CustomLayer` (and the tools, session
-  and workspace layers) declare providers like `maxai.stacks.CustomLayer` that
-  are missing from the alias table in `base/component.py`. Reading the code,
-  `Agent.deserialize` and the compact `to_yaml()` of an agent with
-  `prompt_layers=[CustomLayer(...)]` fail; not verified by running.
 - **Examples:** most files in `examples/` use the old API. See
   [examples/README.md](examples/README.md).
 
