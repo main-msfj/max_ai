@@ -15,6 +15,7 @@ from markupsafe import escape
 from ..base.loop import LoopState
 from ..capabilities.loop import ReactLoop
 from ..capabilities.tools.ask_user import AskUserTool
+from ..capabilities.tools.todos import WriteTodosTool
 from ..core.event_type import (
     CoreEvent,
     ModelCallEvent,
@@ -30,7 +31,7 @@ from ..core.tool.display import BASH
 from ..types.run_context import RunContext
 from ..types.tool_call import ToolResult
 from .spans import SpanProjector
-from .view import Html, Requests, ToolCard, TurnView
+from .view import PLAN_OPTIONS, WRITE_TODOS, Html, Requests, ToolCard, TurnView
 from .workspace import Workspace
 
 if t.TYPE_CHECKING:
@@ -206,11 +207,21 @@ class Conversation:
         self._go_on()
 
     async def answer(self, record_id: str, answers: dict[str, str | list[str]]) -> None:
-        """The answers of an ``ask_user`` call, by question text."""
+        """The answers of a call that waits, by question text."""
         record = self.context.tool_state.records.get(record_id)
         if record is None or record.is_consumed or self.busy:
             return
-        record.store_result(AskUserTool.answer(record, answers))
+        if record.tool_name == WRITE_TODOS:
+            # A plan: accepted, or not, with what the user typed instead.
+            said = next(iter(answers.values()), None)
+            comment = None if said in (None, *PLAN_OPTIONS) else str(said)
+            accepted = said == PLAN_OPTIONS[0]
+            record.store_result(WriteTodosTool.answer(record, self.context, accepted, comment))
+            if accepted:
+                todos = self.html.parts.todos(self.context.todos, False)
+                self.publish(self.html.replace("todos", str(todos)))
+        else:
+            record.store_result(AskUserTool.answer(record, answers))
         self.publish(self.html.delete(f"req-{record_id}"))
         self._go_on()
 

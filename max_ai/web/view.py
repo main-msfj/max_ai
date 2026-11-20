@@ -49,6 +49,7 @@ from .workspace import Workspace
 HERE = Path(__file__).parent
 ASK_USER = "ask_user"
 WRITE_TODOS = "write_todos"
+PLAN_OPTIONS = ("Accept", "No")  # what the user picks for a plan that waits
 
 
 class Html:
@@ -345,6 +346,17 @@ class Requests:
 
     @staticmethod
     def questions(record: ToolCallRecord) -> list[dict[str, t.Any]]:
+        # A plan that waits is one question: accept it or not.
+        if record.tool_name == WRITE_TODOS:
+            todos = t.cast("list[dict[str, str]]", record.parameters.get("todos") or [])
+            steps = "\n".join(f"{n}. {todo['content']}" for n, todo in enumerate(todos, 1))
+            return [{
+                "text": f"Accept this plan?\n{steps}", "header": "Plan", "multi": False,
+                "options": [
+                    {"label": PLAN_OPTIONS[0], "description": "Start working on it."},
+                    {"label": PLAN_OPTIONS[1], "description": "Or type what you would change."},
+                ],
+            }]
         items = t.cast("list[dict[str, t.Any]]", record.parameters.get("questions") or [])
         return [
             {

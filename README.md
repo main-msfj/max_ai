@@ -184,6 +184,11 @@ and `max_output_tokens` you pass are replaced by its own defaults, with a warnin
 | `enter_worktree`, `exit_worktree` | when `bash` is in the toolset |
 | `search_tools`, `call_tool` | when deferred tools (`deferred=True`) take 5,000 tokens or more; below that they are loaded directly |
 
+A plan the agent writes with `write_todos` waits for the user: it becomes the
+list only when accepted, and a rejection goes back to the model with what the
+user said. Marking a step as started or done never asks.
+`HARNESS_PLAN_APPROVAL=false` turns it off.
+
 `bash` itself is never added: pass `BashTool()` in `toolset`. A tool of yours
 with the same name wins. `TracingMiddleware` is always added first.
 
