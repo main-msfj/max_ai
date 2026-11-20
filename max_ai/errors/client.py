@@ -12,6 +12,8 @@ to keep error messages consistent across providers.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 # Kinds worth calling again: the provider or the network, not the request.
 _TRANSIENT_KINDS = frozenset({"rate_limit", "timeout", "stream_interrupted", "api_error", "provider"})
 # HTTP 4xx that are not the request's fault: timeout, conflict, rate limit.
@@ -39,6 +41,8 @@ class ClientError(Exception):
         self.status = status
         # Seconds the provider asked to wait before retrying (Retry-After).
         self.retry_after = retry_after
+        # What a provider says it found when it blocked the request.
+        self.found: list[str] = []
 
     @property
     def transient(self) -> bool:
@@ -97,6 +101,17 @@ class ClientError(Exception):
         else:
             msg = "Token limit exceeded"
         return cls(msg, kind="token_limit")
+
+    @classmethod
+    def blocked(cls, provider: str, found: Sequence[str] = ()) -> "ClientError":
+        """The provider refused the request for its content. Asking again
+        gives the same; ``found`` is what it says it saw."""
+        msg = f"{provider} blocked the request for its content"
+        if found:
+            msg = f"{msg}: {', '.join(found)}"
+        error = cls(msg, kind="content_filter")
+        error.found = list(found)
+        return error
 
     # -------- PROVIDER & TRANSPORT ERRORS -----------------------------------------------------------
     @classmethod

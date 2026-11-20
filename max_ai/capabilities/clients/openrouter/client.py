@@ -34,6 +34,7 @@ class OpenRouterChatCompletionClient(ChatCompletionsClient[OpenRouterChatComplet
     )
 
     PROVIDER_NAME = "OpenRouter"
+    BLOCKED: t.ClassVar[str] = "request blocked"  # how a guardrail starts its message
     API_KEY_ENV = "OPENROUTER_API_KEY"
     DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 
@@ -93,6 +94,16 @@ class OpenRouterChatCompletionClient(ChatCompletionsClient[OpenRouterChatComplet
     def thinking(self, message: t.Any) -> str | None:
         """OpenRouter sends the thinking text as ``reasoning``."""
         return self.get(message, "reasoning") or None
+
+    def blocked(self, error: Exception) -> list[str] | None:
+        """A guardrail of the account refused the request: HTTP 403, "Request
+        blocked: ...", and the patterns it found. Seen live 2026-11-20."""
+        if getattr(error, "status_code", None) != 403 or self.BLOCKED not in str(error).lower():
+            return None
+        body = getattr(error, "body", None)
+        inner = self.get(body, "error") or body
+        found = t.cast("list[t.Any]", self.get(self.get(inner, "metadata") or {}, "patterns") or [])
+        return [str(item) for item in found]
 
     def check(self, payload: t.Any) -> None:
         """OpenRouter can answer 200 with the error inside: a provider failed

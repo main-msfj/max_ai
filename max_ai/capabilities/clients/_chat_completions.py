@@ -48,7 +48,6 @@ class ChatCompletionsClient(CoreChatCompletionClient[ConfigT]):
     format. A subclass is one service: its address, its key, its config and
     what it does differently (``body``, ``thinking``, ``check``)."""
 
-    PROVIDER_NAME: t.ClassVar[str] = "The provider"
     DEFAULT_BASE_URL: t.ClassVar[str | None] = None
 
     def __init__(
@@ -160,20 +159,27 @@ class ChatCompletionsClient(CoreChatCompletionClient[ConfigT]):
             tokens_cached=int(self.get(details, "cached_tokens") or 0),
         )
 
-    def map_error(self, error: Exception) -> ClientError:
-        if isinstance(error, ClientError):
-            return error
+    # ``blocked`` is left to each service: how a request is refused for its
+    # content is the one thing they do not share.
+    def window_full(self, error: Exception) -> bool:
+        text = str(error).lower()
+        return isinstance(error, BadRequestError) and any(
+            words in text for words in ("context_length", "context length", "context window")
+        )
+
+    def rate_limited(self, error: Exception) -> bool:
+        return isinstance(error, RateLimitError)
+
+    def wait_asked(self, error: Exception) -> float | None:
+        headers = getattr(getattr(error, "response", None), "headers", None)
+        return self.retry_after(headers)
+
+    def other_error(self, error: Exception) -> ClientError:
         if isinstance(error, AuthenticationError):
             return ClientError.authentication_failed(str(error))
-        if isinstance(error, RateLimitError):
-            headers = getattr(getattr(error, "response", None), "headers", None)
-            return ClientError.rate_limit_exceeded(self.retry_after(headers))
         if isinstance(error, APITimeoutError):
             return ClientError.request_timeout(0)
         if isinstance(error, BadRequestError):
-            text = str(error).lower()
-            if "context_length" in text or "context length" in text or "context window" in text:
-                return ClientError.token_limit_exceeded()
             return ClientError.invalid_request(str(error))
         if isinstance(error, APIError):
             return ClientError.api_error(

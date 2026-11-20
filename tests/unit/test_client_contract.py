@@ -32,10 +32,20 @@ class Echo(CoreChatCompletionClient):
     failures: list[Exception] = []  # raised one per call, before answering
     calls = 0
 
-    def map_error(self, error):
-        if isinstance(error, ClientError):
-            return error
-        return ClientError.rate_limit_exceeded(0) if str(error) == "busy" else ClientError.invalid_request(str(error))
+    def blocked(self, error):
+        return ["bad words"] if str(error) == "blocked" else None
+
+    def window_full(self, error):
+        return str(error) == "too long"
+
+    def rate_limited(self, error):
+        return str(error) == "busy"
+
+    def wait_asked(self, error):
+        return 0
+
+    def other_error(self, error):
+        return ClientError.invalid_request(str(error))
 
     def fail_if_told(self):
         self.calls += 1
@@ -158,3 +168,66 @@ def test_the_wait_is_read_from_the_standard_headers():
     assert read({"retry-after": "7"}) == 7.0
     assert 0 <= read({"retry-after": "Wed, 21 Oct 2015 07:28:00 GMT"}) < 1  # a date in the past
     assert read({}) is None and read(None) is None
+
+
+class Refused(Exception):
+    """A provider's error as its SDK raises it: a status, a code and the body."""
+
+    def __init__(self, text: str, status_code: int, code: str | None = None, body=None) -> None:
+        super().__init__(text)
+        self.status_code, self.code, self.body = status_code, code, body
+
+
+def test_the_parent_maps_and_asks_each_provider_for_the_cases_it_reacts_to():
+    client = Echo("echo-1")
+    kinds = {text: client.map_error(RuntimeError(text)).kind for text in ("blocked", "too long", "busy", "x")}
+    assert kinds == {
+        "blocked": "content_filter", "too long": "token_limit", "busy": "rate_limit",
+        "x": "invalid_request",
+    }
+    blocked = client.map_error(RuntimeError("blocked"))
+    assert blocked.found == ["bad words"] and not blocked.transient
+
+
+def test_a_client_that_does_not_say_how_it_is_blocked_cannot_be_created():
+    class Lazy(Echo):
+        blocked = CoreChatCompletionClient.blocked  # left as the parent's: abstract
+
+    with pytest.raises(TypeError, match="blocked"):
+        Lazy("lazy-1")
+    # The class of the OpenAI format leaves it to each service on purpose.
+    from max_ai.capabilities.clients._chat_completions import ChatCompletionsClient
+
+    assert "blocked" in ChatCompletionsClient.__abstractmethods__
+
+
+# One refused request per client of the package, as its provider sends it.
+REFUSED = {
+    "max_ai.capabilities.clients.openrouter.OpenRouterChatCompletionClient": Refused(
+        "Error code: 403 - Request blocked: prompt injection patterns detected", 403,
+        body={"message": "Request blocked", "code": 403, "metadata": {"patterns": ["reveal_prompt"]}},
+    ),
+    "max_ai.capabilities.clients.openai.OpenAIChatCompletionClient": Refused(
+        "Error code: 400 - The response was filtered", 400, code="content_filter",
+    ),
+}
+
+
+def test_every_client_of_the_package_tells_a_refused_request_apart():
+    import importlib
+    import pkgutil
+
+    from max_ai.capabilities import clients
+    from max_ai.capabilities.clients._chat_completions import ChatCompletionsClient
+
+    # Every client the package has, found by itself: a new one must add its example.
+    for found in pkgutil.iter_modules(clients.__path__):
+        importlib.import_module(f"{clients.__name__}.{found.name}")
+    services = ChatCompletionsClient.__subclasses__()
+    assert {f"{cls.__module__.rsplit('.', 1)[0]}.{cls.__name__}" for cls in services} == set(REFUSED)
+    for cls in services:
+        client = cls("some/model", api_key="sk-test")
+        error = client.map_error(REFUSED[f"{cls.__module__.rsplit('.', 1)[0]}.{cls.__name__}"])
+        assert error.kind == "content_filter", cls.__name__
+        # Another 403 or 400 is not taken for one.
+        assert client.map_error(Refused("Error code: 403 - no credits", 403)).kind != "content_filter"
