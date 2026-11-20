@@ -17,3 +17,7 @@ class OpenAIChatCompletionClientConfig(BaseModel):
     options: dict[str, t.Any] = Field(default_factory=dict[str, t.Any])  # sent as they are in each request
     config: ModelConfig | None = None
     retry: RetryPolicy | None = None
+
+
+class OpenAIResponsesClientConfig(OpenAIChatCompletionClientConfig):
+    """The same fields: only the endpoint the client calls is different."""

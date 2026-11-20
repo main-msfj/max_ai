@@ -98,7 +98,7 @@ Agent(
 
 | Argument | Type | Notes |
 |---|---|---|
-| `client` | `CoreLLMClient` | `OpenAIChatCompletionClient` or `OpenRouterChatCompletionClient` |
+| `client` | `CoreLLMClient` | `OpenAIChatCompletionClient`, `OpenAIResponsesClient` or `OpenRouterChatCompletionClient` |
 | `toolset` | list of `CoreTool` | your tools, `FunctionAsTool` / `@tool`, `BashTool()` |
 | `mcp` | `StdioMCPServerConfig` / `HTTPServerConfig` | tools from MCP servers |
 | `sandbox` | `SandboxCore` | `LocalSandbox`, `DockerSandbox`, `E2BSandbox` |
@@ -221,6 +221,16 @@ both on the Chat Completions API. Without `api_key` they read `OPENAI_API_KEY`
 / `OPENROUTER_API_KEY`; the serialized config stores only the variable name.
 `options={...}` is sent as is (temperature, top_p...). There is no Ollama
 client; an OpenAI-compatible server can be used through `base_url`.
+
+`OpenAIResponsesClient(model, ...)`, from `max_ai.capabilities.clients.openai`,
+calls OpenAI's Responses API: its newer models reason and call tools in the
+same turn there, which Chat Completions refuses. Thinking is
+`ModelConfig(thinking={"reasoning": {"effort": "low", "summary": "auto"}})`.
+Nothing is stored on OpenAI's side; the model's reasoning comes back encrypted,
+is kept with the message and is sent again in the next call.
+
+Every client gives back the same `LLMResponse`, whatever format its provider
+speaks. There is one family per format: Chat Completions and Responses today.
 
 ### Tools
 
