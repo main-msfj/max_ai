@@ -186,7 +186,9 @@ class Harness:
         names = {tool.name for tool in tools}
 
         # 1. Ours: files only with a sandbox; the question and the list always.
-        ours: list[CoreTool] = [AskUserTool(), WriteTodosTool()]
+        ours: list[CoreTool] = [
+            AskUserTool(), WriteTodosTool(approval=setting.harness_plan_approval),
+        ]
         if sandbox is not None:
             ours += [ReadFileTool(), WriteFileTool(), EditFileTool()]
 

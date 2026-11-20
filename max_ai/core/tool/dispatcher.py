@@ -313,7 +313,7 @@ class ToolDispatcher:
     ) -> bool | ToolResult:
         """True: run it now. False: it waits for a person. A result: denied."""
         # A person will see this call anyway: no approval on top of it.
-        if tool.waits_for_user and record.result is None:
+        if tool.waits(record, tool_ctx.run_context) and record.result is None:
             if not record.is_awaiting_input:
                 record.await_user_input()
             emit(

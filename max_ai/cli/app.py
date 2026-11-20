@@ -118,6 +118,7 @@ APPROVAL_PLACEHOLDER = "Pick an option (click, or type its number) or write a ne
 # Rendered as their own blocks instead of a generic ToolBlock.
 _ASK_USER = AskUserTool.TOOL_NAME
 _WRITE_TODOS = WriteTodosTool.TOOL_NAME
+_PLAN_OPTIONS = ("Accept", "No")  # what the user picks for a plan that waits
 
 # Harness events worth a line even outside verbose mode.
 _ALWAYS_SHOWN = {"error"}
@@ -1063,7 +1064,18 @@ class MaxAIApp(App[None]):
         if questions:
             answers = await self._ask_form(questions)
             for record in asked:
-                record.store_result(AskUserTool.answer(record, answers.get(record.id, {})))
+                given = answers.get(record.id, {})
+                if record.tool_name != _WRITE_TODOS:
+                    record.store_result(AskUserTool.answer(record, given))
+                    continue
+                # A plan: accepted, or not, with what the user typed instead.
+                said = next(iter(given.values()), None)
+                comment = None if said in (None, *_PLAN_OPTIONS) else str(said)
+                record.store_result(
+                    WriteTodosTool.answer(record, ctx, said == _PLAN_OPTIONS[0], comment)
+                )
+                if said == _PLAN_OPTIONS[0]:
+                    await self._render_todos(ctx.todos)
         return None
 
     async def _ask_approval(self, record: ToolCallRecord) -> int | str | None:
@@ -1124,7 +1136,16 @@ class MaxAIApp(App[None]):
 
     @staticmethod
     def _questions(record: ToolCallRecord) -> list[Question]:
-        """Every question of a waiting ask_user call, read from the call itself."""
+        """Every question of a waiting call, read from the call itself. A
+        plan that waits is one question: accept it or not."""
+        if record.tool_name == _WRITE_TODOS:
+            todos = t.cast("list[dict[str, str]]", record.parameters.get("todos") or [])
+            steps = "\n".join(f"{n}. {todo['content']}" for n, todo in enumerate(todos, 1))
+            options = [(_PLAN_OPTIONS[0], "Start working on it."),
+                       (_PLAN_OPTIONS[1], "Or type what you would change.")]
+            return [Question(
+                record.id, f"Accept this plan?\n{steps}", options, list(_PLAN_OPTIONS), "Plan",
+            )]
         questions: list[Question] = []
         for item in t.cast("list[dict[str, t.Any]]", record.parameters.get("questions") or []):
             options = t.cast("list[dict[str, str]]", item.get("options") or [])

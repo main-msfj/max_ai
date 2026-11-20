@@ -63,3 +63,45 @@ async def test_a_wrong_list_says_why_and_changes_nothing(ctx, todos, reason):
     result = await write(ctx, todos)
     assert not result.success and reason in result.error
     assert [t.content for t in ctx.todos] == ["kept"]
+
+
+# -------- THE USER ACCEPTS THE PLAN ---------------------------------------------------
+async def propose(ctx, todos):
+    """A call to a tool that asks for approval: the record, as the dispatcher left it."""
+    record = ToolCallRecord(tool_name="write_todos", parameters={"todos": todos})
+    ctx.tool_state.records[record.id] = record
+    await ToolDispatcher(ToolRegistry([WriteTodosTool(approval=True)])).dispatch(record, ctx, None)
+    return record
+
+
+async def test_a_new_plan_waits_for_the_user_and_is_not_the_list_yet(ctx):
+    record = await propose(ctx, [todo("a"), todo("b")])
+    assert record.is_awaiting_input and ctx.todos == []
+
+    record.store_result(WriteTodosTool.answer(record, ctx, accepted=True))
+    assert record.result.result == WriteTodosTool.ACCEPTED
+    assert [t.content for t in ctx.todos] == ["a", "b"]
+
+
+async def test_a_rejected_plan_never_becomes_the_list_and_says_what_the_user_said(ctx):
+    record = await propose(ctx, [todo("a")])
+    result = WriteTodosTool.answer(record, ctx, accepted=False, comment=" start with the tests ")
+    assert result.result == "The user did not accept the plan. They said: start with the tests"
+    assert WriteTodosTool.answer(record, ctx, accepted=False).result == WriteTodosTool.REJECTED
+    assert ctx.todos == []
+
+
+async def test_marking_progress_or_emptying_the_list_never_asks(ctx):
+    record = await propose(ctx, [todo("a"), todo("b")])
+    record.store_result(WriteTodosTool.answer(record, ctx, accepted=True))
+
+    assert not (await propose(ctx, [todo("a", "done"), todo("b", "in_progress")])).is_awaiting_input
+    assert [t.status for t in ctx.todos] == ["done", "in_progress"]
+    assert not (await propose(ctx, [])).is_awaiting_input
+    # Other steps are a new plan.
+    assert (await propose(ctx, [todo("a", "done"), todo("c")])).is_awaiting_input
+
+
+def test_the_model_is_told_about_the_approval_only_when_it_is_on():
+    assert WriteTodosTool.APPROVAL in WriteTodosTool(approval=True).description
+    assert WriteTodosTool.APPROVAL not in WriteTodosTool().description

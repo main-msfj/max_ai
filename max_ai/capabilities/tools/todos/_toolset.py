@@ -6,6 +6,7 @@ import typing as t
 
 from ....base.tools import CoreTool, CoreToolParameters, ToolContext
 from ....core.event_type import TodosEvent
+from ....types.run_context import RunContext
 from ....types.todos import Todo
 from ....types.tool_call import ToolCallRecord, ToolResult
 from ....types.tools import ToolApprovalMode
@@ -20,12 +21,22 @@ class WriteTodosTool(CoreTool):
         "the user. Always send the whole list: it replaces the one before. Mark "
         "a step in_progress when you start it and done when you finish it."
     )
+    # Added to the description when the user accepts the plans.
+    APPROVAL: t.ClassVar[str] = (
+        " A new plan, or one whose steps changed, waits for the user to accept it. "
+        "If the user rejects it, propose a different one. If they reject it again, "
+        "ask what they would change. After a third rejection, stop proposing and "
+        "let the user say how they want it."
+    )
+    ACCEPTED: t.ClassVar[str] = "The user accepted the plan. Start with its first step."
+    REJECTED: t.ClassVar[str] = "The user did not accept the plan."
     STATUSES: t.ClassVar[tuple[str, ...]] = ("pending", "in_progress", "done")
 
-    def __init__(self) -> None:
+    def __init__(self, approval: bool = False) -> None:
+        self.approval = approval  # the user accepts a plan before it counts
         super().__init__(
             name=self.TOOL_NAME,
-            description=self.DESCRIPTION,
+            description=self.DESCRIPTION + (self.APPROVAL if approval else ""),
             approval_mode=ToolApprovalMode.AUTO_APPROVED,
         )
 
@@ -72,6 +83,26 @@ class WriteTodosTool(CoreTool):
                 is_tool_valid=False, msg_error="Only one thing to do can be in_progress."
             )
         return checked
+
+    def waits(self, record: ToolCallRecord, ctx: RunContext) -> bool:
+        """Only a list with other steps: marking progress never asks."""
+        steps = [todo["content"] for todo in record.parameters["todos"]]
+        return self.approval and bool(steps) and steps != [todo.content for todo in ctx.todos]
+
+    @classmethod
+    def answer(
+        cls, record: ToolCallRecord, ctx: RunContext, accepted: bool, comment: str | None = None
+    ) -> ToolResult:
+        """What the user decided about a plan that waited, as this call's
+        result. Only an accepted plan becomes the list."""
+        # 1. Accepted: now it is the list.
+        if accepted:
+            ctx.todos = [Todo(**todo) for todo in record.parameters["todos"]]
+            return ToolResult.success_result(record.id, cls.ACCEPTED)
+
+        # 2. Rejected, with what the user said when they said something.
+        said = f" They said: {comment.strip()}" if comment and comment.strip() else ""
+        return ToolResult.success_result(record.id, cls.REJECTED + said)
 
     async def execute(self, tool_request: ToolCallRecord, tool_ctx: ToolContext) -> ToolResult:
         todos = [Todo(**todo) for todo in tool_request.parameters["todos"]]

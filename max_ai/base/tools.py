@@ -165,6 +165,11 @@ class CoreTool(ComponentBase[BaseModel], ABC):
         ...
 
     # -------- PUBLIC -----------------------------------------------------------
+    def waits(self, record: ToolCallRecord, ctx: RunContext) -> bool:
+        """This call's result comes from a person. A tool that waits only
+        for some of its calls says here which."""
+        return self.waits_for_user
+
     def validate_parameters(self, tool_request: ToolCallRecord) -> CoreToolParameters:
         """
         Validate input parameters against this tool's JSON schema.

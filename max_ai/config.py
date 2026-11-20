@@ -96,6 +96,11 @@ class Settings(BaseSettings):
         validation_alias="HARNESS_SANDBOX_SECONDS",
         description="How long a sandbox lives; no tool may run longer.",
     )
+    harness_plan_approval: bool = Field(
+        default=True,
+        validation_alias="HARNESS_PLAN_APPROVAL",
+        description="A plan of the agent waits for the user to accept it before it counts.",
+    )
     summary_model: str = Field(
         default="",
         validation_alias="SUMMARY_MODEL",
