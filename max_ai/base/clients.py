@@ -36,6 +36,7 @@ class CoreChatCompletionClient(ComponentBase[ConfigT], ABC):
     A subclass names its config: ``CoreChatCompletionClient[MyConfig]``. That
     is what lets ``_to_config`` and ``_from_config`` use ``MyConfig``."""
 
+    PROVIDER_NAME: t.ClassVar[str] = "The provider"  # how its errors name it
     API_KEY_ENV: t.ClassVar[str | None] = None  # env var with the key; configs store this name
     RETRY: t.ClassVar[RetryPolicy] = RetryPolicy(attempts=3)  # when none is given
 
@@ -192,10 +193,47 @@ class CoreChatCompletionClient(ComponentBase[ConfigT], ABC):
     def build_tool_schema(self, tools: list[CoreToolDefinition]) -> list[dict[str, t.Any]]:
         """``tools`` in the provider's format."""
 
-    @abstractmethod
     def map_error(self, error: Exception) -> ClientError:
-        """The provider's error as a ``ClientError``: what happened, whether
-        trying again may work, and how long the provider asked to wait."""
+        """The provider's error as a ``ClientError``. The order is fixed here;
+        each provider only says how it recognizes each case."""
+        if isinstance(error, ClientError):
+            return error
+
+        # 1. The cases the framework reacts to: every provider tells them apart.
+        found = self.blocked(error)
+        if found is not None:
+            return ClientError.blocked(self.PROVIDER_NAME, found)
+        if self.window_full(error):
+            return ClientError.token_limit_exceeded()
+        if self.rate_limited(error):
+            return ClientError.rate_limit_exceeded(self.wait_asked(error))
+
+        # 2. The rest, as the provider reads them.
+        return self.other_error(error)
+
+    @abstractmethod
+    def blocked(self, error: Exception) -> list[str] | None:
+        """The provider refused the request for its content: what it says it
+        found (may be empty). None when ``error`` is something else. The
+        loop ends the turn and takes the content out of the conversation."""
+
+    @abstractmethod
+    def window_full(self, error: Exception) -> bool:
+        """The request did not fit in the model's window. The loop compacts
+        by force and asks again."""
+
+    @abstractmethod
+    def rate_limited(self, error: Exception) -> bool:
+        """Too many requests. The call is tried again after a wait."""
+
+    def wait_asked(self, error: Exception) -> float | None:
+        """Seconds the provider asked to wait after a rate limit; None when
+        it did not say."""
+        return None
+
+    @abstractmethod
+    def other_error(self, error: Exception) -> ClientError:
+        """Any other error: authentication, a timeout, a failure of the provider."""
 
     @abstractmethod
     def normalize_usage_stats(self, usage: t.Any) -> Usage:

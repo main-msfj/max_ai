@@ -6,7 +6,7 @@ import pytest
 from pydantic import BaseModel
 
 from max_ai.base.component import ComponentBase
-from max_ai.base.loop import LoopHook, LoopState, Stop
+from max_ai.base.loop import LoopHook, LoopState, Note, Refuse, Stop
 from max_ai.capabilities.loop import ReactLoop
 from max_ai.capabilities.tools.decorator import tool as as_tool
 from max_ai.core.messages import AssistantMessage, ToolCall, UserMessage
@@ -124,16 +124,24 @@ async def test_a_stream_gives_the_text_in_pieces_and_the_whole_message():
 
 async def test_the_turn_stops_at_its_limit_of_model_calls():
     ctx, tools = setup()
+    again = [asks((f"c{n}", "weather", {"city": str(n)})) for n in range(2)]
+    model, state = Model(*again, says("I checked two cities; the third is missing.")), LoopState()
+    events = await run(ReactLoop(max_iterations=2), ctx, model, tools, state=state)
+    # The tools of the last round ran, and one call more, without tools, answered.
+    assert WEATHER == ["0", "1"] and (state.iteration, state.finish_reason) == (3, "max_iterations")
+    assert kinds(events) == ["last_round", "max_iterations"]
+    assert model.sent[1][1] != [] and model.sent[2][1] == []
+    assert "no tool rounds left" in notes(ctx)[-1] and state.message.text().startswith("I checked")
+    # A model that asks for tools in that call gets them closed, not run.
+    ctx, tools = setup()
     again = [asks((f"c{n}", "weather", {"city": "Lima"})) for n in range(5)]
-    state = LoopState()
-    await run(ReactLoop(max_iterations=2), ctx, Model(*again), tools, state=state)
-    assert (state.iteration, state.finish_reason) == (2, "max_iterations")
-    assert ctx.messages[-1].role == "tool"  # every call has its answer
+    await run(ReactLoop(max_iterations=2), ctx, Model(*again), tools, state=LoopState())
+    assert ctx.messages[-1].role == "tool" and "turn ended" in ctx.messages[-1].content
     # Given in the call, the limit wins over the loop's own.
     ctx, tools = setup()
     state = LoopState()
     await run(ReactLoop(max_iterations=2), ctx, Model(*again), tools, state=state, max_iterations=1)
-    assert state.iteration == 1
+    assert state.iteration == 2
 
 
 async def test_a_tool_that_waits_for_a_person_ends_the_turn_and_the_next_one_resumes():
@@ -212,6 +220,7 @@ async def test_an_empty_answer_is_asked_again_once_and_then_the_turn_ends():
     state = LoopState()
     await run(ReactLoop(), ctx, Model(says(" "), says("")), tools, state=state)
     assert (state.finish_reason, state.iteration) == ("empty_answer", 2)
+    assert state.message.text() == LoopHook.NO_ANSWER  # the user is told
 
 
 async def test_an_answer_the_provider_blocked_is_not_asked_again():
@@ -220,6 +229,9 @@ async def test_an_answer_the_provider_blocked_is_not_asked_again():
     model.reasons[1] = "content_filter"
     events = await run(ReactLoop(), ctx, model, tools, state=state)
     assert (state.finish_reason, state.iteration, kinds(events)) == ("content_filter", 1, ["content_filter"])
+    # The blocked answer leaves; the user is told in its place.
+    assert [m.role for m in ctx.messages] == ["user", "assistant"]
+    assert ctx.messages[-1].content == LoopHook.ANSWER_BLOCKED
 
 
 async def test_the_hook_can_answer_for_the_agent_when_the_turn_cannot_go_on():
@@ -264,6 +276,7 @@ async def test_the_same_call_stops_running_at_the_third_time_and_ends_the_turn_a
     assert WEATHER == ["Lima", "Lima"]  # the third was answered without running
     assert (state.finish_reason, state.iteration) == ("repetition", 5)
     assert kinds(events) == ["repetition"] * 3  # two refusals, then the end
+    assert state.message.text() == LoopHook.STUCK  # the user is told
     answers = [m for m in ctx.messages if m.role == "tool"]
     assert len(answers) == 5 and "Not run: this is the same call" in answers[2].content
     # Another call in between starts the count again.
@@ -277,7 +290,7 @@ async def test_near_the_limit_the_model_is_told_how_many_calls_it_has_left():
     ctx, tools = setup()
     again = [asks((f"c{n}", "weather", {"city": str(n)})) for n in range(5)]
     events = await run(ReactLoop(max_iterations=5), ctx, Model(*again), tools, hook=LoopHook(warn_before=2))
-    assert kinds(events) == ["near_limit", "max_iterations"]
+    assert kinds(events) == ["near_limit", "last_round", "max_iterations"]
     assert "You have 2 model calls left" in notes(ctx)[0]
     assert [m.role for m in ctx.messages].index("user", 1) == 7  # after the third round
 
@@ -300,7 +313,7 @@ async def test_the_harness_can_keep_the_turn_going_or_end_it():
         async def after_model(self, ctx, state):
             if not self.said:
                 self.said = True
-                return "The user added: also in Cusco."
+                return Note("The user added: also in Cusco.")
             return await super().after_model(ctx, state)
 
     ctx, tools = setup()
@@ -335,6 +348,55 @@ async def test_tool_calls_cut_at_the_output_limit_are_answered_without_running()
     events = await run(ReactLoop(), ctx, model, tools, state=state)
     assert WEATHER == [] and kinds(events) == ["arguments_cut"]
     assert "arrived incomplete" in ctx.messages[2].content and state.finish_reason == "stop"
+
+
+async def test_a_request_the_provider_blocks_ends_the_turn_and_leaves_the_conversation_usable():
+    # The user's message is blocked: it leaves, and the user is told.
+    ctx, tools = setup()
+    ctx.messages.append(UserMessage(source="u", content="something the provider refuses"))
+    blocked = ClientError.blocked("Echo", ["some_pattern"])
+    state = LoopState()
+    events = await run(ReactLoop(), ctx, Model(blocked), tools, state=state)
+    assert state.finish_reason == "content_filter" and kinds(events) == ["content_filter"]
+    assert [m.role for m in ctx.messages] == ["assistant"] and "another way" in ctx.messages[0].content
+    assert "some_pattern" not in ctx.messages[0].content
+
+    # A tool result is blocked: it keeps its place, without its content.
+    ctx, tools = setup()
+    state = LoopState()
+    await run(ReactLoop(), ctx, Model(asks(("c1", "weather", {"city": "Lima"})), blocked), tools, state=state)
+    assert [m.role for m in ctx.messages] == ["user", "assistant", "tool", "assistant"]
+    assert ctx.messages[2].content == LoopHook.REMOVED and state.finish_reason == "content_filter"
+
+    # Any other error still goes up.
+    ctx, tools = setup()
+    with pytest.raises(ClientError):
+        await run(ReactLoop(), ctx, Model(ClientError.authentication_failed("x")), tools)
+
+
+async def test_refuse_answers_the_tools_without_running_them_and_note_lets_them_run():
+    class Says(LoopHook):
+        def __init__(self, decision):
+            super().__init__()
+            self.decision = decision
+
+        async def after_model(self, ctx, state):
+            decision, self.decision = self.decision, None
+            return decision
+
+    # Refuse: the tool does not run and gets the text; the rule is counted.
+    ctx, tools = setup()
+    model, state = Model(asks(("c1", "weather", {"city": "Lima"})), says("ok")), LoopState()
+    events = await run(ReactLoop(), ctx, model, tools, hook=Says(Refuse("Not now.", rule="mine")), state=state)
+    assert WEATHER == [] and ctx.messages[2].content == "Not now."
+    assert kinds(events) == ["mine"] and state.notices == {"mine": 1}
+
+    # Note: the tool runs and the note is told after its answer.
+    ctx, tools = setup()
+    model, state = Model(asks(("c1", "weather", {"city": "Lima"})), says("ok")), LoopState()
+    events = await run(ReactLoop(), ctx, model, tools, hook=Says(Note("Be quick.", rule="mine")), state=state)
+    assert WEATHER == ["Lima"] and [m.role for m in ctx.messages][2:4] == ["tool", "user"]
+    assert notes(ctx) == ["[harness] Be quick."] and state.notices == {"mine": 1}
 
 
 async def test_a_new_message_closes_the_calls_that_waited_for_the_user():

@@ -53,7 +53,6 @@ class LoopState(BaseModel):
     limit: int = 0  # model calls allowed in this run
     notices: dict[str, int] = Field(default_factory=dict[str, int])  # times each rule spoke
     compactions: int = 0  # times the conversation was compacted in this run
-    notice: str = ""  # the rule that spoke last
     last_calls: str = ""  # the tool calls of the last round, as text
     repeats: int = 0  # rounds in a row with those same calls
 
@@ -70,17 +69,48 @@ class Continue(BaseModel):
     """A hook's order to go on with the turn without telling the model anything."""
 
 
-Decision = str | Stop | Continue | None
+class Note(BaseModel):
+    """A hook's order to tell the model something. The turn goes on; tools
+    the model asked for still run, and the note is told after them."""
+
+    text: str
+    rule: str = "hook"  # the rule that speaks: counted in ``state.notices``
+
+    def __init__(self, text: str, rule: str = "hook") -> None:
+        super().__init__(text=text, rule=rule)
+
+
+class Refuse(BaseModel):
+    """A hook's order not to run the tools the model asked for: each one
+    gets ``text`` as its answer."""
+
+    text: str
+    rule: str = "hook"  # the rule that speaks: counted in ``state.notices``
+
+    def __init__(self, text: str, rule: str = "hook") -> None:
+        super().__init__(text=text, rule=rule)
+
+
+class Wrap(BaseModel):
+    """A hook's order to close the turn: the model is told ``text`` and gets
+    one call more, without tools, to answer the user."""
+
+    text: str
+    reason: str  # the turn's finish reason
+
+
+Decision = Note | Refuse | Wrap | Stop | Continue | None
 
 
 class LoopHook:
     """What a loop asks at each moment of a turn. Inherit and write only the
     moments you need; as it is, the usual rules.
 
-    Each moment answers None (go on as usual), a text (told to the model;
-    if it asked for tools, they get that text as their answer and do not
-    run), ``Continue`` (the turn goes on, nothing is told) or ``Stop``
-    (the turn ends)."""
+    Each moment answers None (go on as usual), ``Note`` (told to the
+    model), ``Refuse`` (the tools it asked for do not run and get that text
+    as their answer), ``Continue`` (the turn goes on, nothing is told),
+    ``Wrap`` (the model gets one call more, without tools, to answer) or
+    ``Stop`` (the turn ends)."""
 
     # What the model is told. Replace a text to say it another way.
     EMPTY_ANSWER: t.ClassVar[str] = (
@@ -89,6 +119,13 @@ class LoopHook:
     NEAR_LIMIT: t.ClassVar[str] = (
         "You have {left} model calls left in this turn. Finish what is essential and "
         "then answer saying what you did and what is missing."
+    )
+    LAST_ROUND: t.ClassVar[str] = (
+        "One tool round is left in this turn. After it, please give the final answer."
+    )
+    NO_ROUNDS: t.ClassVar[str] = (
+        "The turn has no tool rounds left. Please give the final answer now, saying what "
+        "was done and what is missing."
     )
     OPEN_TODOS: t.ClassVar[str] = (
         "{open} items of your list are still open. Finish them, or update the list if "
@@ -101,6 +138,26 @@ class LoopHook:
     ARGUMENTS_CUT: t.ClassVar[str] = (
         "Not run: your answer was cut at the output limit, so the arguments of this "
         "call arrived incomplete. Send less content in each call."
+    )
+    # What the user reads when the provider refused the request, and what is
+    # left of a tool result that may have caused it. Neither names what was
+    # found: said again in the conversation, it could be refused again.
+    BLOCKED: t.ClassVar[str] = (
+        "The provider blocked this request because of its content, so I could not answer. "
+        "What was just sent was taken out of the conversation; please say it another way."
+    )
+    REMOVED: t.ClassVar[str] = "[removed: the provider blocked a request that held this content]"
+    # What the user reads when a rule ends the turn.
+    ANSWER_BLOCKED: t.ClassVar[str] = (
+        "The provider blocked the answer because of its content, so there is nothing to "
+        "show. Please ask in another way."
+    )
+    STUCK: t.ClassVar[str] = (
+        "I kept making the same tool call with the same result, so I stopped. Tell me how "
+        "to go on, or ask in another way."
+    )
+    NO_ANSWER: t.ClassVar[str] = (
+        "The model answered with nothing twice, so the turn ended. Please try again."
     )
     GIVE_UP_AFTER: t.ClassVar[int] = 2  # rounds refused as repeated before the turn ends
 
@@ -133,13 +190,17 @@ class LoopHook:
         """Before each model call."""
         # 1. What the user wrote while the turn ran enters the conversation.
         self.take_inbox(ctx)
-        # 2. The turn reached its limit of model calls.
+
+        # 2. The turn reached its limit: one call more, without tools, to answer.
         if state.iteration >= state.limit:
-            return Stop(reason="max_iterations")
-        # 3. Few calls left: the model is told once.
+            return Wrap(text=self.NO_ROUNDS, reason="max_iterations")
+
+        # 3. Few calls left: the model is told once, and once more at the last one.
         left = state.limit - state.iteration
         if left == self.warn_before and state.limit > left and not state.notices.get("near_limit"):
-            return self.tell(state, "near_limit", self.NEAR_LIMIT.format(left=left))
+            return Note(self.NEAR_LIMIT.format(left=left), rule="near_limit")
+        if left == 1 and state.limit > 1 and not state.notices.get("last_round"):
+            return Note(self.LAST_ROUND, rule="last_round")
         return None
 
     async def after_model(self, ctx: RunContext, state: LoopState) -> Decision:
@@ -149,15 +210,16 @@ class LoopHook:
             return None
         # 1. The provider blocked the answer: asking again gives the same.
         if state.finish_reason == "content_filter":
-            return Stop(reason="content_filter")
+            self.drop_blocked_answer(ctx, message)
+            return Stop(reason="content_filter", answer=self.ANSWER_BLOCKED)
         # 2. It asked for tools: cut arguments and repeated calls are not run.
         if message.tool_calls:
             if state.finish_reason == "length":
-                return self.tell(state, "arguments_cut", self.ARGUMENTS_CUT)
+                return Refuse(self.ARGUMENTS_CUT, rule="arguments_cut")
             if state.repeats >= self.max_repeats + self.GIVE_UP_AFTER:
-                return Stop(reason="repetition")
+                return Stop(reason="repetition", answer=self.STUCK)
             if state.repeats >= self.max_repeats:
-                return self.tell(state, "repetition", self.REPEATED)
+                return Refuse(self.REPEATED, rule="repetition")
             return None
         # 3. The user wrote while the model answered: the turn goes on with that.
         if self.take_inbox(ctx):
@@ -165,12 +227,12 @@ class LoopHook:
         # 4. An empty answer is asked again once; then the turn ends.
         if not message.text().strip():
             if state.notices.get("empty_answer"):
-                return Stop(reason="empty_answer")
-            return self.tell(state, "empty_answer", self.EMPTY_ANSWER)
+                return Stop(reason="empty_answer", answer=self.NO_ANSWER)
+            return Note(self.EMPTY_ANSWER, rule="empty_answer")
         # 5. It wants to end with items of its list still open: reminded once.
         still_open = sum(1 for todo in ctx.todos if todo.status != "done")
         if still_open and not state.notices.get("open_todos"):
-            return self.tell(state, "open_todos", self.OPEN_TODOS.format(open=still_open))
+            return Note(self.OPEN_TODOS.format(open=still_open), rule="open_todos")
         return None
 
     async def after_tools(self, ctx: RunContext, state: LoopState) -> None:
@@ -179,7 +241,37 @@ class LoopHook:
     async def on_error(self, ctx: RunContext, state: LoopState, error: Exception) -> Stop | None:
         """The turn failed. Return ``Stop`` to end it with an answer for the
         user; None lets the error go up."""
-        return None
+        # The provider refused the request for its content: the turn ends
+        # clean, and what caused it leaves so the next turn is not refused too.
+        if getattr(error, "kind", None) != "content_filter":
+            return None
+        self.remove_blocked(ctx)
+        return Stop(reason="content_filter", answer=self.BLOCKED)
+
+    @staticmethod
+    def drop_blocked_answer(ctx: RunContext, message: AssistantMessage) -> None:
+        """Take the answer the provider blocked out of the conversation: it
+        is empty or cut. One that asked for tools stays, for their answers."""
+        if not message.tool_calls and ctx.messages and ctx.messages[-1] is message:
+            ctx.messages.pop()
+
+    @classmethod
+    def remove_blocked(cls, ctx: RunContext) -> None:
+        """Take out what entered the conversation since the model last
+        answered: only that can be new to the provider. What the user wrote
+        leaves; a tool result keeps its place, without its content."""
+        # 1. Where the model last answered.
+        last = max(
+            (n for n, message in enumerate(ctx.messages) if isinstance(message, AssistantMessage)),
+            default=-1,
+        )
+
+        # 2. After it: tool results are emptied, the rest leaves.
+        kept = ctx.messages[: last + 1]
+        for message in ctx.messages[last + 1 :]:
+            if isinstance(message, ToolMessage):
+                kept.append(message.model_copy(update={"content": cls.REMOVED}))
+        ctx.messages[:] = kept
 
     @staticmethod
     def take_inbox(ctx: RunContext) -> int:
@@ -189,13 +281,6 @@ class LoopHook:
         while ctx.inbox:
             ctx.messages.append(UserMessage(source=ctx.user_id, content=ctx.inbox.pop(0)))
         return taken
-
-    @staticmethod
-    def tell(state: LoopState, kind: str, text: str) -> str:
-        """``text``, counted as said by the rule ``kind``."""
-        state.notices[kind] = state.notices.get(kind, 0) + 1
-        state.notice = kind
-        return text
 
 
 class CoreLoop(ComponentBase[ConfigT], ABC):
@@ -264,12 +349,13 @@ class CoreLoop(ComponentBase[ConfigT], ABC):
         output_format: type[BaseModel] | None = None,
         stream: bool = False,
         retry: RetryPolicy | None = None,
+        tools: bool = True,  # False: the model can only answer
     ) -> t.AsyncGenerator[CoreEvent]:
         """One model call. Its answer is added to ``ctx.messages`` and left
         in ``state.message``; a call that is cut adds nothing."""
         # 1. What the model sees: the conversation and the loaded tools.
         messages = client.format_messages(ctx, self.system(ctx, prompt))
-        tools = dispatcher.registry.definitions()
+        given = dispatcher.registry.definitions() if tools else []
         yield ModelCallEvent(source=self.SOURCE, model=client.model, input_messages=messages)
 
         # 2. Each try that fails is told when the call gives the control back.
@@ -287,7 +373,7 @@ class CoreLoop(ComponentBase[ConfigT], ABC):
         message, usage, finish = None, Usage(), None
         if stream:
             pieces = client.stream(
-                messages, tools, output_format, retry=retry, on_retry=on_retry,
+                messages, given, output_format, retry=retry, on_retry=on_retry,
                 ctx=ctx, middleware=dispatcher.middleware,
             )
             async for chunk in pieces:
@@ -301,7 +387,7 @@ class CoreLoop(ComponentBase[ConfigT], ABC):
                     message, usage, finish = chunk.message, chunk.usage or usage, chunk.finish_reason
         else:
             result = await client.run(
-                messages, tools, output_format, retry=retry, on_retry=on_retry,
+                messages, given, output_format, retry=retry, on_retry=on_retry,
                 ctx=ctx, middleware=dispatcher.middleware,
             )
             message, usage, finish = result.message, result.usage, result.finish_reason
@@ -416,23 +502,58 @@ class CoreLoop(ComponentBase[ConfigT], ABC):
                     self.close(ctx, record, self.NOT_ANSWERED)
 
     # -------- WHAT THE HOOK DECIDES ----------------------------------------------
-    def note(self, ctx: RunContext, state: LoopState, text: str) -> LoopNoticeEvent:
-        """Tell the model ``text`` as a harness message."""
-        ctx.messages.append(self.harness(text))
-        return self.notice(state, text)
+    def note(self, ctx: RunContext, state: LoopState, said: Note | Refuse) -> LoopNoticeEvent:
+        """Tell the model what a rule said, as a harness message; the rule is counted."""
+        ctx.messages.append(self.harness(said.text))
+        state.notices[said.rule] = state.notices.get(said.rule, 0) + 1
+        return self.notice(said.rule, said.text)
 
-    def notice(self, state: LoopState, text: str = "") -> LoopNoticeEvent:
+    def refuse(
+        self, ctx: RunContext, state: LoopState, records: list[ToolCallRecord], said: Refuse
+    ) -> LoopNoticeEvent:
+        """Answer every call of ``records`` with what a rule said, without
+        running it; the rule is counted."""
+        for record in records:
+            self.close(ctx, record, said.text)
+        state.notices[said.rule] = state.notices.get(said.rule, 0) + 1
+        return self.notice(said.rule, said.text)
+
+    def notice(self, rule: str, text: str = "") -> LoopNoticeEvent:
         """The event that says a rule spoke: which one, and what it said."""
-        kind, state.notice = state.notice or "hook", ""
-        return LoopNoticeEvent(source=self.SOURCE, kind=kind, message=text)
+        return LoopNoticeEvent(source=self.SOURCE, kind=rule, message=text)
+
+    async def wrap(
+        self,
+        ctx: RunContext,
+        prompt: str,
+        client: AnyClient,
+        dispatcher: ToolDispatcher,
+        state: LoopState,
+        hook: LoopHook,
+        said: Wrap,
+        **options: t.Any,
+    ) -> t.AsyncGenerator[CoreEvent]:
+        """Close the turn as the hook ordered: the model is told why, and
+        answers the user in one call without tools."""
+        yield self.note(ctx, state, Note(said.text, rule=said.reason))
+        state.iteration += 1
+        async for event in self.ask_model(
+            ctx, prompt, client, dispatcher, state, hook, tools=False, **options
+        ):
+            yield event
+        # A model that asks for tools anyway gets them closed: none was offered.
+        if state.message is not None:
+            for record in self.new_records(ctx, state.message):
+                self.close(ctx, record, self.TURN_ENDED)
+        state.finish_reason = said.reason
 
     def end(self, ctx: RunContext, state: LoopState, stop: Stop) -> LoopNoticeEvent:
         """End the turn as the hook ordered; its answer becomes the agent's."""
-        state.finish_reason, state.notice = stop.reason, stop.reason
+        state.finish_reason = stop.reason
         if stop.answer:
             state.message = AssistantMessage(source=HARNESS_SOURCE, content=stop.answer)
             ctx.messages.append(state.message)
-        return self.notice(state, stop.answer or "")
+        return self.notice(stop.reason, stop.answer or "")
 
     async def ask_model(
         self,
@@ -448,8 +569,7 @@ class CoreLoop(ComponentBase[ConfigT], ABC):
         conversation compacted if needed; if the model still refuses it as
         too long, it is compacted by force and the call is made once more."""
         for text in await hook.notes(ctx, state):
-            state.notice = "note"
-            yield self.note(ctx, state, text)
+            yield self.note(ctx, state, Note(text, rule="note"))
         if event := await self.compact(ctx, prompt, client, dispatcher, state, hook):
             yield event
         try:
@@ -589,8 +709,7 @@ class CoreLoop(ComponentBase[ConfigT], ABC):
                 ctx.messages[:] = [state.message if m is answer else m for m in ctx.messages]
                 return
             # 3. It does not: the model is told why and tries once more.
-            state.notice = "invalid_format"
-            yield self.notice(state, problem)
+            yield self.notice("invalid_format", problem)
             if not last:
                 asked += [result.message, self.harness(self.INVALID_FORMAT.format(error=problem))]
         state.finish_reason = "invalid_format"

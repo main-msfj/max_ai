@@ -27,6 +27,7 @@ class OpenAIChatCompletionClient(ChatCompletionsClient[OpenAIChatCompletionClien
     component_provider_override = "max_ai.capabilities.clients.openai.OpenAIChatCompletionClient"
 
     PROVIDER_NAME = "OpenAI"
+    BLOCKED_CODE: t.ClassVar[str] = "content_filter"  # the error code of a refused request
     API_KEY_ENV = "OPENAI_API_KEY"
     # Asked to OpenAI on 2026-11-17, model by model. Subject to change: OpenAI
     # moves models between endpoints; a name not listed here is sent as it is.
@@ -61,6 +62,14 @@ class OpenAIChatCompletionClient(ChatCompletionsClient[OpenAIChatCompletionClien
         )
         self.organization = organization
         self.project = project
+
+    def blocked(self, error: Exception) -> list[str] | None:
+        """The request was refused for its content. Written from Azure's
+        documentation (HTTP 400, ``code: "content_filter"``): OpenAI's own
+        pages give no shape for it. Not seen live."""
+        if getattr(error, "code", None) != self.BLOCKED_CODE:
+            return None
+        return []
 
     def request(
         self,
