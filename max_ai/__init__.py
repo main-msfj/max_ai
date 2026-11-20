@@ -20,7 +20,6 @@ except PackageNotFoundError:  # running from a source checkout
 __all__ = [
     "__version__",
     "Agent",
-    "AgentResponse",
     "FunctionAsTool",
     "OpenAIChatCompletionClient",
     "OpenRouterChatCompletionClient",
@@ -31,7 +30,6 @@ __all__ = [
 
 _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "Agent": ("max_ai.agents", "Agent"),
-    "AgentResponse": ("max_ai.types.agent_response", "AgentResponse"),
     "FunctionAsTool": ("max_ai.capabilities.tools.function_as_tool", "FunctionAsTool"),
     "OpenAIChatCompletionClient": (
         "max_ai.capabilities.clients.openai", "OpenAIChatCompletionClient",
@@ -50,7 +48,6 @@ if t.TYPE_CHECKING:  # static analyzers see the real symbols
     from .capabilities.clients.openrouter import OpenRouterChatCompletionClient
     from .capabilities.tools.decorator import tool
     from .capabilities.tools.function_as_tool import FunctionAsTool
-    from .types.agent_response import AgentResponse
     from .types.run_context import RunContext
     from .types.tools import ToolApprovalMode
 
