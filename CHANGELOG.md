@@ -66,6 +66,8 @@ First public version. The core was rewritten between 2026-11-15 and
   and the `gates=[...]` argument.
 
 ### Known gaps
+- `AnthropicClient` (Messages API: streaming, thinking blocks, provider cache)
+  is tested against a fake SDK only, not the real API.
 - `knowledge=` is accepted and serialized but no tool queries it.
 - Completion gates remain in the package but the loop does not use them.
 - Most files in `examples/` still use the old API.
