@@ -98,7 +98,7 @@ Agent(
 
 | Argument | Type | Notes |
 |---|---|---|
-| `client` | `CoreLLMClient` | `OpenAIChatCompletionClient`, `OpenAIResponsesClient` or `OpenRouterChatCompletionClient` |
+| `client` | `CoreLLMClient` | `OpenAIChatCompletionClient`, `OpenAIResponsesClient`, `OpenRouterChatCompletionClient` or `AnthropicClient` |
 | `toolset` | list of `CoreTool` | your tools, `FunctionAsTool` / `@tool`, `BashTool()` |
 | `mcp` | `StdioMCPServerConfig` / `HTTPServerConfig` | tools from MCP servers |
 | `sandbox` | `SandboxCore` | `LocalSandbox`, `DockerSandbox`, `E2BSandbox` |
@@ -229,8 +229,17 @@ same turn there, which Chat Completions refuses. Thinking is
 Nothing is stored on OpenAI's side; the model's reasoning comes back encrypted,
 is kept with the message and is sent again in the next call.
 
+`AnthropicClient(model, ...)`, from `max_ai.capabilities.clients.anthropic`,
+calls Claude through Anthropic's Messages API and reads `ANTHROPIC_API_KEY`.
+Every call is streamed, the request is cached by the provider, and a model
+with `ModelConfig(supports_thinking=True)` thinks by itself and shows a
+summary; how deep is `thinking={..., "output_config": {"effort": "high"}}`.
+The blocks of an answer with thinking are kept with the message and sent back
+as they came.
+
 Every client gives back the same `LLMResponse`, whatever format its provider
-speaks. There is one family per format: Chat Completions and Responses today.
+speaks. There is one family per format: Chat Completions, Responses and
+Messages.
 
 ### Tools
 
@@ -443,6 +452,10 @@ Checked against the code on this branch:
   has no `gates` argument.
 - **Quota stores** (`LocalQuotaStore`, `MongoDBQuotaStore`) are used only by
   `BudgetMiddleware(quota=..., quota_store=...)`; nothing else reads them.
+- **`AnthropicClient` has not been run against the real API yet**, only
+  against a fake SDK. Claude's newer models drop the thinking blocks of a
+  conversation whose history was edited: compaction and the removal of
+  blocked content do edit it, so that thinking is lost (nothing fails).
 - **Examples:** most files in `examples/` use the old API, and
   `advance/04_custom_middleware.py` imports the removed `AgentResponse`. See
   [examples/README.md](examples/README.md).
@@ -456,7 +469,7 @@ max_ai/
   core/harness/     rules, permissions, judge, hooks
   core/             messages, events, tool registry and dispatcher, middleware chain, retry
   capabilities/
-    clients/        OpenAI, OpenRouter
+    clients/        OpenAI, OpenRouter, Anthropic
     loop/react/     ReactLoop
     compaction/     SummaryCompaction, SlidingWindowCompaction
     sandbox/        local, docker, e2b

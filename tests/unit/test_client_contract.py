@@ -213,6 +213,9 @@ REFUSED = {
     "max_ai.capabilities.clients.openai.OpenAIResponsesClient": Refused(
         "Error code: 400 - The response was filtered", 400, code="content_filter",
     ),
+    "max_ai.capabilities.clients.anthropic.AnthropicClient": Refused(
+        "Error code: 400 - Output blocked by content filtering policy", 400,
+    ),
 }
 
 
@@ -226,9 +229,13 @@ def test_every_client_of_the_package_tells_a_refused_request_apart():
     # Every client the package has, found by itself: a new one must add its example.
     for found in pkgutil.iter_modules(clients.__path__):
         importlib.import_module(f"{clients.__name__}.{found.name}")
+    from max_ai.capabilities.clients._messages import MessagesClient
     from max_ai.capabilities.clients._responses import ResponsesClient
 
-    services = [*ChatCompletionsClient.__subclasses__(), *ResponsesClient.__subclasses__()]
+    services = [
+        *ChatCompletionsClient.__subclasses__(), *ResponsesClient.__subclasses__(),
+        *MessagesClient.__subclasses__(),
+    ]
     assert {f"{cls.__module__.rsplit('.', 1)[0]}.{cls.__name__}" for cls in services} == set(REFUSED)
     for cls in services:
         client = cls("some/model", api_key="sk-test")
