@@ -252,10 +252,18 @@ class Harness:
         from ...capabilities.clients.openrouter import OpenRouterChatCompletionClient
         from ...capabilities.compaction import SummaryCompaction
 
+        # 1. The summary model of the settings, when it has its key.
         key = os.environ.get(OpenRouterChatCompletionClient.API_KEY_ENV or "")
+        client = None
         if setting.summary_model and key:
-            return SummaryCompaction(client=OpenRouterChatCompletionClient(setting.summary_model))
-        return SummaryCompaction()
+            client = OpenRouterChatCompletionClient(setting.summary_model)
+
+        # 2. The limits are the settings'.
+        return SummaryCompaction(
+            client=client,
+            keep_groups=setting.compaction_keep_groups,
+            max_result_chars=setting.compaction_result_chars,
+        )
 
     @classmethod
     def retry_rules(cls, given: RetryPolicy) -> RetryPolicy:

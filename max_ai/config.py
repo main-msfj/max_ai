@@ -141,17 +141,16 @@ class Settings(BaseSettings):
     compaction_live_message_threshold: float = Field(default=0.8, gt=0, lt=1)
     compaction_live_message_keep_ratio: float = Field(default=0.2, gt=0, lt=1)
     compaction_min_output_tokens: int = Field(default=1024, gt=0)
-    compaction_min_keep_groups: int = Field(
-        default=3,
-        ge=1,
-        description="Recent assistant+tool groups always kept, so the model does not "
-        "re-call tools whose results vanished.",
+    compaction_keep_groups: int = Field(
+        default=2, ge=1, description="Last exchanges a compaction never touches."
+    )
+    compaction_result_chars: int = Field(
+        default=2_000,
+        ge=100,
+        description="An old tool result longer than this is cut when the context fills.",
     )
     compaction_capacity_warning_tokens: int = Field(
         default=2000, ge=0, description="Warn when less room than this is left for messages."
-    )
-    compaction_summary_message_cap_tokens: int = Field(
-        default=2000, gt=0, description="Each message is cut to this in the summary request."
     )
 
     @field_validator("root_dir")

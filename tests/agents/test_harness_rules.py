@@ -170,3 +170,12 @@ async def test_the_harness_hook_shortens_a_result_longer_than_the_setting(monkey
 
     assert await hook.shorten(record, ctx, short) is short
     assert "500 characters" in (await hook.shorten(record, ctx, long)).result
+
+
+def test_the_harness_compaction_takes_its_limits_from_the_settings(monkeypatch):
+    monkeypatch.setattr(setting, "compaction_keep_groups", 4)
+    monkeypatch.setattr(setting, "compaction_result_chars", 500)
+
+    made = Harness.compaction_rules()
+
+    assert made.keep_groups == 4 and made.max_result_chars == 500
