@@ -1,7 +1,7 @@
 """Global settings for MaxAI.
 
 Every field can be set in the environment or ``.env`` with its uppercase
-name, e.g. ``HARNESS_MAX_ITERATIONS=30``. ``root_dir`` reads ``HOST_WORKSPACE``.
+name, e.g. ``HARNESS_MAX_ITERATIONS=30``.
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,23 +23,16 @@ class Settings(BaseSettings):
     )
 
     # -------- HOST -------------------------------------------------------------
-    root_dir: Path = Field(default_factory=Path.cwd, validation_alias="HOST_WORKSPACE")
     max_ai_home: Path = Field(default_factory=lambda: Path.home() / ".max_ai")
     default_tokenizer: str = Field(
         default="o200k_base",
         description="tiktoken encoding; a model's tokenizer_base overrides it.",
     )
 
-    # -------- LOOP -------------------------------------------------------------
-    environment_idle_timeout: float = Field(default=300, ge=0)
-
     # -------- TOOLS ------------------------------------------------------------
     tool_timeout_seconds: float = Field(
         default=360, gt=0, description="Max seconds one bash command may run."
     )
-    tool_name_pattern: str = Field(default=r"[a-z][a-z0-9_]{0,63}")
-    tool_description_min_tokens: int = Field(default=5, ge=1)
-    tool_description_max_tokens: int = Field(default=150, ge=1)
 
     # -------- HARNESS ----------------------------------------------------------
     harness_max_iterations: int = Field(
@@ -154,15 +147,6 @@ class Settings(BaseSettings):
         ge=100,
         description="An old tool result longer than this is cut when the context fills.",
     )
-    compaction_capacity_warning_tokens: int = Field(
-        default=2000, ge=0, description="Warn when less room than this is left for messages."
-    )
-
-    @field_validator("root_dir")
-    @classmethod
-    def _resolve_root(cls, v: Path) -> Path:
-        """Store root_dir absolute, so relative HOST_WORKSPACE paths work."""
-        return v.expanduser().resolve()
 
     def create_global(self) -> Path:
         """Create ``~/.max_ai/setting.global.json`` if it is missing; never

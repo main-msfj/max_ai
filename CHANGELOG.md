@@ -68,5 +68,4 @@ First public version. The core was rewritten between 2026-11-15 and
 ### Known gaps
 - `knowledge=` is accepted and serialized but no tool queries it.
 - Completion gates remain in the package but the loop does not use them.
-- `HOST_WORKSPACE` and some other settings are not read.
 - Most files in `examples/` still use the old API.

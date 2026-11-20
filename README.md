@@ -414,9 +414,6 @@ Checked against the code on this branch:
   has no `gates` argument.
 - **Quota stores** (`LocalQuotaStore`, `MongoDBQuotaStore`) are used only by
   `BudgetMiddleware(quota=..., quota_store=...)`; nothing else reads them.
-- **Some settings are not read:** `HOST_WORKSPACE`, `ENVIRONMENT_IDLE_TIMEOUT`,
-  the `TOOL_NAME_PATTERN` and `TOOL_DESCRIPTION_*` fields, and several
-  `COMPACTION_*` fields.
 - **Examples:** most files in `examples/` use the old API, and
   `advance/04_custom_middleware.py` imports the removed `AgentResponse`. See
   [examples/README.md](examples/README.md).
