@@ -263,6 +263,7 @@ class Harness:
             client=client,
             keep_groups=setting.compaction_keep_groups,
             max_result_chars=setting.compaction_result_chars,
+            max_share=setting.compaction_summary_max_share,
         )
 
     @classmethod

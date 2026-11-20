@@ -36,6 +36,10 @@ class SummaryCompaction(CoreCompaction[SummaryCompactionConfig]):
         "This is the summary kept so far. Return the complete new summary: what it says "
         "that still holds, updated with the messages."
     )
+    BUDGET: t.ClassVar[str] = (
+        "The complete summary must stay under {tokens:,} tokens: when it does not fit, "
+        "leave out the oldest finished work first."
+    )
     MAX_MESSAGE_CHARS: t.ClassVar[int] = 2000  # of each message shown to the model
     MAX_CHARS: t.ClassVar[int] = 200_000  # of all of them; the oldest are left out
 
@@ -48,10 +52,12 @@ class SummaryCompaction(CoreCompaction[SummaryCompactionConfig]):
         max_result_chars: int = 2000,
         keep_groups: int = 2,
         counter: TokenCounter | None = None,
+        max_share: float = 0.10,
     ) -> None:
         super().__init__(threshold, keep, max_result_chars, keep_groups, counter)
         self.client = client  # the model that summarizes; None = the agent's
         self.instructions = instructions  # what to care about, added to the task
+        self.max_share = max_share  # part of the agent's window the summary may take
 
     async def reduce(
         self,
@@ -61,15 +67,19 @@ class SummaryCompaction(CoreCompaction[SummaryCompactionConfig]):
         ctx: RunContext | None = None,
         middleware: MiddlewareChain | None = None,
     ) -> tuple[Summary | None, Usage]:
-        # 1. The task, the summary kept so far and the messages, as one text.
-        parts = [self.TASK]
+        # 1. The room the summary has: a part of the window of who will read it.
+        tokens = int(self.max_share * client.config.max_context_window)
+
+        # 2. The task, the summary kept so far and the messages, as one text.
+        parts = [self.TASK, self.BUDGET.format(tokens=tokens)]
         if self.instructions:
             parts.append(self.instructions)
         if summary is not None and summary.text():
             parts.append(f"{self.EARLIER}\n\n{summary.text()}")
         parts.append(f"Messages:\n\n{self.transcript(old)}")
         ask: list[Message] = [UserMessage(source=HARNESS_SOURCE, content="\n\n".join(parts))]
-        # 2. The model answers in the summary's format.
+
+        # 3. The model answers in the summary's format.
         result = await (self.client or client).run(ask, None, Summary, ctx=ctx, middleware=middleware)
         answer = result.message.structured_output
         if not isinstance(answer, Summary):
@@ -92,6 +102,7 @@ class SummaryCompaction(CoreCompaction[SummaryCompactionConfig]):
         return SummaryCompactionConfig(
             threshold=self.threshold, keep=self.keep, max_result_chars=self.max_result_chars,
             keep_groups=self.keep_groups, instructions=self.instructions,
+            max_share=self.max_share,
             client=self.client.serialize() if self.client is not None else None,
         )
 
@@ -102,5 +113,5 @@ class SummaryCompaction(CoreCompaction[SummaryCompactionConfig]):
             client = t.cast("AnyClient", ComponentBase.deserialize(config.client))
         return cls(
             client, config.instructions, config.threshold, config.keep,
-            config.max_result_chars, config.keep_groups,
+            config.max_result_chars, config.keep_groups, max_share=config.max_share,
         )

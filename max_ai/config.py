@@ -136,7 +136,12 @@ class Settings(BaseSettings):
 
     # -------- COMPACTION -------------------------------------------------------
     compaction_prompt_budget_tokens: int = Field(default=6000, gt=0)
-    compaction_summary_budget_tokens: int = Field(default=2000, gt=0)
+    compaction_summary_max_share: float = Field(
+        default=0.10,
+        gt=0,
+        le=1,
+        description="Most of the context window the summary may take; the model is told.",
+    )
     compaction_safety_margin_ratio: float = Field(default=0.05, ge=0, lt=1)
     compaction_live_message_threshold: float = Field(default=0.8, gt=0, lt=1)
     compaction_live_message_keep_ratio: float = Field(default=0.2, gt=0, lt=1)

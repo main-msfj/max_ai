@@ -151,6 +151,15 @@ async def test_a_model_that_refuses_the_conversation_as_too_long_gets_it_compact
     assert ctx.position is not None and ctx.messages[-1].content == "ok"
 
 
+async def test_the_summary_is_told_its_room_a_part_of_the_window_of_the_agent():
+    cheap, agent = Model(Summary(goal="g"), window=100_000), Model(window=3000)
+    compaction = SummaryCompaction(client=cheap, max_share=0.2)
+    await compaction.compact(conversation(8), agent)
+    assert "must stay under 600 tokens" in cheap.asked[0][0][0].content
+    again = ComponentBase.deserialize(SummaryCompaction(max_share=0.2).serialize().model_dump())
+    assert again.max_share == 0.2
+
+
 def test_a_loop_is_stored_with_its_compaction_and_built_again():
     loop = ReactLoop(max_iterations=7, compaction=SummaryCompaction(instructions="paths", keep=0.5))
     again = ComponentBase.deserialize(loop.serialize().model_dump())
