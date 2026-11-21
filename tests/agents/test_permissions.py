@@ -250,3 +250,18 @@ def test_a_call_that_names_a_file_of_keys_is_always_asked(tool, target):
 )
 def test_a_name_that_only_looks_like_one_is_not(tool, target):
     assert not Permissions.dangerous(tool, target)
+
+
+# -------- why a call is asked ------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("rules", "command", "why"),
+    [
+        ({}, "cat .env", Permissions.WHY_SECRETS),
+        ({}, "ls && rm -rf build", "rm deletes or takes control: always asked"),
+        ({}, "cat .agent/setting.json", Permissions.WHY_SETTINGS),
+        ({"ask": ["bash(pytest*)"]}, "pytest -q", Permissions.WHY_RULE),
+        ({}, "ls -la", None),
+    ],
+)
+def test_the_rules_say_why_they_ask(rules, command, why):
+    assert Permissions(rules).why("bash", {"command": command}) == why
