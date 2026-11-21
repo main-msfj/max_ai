@@ -472,9 +472,9 @@ Checked against the code on this branch:
   against a fake SDK. Claude's newer models drop the thinking blocks of a
   conversation whose history was edited: compaction and the removal of
   blocked content do edit it, so that thinking is lost (nothing fails).
-- **Examples** were checked with a model that is faked, not against a real
-  one; `examples/basic/12_skills.py` could not be checked (GitHub's rate
-  limit). `example-deploy/` was run against real models.
+- **Examples** were run against a real model (DeepSeek through OpenRouter),
+  except `examples/basic/12_skills.py`: GitHub's rate limit stops it without
+  a token. What is still missing is listed in [MILESTONES.md](MILESTONES.md).
 
 ## Repository map
 

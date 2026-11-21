@@ -13,7 +13,6 @@ from max_ai.capabilities.memory import Memory
 from max_ai.capabilities.middleware import LoggingMiddleware
 from max_ai.capabilities.sandbox.local import LocalSandbox
 from max_ai.capabilities.session_store import LocalSessionStore
-from max_ai.capabilities.tools.bash import BashTool
 from max_ai.capabilities.tools.function_as_tool import FunctionAsTool
 from max_ai.types.run_context import RunContext
 from max_ai.types.tools import ToolApprovalMode
@@ -22,7 +21,7 @@ LOCAL = Path("./local")
 
 
 def calculate_compound_interest(principal: float, annual_rate: float, years: int) -> float:
-    """Calculate the balance with annual compound interest."""
+    """Calculate the balance with annual compound interest. ``annual_rate`` is a percentage: 5 for 5%."""
     return round(principal * (1 + annual_rate / 100) ** years, 2)
 
 
@@ -37,7 +36,7 @@ async def main() -> None:
         description="An assistant with most of the framework's pieces.",
         instructions="Help the user. Use your tools and what you remember of them.",
         client=OpenAIChatCompletionClient(model="gpt-5.4-nano"),
-        toolset=[interest, BashTool()],
+        toolset=[interest],
         memory=Memory(),
         sandbox=LocalSandbox(root=str(LOCAL / "box")),
         # When the conversation fills the window, the old part becomes a summary.
