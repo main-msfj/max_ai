@@ -7,13 +7,6 @@ class ChatHistoryError(Exception):
         super().__init__(message)
 
     @classmethod
-    def wrong_input(cls, index: int):
-        return cls(
-            f"message_history[{index}] is a raw dict. "
-            "Use ChatHistory.load_from() instead."
-        )
-
-    @classmethod
     def wrong_type(cls, index: int, actual_type: type):
         return cls(
             f"message_history[{index}] is {actual_type.__name__}, expected CoreMessage."

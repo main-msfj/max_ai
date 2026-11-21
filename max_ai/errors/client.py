@@ -65,10 +65,6 @@ class ClientError(Exception):
         )
 
     @classmethod
-    def invalid_model_config(cls, detail: str) -> "ClientError":
-        return cls(f"Invalid model configuration: {detail}", kind="invalid_config")
-
-    @classmethod
     def invalid_request(cls, detail: str) -> "ClientError":
         return cls(f"Invalid request: {detail}", kind="invalid_request")
 

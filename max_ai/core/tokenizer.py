@@ -102,17 +102,6 @@ class TokenCounter(BaseModel):
     def count_messages(self, messages: t.Iterable[CoreMessage]) -> int:
         return sum(self.count_message(message) for message in messages)
 
-    def count_serialized(self, value: t.Any) -> int:
-        if isinstance(value, BaseModel):
-            return self.count_text(value.model_dump_json(exclude_none=True))
-
-        try:
-            text = json.dumps(value, ensure_ascii=False, default=str)
-        except TypeError:
-            text = str(value)
-
-        return self.count_text(text)
-
     def _message_budget_payload(self, message: CoreMessage) -> str:
         data = message.model_dump(exclude_none=True, exclude={"thinking"})
 

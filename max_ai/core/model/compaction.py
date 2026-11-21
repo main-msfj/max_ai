@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, JsonValue
 
-from ..messages import AssistantMessage, CoreMessage
+from ..messages import CoreMessage
 
 
 class CompactionState(BaseModel):
@@ -42,13 +42,6 @@ class MessageGroup(BaseModel):
 
     messages: list[CoreMessage] = Field(default_factory=list)   # type: ignore[assignment]
     token_count: int = 0
-
-    @property
-    def is_tool_group(self) -> bool:
-        return any(
-            isinstance(message, AssistantMessage) and bool(message.tool_calls)
-            for message in self.messages
-        )
 
 
 __all__ = [

@@ -68,32 +68,6 @@ class AgentPlan(BaseModel):
                 )
         return self
 
-    def as_text(self) -> str:
-        """One line per step, for prompts: ``[active] 2. Write the scraper``."""
-        return "\n".join(f"[{s.status}] {s.id}. {s.description}" for s in self.steps)
-
     def has_unfinished_steps(self) -> bool:
         """True if any step is still pending or active (work remains)."""
         return any(s.status in ("pending", "active") for s in self.steps)
-
-    def active_step(self) -> PlanStep | None:
-        """The step currently in progress, or None."""
-        return next((s for s in self.steps if s.status == "active"), None)
-
-    def next_pending(self) -> PlanStep | None:
-        """The first pending step (the next to run)."""
-        return next((s for s in self.steps if s.status == "pending"), None)
-
-    def mark_done(self, step_id: int) -> None:
-        """Mark as completed by id"""
-        for s in self.steps:
-            if s.id == step_id:
-                s.status = "done"
-                return
-
-    def mark_failed(self, step_id: int) -> None:
-        """Mark a step as failed (could not be completed)"""
-        for s in self.steps:
-            if s.id == step_id:
-                s.status = "failed"
-                return

@@ -2,7 +2,7 @@ import typing as t
 
 from pydantic import BaseModel, Field
 
-from .messages import CoreMessage, Message
+from .messages import Message
 
 # -------- UNIT BLOCKS -----------------------------------------------------------
 
@@ -17,10 +17,6 @@ class ChatHistoryBlock(BaseModel):
     """
 
     message_history: list[Message] = Field(default_factory=list)  # type: ignore
-
-    def iter_messages(self) -> t.Iterator[CoreMessage]:
-        """Iterate over the messages in chronological order."""
-        return iter(self.message_history)
 
     def __len__(self) -> int:
         return len(self.message_history)

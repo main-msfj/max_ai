@@ -29,7 +29,6 @@ class Harness:
     """Rules as class methods. Some check and raise ``HarnessError``; the
     others return what the harness adds (tools, middlewares, compaction)."""
 
-    VERSION: t.ClassVar[str] = "1"
     BASH: t.ClassVar[str] = "bash"
 
     TOOL_TOO_LONG: t.ClassVar[str] = (
