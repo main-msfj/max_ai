@@ -71,7 +71,6 @@ class SpanProjector:
         self.turn: Span | None = None  # The turn running now
         self.step: Span | None = None  # The step running now
         self.model: Span | None = None  # The model call waiting for its answer
-        self.compaction: Span | None = None  # The compaction running now
 
     def start_turn(self, task: str | None, at: datetime | None = None) -> Span:
         """Open a turn; a turn still open is closed as cancelled."""
@@ -93,7 +92,7 @@ class SpanProjector:
             cut = span.kind != "step" and status == "ok"
             self._close(span, at, "cancelled" if cut else status)
         self._close(self.turn, at, status)
-        self.turn = self.step = self.model = self.compaction = None
+        self.turn = self.step = self.model = None
 
     def feed(self, event: CoreEvent) -> Span | None:
         """Apply one event; return the span it opened or changed, if any."""
@@ -153,15 +152,9 @@ class SpanProjector:
             return self._close(span, result.completed_at or at, "ok" if result.success else "error")
 
         if isinstance(event, CompactionEvent):
-            if event.phase == "start":
-                self.compaction = self._open("compaction", event.strategy, self._parent(), at)
-                self.compaction.input = event.tokens_before
-                return self.compaction
-            span, self.compaction = self.compaction, None
-            if span is None:
-                return None
-            span.usage, span.output = event.usage, event.summary
-            return self._close(span, at, "ok")
+            span = self._open("compaction", event.strategy, self._parent(), at)
+            span.input, span.usage, span.output = event.tokens_before, event.usage, event.summary
+            return self._close(span, at, "error" if event.summary_failed else "ok")
 
         if isinstance(event, FatalErrorEvent):
             if turn is not None:

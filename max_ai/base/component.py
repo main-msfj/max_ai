@@ -17,24 +17,23 @@ import yaml
 from pydantic import BaseModel, Field
 from pydantic_core import to_jsonable_python
 
-ComponentType = t.Union[
-    t.Literal[
-        "model",
-        "agent",
-        "tool",
-        "termination",
-        "orchestrator",
-        "step",
-        "workflow",
-        "memory",
-        "store",
-        "knowledge",
-        "prompts",
-        "skills",
-        "context",
-        "sandbox",
-    ],
-    str,
+# Every kind of component there is; a new kind is added here.
+ComponentType = t.Literal[
+    "agent",
+    "client",
+    "compaction",
+    "completion",
+    "embedding",
+    "knowledge",
+    "loop",
+    "memory",
+    "middleware",
+    "prompts",
+    "quota_store",
+    "sandbox",
+    "session_store",
+    "skills",
+    "tool",
 ]
 
 ConfigT = t.TypeVar("ConfigT", bound=BaseModel)

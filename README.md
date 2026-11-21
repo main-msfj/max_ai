@@ -127,8 +127,9 @@ Pausing for the user:
 ```python
 state = await agent.run("Clean the build folder", ctx)
 if state.finish_reason == "waiting_for_user":
-    for record in ctx.tool_state.pending_approvals:
-        await agent.approve(ctx, record.id)       # or record.reject()
+    for record in ctx.tool_state.records.values():
+        if record.is_pending_approval:
+            await agent.approve(ctx, record.id)   # or record.reject()
     state = await agent.run(None, ctx)
 ```
 
@@ -212,8 +213,9 @@ to that model on OpenRouter's decisions endpoint. If it is at least
 `HARNESS_JUDGE_MIN_SAFE` (0.9) sure the command is safe, it runs without asking.
 It only removes questions; it never overrides deny, ask or dangerous rules, and
 any failure falls back to asking. **Data flow:** each judged call sends the
-command, the model's description of it, and the user's last message (up to
-4,000 characters each) to OpenRouter.
+command whole, and the model's description of it and the user's last message
+cut at 4,000 characters, to OpenRouter. A command longer than that is not
+sent: the user is asked.
 
 **Memory at compaction** (`hooks.py`): when messages leave the window, a model
 extracts up to 5 facts the user stated about themselves or their work and saves
@@ -436,6 +438,9 @@ ones the code uses today:
 | `TOOL_TIMEOUT_SECONDS` | 360 | most one tool call may run |
 | `HARNESS_SANDBOX_SECONDS` | 600 | idle life of a sandbox; must be at least the tool timeout |
 | `HARNESS_RETRY_ATTEMPTS` | 3 | tries per model call |
+| `HARNESS_MAX_ITERATIONS` | 50 | model calls one turn may make |
+| `HARNESS_PARALLEL_TOOLS` | 8 | read-only calls of one reply that run at once |
+| `HARNESS_TOOL_RESULT_CHARS` | 40000 | a longer tool result is saved to a file and shown cut |
 | `HARNESS_TOOLS_MAX_TOKENS` | 20000 | most all loaded tools may take |
 | `HARNESS_DEFERRED_TOOLS_MIN_TOKENS` | 5000 | below this, deferred tools are loaded directly |
 | `HARNESS_PROMPT_MAX_SHARE` | 0.10 | most of the window the system prompt may take |

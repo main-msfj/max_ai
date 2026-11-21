@@ -37,7 +37,6 @@ from ..capabilities.tools.todos import WriteTodosTool
 from ..core.event_type import (
     CompactionEvent,
     CoreEvent,
-    ErrorEvent,
     ModelCallEvent,
     ModelResponseEvent,
     ModelRetryEvent,
@@ -122,8 +121,6 @@ _ASK_USER = AskUserTool.TOOL_NAME
 _WRITE_TODOS = WriteTodosTool.TOOL_NAME
 _PLAN_OPTIONS = ("Accept", "No")  # what the user picks for a plan that waits
 
-# Harness events worth a line even outside verbose mode.
-_ALWAYS_SHOWN = {"error"}
 # Folded into the end-of-turn summary line, or shown as an error already.
 _NEVER_SHOWN = {
     "user_input_request", "tool_call", "tool_call_response", "tool_approval",
@@ -202,7 +199,6 @@ class MaxAIApp(App[None]):
         self._tokens_input = 0
         self._tokens_output = 0
         self._tokens_cached = 0
-        self._compaction: CompactionBlock | None = None
         self._turn_started_at: float | None = None
         self._turn_tokens = 0
         self._frame = 0
@@ -857,7 +853,7 @@ class MaxAIApp(App[None]):
             self._retry = event
             self._refresh_status()
             return
-        if isinstance(event, (ModelResponseEvent, ErrorEvent)) and self._retry is not None:
+        if isinstance(event, ModelResponseEvent) and self._retry is not None:
             self._retry = None
             self._refresh_status()
         if isinstance(event, ModelCallEvent):
@@ -882,15 +878,10 @@ class MaxAIApp(App[None]):
         if isinstance(event, CompactionEvent):
             await self._render_compaction(event)
             return
-        if isinstance(event, ErrorEvent) and event.error_type == "compaction_failed":
-            if self._compaction is not None:
-                self._compaction.fail(event.error_message)
-                self._compaction = None
-                return
         etype = event.event_type
         if etype in _NEVER_SHOWN:
             return
-        if etype in _ALWAYS_SHOWN or self.verbose:
+        if self.verbose:
             await self._mount(NoteLine(event_line(event)))
 
     async def _write_tool_event(
@@ -944,20 +935,12 @@ class MaxAIApp(App[None]):
                 del self._tools[call_id]
 
     async def _render_compaction(self, event: CompactionEvent) -> None:
-        """One block per compaction: live at start, folded line at end."""
+        """One folded line per compaction; its body is the summary."""
         await self._finish_assistant()
-        if event.phase == "start":
-            self._compaction = CompactionBlock(event.strategy)
-            await self._mount(self._compaction)
-            return
-        block, self._compaction = self._compaction, None
         if not event.changed:
-            if block is not None:
-                await block.remove()  # triggered but nothing to do: no noise
             return
-        if block is None:
-            block = CompactionBlock(event.strategy)
-            await self._mount(block)
+        block = CompactionBlock(event.strategy)
+        await self._mount(block)
         block.finish(event)
         self._refresh_usage()
 

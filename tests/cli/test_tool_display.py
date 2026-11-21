@@ -117,3 +117,20 @@ def test_the_theme_is_the_one_tried_then_the_saved_one_then_gray(tmp_path, monke
 
     with pytest.raises(ValueError, match="pink is not a theme"):
         Theme.save("pink")
+
+
+def test_a_compaction_whose_summary_failed_says_what_was_lost():
+    from max_ai.cli.blocks import CompactionBlock
+    from max_ai.core.event_type import CompactionEvent
+
+    def header(**given) -> str:
+        block = CompactionBlock("SummaryCompaction")
+        block.done = True
+        block.event = CompactionEvent(
+            source="loop", strategy="SummaryCompaction", changed=True, kept_message_count=6,
+            tokens_before=90_000, tokens_after=12_000, **given,
+        )
+        return block._header().plain
+
+    assert "failed" not in header(summary="Goal: build fizz", removed=14)
+    assert "the summary failed: 14 messages left without one" in header(removed=14, summary_failed=True)

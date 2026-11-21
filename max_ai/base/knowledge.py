@@ -123,7 +123,7 @@ class CoreKnowledgeRegistry(CoreAgentCapabilities[BaseModel], ABC):
         The tool is named ``search_{self.name}``, so multiple sources
         in the same agent stay distinguishable.
         """
-        if self.tool_mode == KnowledgeToolMode.NONE: # This doe sno make sense as knowledge must be injeccted other wise it will never be used
+        if self.tool_mode == KnowledgeToolMode.NONE:  # Does not make sense: knowledge must be injected, or it is never used
             return None
         return self._build_search_tool()
 

@@ -37,6 +37,7 @@ class CompactionResult(BaseModel):
     summary: Summary | None = None  # what is kept of the messages that left
     changed: bool = False  # something was shortened or removed
     removed: int = 0  # messages that left
+    summary_failed: bool = False  # they left with no summary: it could not be written
     usage: Usage = Field(default_factory=Usage)  # what keeping the summary cost
     context: Context = Field(default_factory=Context)  # the window, part by part, after it
     tokens_before: int = 0
@@ -169,6 +170,7 @@ class CoreCompaction(ComponentBase[ConfigT], ABC):
             logger.error(
                 "Compaction could not reduce the old messages; they are dropped", exc_info=reduced
             )
+            result.summary_failed = True
         else:
             result.summary, result.usage = reduced
         if isinstance(looked, BaseException):

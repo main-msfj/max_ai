@@ -41,7 +41,7 @@ class CoreLLMClient(ComponentBase[ConfigT], ABC):
 
     PROVIDER_NAME: t.ClassVar[str] = "The provider"  # how its errors name it
     API_KEY_ENV: t.ClassVar[str | None] = None  # env var with the key; configs store this name
-    RETRY: t.ClassVar[RetryPolicy] = RetryPolicy(attempts=3)  # when none is given
+    RETRY: t.ClassVar[RetryPolicy] = RetryPolicy()  # when none is given
 
     def __init__(
         self,

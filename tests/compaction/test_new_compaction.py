@@ -137,6 +137,7 @@ async def test_the_loop_compacts_before_the_model_and_leaves_ctx_in_order():
     assert "Current folder: /w/repo" in system and "- [in_progress] run tests" in system
     assert not any("build fizz" in str(m.content) for m in ctx.messages)  # the summary is not a message
     assert ctx.summary == Summary(goal="build fizz") and ctx.files_seen == {} and seen and state.compactions == 1
+    assert ctx.compaction.compactions == 1  # what the list of sessions shows
     assert state.usage.llm_calls == 3  # the summary call is counted with the two of the turn
     assert ctx.messages[-1].content == "really done"
 
@@ -247,6 +248,8 @@ async def test_a_failure_looking_at_them_does_not_stop_the_summary_nor_the_other
         conversation(8), Model(ClientError.authentication_failed("x")), leaving=look
     )
     assert failed.removed > 0 and looked == [failed.removed]
+    # Nothing is kept of them, and the result says so.
+    assert failed.summary is None and failed.summary_failed
 
 
 async def test_at_compaction_what_the_user_said_goes_to_the_memory(tmp_path, monkeypatch):

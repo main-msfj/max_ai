@@ -2,7 +2,6 @@
 message blocks. Token counting lives in ``core.tokenizer``."""
 
 from ..model.compaction import (
-    CompactionResult,
     CompactionState,
     MessageGroup,
 )
@@ -13,7 +12,6 @@ from .groups import (
 
 __all__ = [
     "CompactionState",
-    "CompactionResult",
     "MessageGroup",
     "group_atomic_messages",
     "split_recent_messages",

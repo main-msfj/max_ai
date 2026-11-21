@@ -18,7 +18,6 @@ def conversation(user: str = "alice", session: str = "s1", first: str = "arma un
         UserMessage(source=user, content=first),
         AssistantMessage(source="agent", content="listo"),
     ])
-    ctx.compaction.state["summary"] = {"summary": "resumen previo"}
     ctx.compaction.compactions = 2
     ctx.plan = AgentPlan(rationale="r", steps=[{"id": 1, "description": "paso", "status": "active"}])
     return ctx
@@ -32,7 +31,7 @@ async def test_round_trip_keeps_the_whole_conversation(tmp_path):
 
     loaded = await LocalSessionStore(tmp_path).load("alice", "s1")  # e.g. another process
     assert loaded.model_dump() == ctx.model_dump()
-    assert loaded.compaction.state["summary"] == {"summary": "resumen previo"}
+    assert loaded.compaction.compactions == 2
     assert loaded.plan.steps[0].status == "active"
 
 
