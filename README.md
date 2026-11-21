@@ -536,6 +536,10 @@ Planned, not started; order inside a group is not a commitment.
   as a client and as a server.
 - **Always-on agent:** an agent that stays up and wakes on a schedule or an
   event, not only on a user message.
+- **Sandbox on first use:** today a turn starts the user's sandbox before the
+  model is called, even for a greeting. Start it at the first tool that needs
+  it; the open question is the memory index, which lives inside it. Measure
+  the first message on Docker and E2B before building.
 
 **Later**
 
