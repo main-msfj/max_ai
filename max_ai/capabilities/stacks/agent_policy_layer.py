@@ -39,7 +39,7 @@ class AgentPolicyLayer(Component[StackConfig], CoreLayer):
     """
     component_schema = StackConfig
     component_type = "prompts"
-    component_provider_override = "maxai.stacks.AgentPolicyLayer"
+    component_provider_override = "max_ai.capabilities.stacks.AgentPolicyLayer"
     
 
     def __init__(

@@ -77,31 +77,6 @@ def _type_to_provider_str(cls: type) -> str:
     return f"{cls.__module__}.{cls.__qualname__}"
 
 
-KNOWN_PROVIDERS: dict[str, str] = {
-    "OpenAIChatCompletionClient": "max_ai.capabilities.clients.openai.OpenAIChatCompletionClient",
-    "maxai.llm.OpenAIChatCompletionClient": "max_ai.capabilities.clients.openai.OpenAIChatCompletionClient",
-    "OpenRouterChatCompletionClient": "max_ai.capabilities.clients.openrouter.OpenRouterChatCompletionClient",
-    "maxai.llm.OpenRouterChatCompletionClient": "max_ai.capabilities.clients.openrouter.OpenRouterChatCompletionClient",
-    "maxai.stacks.AgentPolicyLayer": "max_ai.capabilities.stacks.agent_policy_layer.AgentPolicyLayer",
-    "maxai.stacks.TaskAnalysisLayer": "max_ai.capabilities.stacks.task_analysis_layer.TaskAnalysisLayer",
-    "maxai.stacks.RenderingLayer": "max_ai.capabilities.stacks.rendering_layer.RenderingLayer",
-    "maxai.stacks.SkillsLayer": "max_ai.capabilities.stacks.skills_layer.SkillsLayer",
-    "maxai.stacks.KnowledgeLayer": "max_ai.capabilities.stacks.knowledge_layer.KnowledgeLayer",
-    "maxai.stacks.MemoryFilesLayer": "max_ai.capabilities.stacks.memory_files_layer.MemoryFilesLayer",
-    "maxai.stacks.CustomLayer": "max_ai.capabilities.stacks.custom_layer.CustomLayer",
-    "maxai.stacks.ToolsLayer": "max_ai.capabilities.stacks.tools_layer.ToolsLayer",
-    "maxai.stacks.SessionLayer": "max_ai.capabilities.stacks.session_layer.SessionLayer",
-    "maxai.stacks.WorkspaceLayer": "max_ai.capabilities.stacks.workspace_layer.WorkspaceLayer",
-    "maxai.agents.Agent": "max_ai.agents.agent.Agent",
-    "maxai.completion.RuntimeCompletionGate": "max_ai.capabilities.completion_gate.gate.RuntimeCompletionGate",
-    "maxai.session_store.LocalSessionStore": "max_ai.capabilities.session_store.local._store.LocalSessionStore",
-    "maxai.compaction.SummaryCompaction": "max_ai.capabilities.compaction.summary.SummaryCompaction",
-    "maxai.compaction.SlidingWindowCompaction": "max_ai.base.compaction.WindowCompaction",
-}
-
-
-# Provider allowlist: deserialize imports the class a config names, and an
-# import runs code, so only trusted packages load. Built-ins always do.
 _ALLOWED_PREFIXES: set[str] = {"max_ai."}
 
 
@@ -426,7 +401,7 @@ class Component(t.Generic[ConfigT]):
 
 def _component_class(provider: str) -> type[ComponentBase[t.Any]]:
     """The allowed component class a ``provider`` names."""
-    path = KNOWN_PROVIDERS.get(provider, provider)
+    path = provider
     parts = path.rsplit(".", maxsplit=1)
     if len(parts) != 2:
         raise ValueError(f"Invalid provider path: {path!r}")

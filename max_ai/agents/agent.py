@@ -56,7 +56,7 @@ class Agent(ComponentBase[AgentSpec]):
 
     component_type = "agent"
     component_schema = AgentSpec
-    component_provider_override = "maxai.agents.Agent"
+    component_provider_override = "max_ai.agents.Agent"
 
     NOT_STORABLE: t.ClassVar[str] = "Cannot serialize {what} {name!r}: {hint}"
     TOOL_HINT: t.ClassVar[str] = (

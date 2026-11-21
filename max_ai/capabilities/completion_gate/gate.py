@@ -121,7 +121,7 @@ class RuntimeCompletionGate(CompletionBase):
     """
 
     component_schema = RuntimeGateConfig
-    component_provider_override = "maxai.completion.RuntimeCompletionGate"
+    component_provider_override = "max_ai.capabilities.completion_gate.RuntimeCompletionGate"
 
     def __init__(self, config: RuntimeGateConfig | None = None) -> None:
         super().__init__()

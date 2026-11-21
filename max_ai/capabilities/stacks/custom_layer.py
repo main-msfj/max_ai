@@ -18,7 +18,7 @@ class CustomLayer(Component[StackConfig], CoreLayer):
 
     component_schema = StackConfig
     component_type = "prompts"
-    component_provider_override = "maxai.stacks.CustomLayer"
+    component_provider_override = "max_ai.capabilities.stacks.CustomLayer"
 
     def __init__(
         self,

@@ -76,7 +76,7 @@ def test_output_format_is_stored_as_json_schema(tmp_path):
     spec = full_agent(tmp_path).serialize().config
     assert spec["output_format"] == Invoice.model_json_schema()
 
-    rebuilt = Agent.deserialize(json.dumps({"provider": "maxai.agents.Agent", "config": spec}))
+    rebuilt = Agent.deserialize(json.dumps({"provider": "max_ai.agents.Agent", "config": spec}))
     shape = rebuilt.output_format
     assert shape is not None and shape.model_json_schema() == Invoice.model_json_schema()
     ok = t.cast(t.Any, shape.model_validate({"customer": "Ana", "status": "paid", "items": [{"name": "x"}]}))

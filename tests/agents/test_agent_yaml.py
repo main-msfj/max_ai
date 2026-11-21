@@ -33,7 +33,7 @@ def test_the_compact_form_rebuilds_the_same_agent(tmp_path, fmt):
 def test_a_hand_written_yaml_needs_only_what_differs(tmp_path):
     path = tmp_path / "agent.yaml"
     path.write_text(f"""
-provider: maxai.agents.Agent
+provider: max_ai.agents.Agent
 config:
   name: helper
   description: Answers questions.
@@ -41,7 +41,7 @@ config:
     Be brief.
     Cite your sources.
   client:
-    provider: maxai.llm.OpenAIChatCompletionClient
+    provider: max_ai.capabilities.clients.openai.OpenAIChatCompletionClient
     config: {{model: gpt-4o-mini}}
   sandbox:
     provider: max_ai.capabilities.sandbox.local.LocalSandbox

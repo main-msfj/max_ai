@@ -24,7 +24,7 @@ class RenderingLayer(Component[StackConfig], CoreLayer):
 
     component_schema = StackConfig
     component_type = "prompts"
-    component_provider_override = "maxai.stacks.RenderingLayer"
+    component_provider_override = "max_ai.capabilities.stacks.RenderingLayer"
 
     def __init__(
         self,
