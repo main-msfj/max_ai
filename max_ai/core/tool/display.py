@@ -64,28 +64,27 @@ def _first_line(text: str, limit: int = 100) -> str:
 
 
 def command_lines(command: str) -> list[str]:
-    """A command cut in lines to be read: after each ``;``, ``&&`` or
-    ``||`` that is not inside quotes. Only how it is shown: what runs is
-    the command as it was written."""
+    """A command in lines to be read. One written in several lines (a
+    script, a heredoc) is shown as it is, its indentation kept; one in a
+    single line is cut after each ``;`` that is not inside quotes. Only how
+    it is shown: what runs is the command as it was written."""
+    command = command.strip()
+    if "\n" in command:
+        return command.splitlines()
     lines: list[str] = []
     line, quote, index = "", "", 0
     while index < len(command):
         char = command[index]
-        pair = command[index : index + 2]
         # 1. Inside quotes nothing is cut; a backslash keeps the next character.
         if quote:
             quote = "" if char == quote else quote
         elif char in "'\"":
             quote = char
         elif char == "\\":
-            line, index = line + pair, index + 2
+            line, index = line + command[index : index + 2], index + 2
             continue
-        # 2. Outside them, a line ends after the operator or at a line break.
-        elif pair in ("&&", "||"):
-            lines.append((line + pair).strip())
-            line, index = "", index + 2
-            continue
-        elif char in ";\n":
+        # 2. Outside them, a line ends after the ``;``.
+        elif char == ";":
             lines.append((line + char).strip())
             line, index = "", index + 1
             continue

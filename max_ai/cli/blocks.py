@@ -70,7 +70,7 @@ class WelcomeBox(Static):
             body.append("\n")
         body.append(f"\n{agent_name}\n\n", style=f"bold {PRIMARY}")
         for key, what in (("/help", "commands"), ("esc", "interrupt"), ("ctrl+t", "thinking"),
-                          ("ctrl+b", "files")):
+                          ("ctrl+b", "workspace")):
             body.append(key, style=f"bold {PRIMARY}")
             body.append(f" {what}   ", style=DIM)
         super().__init__(body)

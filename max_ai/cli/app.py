@@ -22,7 +22,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
 from textual.widget import Widget
-from textual.widgets import Button, DirectoryTree, OptionList, Static, TextArea
+from textual.widgets import Button, OptionList, Static, TextArea
 
 from ..agents.agent import Agent
 from ..base.loop import LoopState
@@ -92,9 +92,10 @@ from .theme import (
     SYSTEM,
     TEXT,
     WARNING,
+    Theme,
     shimmer,
 )
-from .widgets import CommandMenu, FileTree, InfoPanel, PromptEditor
+from .widgets import CommandMenu, InfoPanel, PromptEditor, WorkspaceTree
 
 COMMANDS = {
     "/help": "show commands and shortcuts",
@@ -107,7 +108,8 @@ COMMANDS = {
     "/clear": "start a new conversation (same as /new)",
     "/thinking": "show or hide thinking boxes",
     "/verbose": "show or hide runtime events",
-    "/files": "toggle the file sidebar",
+    "/workspace": "show or hide the files of this session",
+    "/theme": "show the color themes, or pick one: /theme blue",
     "/exit": "quit",
 }
 
@@ -148,15 +150,13 @@ class MaxAIApp(App[None]):
     #sidebar {{ width: 30; background: {PANEL}; border-right: tall {BORDER_SUBTLE}; padding: 1 1 0 1; display: none; }}
     .sidebar-title {{ height: 1; color: {DIM}; text-style: bold; margin-bottom: 1; }}
     #workspace-files {{ height: 1fr; background: {PANEL}; border: none; color: {MUTED}; padding: 0; scrollbar-size: 0 0; }}
-    DirectoryTree > .tree--cursor, DirectoryTree:focus > .tree--cursor {{ background: {ELEMENT}; color: {TEXT}; text-style: none; }}
-    DirectoryTree > .tree--highlight, DirectoryTree > .tree--highlight-line {{ background: {ELEMENT}; }}
-    DirectoryTree > .tree--guides {{ color: {BORDER_SUBTLE}; }}
-    DirectoryTree > .directory-tree--folder {{ color: {TEXT}; text-style: none; }}
-    DirectoryTree > .directory-tree--extension, DirectoryTree > .directory-tree--file {{ color: {MUTED}; text-style: none; }}
-    #main {{ width: 1fr; padding: 0 1; }}
+    WorkspaceTree > .tree--cursor, WorkspaceTree:focus > .tree--cursor {{ background: {ELEMENT}; color: {TEXT}; text-style: none; }}
+    WorkspaceTree > .tree--highlight, WorkspaceTree > .tree--highlight-line {{ background: {ELEMENT}; }}
+    WorkspaceTree > .tree--guides {{ color: {BORDER_SUBTLE}; }}
+        #main {{ width: 1fr; padding: 0 1; }}
     #transcript {{ height: 1fr; background: {BACKGROUND}; scrollbar-size: 1 1; padding: 0 1; scrollbar-background: {BACKGROUND}; scrollbar-background-hover: {BACKGROUND}; scrollbar-background-active: {BACKGROUND}; scrollbar-color: {ELEMENT}; scrollbar-color-hover: {PRIMARY}; scrollbar-color-active: {PRIMARY}; }}
     #request-card {{ height: auto; display: none; border: round {PRIMARY}; padding: 0 1; margin: 1 0 0 0; }}
-    #request-detail {{ height: auto; color: {TEXT}; margin-bottom: 1; }}
+    #request-detail {{ height: auto; max-height: 24; overflow-y: auto; color: {TEXT}; margin-bottom: 1; }}
     #decisions {{ height: auto; display: none; }}
     #decisions Button {{ width: 1fr; height: 1; min-height: 1; border: none; margin: 0; background: {PANEL}; color: {TEXT}; content-align: left middle; text-align: left; }}
     #decisions Button:hover, #decisions Button:focus {{ background: {ELEMENT}; color: {PRIMARY}; }}
@@ -171,7 +171,7 @@ class MaxAIApp(App[None]):
         Binding("escape", "interrupt", "Interrupt", priority=True),
         Binding("ctrl+t", "toggle_thinking", "Thinking", priority=True),
         Binding("ctrl+o", "toggle_verbose", "Verbose", priority=True),
-        Binding("ctrl+b", "toggle_sidebar", "Files"),
+        Binding("ctrl+b", "toggle_sidebar", "Workspace"),
         Binding("ctrl+l", "clear_chat", "Clear screen"),
         Binding("pageup", "scroll_transcript(-1)", "Scroll up", show=False),
         Binding("pagedown", "scroll_transcript(1)", "Scroll down", show=False),
@@ -221,14 +221,14 @@ class MaxAIApp(App[None]):
         self._thinking: ThinkingBlock | None = None
         self._assistant: AssistantBlock | None = None
 
-    NO_FILES = "The sandbox is not on this computer: there is no file panel and @file is off."
-
     # -------- LAYOUT -----------------------------------------------------------
     def compose(self) -> ComposeResult:
         with Horizontal(id="body"):
             with Vertical(id="sidebar"):
-                yield Static("FILES", classes="sidebar-title")
-                yield self._tree(self.workspace_root, "workspace-files")
+                yield Static("WORKSPACE", classes="sidebar-title")
+                tree = WorkspaceTree("workspace", id="workspace-files")
+                tree.show_root = False
+                yield tree
             with Vertical(id="main"):
                 yield Transcript(id="transcript")
                 with Vertical(id="request-card"):
@@ -244,13 +244,6 @@ class MaxAIApp(App[None]):
                     )
                 yield CommandMenu(id="menu")
                 yield Static("", id="usage")
-
-    @staticmethod
-    def _tree(root: Path, tree_id: str) -> DirectoryTree:
-        """A file tree that shows what is inside ``root``, not the folder itself."""
-        tree = FileTree(str(root), id=tree_id)
-        tree.show_root = False
-        return tree
 
     async def on_mount(self) -> None:
         # 1. The banner, and the MCP servers the agent was given.
@@ -380,7 +373,7 @@ class MaxAIApp(App[None]):
         status.update(line)
 
     def _refresh_usage(self) -> None:
-        """Tokens spent, the window used and where compaction starts."""
+        """Tokens spent and the window used."""
         # 1. Tokens of this CLI's life.
         line = Text()
         if self.verbose:
@@ -397,12 +390,6 @@ class MaxAIApp(App[None]):
         used = parts.prompt + parts.tools + parts.messages if parts else 0
         line.append(" · ctx ", style=DIM)
         line.append_text(context_bar(used, window))
-        # 3. Compaction starts when the messages fill their room.
-        name = type(self.agent.reasoning.compaction).__name__.removesuffix("Compaction").lower()
-        line.append(f" · {name} compaction", style=DIM)
-        if parts is not None and parts.window:
-            share = round((parts.window - parts.output - parts.margin) / parts.window * 100)
-            line.append(f" at ~{share}%", style=DIM)
         usage = self._static("#usage")
         if usage is not None:
             usage.update(line)
@@ -421,14 +408,63 @@ class MaxAIApp(App[None]):
         else:
             transcript.scroll_page_down()
 
-    def action_toggle_sidebar(self) -> None:
-        """Show or hide the session's files. A sandbox on another machine
-        has no folder here to show."""
-        if not self._is_local:
-            self.run_worker(self._write_system(self.NO_FILES))
+    async def _theme(self, name: str) -> None:
+        """``/theme``: the themes there are; ``/theme name``: keep one."""
+        # 1. Without a name, the list, with the one in use marked.
+        if not name:
+            line = Text("Themes: ", style=DIM)
+            for index, theme in enumerate(Theme.THEMES):
+                line.append(" · " if index else "", style=DIM)
+                line.append(theme, style=f"bold {Theme.THEMES[theme][0]}")
+                line.append(" (in use)" if theme == Theme.chosen() else "", style=DIM)
+            line.append("   pick one with /theme name", style=DIM)
+            await self._mount(NoteLine(line))
             return
+
+        # 2. With one, it is kept; the colors are read when the CLI starts.
+        try:
+            Theme.save(name)
+        except (ValueError, OSError) as error:
+            await self._write_system(str(error), style=ERROR)
+            return
+        await self._write_system(
+            f"Theme saved: {name}. It shows the next time you open the CLI.", style=SUCCESS
+        )
+
+    def action_toggle_sidebar(self) -> None:
+        """Show or hide the session's files, listed again each time it opens."""
         sidebar = self.query_one("#sidebar")
         sidebar.display = not sidebar.display
+        self._refresh_workspace()
+
+    @work(group="workspace", exclusive=True)
+    async def _refresh_workspace(self) -> None:
+        """List the session's files where they are and draw them. Only
+        while the panel is open; a listing that fails leaves it as it was."""
+        if not self.query_one("#sidebar").display:
+            return
+        try:
+            printed = await self._list_workspace()
+        except Exception:  # noqa: BLE001 — the panel must not kill the UI
+            return
+        self.query_one("#workspace-files", WorkspaceTree).show(WorkspaceTree.read(printed))
+
+    async def _list_workspace(self) -> str:
+        """What the listing prints: run in the sandbox, or here without one."""
+        box = self._box()
+        # 1. With a sandbox, its own session folder, wherever that machine is.
+        if box is not None:
+            await box.prepare()
+            sid = self.context.session_id or self.context.run_id
+            command = WorkspaceTree.command(box.session_paths(sid)["workspace"])
+            return (await box.execute_command(command, harness=True)).stdout
+
+        # 2. Without one, the folder the program runs in.
+        process = await asyncio.create_subprocess_shell(
+            WorkspaceTree.command(str(Path.cwd())), stdout=asyncio.subprocess.PIPE,
+        )
+        printed, _ = await process.communicate()
+        return printed.decode("utf-8", errors="replace")
 
     def action_toggle_thinking(self) -> None:
         self.show_thinking = not self.show_thinking
@@ -644,8 +680,10 @@ class MaxAIApp(App[None]):
         elif command == "/verbose":
             await self.action_toggle_verbose()
             await self._write_system(f"Verbose {'on' if self.verbose else 'off'}.")
-        elif command == "/files":
+        elif command == "/workspace":
             self.action_toggle_sidebar()
+        elif command == "/theme":
+            await self._theme(args.strip().lower())
         elif command in ("/exit", "/quit"):
             self.exit()
         else:
@@ -664,7 +702,7 @@ class MaxAIApp(App[None]):
             ("esc", "interrupt the running turn"),
             ("ctrl+t", "thinking on/off"),
             ("ctrl+o", "verbose runtime events on/off"),
-            ("ctrl+b", "file sidebar"),
+            ("ctrl+b", "workspace"),
             ("ctrl+l", "clear the screen"),
             ("pgup/pgdn", "scroll the conversation"),
             ("@path", "attach a workspace file"),
@@ -1110,7 +1148,9 @@ class MaxAIApp(App[None]):
         return f"Session {sid} · saved after every turn · resume it with /resume or --session {sid}"
 
     async def _save(self, ctx: RunContext) -> None:
-        """Keep ``ctx`` in the store: after each batch of tools and when a turn ends."""
+        """Keep ``ctx`` in the store: after each batch of tools and when a turn
+        ends. The files may have changed by then: the panel lists them again."""
+        self._refresh_workspace()
         if self.store is None:
             return
         try:
@@ -1142,9 +1182,8 @@ class MaxAIApp(App[None]):
         self._todos = None
         await self._replay(ctx)
         self._refresh_usage()
-        # The sidebar follows the session's folder.
-        if self._is_local:
-            self.query_one("#workspace-files", DirectoryTree).path = self.workspace_root
+        # The panel follows the session's folder.
+        self._refresh_workspace()
 
     def _answer_open_calls(self) -> None:
         """A resumed conversation that waits for approvals or answers asks them now."""

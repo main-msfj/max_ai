@@ -61,7 +61,7 @@ def test_the_card_of_a_call_that_asks_shows_what_goes_in_and_why():
     card = ToolBlock.approval("bash", {"command": command, "description": "Read the keys"}, "it names a file of keys")
     assert card.plain.splitlines() == [
         "◆ Bash  Read the keys", "",
-        "  IN   if [ -e .env ];", "       then printf 'a; b\\n';", "       cat .env;", "       fi &&", "       ls", "",
+        "  IN   if [ -e .env ];", "       then printf 'a; b\\n';", "       cat .env;", "       fi && ls", "",
         "  WHY  it names a file of keys",
     ]
     # A file tool shows its lines; without a reason there is no WHY.
@@ -69,19 +69,51 @@ def test_the_card_of_a_call_that_asks_shows_what_goes_in_and_why():
     assert "−     default=50," in edit.plain and "WHY" not in edit.plain
 
 
-def test_a_command_is_cut_in_lines_only_outside_quotes():
+def test_a_command_is_cut_in_lines_only_outside_quotes_and_a_script_is_left_as_it_is():
     from max_ai.core.tool.display import command_lines
 
-    assert command_lines("cd app && echo 'a && b; c' || exit 1") == [
-        "cd app &&", "echo 'a && b; c' ||", "exit 1",
+    assert command_lines("cd app && echo 'a; b' || exit 1; ls") == ["cd app && echo 'a; b' || exit 1;", "ls"]
+    script = "python3 - <<'PY'\nfor n in range(2):\n    print(n); print('x')\nPY"
+    assert command_lines(script) == script.splitlines()
+
+
+def test_the_workspace_is_listed_where_it_is_and_drawn_as_a_tree(tmp_path):
+    import subprocess
+
+    from max_ai.cli.widgets import WorkspaceTree
+
+    (tmp_path / "output" / "sheets").mkdir(parents=True)
+    (tmp_path / "output" / "sheets" / "flights.xlsx").touch()
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "config").touch()
+    (tmp_path / "index.html").touch()
+    printed = subprocess.run(
+        WorkspaceTree.command(str(tmp_path)), shell=True, capture_output=True, text=True, check=True
+    ).stdout
+    assert WorkspaceTree.read(printed) == [
+        ("output", True), ("index.html", False), ("output/sheets", True),
+        ("output/sheets/flights.xlsx", False),
     ]
-    assert command_lines('echo "x; y"; ls') == ['echo "x; y";', "ls"]
 
 
-def test_the_file_tree_hides_what_the_tools_keep_for_themselves(tmp_path):
-    from max_ai.cli.widgets import FileTree
+def test_the_theme_is_the_one_tried_then_the_saved_one_then_gray(tmp_path, monkeypatch):
+    from max_ai.cli.theme import Theme
+    from max_ai.config import setting
 
-    for name in (".git", ".venv", "__pycache__", "src", ".env", "README.md"):
-        (tmp_path / name).mkdir() if "." not in name[1:] else (tmp_path / name).touch()
-    shown = FileTree.filter_paths(FileTree, tmp_path.iterdir())  # no app needed: it only reads HIDDEN
-    assert sorted(path.name for path in shown) == [".env", "README.md", "src"]
+    monkeypatch.setattr(setting, "max_ai_home", tmp_path)
+    monkeypatch.delenv(Theme.ENV, raising=False)
+    assert Theme.chosen() == "gray"
+    Theme.save("blue")
+    assert Theme.chosen() == "blue" and (tmp_path / "cli.json").read_text() == '{\n  "theme": "blue"\n}\n'
+    monkeypatch.setenv(Theme.ENV, "teal")
+    assert Theme.chosen() == "teal"
+    # A name that is no theme, or a file that cannot be read, is gray.
+    monkeypatch.setenv(Theme.ENV, "pink")
+    assert Theme.chosen() == "gray"
+    monkeypatch.delenv(Theme.ENV)
+    (tmp_path / "cli.json").write_text("not json")
+    assert Theme.chosen() == "gray"
+    import pytest
+
+    with pytest.raises(ValueError, match="pink is not a theme"):
+        Theme.save("pink")

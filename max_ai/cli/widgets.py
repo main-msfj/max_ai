@@ -2,34 +2,91 @@
 
 from __future__ import annotations
 
+import shlex
 import typing as t
-from pathlib import Path
 
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.message import Message
-from textual.widgets import DirectoryTree, OptionList, Static, TextArea
+from textual.widgets import OptionList, Static, TextArea, Tree
 from textual.widgets.option_list import Option
 
 from .theme import DIM, ELEMENT, MUTED, PANEL, PRIMARY, TEXT
 
 
-class FileTree(DirectoryTree):
-    """The sidebar's file tree: plain arrows instead of emoji icons."""
+class WorkspaceTree(Tree[str]):
+    """The files of the session's workspace, as its sandbox lists them: the
+    same panel whether the files are on this computer, in a container or
+    in the cloud."""
 
     ICON_NODE = "▸ "
     ICON_NODE_EXPANDED = "▾ "
-    ICON_FILE = "  "
+    DEPTH: t.ClassVar[int] = 4  # folders deep
+    MOST: t.ClassVar[int] = 400  # entries at most
     # What is never worth showing: the tools' own folders and caches.
     HIDDEN: t.ClassVar[frozenset[str]] = frozenset({
         ".git", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache", ".ruff_cache",
         ".mypy_cache", ".DS_Store", ".idea", ".vscode", ".devcontainer", ".claude",
     })
+    # Runs where the files are: prints ``d path`` or ``f path`` for each entry.
+    SCRIPT: t.ClassVar[str] = (
+        "import os, sys\n"
+        "root, depth, hidden = sys.argv[1], int(sys.argv[2]), set(sys.argv[3].split(','))\n"
+        "for folder, names, files in os.walk(root):\n"
+        "    inside = os.path.relpath(folder, root)\n"
+        "    inside = '' if inside == '.' else inside\n"
+        "    names[:] = sorted(name for name in names if name not in hidden)\n"
+        "    for name in names:\n"
+        "        print('d', os.path.join(inside, name))\n"
+        "    for name in sorted(files):\n"
+        "        if name not in hidden:\n"
+        "            print('f', os.path.join(inside, name))\n"
+        "    if inside.count(os.sep) + 2 >= depth:\n"
+        "        names[:] = []\n"
+    )
 
-    def filter_paths(self, paths: t.Iterable[Path]) -> t.Iterable[Path]:
-        return [path for path in paths if path.name not in self.HIDDEN]
+    @classmethod
+    def command(cls, workspace: str) -> str:
+        """The command that lists ``workspace``, for any machine with python3."""
+        hidden = ",".join(sorted(cls.HIDDEN))
+        script, folder = shlex.quote(cls.SCRIPT), shlex.quote(workspace)
+        return f"python3 -c {script} {folder} {cls.DEPTH} {hidden} | head -n {cls.MOST}"
+
+    @staticmethod
+    def read(printed: str) -> list[tuple[str, bool]]:
+        """What the listing printed, as (path, is a folder)."""
+        entries: list[tuple[str, bool]] = []
+        for line in printed.splitlines():
+            kind, _, path = line.partition(" ")
+            if kind in ("d", "f") and path:
+                entries.append((path, kind == "d"))
+        return entries
+
+    def show(self, entries: list[tuple[str, bool]]) -> None:
+        """Draw ``entries``; a folder that was open stays open."""
+        # 1. What the user had open.
+        opened: set[str] = set()
+        pending = list(self.root.children)
+        while pending:
+            node = pending.pop()
+            if node.is_expanded and node.data is not None:
+                opened.add(node.data)
+            pending += list(node.children)
+
+        # 2. Sorted, a folder always comes before what it holds.
+        self.clear()
+        folders = {"": self.root}
+        for path, is_folder in sorted(entries):
+            parent, _, name = path.rpartition("/")
+            where = folders.get(parent)
+            if where is None:
+                continue
+            if is_folder:
+                folders[path] = where.add(name, data=path, expand=path in opened)
+            else:
+                where.add_leaf(name, data=path)
 
 
 class PromptEditor(TextArea):
