@@ -33,9 +33,11 @@ architecture.md
 a-harness-max-ai/
 ai-harness-research/
 
-# Deployment examples and review reports: kept on disk, not in git
-example-for-deployment/
+# Review reports: kept on disk, not in git
 report/
+
+# What the examples write when run from the repository root
+/local/
 new_tools.md
 resumen.md
 unused_files.md

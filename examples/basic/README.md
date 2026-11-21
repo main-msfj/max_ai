@@ -1,27 +1,22 @@
-# Basic Examples
+# Basic examples
 
-Each file demonstrates one feature. From the repository root:
+| File | What it shows | Needs besides `OPENAI_API_KEY` |
+|---|---|---|
+| `01_basic_agent.py` | the smallest agent | |
+| `02_openrouter_agent.py` | OpenRouter with fallback models | `OPENROUTER_API_KEY` instead |
+| `03_function_tools.py` | a Python function as a tool | |
+| `04_tool_approval.py` | a tool that waits for the user, and going on after | |
+| `05_sessions.py` | saving a conversation and continuing it (run it twice) | |
+| `06_structured_output.py` | an answer that follows a Pydantic model | |
+| `07_streaming.py` | the answer as it is written | |
+| `08_middleware_and_tracing.py` | logging and OpenTelemetry traces | |
+| `09_concurrent_runs.py` | one agent, two users at once | |
+| `10_local_sandbox.py` | a sandbox, its files and `BashTool` | |
+| `11_memory.py` | facts about the user kept between sessions | |
+| `12_skills.py` | a skill installed from GitHub | `GITHUB_TOKEN` if GitHub answers 403 |
+| `13_mcp_tools.py` | tools from an MCP server, with its secret | `EXA_API_KEY` |
+| `14_full_agent.py` | most pieces together | |
 
-```sh
-uv run python -m examples.basic.01_basic_agent
-```
-
-## Status
-
-**None of the basic examples run against the current API.** They have not
-been ported since the November 2026 rewrite. See [../README.md](../README.md)
-for what changed and the main [README](../../README.md) for working code.
-
-| File | Problem |
-|---|---|
-| `02_ollama_agent.py` | imports `max_ai.capabilities.clients.ollama` (removed) |
-| `06_memory.py` | imports `max_ai.capabilities.memory.to_delete.local` (removed) |
-| `10_skills.py` | imports `GithubSkillRegistry` (now `GitHubSkills`) |
-| `13_workspace_files.py` | imports `max_ai.capabilities.workspace.local` (removed) |
-| `15_full_agent.py` | imports `max_ai.base.memory`, `max_ai.capabilities.compaction.to_delete`, `max_ai.capabilities.memory.to_delete.local` (removed) and `GithubSkillRegistry` |
-| `16_local_sandbox.py` | imports are valid, but uses `sandbox.root` (now `sandbox.layout.root`) and expects files without calling `await sandbox.prepare()` |
-| `01`, `03`, `04`, `05`, `07`, `08`, `09`, `11`, `12`, `14` | imports are valid, but they use the old run API: `async with agent`, `run_context=`, `response.final_text`, `response.final_message`; `04` also uses `response.pending_approvals` and `agent.resume()` |
-
-`07_knowledge_search.py` and the knowledge part of `15_full_agent.py` would
-not work even once ported: `knowledge=` is not wired to any tool yet (see
-"Status and known gaps" in the main README).
+Checked by running each one with a model that is faked, so the framework's
+part really runs; `12_skills.py` could not be checked that way (GitHub's rate
+limit). None was run against a real model.

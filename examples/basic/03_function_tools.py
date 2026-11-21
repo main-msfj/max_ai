@@ -1,4 +1,4 @@
-"""Give the agent a compound interest calculator tool."""
+"""A Python function as a tool: its name, docstring and types are what the model reads."""
 
 import asyncio
 
@@ -18,12 +18,15 @@ async def main() -> None:
         name="FinancialAdvisor",
         description="An assistant that calculates compound interest.",
         instructions="Use calculate_compound_interest to calculate the final balance.",
-        client=OpenAIChatCompletionClient(model="gpt-5.6-luna", api_key="YOUR_API_KEY"),
+        client=OpenAIChatCompletionClient(model="gpt-5.4-nano"),
+        # It only reads, so it runs without asking the user.
         toolset=[FunctionAsTool(calculate_compound_interest, approval_mode=ToolApprovalMode.AUTO_APPROVED)],
     )
-    async with agent:
-        response = await agent.run("How much will I have after investing 1000 euros at 5% for 3 years?")
-        print(response.final_text)
+    try:
+        state = await agent.run("How much will I have after investing 1000 euros at 5% for 3 years?")
+        print(state.text)
+    finally:
+        await agent.close()
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Create a teaching embedding with three word counters."""
+"""An embedding of your own: here, three counters of words by topic. No key needed."""
 
 import asyncio
 
@@ -11,14 +11,14 @@ class TopicEmbedding(CoreEmbedding):
         return "topic-counter-v1"
 
     async def _embed(self, texts: list[str]) -> list[list[float]]:
-        temas = [
+        topics = [
             {"bank", "interest", "money", "investment"},
             {"food", "recipe", "cooking", "ingredient"},
             {"code", "python", "programming", "software"},
         ]
         return [
-            [float(sum(palabra in texto.lower().split() for palabra in tema)) for tema in temas]
-            for texto in texts
+            [float(sum(word in text.lower().split() for word in topic)) for topic in topics]
+            for text in texts
         ]
 
 

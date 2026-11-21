@@ -1,4 +1,4 @@
-"""Create a native tool by extending CoreTool."""
+"""A tool written as a class: its own schema, and a result built by hand."""
 
 import asyncio
 import typing as t
@@ -6,7 +6,6 @@ import typing as t
 from max_ai.agents import Agent
 from max_ai.base.tools import CoreTool, ToolContext
 from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
-from max_ai.core.cancellation import CancellationToken
 from max_ai.types.tool_call import ToolCallRecord, ToolResult
 from max_ai.types.tools import ToolApprovalMode
 
@@ -17,7 +16,7 @@ class CompoundInterestTool(CoreTool):
             name="calculate_compound_interest",
             description="Calculate a balance with annual compound interest.",
             approval_mode=ToolApprovalMode.AUTO_APPROVED,
-            read_only=True,
+            read_only=True,  # read-only calls of one reply may run at once
         )
 
     @property
@@ -32,33 +31,25 @@ class CompoundInterestTool(CoreTool):
             "required": ["principal", "annual_rate", "years"],
         }
 
-    async def execute(
-        self,
-        tool_request: ToolCallRecord,
-        tool_context: ToolContext | None = None,
-        cancellation_token: CancellationToken | None = None,
-    ) -> ToolResult:
-        parameters = tool_request.parameters
-        balance = (
-            parameters["principal"]
-            * (1 + parameters["annual_rate"] / 100) ** parameters["years"]
-        )
+    async def execute(self, tool_request: ToolCallRecord, tool_ctx: ToolContext) -> ToolResult:
+        given = tool_request.parameters
+        balance = given["principal"] * (1 + given["annual_rate"] / 100) ** given["years"]
         return ToolResult.success_result(tool_request.id, round(balance, 2))
 
 
 async def main() -> None:
     agent = Agent(
         name="FinancialAdvisor",
-        description="Calculate compound interest.",
+        description="Calculates compound interest.",
         instructions="Use calculate_compound_interest for investment calculations.",
-        client=OpenAIChatCompletionClient(model="gpt-5.6-luna", api_key="YOUR_API_KEY"),
+        client=OpenAIChatCompletionClient(model="gpt-5.4-nano"),
         toolset=[CompoundInterestTool()],
     )
-    async with agent:
-        response = await agent.run(
-            "How much will I have with 1000 euros at 5% for 3 years?"
-        )
-        print(response.final_text)
+    try:
+        state = await agent.run("How much will I have with 1000 euros at 5% for 3 years?")
+        print(state.text)
+    finally:
+        await agent.close()
 
 
 if __name__ == "__main__":

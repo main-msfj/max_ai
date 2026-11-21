@@ -1,0 +1,9 @@
+date,product,quantity,unit_price,currency
+2026-10-01,Latte,410,22.00,GTQ
+2026-10-01,Espresso,265,15.00,GTQ
+2026-10-01,Cappuccino,330,24.00,GTQ
+2026-10-01,Croissant,290,18.00,GTQ
+2026-10-01,Sandwich,175,38.00,GTQ
+2026-10-12,Catering for an office,1,3200.00,GTQ
+2026-10-20,Bags of coffee beans,62,85.00,GTQ
+2026-10-27,Barista workshop,2,450.00,USD

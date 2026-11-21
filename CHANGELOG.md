@@ -72,4 +72,4 @@ First public version. The core was rewritten between 2026-11-15 and
   to be connected.
 - Completion gates are kept in the package to be connected; the loop does
   not use them yet.
-- Most files in `examples/` still use the old API.
+- The examples were checked with a faked model only, not a real one.
