@@ -25,6 +25,14 @@ Pieces that exist in the code but do not work end to end yet.
 - [ ] **An MCP stdio server can still get a secret through `args`.** Keys go
   only through `secret=`; `args` is not checked.
 
+- [ ] **Check the prompt cache.** It looks like little of a call is read from
+  the provider's cache. Measure first: cached tokens per call, per provider
+  (OpenAI, OpenRouter, Anthropic), over a long session. Then look at what
+  breaks the prefix: the order of the prompt layers, text that changes each
+  turn (date, memory index, todos), the tool list, and compaction. A small
+  agent's system prompt is about 1,840 tokens, under the 2,000 the harness
+  warns about.
+
 ## 2. Examples
 
 Checked on 2026-11-21 against a real model (`deepseek/deepseek-v4-flash`
