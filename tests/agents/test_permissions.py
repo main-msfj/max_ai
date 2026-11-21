@@ -210,3 +210,43 @@ def test_a_dangerous_command_is_found_behind_what_hides_it(command):
 )
 def test_a_command_that_only_names_a_dangerous_word_is_not_dangerous(command):
     assert not Permissions.dangerous("bash", command)
+
+
+# -------- files that hold keys ---------------------------------------------------------
+@pytest.mark.parametrize(
+    ("tool", "target"),
+    [
+        ("bash", "cat .env"),
+        ("bash", "cd app && head -3 ./.env.local"),
+        ("bash", "grep KEY < .env"),
+        ("bash", "cp ~/.ssh/id_rsa /tmp/x"),
+        ("bash", "openssl x509 -in certs/server.pem -text"),
+        ("bash", "cat ~/.aws/credentials"),
+        ("bash", "cat credentials.json | head"),
+        ("bash", "cat ~/.netrc"),
+        ("read_file", ".env"),
+        ("read_file", "deploy/prod.key"),
+    ],
+)
+def test_a_call_that_names_a_file_of_keys_is_always_asked(tool, target):
+    assert Permissions.dangerous(tool, target)
+    # Not even a rule of the user lets it run alone, and "always" is not offered.
+    key = "command" if tool == "bash" else "path"
+    assert Permissions({"allow": [f"{tool}(*)"]}).decide(tool, {key: target}) is None
+    assert not Permissions.can_be_kept(tool, {key: target})
+
+
+@pytest.mark.parametrize(
+    ("tool", "target"),
+    [
+        ("bash", "cat .env.example"),
+        ("bash", "cat environment.py"),
+        ("bash", "python -m venv .venv && ls .venv"),
+        ("bash", "grep -n keyboard src/keys.py"),
+        ("bash", "echo credentialsStore"),
+        ("read_file", "docs/monkey.md"),
+        ("read_file", "src/env.py"),
+    ],
+)
+def test_a_name_that_only_looks_like_one_is_not(tool, target):
+    assert not Permissions.dangerous(tool, target)
