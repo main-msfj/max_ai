@@ -101,6 +101,7 @@ async def test_an_answer_of_another_shape_is_no_verdict():
         ({"deny": ["bash(pytest*)"]}, "pytest -q", False),
         ({"ask": ["bash(pytest*)"]}, "pytest -q", None),
         ({}, "timeout 5 rm -rf workspace", None),  # dangerous: always asked
+        ({}, "cat .env", None),  # a file of keys: always asked, however safe it looks
         ({"allow": ["bash(pytest -q)"]}, "pytest -q", True),
     ],
 )
@@ -146,6 +147,8 @@ async def test_without_a_key_or_with_a_command_too_long_nothing_is_sent(monkeypa
 async def test_there_is_no_judge_until_the_settings_name_a_model(monkeypatch):
     from max_ai.config import setting
 
+    # Whatever the .env of this machine says, the test starts without a model.
+    monkeypatch.setattr(setting, "harness_judge_model", "")
     assert HarnessToolHook().judge is None
     monkeypatch.setattr(setting, "harness_judge_model", "typesafe/jev-1.14")
     monkeypatch.setattr(setting, "harness_judge_min_safe", 0.8)

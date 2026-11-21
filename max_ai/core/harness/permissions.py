@@ -39,6 +39,14 @@ class Permissions:
         # Something is piped into an interpreter: alone, or told to read its input.
         r"^(sh|bash|zsh|python3?)(\s+-)?$", r"^(sh|bash|zsh)\s+-s\b",
     )
+    # Files that hold keys: a call that names one is always asked, whatever the tool.
+    SECRETS: t.ClassVar[tuple[str, ...]] = (
+        r"(^|[\s/'\"=<>])\.env(\.(?!example|sample|template)[\w-]+)?($|[\s'\";|&)<>])",
+        r"\.(pem|key)($|[\s'\";|&)<>])",
+        r"\bid_(rsa|ed25519|ecdsa)\b",
+        r"\bcredentials(\.\w+)?($|[\s'\";|&)<>])",
+        r"(^|[\s/'\"=<>])\.netrc\b",
+    )
     # Commands that only run another one: what they run is what counts.
     WRAPPERS: t.ClassVar[frozenset[str]] = frozenset({
         "timeout", "env", "nohup", "nice", "command", "time", "xargs", "exec", "stdbuf", "ionice",
@@ -115,9 +123,13 @@ class Permissions:
 
     @staticmethod
     def dangerous(tool_name: str, target: str) -> bool:
-        """A call the user must see: it touches the settings, or it is a
-        command that deletes, takes control or cannot be read safely."""
+        """A call the user must see: it touches the settings or a file of
+        keys, or it is a command that deletes, takes control or cannot be
+        read safely."""
         if Permissions.SETTINGS in target:
+            return True
+        # A file of keys, named by any tool.
+        if any(re.search(pattern, target) for pattern in Permissions.SECRETS):
             return True
         if tool_name != Permissions.BASH:
             return False
