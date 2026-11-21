@@ -451,13 +451,16 @@ ones the code uses today:
 
 Checked against the code on this branch:
 
-- **`knowledge=` is not wired.** The agent validates and serializes knowledge
-  registries (local, SQLite, MongoDB), but never adds their `search_knowledge`
-  tool to the registry, and the knowledge prompt layer receives no tool names,
-  so it renders empty. The model cannot query knowledge today.
-- **Completion gates are not used.** `max_ai/capabilities/completion_gate` and
-  `base/completion_gate.py` still exist, but no loop calls them and `Agent`
-  has no `gates` argument.
+- **`knowledge=` still has to be connected.** The agent validates and
+  serializes knowledge registries (local, SQLite, MongoDB), but never adds
+  their `search_knowledge` tool to the registry, and the knowledge prompt
+  layer receives no tool names, so it renders empty. The model cannot query
+  knowledge today. The code is kept on purpose: connecting it well is the
+  next piece of work.
+- **Completion gates still have to be connected.**
+  `max_ai/capabilities/completion_gate` and `base/completion_gate.py` are
+  kept on purpose, but no loop calls them and `Agent` has no `gates`
+  argument yet.
 - **Quota stores** (`LocalQuotaStore`, `MongoDBQuotaStore`) are used only by
   `BudgetMiddleware(quota=..., quota_store=...)`; nothing else reads them.
 - **`AnthropicClient` has not been run against the real API yet**, only
@@ -508,11 +511,30 @@ uv run pytest -m "not integration"
 
 ## Roadmap
 
-Planned, not started; order is not a commitment.
+Planned, not started; order inside a group is not a commitment.
 
-- Wire knowledge search into the agent, or remove it.
-- Multi-agent delegation on the stateless `Agent`.
-- Native clients: Anthropic first, then Gemini and Azure OpenAI.
+**Gaps to close first**
+
+- Connect knowledge search to the agent: the tool in the registry and the
+  prompt layer that names it.
+- Connect completion gates to the loop.
+- Run `AnthropicClient` against the real API.
+- Bring `examples/` up to the current API.
+
+**Milestones**
+
+- **Multi-agent:** an agent starts other agents and gathers their work, on
+  the stateless `Agent`.
+- **Background tasks:** work that keeps running while the conversation goes
+  on, and reports when it ends.
+- **A2A:** talk to agents of other frameworks over the Agent2Agent protocol,
+  as a client and as a server.
+- **Always-on agent:** an agent that stays up and wakes on a schedule or an
+  event, not only on a user message.
+
+**Later**
+
+- Native clients for Gemini and Azure OpenAI.
 - Optimistic concurrency in session stores.
 - Guardrail middleware for PII and prompt injection.
 
