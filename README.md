@@ -200,7 +200,10 @@ tools; for bash the exact command, `bash(pytest -q)`, or a word prefix,
 every part allowed. Some calls are always asked whatever the rules say:
 `rm`, `sudo`, `git push --force`, `git reset --hard`, `find -delete`, command
 substitution, anything touching `setting.json` or writing to the skills
-folder. Without a matching rule, the tool's own `approval_mode` decides
+folder, and any call that names a file of keys (`.env`, `*.pem`, `*.key`,
+`id_rsa`, `credentials`, `.netrc`). That last one goes by the name written in
+the call: `grep -r KEY .` reads `.env` without naming it, so the real
+protection is a sandbox where that file does not exist. Without a matching rule, the tool's own `approval_mode` decides
 (`BashTool` asks, the file tools run).
 
 **Judge (optional, off by default)** (`judge.py`): set `HARNESS_JUDGE_MODEL`
