@@ -127,3 +127,43 @@ async def test_the_tools_are_told_which_skills_the_agent_was_given(tmp_path):
     plain = Agent("a", "d", "i", FakeClient(), sandbox=LocalSandbox(str(tmp_path / "work")))
     assert (await plain._dispatcher(await plain._registry(), None)).skills == ()
     await agent.close()
+
+
+class ClosedSandbox(LocalSandbox):
+    closed: list[str] = []
+
+    async def close(self) -> None:
+        ClosedSandbox.closed.append(self.identifier)
+
+
+async def test_an_idle_sandbox_is_closed_and_made_again_when_its_user_returns(tmp_path, monkeypatch):
+    from max_ai.config import setting
+
+    (tmp_path / "work").mkdir()
+    ClosedSandbox.closed = []
+    agent = Agent("a", "d", "i", FakeClient(), sandbox=ClosedSandbox(str(tmp_path / "work")))
+    ana, luis = RunContext(user_id="ana"), RunContext(user_id="luis")
+    await agent.run("uno", ana)
+    await agent.run("uno", luis)
+    first = agent._boxes["ana"]
+
+    # 1. Both used a moment ago: a new turn closes nobody's.
+    await agent.run("dos", luis)
+    assert ClosedSandbox.closed == [] and set(agent._boxes) == {"ana", "luis"}
+
+    # 2. Ana has been away longer than a sandbox lives: Luis's turn releases hers.
+    agent._used["ana"] -= setting.harness_sandbox_seconds + 1
+    await agent.run("tres", luis)
+    assert ClosedSandbox.closed == ["ana"] and set(agent._boxes) == {"luis"}
+
+    # 3. One whose turn is going is never closed, however old its mark.
+    agent._used["luis"] -= setting.harness_sandbox_seconds + 1
+    async with agent._lock(luis):
+        await agent._release_idle()
+    assert ClosedSandbox.closed == ["ana"]
+
+    # 4. Ana comes back: she gets a new one, and closing the agent closes the rest.
+    await agent.run("dos", ana)
+    assert agent._boxes["ana"] is not first
+    await agent.close()
+    assert sorted(ClosedSandbox.closed) == ["ana", "ana", "luis"] and agent._boxes == {}

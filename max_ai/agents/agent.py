@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import time
 import typing as t
 import weakref
 from collections.abc import AsyncGenerator, Sequence
@@ -45,6 +47,8 @@ AnyClient = CoreLLMClient[t.Any]
 AnyLoop = CoreLoop[t.Any]
 ServerConfig = StdioMCPServerConfig | HTTPServerConfig
 
+
+logger = logging.getLogger(__name__)
 
 class Agent(ComponentBase[AgentSpec]):
     """A model with its tools, skills, memory and sandbox, run by a loop.
@@ -191,7 +195,8 @@ class Agent(ComponentBase[AgentSpec]):
         self._locks: weakref.WeakValueDictionary[tuple[str, str], asyncio.Lock] = (
             weakref.WeakValueDictionary()
         )
-        self._boxes: dict[str, SandboxCore] = {}  # closed by close()
+        self._boxes: dict[str, SandboxCore] = {}  # closed when idle, and by close()
+        self._used: dict[str, float] = {}  # when each user's sandbox was last used
         self._closed = False
 
         # 4. close() waits for the runs that are still going.
@@ -281,6 +286,8 @@ class Agent(ComponentBase[AgentSpec]):
         # The users' sandboxes, not self.sandbox: that one has no user.
         for box in self._boxes.values():
             await box.close()
+        self._boxes.clear()
+        self._used.clear()
         await self.client.aclose()
 
     # -------- ONE TURN, STEP BY STEP -----------------------------------------
@@ -317,6 +324,10 @@ class Agent(ComponentBase[AgentSpec]):
                 if task is not None and ctx.inbox and ctx.inbox[-1] == task:
                     ctx.inbox.pop()
                 raise
+            finally:
+                # The sandbox's idle time is counted from the end of the turn.
+                if ctx.user_id in self._boxes:
+                    self._used[ctx.user_id] = time.monotonic()
 
     async def _steps(self, ctx: RunContext, state: LoopState, stream: bool) -> AsyncGenerator[CoreEvent]:
         """What a turn does: get ready, then the loop. A failure while
@@ -369,6 +380,7 @@ class Agent(ComponentBase[AgentSpec]):
         without one. Made ready once per user: later turns get the same one."""
         if self.sandbox is None:
             return None
+        await self._release_idle()
         async with self._lock(ctx, self.SANDBOX_LOCK):
             box = self._boxes.get(ctx.user_id)
             if box is None:
@@ -379,7 +391,36 @@ class Agent(ComponentBase[AgentSpec]):
                     await self.skills.sync(box)
                 # Kept only once it is ready: a failure tries again next turn.
                 self._boxes[ctx.user_id] = box
+            self._used[ctx.user_id] = time.monotonic()
         return box
+
+    async def _release_idle(self) -> None:
+        """Close the sandbox of each user with no turn going and none for
+        ``harness_sandbox_seconds``: what it held is released (a network),
+        and the user gets one again, with the same files, when they come back."""
+        limit = time.monotonic() - setting.harness_sandbox_seconds
+        for user in [user for user, used in self._used.items() if used <= limit]:
+            # 1. Under the user's sandbox lock: a turn of theirs that starts
+            #    now waits, and then makes a new one.
+            async with self._lock(RunContext(user_id=user), self.SANDBOX_LOCK):
+                if self._used.get(user, limit + 1) > limit or self._busy(user):
+                    continue
+                box = self._boxes.pop(user, None)
+                del self._used[user]
+                # 2. One that cannot be closed is only told: the turn goes on.
+                try:
+                    if box is not None:
+                        await box.close()
+                except Exception:  # noqa: BLE001 — never stops another user's turn
+                    logger.warning("The idle sandbox of %s could not be closed", user, exc_info=True)
+
+    def _busy(self, user: str) -> bool:
+        """A turn of ``user`` is going: one of their sessions holds its lock."""
+        return any(
+            lock.locked()
+            for (owner, what), lock in list(self._locks.items())
+            if owner == user and what != self.SANDBOX_LOCK
+        )
 
     async def _registry(self) -> ToolRegistry:
         """The tools of a run: the agent's, the MCP servers' and what reaches them."""
