@@ -63,6 +63,37 @@ def _first_line(text: str, limit: int = 100) -> str:
     return f"{first} … (+{len(lines) - 1} lines)" if len(lines) > 1 else first
 
 
+def command_lines(command: str) -> list[str]:
+    """A command cut in lines to be read: after each ``;``, ``&&`` or
+    ``||`` that is not inside quotes. Only how it is shown: what runs is
+    the command as it was written."""
+    lines: list[str] = []
+    line, quote, index = "", "", 0
+    while index < len(command):
+        char = command[index]
+        pair = command[index : index + 2]
+        # 1. Inside quotes nothing is cut; a backslash keeps the next character.
+        if quote:
+            quote = "" if char == quote else quote
+        elif char in "'\"":
+            quote = char
+        elif char == "\\":
+            line, index = line + pair, index + 2
+            continue
+        # 2. Outside them, a line ends after the operator or at a line break.
+        elif pair in ("&&", "||"):
+            lines.append((line + pair).strip())
+            line, index = "", index + 2
+            continue
+        elif char in ";\n":
+            lines.append((line + char).strip())
+            line, index = "", index + 1
+            continue
+        line, index = line + char, index + 1
+    lines.append(line.strip())
+    return [found for found in lines if found]
+
+
 def first_line(tool_name: str, result: ToolResult | None) -> int | None:
     """The line of the file where the lines of ``changes`` begin: 1 for a
     written file, what the tool said for an edit, None while it is not known."""

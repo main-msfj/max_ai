@@ -54,3 +54,34 @@ def test_the_lines_are_numbered_once_the_tool_says_where_the_change_begins():
     # A written file starts at its first line, known before it runs.
     written = ToolBlock("write_file", {"path": "a.md", "content": "one\ntwo"})
     assert written._input().plain.splitlines() == ["   1 + one", "   2 + two"]
+
+
+def test_the_card_of_a_call_that_asks_shows_what_goes_in_and_why():
+    command = "if [ -e .env ]; then printf 'a; b\\n'; cat .env; fi && ls"
+    card = ToolBlock.approval("bash", {"command": command, "description": "Read the keys"}, "it names a file of keys")
+    assert card.plain.splitlines() == [
+        "◆ Bash  Read the keys", "",
+        "  IN   if [ -e .env ];", "       then printf 'a; b\\n';", "       cat .env;", "       fi &&", "       ls", "",
+        "  WHY  it names a file of keys",
+    ]
+    # A file tool shows its lines; without a reason there is no WHY.
+    edit = ToolBlock.approval("edit_file", EDIT, None)
+    assert "−     default=50," in edit.plain and "WHY" not in edit.plain
+
+
+def test_a_command_is_cut_in_lines_only_outside_quotes():
+    from max_ai.core.tool.display import command_lines
+
+    assert command_lines("cd app && echo 'a && b; c' || exit 1") == [
+        "cd app &&", "echo 'a && b; c' ||", "exit 1",
+    ]
+    assert command_lines('echo "x; y"; ls') == ['echo "x; y";', "ls"]
+
+
+def test_the_file_tree_hides_what_the_tools_keep_for_themselves(tmp_path):
+    from max_ai.cli.widgets import FileTree
+
+    for name in (".git", ".venv", "__pycache__", "src", ".env", "README.md"):
+        (tmp_path / name).mkdir() if "." not in name[1:] else (tmp_path / name).touch()
+    shown = FileTree.filter_paths(FileTree, tmp_path.iterdir())  # no app needed: it only reads HIDDEN
+    assert sorted(path.name for path in shown) == [".env", "README.md", "src"]

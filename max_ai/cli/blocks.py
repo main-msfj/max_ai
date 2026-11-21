@@ -18,6 +18,7 @@ from ..core.tool.display import (  # noqa: F401 — the CLI's app imports them f
     BASH,
     _first_line,  # pyright: ignore[reportPrivateUsage]
     changes,
+    command_lines,
     exit_code,
     first_line,
     result_text,
@@ -35,8 +36,8 @@ from .theme import (
     ELEMENT,
     ERROR,
     LOGO,
-    MODEL,
     MUTED,
+    PANEL,
     PATH,
     PRIMARY,
     SUCCESS,
@@ -56,20 +57,18 @@ def _plural(count: int, word: str) -> str:
 
 
 class WelcomeBox(Static):
-    """Session banner: the MAX-AI logo, then agent and model."""
+    """Session banner: the MAX-AI logo and the agent. The model is in the line at the bottom."""
 
     DEFAULT_CSS = """
     WelcomeBox { width: 1fr; height: auto; margin: 2 0 1 0; content-align: center top; text-align: center; }
     """
 
-    def __init__(self, agent_name: str, model: str) -> None:
+    def __init__(self, agent_name: str) -> None:
         body = Text(justify="center")
         for left, right in LOGO:
             body.append_text(gradient(left + right))
             body.append("\n")
-        body.append(f"\n{agent_name}", style=f"bold {PRIMARY}")
-        body.append(" · ", style=DIM)
-        body.append(f"{model}\n\n", style=MODEL)
+        body.append(f"\n{agent_name}\n\n", style=f"bold {PRIMARY}")
         for key, what in (("/help", "commands"), ("esc", "interrupt"), ("ctrl+t", "thinking"),
                           ("ctrl+b", "files")):
             body.append(key, style=f"bold {PRIMARY}")
@@ -808,10 +807,12 @@ _INTERRUPTED = "interrupted"
 
 
 class ToolBlock(Vertical):
-    """``◆ name(arg)`` then ``╰─ summary``. Output folds; click to expand.
+    """``◆ Name  what it does``, then ``IN`` with what goes in (the command,
+    or the lines a file tool changes) in its own box, then ``OUT`` with how
+    it went. Output folds; click to expand.
 
     A bash call reads ``◆ Bash  description``, then ``$ command`` and
-    ``╰─`` with what it printed. State lives on the block and
+    ``OUT`` with what it printed. State lives on the block and
     ``_redraw`` draws from it, so updates that land before the children are
     mounted (the spinner tick, a fast result) are drawn on mount.
     """
@@ -819,7 +820,10 @@ class ToolBlock(Vertical):
     DEFAULT_CSS = f"""
     ToolBlock {{ height: auto; margin: 1 0 0 0; }}
     ToolBlock:hover > .summary {{ color: {TEXT}; }}
-    ToolBlock > .input {{ color: {MUTED}; padding-left: 2; max-height: 20; overflow-y: auto; }}
+    ToolBlock > .input {{
+        color: {MUTED}; background: {PANEL}; margin: 0 2; padding: 0 1; max-height: 20;
+        overflow-y: auto;
+    }}
     ToolBlock > .summary {{ color: {MUTED}; padding-left: 2; }}
     ToolBlock > .output {{
         display: none; color: {TEXT}; padding: 0 1; margin-left: 5;
@@ -830,6 +834,7 @@ class ToolBlock(Vertical):
 
     MAX_OUTPUT = 6000
     DIFF_LINES = 12  # lines of a change shown before the block is opened
+    CARD_LINES = 30  # lines of a change shown when it asks to run
 
     def __init__(self, tool_name: str, parameters: dict[str, t.Any]) -> None:
         super().__init__()
@@ -907,11 +912,16 @@ class ToolBlock(Vertical):
         return MUTED
 
     def _diff(self) -> Text:
+        """The lines this call changes; folded, only the first ``DIFF_LINES``."""
+        limit = None if self.has_class("-expanded") else self.DIFF_LINES
+        return self.diff(self.changed, first_line(self.tool_name, self.result), limit)
+
+    @staticmethod
+    def diff(changed: list[tuple[str, str]], start: int | None, limit: int | None = None) -> Text:
         """The lines a file tool changes: red out, green in, each with its
-        line of the file once it is known. Folded, only the first ``DIFF_LINES``."""
-        lines = self.changed if self.has_class("-expanded") else self.changed[: self.DIFF_LINES]
+        line of the file when ``start`` is known. At most ``limit`` of them."""
+        lines = changed if limit is None else changed[:limit]
         # A line that leaves is counted in the old file; the others in the new one.
-        start = first_line(self.tool_name, self.result)
         old = new = start or 0
         shown = Text()
         for index, (mark, line) in enumerate(lines):
@@ -921,12 +931,47 @@ class ToolBlock(Vertical):
             old, new = old + (mark != "+"), new + (mark != "-")
             style = {"+": SUCCESS, "-": ERROR}.get(mark, MUTED)
             shown.append(f"{'−' if mark == '-' else mark} {line}", style=style)
-        if len(lines) < len(self.changed):
-            shown.append(f"\n… (+{len(self.changed) - len(lines)} lines)", style=DIM)
+        if len(lines) < len(changed):
+            shown.append(f"\n… (+{len(changed) - len(lines)} lines)", style=DIM)
+        return shown
+
+    @classmethod
+    def approval(cls, tool_name: str, parameters: dict[str, t.Any], why: str | None) -> Text:
+        """What the user sees when a call asks to run: what it is, what
+        goes in, and why it is asked."""
+        # 1. The same title as the tool's block: its name and what it does.
+        card = Text("◆ ", style=f"bold {PRIMARY}")
+        card.append(tool_label(tool_name), style=f"bold {TEXT}")
+        if summary := tool_summary(tool_name, parameters):
+            card.append(f"  {summary}", style=TEXT if tool_name != BASH else MUTED)
+
+        # 2. What goes in: the lines of a file tool, the whole command, or the arguments.
+        changed = changes(tool_name, parameters)
+        if changed:
+            given = cls.diff(changed, first_line(tool_name, None), cls.CARD_LINES)
+        elif tool_name == BASH:
+            given = Text("\n".join(command_lines(str(parameters.get("command") or ""))), style=TEXT)
+        else:
+            given = Text("\n".join(f"{key}: {value}" for key, value in parameters.items()), style=TEXT)
+        card.append_text(cls.labeled("IN", given))
+
+        # 3. Why it is asked, when the harness said it.
+        if why:
+            card.append_text(cls.labeled("WHY", Text(why, style=WARNING)))
+        return card
+
+    @staticmethod
+    def labeled(label: str, body: Text) -> Text:
+        """``body`` under a short label, its other lines aligned with the first."""
+        shown = Text("\n\n")
+        shown.append(f"  {label:<5}", style=f"bold {DIM}")
+        for index, line in enumerate(body.split("\n")):
+            shown.append("\n       " if index else "")
+            shown.append_text(line)
         return shown
 
     def _input(self) -> Text:
-        """``$ command``: the whole command once expanded, its first line
+        """``IN  command``: the whole command once expanded, its first line
         before. For a file tool, the lines it changes."""
         if self.changed:
             return self._diff()
@@ -935,15 +980,15 @@ class ToolBlock(Vertical):
         command = str(self.parameters.get("command") or "")
         shown = command.strip() if self.has_class("-expanded") else _first_line(command)
         line = Text()
-        line.append("$ ", style=f"bold {DIM}")
-        line.append(shown.replace("\n", "\n  "), style=COMMAND)
+        line.append("IN   ", style=f"bold {DIM}")
+        line.append(shown.replace("\n", "\n     "), style=COMMAND)
         return line
 
     def _summary_line(self) -> Text:
         if self.result is None:
             if self._waiting:
-                return Text("╰─ Waiting for approval…", style=WARNING)
-            return Text("╰─ Running…", style=f"italic {DIM}")
+                return Text("OUT  waiting for approval…", style=WARNING)
+            return Text("OUT  running…", style=f"italic {DIM}")
         summary = self._summary.copy()
         hint = "▾ click to collapse" if self.has_class("-expanded") else "▸ click to expand"
         summary.append(f"   {hint}", style="dim")
@@ -982,7 +1027,7 @@ class ToolBlock(Vertical):
         lines = text.count("\n") + 1
         ms = self.result.duration_ms
         summary = Text()
-        summary.append("╰─ ", style=BORDER)
+        summary.append("OUT  ", style=f"bold {DIM}")
         if self._interrupted:
             summary.append("cancelled", style=MUTED)
         elif not self.result.success:

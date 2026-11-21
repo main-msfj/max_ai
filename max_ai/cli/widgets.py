@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import typing as t
+from pathlib import Path
+
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -19,6 +22,14 @@ class FileTree(DirectoryTree):
     ICON_NODE = "▸ "
     ICON_NODE_EXPANDED = "▾ "
     ICON_FILE = "  "
+    # What is never worth showing: the tools' own folders and caches.
+    HIDDEN: t.ClassVar[frozenset[str]] = frozenset({
+        ".git", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache", ".ruff_cache",
+        ".mypy_cache", ".DS_Store", ".idea", ".vscode", ".devcontainer", ".claude",
+    })
+
+    def filter_paths(self, paths: t.Iterable[Path]) -> t.Iterable[Path]:
+        return [path for path in paths if path.name not in self.HIDDEN]
 
 
 class PromptEditor(TextArea):

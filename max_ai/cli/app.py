@@ -146,10 +146,8 @@ class MaxAIApp(App[None]):
     Screen {{ background: {BACKGROUND}; }}
     #body {{ height: 1fr; }}
     #sidebar {{ width: 30; background: {PANEL}; border-right: tall {BORDER_SUBTLE}; padding: 1 1 0 1; display: none; }}
-    .sidebar-toggle {{ height: 1; min-width: 0; width: 1fr; margin: 0; padding: 0; border: none; background: {PANEL}; color: {DIM}; text-style: bold; text-align: left; content-align: left middle; }}
-    .sidebar-toggle:hover, .sidebar-toggle:focus {{ background: {PANEL}; color: {TEXT}; text-style: bold; }}
-    #skills-toggle {{ margin-top: 1; }}
-    #workspace-files, #skill-files {{ height: 1fr; background: {PANEL}; border: none; color: {MUTED}; padding: 0; scrollbar-size: 0 0; }}
+    .sidebar-title {{ height: 1; color: {DIM}; text-style: bold; margin-bottom: 1; }}
+    #workspace-files {{ height: 1fr; background: {PANEL}; border: none; color: {MUTED}; padding: 0; scrollbar-size: 0 0; }}
     DirectoryTree > .tree--cursor, DirectoryTree:focus > .tree--cursor {{ background: {ELEMENT}; color: {TEXT}; text-style: none; }}
     DirectoryTree > .tree--highlight, DirectoryTree > .tree--highlight-line {{ background: {ELEMENT}; }}
     DirectoryTree > .tree--guides {{ color: {BORDER_SUBTLE}; }}
@@ -215,8 +213,6 @@ class MaxAIApp(App[None]):
         self._job: asyncio.Task[LoopState] | None = None
         self._interrupting = False  # esc asked to stop: a cancel that is ours
         self._agent_name = agent.name
-        self._workspace_open = True
-        self._skills_open = True
         self._form: QuestionForm | None = None
         self._todo_call_ids: set[str] = set()
         self._todos: TodoBlock | None = None
@@ -225,14 +221,14 @@ class MaxAIApp(App[None]):
         self._thinking: ThinkingBlock | None = None
         self._assistant: AssistantBlock | None = None
 
+    NO_FILES = "The sandbox is not on this computer: there is no file panel and @file is off."
+
     # -------- LAYOUT -----------------------------------------------------------
     def compose(self) -> ComposeResult:
         with Horizontal(id="body"):
             with Vertical(id="sidebar"):
-                yield Button("▾ WORKSPACE", id="workspace-toggle", classes="sidebar-toggle")
+                yield Static("FILES", classes="sidebar-title")
                 yield self._tree(self.workspace_root, "workspace-files")
-                yield Button("▾ SKILLS", id="skills-toggle", classes="sidebar-toggle")
-                yield self._tree(self.skills_root, "skill-files")
             with Vertical(id="main"):
                 yield Transcript(id="transcript")
                 with Vertical(id="request-card"):
@@ -259,19 +255,8 @@ class MaxAIApp(App[None]):
     async def on_mount(self) -> None:
         # 1. The banner, and the MCP servers the agent was given.
         self.query_one("#prompt", TextArea).focus()
-        await self._mount(WelcomeBox(self._agent_name, self.agent.client.model))
-        servers = [server.server_id for server in self.agent.mcp]
-        if servers:
-            line = Text()
-            line.append("◇ ", style=SYSTEM)
-            line.append("mcp ", style=f"bold {SYSTEM}")
-            line.append(" · ".join(servers), style=TEXT)
-            line.append("  /mcp for details", style=DIM)
-            await self._mount(NoteLine(line))
-        if self.agent.sandbox is not None and not self._is_local:
-            await self._write_system(
-                "The sandbox is not on this computer: the file sidebar and @file are off.",
-            )
+        await self._mount(WelcomeBox(self._agent_name))
+        await self._mount(NoteLine(self._start_line()))
         # 2. The session to open, then the skills (they may be downloaded).
         if self.store is not None:
             await self._open_session_on_start()
@@ -317,15 +302,6 @@ class MaxAIApp(App[None]):
         if box is None or not self._is_local:
             return Path.cwd()
         root = Path(box.session_paths(self.context.session_id or self.context.run_id)["workspace"])
-        root.mkdir(parents=True, exist_ok=True)
-        return root
-
-    @property
-    def skills_root(self) -> Path:
-        box = self._box()
-        if box is None or not self._is_local:
-            return Path.cwd()
-        root = Path(str(box.layout.skills))
         root.mkdir(parents=True, exist_ok=True)
         return root
 
@@ -413,8 +389,8 @@ class MaxAIApp(App[None]):
         line.append(" · ", style=DIM)
         line.append(self.agent.client.model, style=MODEL)
         line.append(f" · ↑ {_k(self._tokens_input)} ↓ {_k(self._tokens_output)}", style=MUTED)
-        if self._tokens_cached:
-            line.append(f" · cached {_k(self._tokens_cached)}", style=DIM)
+        # Always shown: a zero says the provider is not reusing the prompt.
+        line.append(f" · cached {_k(self._tokens_cached)}", style=DIM)
         # 2. The window as the last model call shared it out.
         parts = self.context.context
         window = (parts.window if parts else 0) or self.agent.client.config.max_context_window
@@ -446,6 +422,11 @@ class MaxAIApp(App[None]):
             transcript.scroll_page_down()
 
     def action_toggle_sidebar(self) -> None:
+        """Show or hide the session's files. A sandbox on another machine
+        has no folder here to show."""
+        if not self._is_local:
+            self.run_worker(self._write_system(self.NO_FILES))
+            return
         sidebar = self.query_one("#sidebar")
         sidebar.display = not sidebar.display
 
@@ -757,68 +738,16 @@ class MaxAIApp(App[None]):
         prompt.focus()
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "workspace-toggle":
-            self._workspace_open = not self._workspace_open
-            self.query_one("#workspace-files").display = self._workspace_open
-            event.button.label = f"{'▾' if self._workspace_open else '▸'} WORKSPACE"
-            return
-        if event.button.id == "skills-toggle":
-            self._skills_open = not self._skills_open
-            self.query_one("#skill-files").display = self._skills_open
-            event.button.label = f"{'▾' if self._skills_open else '▸'} SKILLS"
-            return
         if self._request_future is not None and not self._request_future.done():
             label = str(event.button.label)
             self._request_future.set_result(re.sub(r"^\d+\.\s+", "", label))
 
     # -------- HELPERS -----------------------------------------------------------
     @staticmethod
-    def _format_parameters(parameters: dict[str, t.Any]) -> str:
-        """Render approval arguments as readable key/value lines, never JSON."""
-        if not parameters:
-            return "No parameters"
-        lines: list[str] = []
-
-        def add_value(name: str, value: t.Any) -> None:
-            if isinstance(value, dict):
-                items = t.cast("dict[str, t.Any]", value)
-                if not items:
-                    lines.append(f"{name}: (empty)")
-                for child, nested in items.items():
-                    add_value(f"{name}.{child}", nested)
-            elif isinstance(value, (list, tuple)):
-                values = list(t.cast("list[t.Any]", value))
-                if not values:
-                    lines.append(f"{name}: (empty)")
-                elif any(isinstance(item, (dict, list, tuple)) for item in values):
-                    for index, item in enumerate(values, start=1):
-                        add_value(f"{name} {index}", item)
-                else:
-                    lines.append(f"{name}: {', '.join(str(item) for item in values)}")
-            else:
-                rendered = str(value).replace("\n", " ")
-                if len(rendered) > 240:
-                    rendered = rendered[:237] + "..."
-                lines.append(f"{name}: {rendered or '(empty)'}")
-
-        for key, value in parameters.items():
-            add_value(str(key).replace("_", " "), value)
-        return "\n".join(lines)
-
-    @staticmethod
-    def _approval_card(record: ToolCallRecord) -> str:
-        """What the approval card says. Bash: what the command does, then
-        the exact command; any other tool: its arguments."""
-        if record.tool_name != BASH:
-            details = MaxAIApp._format_parameters(record.parameters)
-            return f"Allow {record.tool_name}?\n\n{details}"
-        description = str(record.parameters.get("description") or "").strip()
-        command = str(record.parameters.get("command") or "").strip()
-        head = f"Allow Bash?\n\n{description}\n\n" if description else "Allow Bash?\n\n"
-        card = head + "$ " + command.replace("\n", "\n  ")
-        # The judge's verdict, when one was asked and it did not let the command run.
-        note = record.approval_reason or ""
-        return f"{card}\n\n{note}" if note.startswith("judge:") else card
+    def _approval_card(record: ToolCallRecord) -> Text:
+        """What the approval card says: the call as its block shows it, and
+        why the harness asks."""
+        return ToolBlock.approval(record.tool_name, record.parameters, record.approval_reason)
 
     def _expand_file_mentions(self, value: str) -> str:
         """Attach readable workspace files referenced as ``@relative/path``."""
@@ -1159,6 +1088,21 @@ class MaxAIApp(App[None]):
         return questions
 
     # -------- SESSIONS -----------------------------------------------------------
+    def _start_line(self) -> Text:
+        """One line under the banner: the session, the MCP servers and
+        where the files are. The details are in /session and /mcp."""
+        line = Text("◇ ", style=SYSTEM)
+        line.append(f"session {self.context.session_id}", style=TEXT)
+        if self.store is None:
+            line.append(" (not saved)", style=WARNING)
+        servers = [server.server_id for server in self.agent.mcp]
+        if servers:
+            line.append(" · mcp ", style=DIM)
+            line.append(", ".join(servers), style=TEXT)
+        if self.agent.sandbox is not None and not self._is_local:
+            line.append(" · remote sandbox", style=DIM)
+        return line
+
     def _session_line(self) -> str:
         sid = self.context.session_id
         if self.store is None:
@@ -1177,7 +1121,6 @@ class MaxAIApp(App[None]):
     async def _open_session_on_start(self) -> None:
         sid = self._resume_id
         if sid is None or self.store is None:
-            await self._write_system(self._session_line())
             return
         try:
             ctx = await self.store.load(self.user_id, sid)
@@ -1450,7 +1393,7 @@ class MaxAIApp(App[None]):
         label: str,
         options: list[str] | None = None,
         *,
-        prompt_card: str | None = None,
+        prompt_card: Text | None = None,
     ) -> str:
         """Keep the composer usable while the agent waits for a human."""
         await self._finish_assistant()
@@ -1465,7 +1408,7 @@ class MaxAIApp(App[None]):
         detail = self.query_one("#request-detail", Static)
         decisions = self.query_one("#decisions", Vertical)
         await decisions.remove_children()
-        detail.update(Text(prompt_card or label, style="bold"))
+        detail.update(prompt_card or Text(label, style="bold"))
         card.display = bool(prompt_card or options)
         if options:
             await decisions.mount(*(Button(option) for option in options))

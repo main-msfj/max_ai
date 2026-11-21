@@ -79,7 +79,8 @@ async def test_a_command_the_judge_is_not_sure_about_asks_and_says_so():
     record = bash("pytest -q")
     assert await ask(HarnessToolHook(judge=judge(Server(0.6))), record) is None
     assert record.approval_reason == "judge: not sure (0.60)"
-    assert MaxAIApp._approval_card(record).endswith("$ pytest -q\n\njudge: not sure (0.60)")
+    card = MaxAIApp._approval_card(record).plain
+    assert card.endswith("  IN   pytest -q\n\n  WHY  judge: not sure (0.60)")
 
 
 @pytest.mark.parametrize("server", [Server(None), Server(0.97, status=500)])
