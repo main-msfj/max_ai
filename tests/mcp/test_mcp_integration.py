@@ -15,6 +15,7 @@ from mcp.types import (
     Tool,
     ToolAnnotations,
 )
+from pydantic import ValidationError
 
 from max_ai.base.tools import CoreTool
 from max_ai.capabilities.mcp import (
@@ -235,11 +236,11 @@ def test_server_configs_round_trip_as_json(monkeypatch) -> None:
     monkeypatch.setenv("CRM_ID", "id-789")
     stdio = StdioMCPServerConfig(
         server_id="local", command="python", args=["-m", "server"],
-        env={"MODE": "test"}, secret=StdioSecret(keys={"CRM_KEY": "crm-456", "CRM_ID": "id-789"}),
+        secret=StdioSecret(keys={"CRM_KEY": "crm-456", "CRM_ID": "id-789"}),
         tool_approval_modes={"search": "auto_approval"},
     )
     http = HTTPServerConfig(
-        server_id="remote", url="https://example.com/mcp", headers={"X-Test": "yes"},
+        server_id="remote", url="https://example.com/mcp",
         secret=HTTPSecret(type="bearer", keys={"DOCS_TOKEN": "tok-123"}),
     )
     keyed = HTTPServerConfig(
@@ -253,9 +254,22 @@ def test_server_configs_round_trip_as_json(monkeypatch) -> None:
     assert '"keys":["DOCS_TOKEN"]' in payload and '"keys":["CRM_KEY","CRM_ID"]' in payload
     assert not any(value in payload for value in ("tok-123", "key-123", "crm-456", "id-789"))
     assert deserialize_mcp_servers(payload) == [stdio, http, keyed]
-    assert http.request_headers == {"X-Test": "yes", "Authorization": "Bearer tok-123"}
+    assert http.request_headers == {"Authorization": "Bearer tok-123"}
     assert keyed.request_headers == {"X-Api-Key": "key-123"}
-    assert stdio.process_env == {"MODE": "test", "CRM_KEY": "crm-456", "CRM_ID": "id-789"}
+    assert stdio.process_env == {"CRM_KEY": "crm-456", "CRM_ID": "id-789"}
+
+
+@pytest.mark.parametrize("build", [
+    # A name the config does not know: before, the key was silently not sent.
+    lambda: HTTPServerConfig(server_id="x", url="https://e.com/mcp", headers_env={"x-api-key": "K"}),
+    lambda: HTTPServerConfig(server_id="x", url="https://e.com/mcp", env={"MODE": "test"}),
+    # There is nowhere to write a value that would be stored: only ``secret``.
+    lambda: HTTPServerConfig(server_id="x", url="https://e.com/mcp", headers={"Authorization": "Bearer t"}),
+    lambda: StdioMCPServerConfig(server_id="x", command="python", env={"CRM_TOKEN": "t"}),
+])
+def test_a_config_refuses_a_name_it_does_not_know(build) -> None:
+    with pytest.raises(ValidationError):
+        build()
 
 
 def test_a_secret_shows_its_names_and_never_its_values() -> None:

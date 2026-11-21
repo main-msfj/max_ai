@@ -7,6 +7,7 @@ import typing as t
 
 from pydantic import (
     BaseModel,
+    ConfigDict,
     Field,
     TypeAdapter,
     field_serializer,
@@ -88,9 +89,12 @@ class MCPServerConfig(BaseModel):
     of the env vars that hold them, read when the connection opens.
     """
 
+    # An unknown name is an error, never ignored. There is no ``env`` or
+    # ``headers``: what a server gets from us goes in ``secret``.
+    model_config = ConfigDict(extra="forbid")
+
     server_id: str
     transport_protocol: TransportProtocol = "streamable-http"
-    env: dict[str, str] = Field(default_factory=dict)
     approval_mode: ToolApprovalMode = ToolApprovalMode.ASK_APPROVED
     resource_approval_mode: ToolApprovalMode | None = None
     tool_approval_modes: dict[str, ToolApprovalMode] = Field(default_factory=dict)
@@ -128,9 +132,9 @@ class StdioMCPServerConfig(MCPServerConfig):
 
     @property
     def process_env(self) -> dict[str, str]:
-        """The child's env with the secret's values (call when connecting)."""
-        given = self.secret.values(self.server_id) if self.secret else {}
-        return {**self.env, **given}
+        """What the child sees of our environment: the secret's values and
+        nothing else (call when connecting)."""
+        return self.secret.values(self.server_id) if self.secret else {}
 
     @field_validator("command")
     @classmethod
@@ -145,7 +149,6 @@ class HTTPServerConfig(MCPServerConfig):
 
     transport_protocol: HTTPTransportProtocol = "streamable-http"
     url: str
-    headers: dict[str, str] = Field(default_factory=dict)
     secret: HTTPSecret | None = None  # None: the server is used without authentication
 
     @field_validator("url")
@@ -157,9 +160,9 @@ class HTTPServerConfig(MCPServerConfig):
 
     @property
     def request_headers(self) -> dict[str, str]:
-        """Headers with the secret's value (call when connecting)."""
-        given = self.secret.headers(self.server_id) if self.secret else {}
-        return {**self.headers, **given}
+        """The header with the secret's value, the only one we add (call
+        when connecting)."""
+        return self.secret.headers(self.server_id) if self.secret else {}
 
 
 _server_list_adapter = TypeAdapter(list[StdioMCPServerConfig | HTTPServerConfig])
