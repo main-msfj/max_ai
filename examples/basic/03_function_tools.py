@@ -9,7 +9,7 @@ from max_ai.types.tools import ToolApprovalMode
 
 
 def calculate_compound_interest(principal: float, annual_rate: float, years: int) -> float:
-    """Calculate the balance with annual compound interest."""
+    """Calculate the balance with annual compound interest. ``annual_rate`` is a percentage: 5 for 5%."""
     return round(principal * (1 + annual_rate / 100) ** years, 2)
 
 

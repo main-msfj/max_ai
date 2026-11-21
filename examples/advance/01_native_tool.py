@@ -25,7 +25,7 @@ class CompoundInterestTool(CoreTool):
             "type": "object",
             "properties": {
                 "principal": {"type": "number"},
-                "annual_rate": {"type": "number"},
+                "annual_rate": {"type": "number", "description": "A percentage: 5 for 5%."},
                 "years": {"type": "integer"},
             },
             "required": ["principal", "annual_rate", "years"],

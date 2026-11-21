@@ -17,6 +17,5 @@
 | `13_mcp_tools.py` | tools from an MCP server, with its secret | `EXA_API_KEY` |
 | `14_full_agent.py` | most pieces together | |
 
-Checked by running each one with a model that is faked, so the framework's
-part really runs; `12_skills.py` could not be checked that way (GitHub's rate
-limit). None was run against a real model.
+Each one was run against a real model (DeepSeek through OpenRouter), except
+`12_skills.py`: GitHub's rate limit stops it without a token.

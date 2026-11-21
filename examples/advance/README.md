@@ -11,5 +11,4 @@ Pieces of your own, each by extending one base class.
 | `05_custom_embedding.py` | `CoreEmbedding` | `model_id` and `_embed` (no key needed) |
 | `06_save_and_load_agent.py` | | an agent as YAML, with no secrets, and back |
 
-Checked by running each one with a model that is faked; none was run against
-a real model.
+Each one was run against a real model (DeepSeek through OpenRouter).

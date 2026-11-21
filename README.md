@@ -85,6 +85,142 @@ agent = Agent(
 )
 ```
 
+## Architecture
+
+One `Agent` is built once and serves every user. It keeps no conversation:
+each turn receives a `RunContext`, works on it and gives it back changed. The
+application decides where that context is stored.
+
+```text
+┌─────────────────────────────── Your application ───────────────────────────────┐
+│  RunContext, one per (user_id, session_id)       SessionStore: local, MongoDB  │
+│  messages · tool_state · todos · summary · inbox load(ctx) / save(ctx)         │
+└─────────────────────────┬──────────────────────────────────────▲───────────────┘
+                          │ agent.run(task, ctx)                 │ LoopState
+                          ▼                                      │
+┌──────────────────────────────────── Agent ─────────────────────┴───────────────┐
+│                                                                                │
+│  ┌───────────── Harness ─────────────┐   ┌────────── MiddlewareChain ────────┐ │
+│  │ checks the agent when it is built │   │ Tracing first, then yours         │ │
+│  │ adds its own tools                │   │ (Logging, Budget, ...)            │ │
+│  │ permissions · judge · retries     │   │ wraps turn · model · stream · tool│ │
+│  └───────────────────────────────────┘   └───────────────────────────────────┘ │
+│                                                                                │
+│  ┌────────── NativePrompt ───────────┐   ┌──────────── ReactLoop ────────────┐ │
+│  │ the system prompt, from layers    │──▶│ model ⇄ tools until it answers    │ │
+│  │ stable first, for the cache       │   │ Compaction: Summary or Sliding    │ │
+│  └───────────────────────────────────┘   └───────┬─────────────────┬─────────┘ │
+│                                                  │                 │           │
+│                                  ┌───────────────▼──────┐  ┌───────▼─────────┐ │
+│                                  │ CoreLLMClient        │  │ ToolDispatcher  │ │
+│                                  │ Chat Completions     │  │ ToolRegistry    │ │
+│                                  │ Responses · Messages │  │ HarnessToolHook │ │
+│                                  └──────────────────────┘  └───────┬─────────┘ │
+└────────────────────────────────────────────────────────────────────┼───────────┘
+                                                                     │
+                     ┌───────────────────────────┬───────────────────┤
+                     ▼                           ▼                   ▼
+          ┌─────────────────────┐   ┌─────────────────────┐  ┌───────────────────┐
+          │ Your tools          │   │ Harness tools       │  │ MCP tools         │
+          │ @tool, CoreTool,    │   │ ask_user, todos,    │  │ stdio or HTTP     │
+          │ BashTool()          │   │ files, read_skill   │  │ run on the host   │
+          └──────────┬──────────┘   └──────────┬──────────┘  └───────────────────┘
+                     │ bash, files             │
+                     ▼                         ▼
+          ┌────────────────────────────────────────────────┐
+          │ Sandbox, one per user: Local · Docker · E2B    │
+          │ .agent/  setting.json · skills/ · memory/      │
+          │          workspace/<session>/ · tmp/<session>/ │
+          └────────────────────────────────────────────────┘
+```
+
+| Box | Where | What it does |
+|---|---|---|
+| `Agent` | `agents/agent.py` | holds the pieces, locks each session, binds the user's sandbox, builds the registry and the prompt, starts the loop |
+| Harness | `core/harness/` | the fixed rules: sizes, the tools it adds, who may run what, the judge, memory at compaction |
+| `MiddlewareChain` | `core/middleware/` | your code around the whole turn, each model call, each stream and each tool call |
+| `NativePrompt` | `capabilities/stacks/` | puts the prompt layers in order: policy, yours, tools, skills, workspace, memory, session |
+| `ReactLoop` | `capabilities/loop/react/` | moves the turn; a `LoopHook` decides at each step (stop, note, refuse) |
+| `CoreLLMClient` | `capabilities/clients/` | one family per API format; every one gives back the same `LLMResponse` |
+| `ToolDispatcher` | `core/tool/` | checks, asks permission, runs and closes each tool call |
+| Sandbox | `capabilities/sandbox/` | where commands, files, skills and memory live, apart for each user |
+
+### One turn
+
+```text
+ agent.run("task", ctx)
+        │
+        ▼
+ ┌──────────────────────────────────────────────┐
+ │ 1. lock (user_id, session_id)                │  other sessions run in parallel
+ │    task → ctx.inbox                          │
+ └──────────────────────┬───────────────────────┘
+                        ▼
+ ┌──────────────────────────────────────────────┐
+ │ 2. get ready                                 │
+ │    bind the user's sandbox, sync the skills  │  once per user
+ │    registry = yours + harness + MCP          │  first name wins
+ │    permissions from .agent/setting.json      │
+ │    system prompt from the layers             │
+ │    harness checks prompt and tool sizes      │
+ └──────────────────────┬───────────────────────┘
+                        ▼
+ ┌──────────────────────────────────────────────┐
+ │ 3. ReactLoop                                 │
+ │                                              │
+ │    ┌─▶ hook.before_model  (stop? note?)      │
+ │    │   compact if the window is filling      │
+ │    │   call the model (retries, middleware)  │
+ │    │   hook.after_model   (stop? refuse?)    │
+ │    │          │                              │
+ │    │     tool calls? ── no ──▶ end           │
+ │    │          │ yes                          │
+ │    │   run them: read-only in parallel (8)   │
+ │    │          │                              │
+ │    │   one waits for the user? ─ yes ─▶ end  │  waiting_for_user
+ │    │          │ no                           │
+ │    └──────────┘                              │
+ └──────────────────────┬───────────────────────┘
+                        ▼
+ LoopState: message · finish_reason · usage · iteration
+ the conversation stays in ctx: save it, pass it again
+```
+
+The turn ends when the model answers without tools (`stop`, `length`), a
+call waits for the user (`waiting_for_user`), the limit is reached
+(`max_iterations`, 50), a rule stops it (repeated calls, empty answers), a
+middleware stops it, or it fails (`error`, `cancelled`).
+
+### One tool call
+
+```text
+ the model asks for a tool
+        │
+        ▼
+ ┌─────────────────────── middleware.tool ────────────────────────┐
+ │                                                                │
+ │  call_tool(name, args)? it becomes the call to the real tool   │
+ │  unknown tool, bad arguments, no sandbox   ──▶ error result    │
+ │  hook.before: writes to a read-only memory ──▶ error result    │
+ │                                                                │
+ │  permission                                                    │
+ │    rules in setting.json: deny ▶ dangerous ▶ ask ▶ allow       │
+ │    no rule: the tool's approval_mode                           │
+ │    bash would ask: the judge may let it run (optional)         │
+ │       │                  │                     │               │
+ │     allow               ask                  deny ──▶ result   │
+ │       │                  └──▶ waits for agent.approve(ctx, id) │
+ │       ▼                       then agent.run(None, ctx)        │
+ │  execute, with a timeout (TOOL_TIMEOUT_SECONDS)                │
+ │  hook.after / hook.failed                                      │
+ └────────────────────────────────┬───────────────────────────────┘
+                                  ▼
+                 ToolMessage back into ctx.messages
+```
+
+An error or a denial is not raised: it goes back to the model as the tool's
+result, and the turn goes on.
+
 ## The Agent
 
 ```python
@@ -141,27 +277,6 @@ without running.
 The constructor checks every piece and raises a clear error: wrong types,
 skills or memory without a sandbox, skills without `BashTool()`, bash without a
 sandbox, and the harness token limits below.
-
-## How a turn runs
-
-1. Turns of the same `(user_id, session_id)` wait for each other; other
-   sessions run in parallel on the same agent.
-2. The task goes into `ctx.inbox`; the middlewares wrap the whole turn.
-3. Getting ready: the user's sandbox is bound (`sandbox.bind(user_id)`) and
-   prepared once per user, and the skills are synced into it. The tool
-   registry is built from your tools, the harness's tools and the MCP servers'
-   tools (first name wins). The permission rules are read from `setting.json`,
-   the memory index is read, and the system prompt is built from the prompt
-   layers. The harness checks the prompt and tool sizes.
-4. `ReactLoop` calls the model (with retries and middleware), runs the
-   requested tools (read-only calls of one reply in parallel, up to 8), and
-   repeats until the model answers without tools, a call waits for the user,
-   `max_iterations` (50) is reached, or a rule stops it (repeated calls, empty
-   answers). Before each model call it compacts the conversation if the window
-   is filling.
-5. `state.finish_reason` says why it ended: the model's own reason (`stop`,
-   `length`), `waiting_for_user`, `max_iterations`, `cancelled`, `error`, or the
-   reason a middleware or hook gave.
 
 ## The harness
 
@@ -472,9 +587,9 @@ Checked against the code on this branch:
   against a fake SDK. Claude's newer models drop the thinking blocks of a
   conversation whose history was edited: compaction and the removal of
   blocked content do edit it, so that thinking is lost (nothing fails).
-- **Examples** were checked with a model that is faked, not against a real
-  one; `examples/basic/12_skills.py` could not be checked (GitHub's rate
-  limit). `example-deploy/` was run against real models.
+- **Examples** were run against a real model (DeepSeek through OpenRouter),
+  except `examples/basic/12_skills.py`: GitHub's rate limit stops it without
+  a token. What is still missing is listed in [MILESTONES.md](MILESTONES.md).
 
 ## Repository map
 
@@ -503,7 +618,7 @@ max_ai/
   web/              browser UI
   types/            RunContext and other runtime types
 examples/           one idea per file: basic/ and advance/
-example-deploy/     one agent that uses most of the framework, from the CLI
+example-deploy/     whole agents to run from the CLI, one per folder
 docker-infra/       MongoDB Atlas Local, MCP server, Langfuse
 tests/
 ```

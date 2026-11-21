@@ -72,4 +72,5 @@ First public version. The core was rewritten between 2026-11-15 and
   to be connected.
 - Completion gates are kept in the package to be connected; the loop does
   not use them yet.
-- The examples were checked with a faked model only, not a real one.
+- The examples were run against a real model, except `12_skills.py`
+  (GitHub's rate limit). What is missing is listed in `MILESTONES.md`.
