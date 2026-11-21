@@ -22,7 +22,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
 from textual.widget import Widget
-from textual.widgets import Button, DirectoryTree, OptionList, Static, TextArea
+from textual.widgets import Button, OptionList, Static, TextArea
 
 from ..agents.agent import Agent
 from ..base.loop import LoopState
@@ -92,9 +92,10 @@ from .theme import (
     SYSTEM,
     TEXT,
     WARNING,
+    Theme,
     shimmer,
 )
-from .widgets import CommandMenu, FileTree, InfoPanel, PromptEditor
+from .widgets import CommandMenu, InfoPanel, PromptEditor, WorkspaceTree
 
 COMMANDS = {
     "/help": "show commands and shortcuts",
@@ -107,7 +108,8 @@ COMMANDS = {
     "/clear": "start a new conversation (same as /new)",
     "/thinking": "show or hide thinking boxes",
     "/verbose": "show or hide runtime events",
-    "/files": "toggle the file sidebar",
+    "/workspace": "show or hide the files of this session",
+    "/theme": "show the color themes, or pick one: /theme blue",
     "/exit": "quit",
 }
 
@@ -146,19 +148,15 @@ class MaxAIApp(App[None]):
     Screen {{ background: {BACKGROUND}; }}
     #body {{ height: 1fr; }}
     #sidebar {{ width: 30; background: {PANEL}; border-right: tall {BORDER_SUBTLE}; padding: 1 1 0 1; display: none; }}
-    .sidebar-toggle {{ height: 1; min-width: 0; width: 1fr; margin: 0; padding: 0; border: none; background: {PANEL}; color: {DIM}; text-style: bold; text-align: left; content-align: left middle; }}
-    .sidebar-toggle:hover, .sidebar-toggle:focus {{ background: {PANEL}; color: {TEXT}; text-style: bold; }}
-    #skills-toggle {{ margin-top: 1; }}
-    #workspace-files, #skill-files {{ height: 1fr; background: {PANEL}; border: none; color: {MUTED}; padding: 0; scrollbar-size: 0 0; }}
-    DirectoryTree > .tree--cursor, DirectoryTree:focus > .tree--cursor {{ background: {ELEMENT}; color: {TEXT}; text-style: none; }}
-    DirectoryTree > .tree--highlight, DirectoryTree > .tree--highlight-line {{ background: {ELEMENT}; }}
-    DirectoryTree > .tree--guides {{ color: {BORDER_SUBTLE}; }}
-    DirectoryTree > .directory-tree--folder {{ color: {TEXT}; text-style: none; }}
-    DirectoryTree > .directory-tree--extension, DirectoryTree > .directory-tree--file {{ color: {MUTED}; text-style: none; }}
-    #main {{ width: 1fr; padding: 0 1; }}
+    .sidebar-title {{ height: 1; color: {DIM}; text-style: bold; margin-bottom: 1; }}
+    #workspace-files {{ height: 1fr; background: {PANEL}; border: none; color: {MUTED}; padding: 0; scrollbar-size: 0 0; }}
+    WorkspaceTree > .tree--cursor, WorkspaceTree:focus > .tree--cursor {{ background: {ELEMENT}; color: {TEXT}; text-style: none; }}
+    WorkspaceTree > .tree--highlight, WorkspaceTree > .tree--highlight-line {{ background: {ELEMENT}; }}
+    WorkspaceTree > .tree--guides {{ color: {BORDER_SUBTLE}; }}
+        #main {{ width: 1fr; padding: 0 1; }}
     #transcript {{ height: 1fr; background: {BACKGROUND}; scrollbar-size: 1 1; padding: 0 1; scrollbar-background: {BACKGROUND}; scrollbar-background-hover: {BACKGROUND}; scrollbar-background-active: {BACKGROUND}; scrollbar-color: {ELEMENT}; scrollbar-color-hover: {PRIMARY}; scrollbar-color-active: {PRIMARY}; }}
     #request-card {{ height: auto; display: none; border: round {PRIMARY}; padding: 0 1; margin: 1 0 0 0; }}
-    #request-detail {{ height: auto; color: {TEXT}; margin-bottom: 1; }}
+    #request-detail {{ height: auto; max-height: 24; overflow-y: auto; color: {TEXT}; margin-bottom: 1; }}
     #decisions {{ height: auto; display: none; }}
     #decisions Button {{ width: 1fr; height: 1; min-height: 1; border: none; margin: 0; background: {PANEL}; color: {TEXT}; content-align: left middle; text-align: left; }}
     #decisions Button:hover, #decisions Button:focus {{ background: {ELEMENT}; color: {PRIMARY}; }}
@@ -173,7 +171,7 @@ class MaxAIApp(App[None]):
         Binding("escape", "interrupt", "Interrupt", priority=True),
         Binding("ctrl+t", "toggle_thinking", "Thinking", priority=True),
         Binding("ctrl+o", "toggle_verbose", "Verbose", priority=True),
-        Binding("ctrl+b", "toggle_sidebar", "Files"),
+        Binding("ctrl+b", "toggle_sidebar", "Workspace"),
         Binding("ctrl+l", "clear_chat", "Clear screen"),
         Binding("pageup", "scroll_transcript(-1)", "Scroll up", show=False),
         Binding("pagedown", "scroll_transcript(1)", "Scroll down", show=False),
@@ -215,8 +213,6 @@ class MaxAIApp(App[None]):
         self._job: asyncio.Task[LoopState] | None = None
         self._interrupting = False  # esc asked to stop: a cancel that is ours
         self._agent_name = agent.name
-        self._workspace_open = True
-        self._skills_open = True
         self._form: QuestionForm | None = None
         self._todo_call_ids: set[str] = set()
         self._todos: TodoBlock | None = None
@@ -229,10 +225,10 @@ class MaxAIApp(App[None]):
     def compose(self) -> ComposeResult:
         with Horizontal(id="body"):
             with Vertical(id="sidebar"):
-                yield Button("▾ WORKSPACE", id="workspace-toggle", classes="sidebar-toggle")
-                yield self._tree(self.workspace_root, "workspace-files")
-                yield Button("▾ SKILLS", id="skills-toggle", classes="sidebar-toggle")
-                yield self._tree(self.skills_root, "skill-files")
+                yield Static("WORKSPACE", classes="sidebar-title")
+                tree = WorkspaceTree("workspace", id="workspace-files")
+                tree.show_root = False
+                yield tree
             with Vertical(id="main"):
                 yield Transcript(id="transcript")
                 with Vertical(id="request-card"):
@@ -249,29 +245,11 @@ class MaxAIApp(App[None]):
                 yield CommandMenu(id="menu")
                 yield Static("", id="usage")
 
-    @staticmethod
-    def _tree(root: Path, tree_id: str) -> DirectoryTree:
-        """A file tree that shows what is inside ``root``, not the folder itself."""
-        tree = FileTree(str(root), id=tree_id)
-        tree.show_root = False
-        return tree
-
     async def on_mount(self) -> None:
         # 1. The banner, and the MCP servers the agent was given.
         self.query_one("#prompt", TextArea).focus()
-        await self._mount(WelcomeBox(self._agent_name, self.agent.client.model))
-        servers = [server.server_id for server in self.agent.mcp]
-        if servers:
-            line = Text()
-            line.append("◇ ", style=SYSTEM)
-            line.append("mcp ", style=f"bold {SYSTEM}")
-            line.append(" · ".join(servers), style=TEXT)
-            line.append("  /mcp for details", style=DIM)
-            await self._mount(NoteLine(line))
-        if self.agent.sandbox is not None and not self._is_local:
-            await self._write_system(
-                "The sandbox is not on this computer: the file sidebar and @file are off.",
-            )
+        await self._mount(WelcomeBox(self._agent_name))
+        await self._mount(NoteLine(self._start_line()))
         # 2. The session to open, then the skills (they may be downloaded).
         if self.store is not None:
             await self._open_session_on_start()
@@ -317,15 +295,6 @@ class MaxAIApp(App[None]):
         if box is None or not self._is_local:
             return Path.cwd()
         root = Path(box.session_paths(self.context.session_id or self.context.run_id)["workspace"])
-        root.mkdir(parents=True, exist_ok=True)
-        return root
-
-    @property
-    def skills_root(self) -> Path:
-        box = self._box()
-        if box is None or not self._is_local:
-            return Path.cwd()
-        root = Path(str(box.layout.skills))
         root.mkdir(parents=True, exist_ok=True)
         return root
 
@@ -404,7 +373,7 @@ class MaxAIApp(App[None]):
         status.update(line)
 
     def _refresh_usage(self) -> None:
-        """Tokens spent, the window used and where compaction starts."""
+        """Tokens spent and the window used."""
         # 1. Tokens of this CLI's life.
         line = Text()
         if self.verbose:
@@ -413,20 +382,14 @@ class MaxAIApp(App[None]):
         line.append(" · ", style=DIM)
         line.append(self.agent.client.model, style=MODEL)
         line.append(f" · ↑ {_k(self._tokens_input)} ↓ {_k(self._tokens_output)}", style=MUTED)
-        if self._tokens_cached:
-            line.append(f" · cached {_k(self._tokens_cached)}", style=DIM)
+        # Always shown: a zero says the provider is not reusing the prompt.
+        line.append(f" · cached {_k(self._tokens_cached)}", style=DIM)
         # 2. The window as the last model call shared it out.
         parts = self.context.context
         window = (parts.window if parts else 0) or self.agent.client.config.max_context_window
         used = parts.prompt + parts.tools + parts.messages if parts else 0
         line.append(" · ctx ", style=DIM)
         line.append_text(context_bar(used, window))
-        # 3. Compaction starts when the messages fill their room.
-        name = type(self.agent.reasoning.compaction).__name__.removesuffix("Compaction").lower()
-        line.append(f" · {name} compaction", style=DIM)
-        if parts is not None and parts.window:
-            share = round((parts.window - parts.output - parts.margin) / parts.window * 100)
-            line.append(f" at ~{share}%", style=DIM)
         usage = self._static("#usage")
         if usage is not None:
             usage.update(line)
@@ -445,9 +408,63 @@ class MaxAIApp(App[None]):
         else:
             transcript.scroll_page_down()
 
+    async def _theme(self, name: str) -> None:
+        """``/theme``: the themes there are; ``/theme name``: keep one."""
+        # 1. Without a name, the list, with the one in use marked.
+        if not name:
+            line = Text("Themes: ", style=DIM)
+            for index, theme in enumerate(Theme.THEMES):
+                line.append(" · " if index else "", style=DIM)
+                line.append(theme, style=f"bold {Theme.THEMES[theme][0]}")
+                line.append(" (in use)" if theme == Theme.chosen() else "", style=DIM)
+            line.append("   pick one with /theme name", style=DIM)
+            await self._mount(NoteLine(line))
+            return
+
+        # 2. With one, it is kept; the colors are read when the CLI starts.
+        try:
+            Theme.save(name)
+        except (ValueError, OSError) as error:
+            await self._write_system(str(error), style=ERROR)
+            return
+        await self._write_system(
+            f"Theme saved: {name}. It shows the next time you open the CLI.", style=SUCCESS
+        )
+
     def action_toggle_sidebar(self) -> None:
+        """Show or hide the session's files, listed again each time it opens."""
         sidebar = self.query_one("#sidebar")
         sidebar.display = not sidebar.display
+        self._refresh_workspace()
+
+    @work(group="workspace", exclusive=True)
+    async def _refresh_workspace(self) -> None:
+        """List the session's files where they are and draw them. Only
+        while the panel is open; a listing that fails leaves it as it was."""
+        if not self.query_one("#sidebar").display:
+            return
+        try:
+            printed = await self._list_workspace()
+        except Exception:  # noqa: BLE001 — the panel must not kill the UI
+            return
+        self.query_one("#workspace-files", WorkspaceTree).show(WorkspaceTree.read(printed))
+
+    async def _list_workspace(self) -> str:
+        """What the listing prints: run in the sandbox, or here without one."""
+        box = self._box()
+        # 1. With a sandbox, its own session folder, wherever that machine is.
+        if box is not None:
+            await box.prepare()
+            sid = self.context.session_id or self.context.run_id
+            command = WorkspaceTree.command(box.session_paths(sid)["workspace"])
+            return (await box.execute_command(command, harness=True)).stdout
+
+        # 2. Without one, the folder the program runs in.
+        process = await asyncio.create_subprocess_shell(
+            WorkspaceTree.command(str(Path.cwd())), stdout=asyncio.subprocess.PIPE,
+        )
+        printed, _ = await process.communicate()
+        return printed.decode("utf-8", errors="replace")
 
     def action_toggle_thinking(self) -> None:
         self.show_thinking = not self.show_thinking
@@ -663,8 +680,10 @@ class MaxAIApp(App[None]):
         elif command == "/verbose":
             await self.action_toggle_verbose()
             await self._write_system(f"Verbose {'on' if self.verbose else 'off'}.")
-        elif command == "/files":
+        elif command == "/workspace":
             self.action_toggle_sidebar()
+        elif command == "/theme":
+            await self._theme(args.strip().lower())
         elif command in ("/exit", "/quit"):
             self.exit()
         else:
@@ -683,7 +702,7 @@ class MaxAIApp(App[None]):
             ("esc", "interrupt the running turn"),
             ("ctrl+t", "thinking on/off"),
             ("ctrl+o", "verbose runtime events on/off"),
-            ("ctrl+b", "file sidebar"),
+            ("ctrl+b", "workspace"),
             ("ctrl+l", "clear the screen"),
             ("pgup/pgdn", "scroll the conversation"),
             ("@path", "attach a workspace file"),
@@ -757,68 +776,16 @@ class MaxAIApp(App[None]):
         prompt.focus()
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "workspace-toggle":
-            self._workspace_open = not self._workspace_open
-            self.query_one("#workspace-files").display = self._workspace_open
-            event.button.label = f"{'▾' if self._workspace_open else '▸'} WORKSPACE"
-            return
-        if event.button.id == "skills-toggle":
-            self._skills_open = not self._skills_open
-            self.query_one("#skill-files").display = self._skills_open
-            event.button.label = f"{'▾' if self._skills_open else '▸'} SKILLS"
-            return
         if self._request_future is not None and not self._request_future.done():
             label = str(event.button.label)
             self._request_future.set_result(re.sub(r"^\d+\.\s+", "", label))
 
     # -------- HELPERS -----------------------------------------------------------
     @staticmethod
-    def _format_parameters(parameters: dict[str, t.Any]) -> str:
-        """Render approval arguments as readable key/value lines, never JSON."""
-        if not parameters:
-            return "No parameters"
-        lines: list[str] = []
-
-        def add_value(name: str, value: t.Any) -> None:
-            if isinstance(value, dict):
-                items = t.cast("dict[str, t.Any]", value)
-                if not items:
-                    lines.append(f"{name}: (empty)")
-                for child, nested in items.items():
-                    add_value(f"{name}.{child}", nested)
-            elif isinstance(value, (list, tuple)):
-                values = list(t.cast("list[t.Any]", value))
-                if not values:
-                    lines.append(f"{name}: (empty)")
-                elif any(isinstance(item, (dict, list, tuple)) for item in values):
-                    for index, item in enumerate(values, start=1):
-                        add_value(f"{name} {index}", item)
-                else:
-                    lines.append(f"{name}: {', '.join(str(item) for item in values)}")
-            else:
-                rendered = str(value).replace("\n", " ")
-                if len(rendered) > 240:
-                    rendered = rendered[:237] + "..."
-                lines.append(f"{name}: {rendered or '(empty)'}")
-
-        for key, value in parameters.items():
-            add_value(str(key).replace("_", " "), value)
-        return "\n".join(lines)
-
-    @staticmethod
-    def _approval_card(record: ToolCallRecord) -> str:
-        """What the approval card says. Bash: what the command does, then
-        the exact command; any other tool: its arguments."""
-        if record.tool_name != BASH:
-            details = MaxAIApp._format_parameters(record.parameters)
-            return f"Allow {record.tool_name}?\n\n{details}"
-        description = str(record.parameters.get("description") or "").strip()
-        command = str(record.parameters.get("command") or "").strip()
-        head = f"Allow Bash?\n\n{description}\n\n" if description else "Allow Bash?\n\n"
-        card = head + "$ " + command.replace("\n", "\n  ")
-        # The judge's verdict, when one was asked and it did not let the command run.
-        note = record.approval_reason or ""
-        return f"{card}\n\n{note}" if note.startswith("judge:") else card
+    def _approval_card(record: ToolCallRecord) -> Text:
+        """What the approval card says: the call as its block shows it, and
+        why the harness asks."""
+        return ToolBlock.approval(record.tool_name, record.parameters, record.approval_reason)
 
     def _expand_file_mentions(self, value: str) -> str:
         """Attach readable workspace files referenced as ``@relative/path``."""
@@ -1159,6 +1126,21 @@ class MaxAIApp(App[None]):
         return questions
 
     # -------- SESSIONS -----------------------------------------------------------
+    def _start_line(self) -> Text:
+        """One line under the banner: the session, the MCP servers and
+        where the files are. The details are in /session and /mcp."""
+        line = Text("◇ ", style=SYSTEM)
+        line.append(f"session {self.context.session_id}", style=TEXT)
+        if self.store is None:
+            line.append(" (not saved)", style=WARNING)
+        servers = [server.server_id for server in self.agent.mcp]
+        if servers:
+            line.append(" · mcp ", style=DIM)
+            line.append(", ".join(servers), style=TEXT)
+        if self.agent.sandbox is not None and not self._is_local:
+            line.append(" · remote sandbox", style=DIM)
+        return line
+
     def _session_line(self) -> str:
         sid = self.context.session_id
         if self.store is None:
@@ -1166,7 +1148,9 @@ class MaxAIApp(App[None]):
         return f"Session {sid} · saved after every turn · resume it with /resume or --session {sid}"
 
     async def _save(self, ctx: RunContext) -> None:
-        """Keep ``ctx`` in the store: after each batch of tools and when a turn ends."""
+        """Keep ``ctx`` in the store: after each batch of tools and when a turn
+        ends. The files may have changed by then: the panel lists them again."""
+        self._refresh_workspace()
         if self.store is None:
             return
         try:
@@ -1177,7 +1161,6 @@ class MaxAIApp(App[None]):
     async def _open_session_on_start(self) -> None:
         sid = self._resume_id
         if sid is None or self.store is None:
-            await self._write_system(self._session_line())
             return
         try:
             ctx = await self.store.load(self.user_id, sid)
@@ -1199,9 +1182,8 @@ class MaxAIApp(App[None]):
         self._todos = None
         await self._replay(ctx)
         self._refresh_usage()
-        # The sidebar follows the session's folder.
-        if self._is_local:
-            self.query_one("#workspace-files", DirectoryTree).path = self.workspace_root
+        # The panel follows the session's folder.
+        self._refresh_workspace()
 
     def _answer_open_calls(self) -> None:
         """A resumed conversation that waits for approvals or answers asks them now."""
@@ -1450,7 +1432,7 @@ class MaxAIApp(App[None]):
         label: str,
         options: list[str] | None = None,
         *,
-        prompt_card: str | None = None,
+        prompt_card: Text | None = None,
     ) -> str:
         """Keep the composer usable while the agent waits for a human."""
         await self._finish_assistant()
@@ -1465,7 +1447,7 @@ class MaxAIApp(App[None]):
         detail = self.query_one("#request-detail", Static)
         decisions = self.query_one("#decisions", Vertical)
         await decisions.remove_children()
-        detail.update(Text(prompt_card or label, style="bold"))
+        detail.update(prompt_card or Text(label, style="bold"))
         card.display = bool(prompt_card or options)
         if options:
             await decisions.mount(*(Button(option) for option in options))

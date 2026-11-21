@@ -147,6 +147,9 @@ class HarnessToolHook(ToolHook):
     ) -> bool | None:
         # 1. The rules decide first: deny, dangerous, ask and allow end here.
         decision = self.permissions.decide(record.tool_name, record.parameters)
+        if decision is None:
+            # Said to the user with the question.
+            record.approval_reason = self.permissions.why(record.tool_name, record.parameters)
         if not isinstance(decision, str):
             return decision
         # 2. Without a rule, the tool's own approval mode.

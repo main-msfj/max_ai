@@ -49,7 +49,8 @@ async def edit(sandbox, path, old, new, **more):
 
 async def test_one_place_is_changed_and_the_rest_stays(sandbox, workspace):
     result = await edit(sandbox, "calc.py", "def sub(a, b):\n    return a + b", "def sub(a, b):\n    return a - b")
-    assert result.success and result.result == "Edited calc.py: 1 place changed."
+    assert result.success and result.result == "Edited calc.py: 1 place changed, from line 4."
+    assert result.metadata == {"line": 4}  # for whoever shows the change
     assert (workspace / "calc.py").read_text() == CODE[:-6] + "a - b\n"
     assert not list(workspace.rglob("*.partial"))
 
@@ -59,7 +60,7 @@ async def test_a_text_that_repeats_needs_more_lines_or_replace_all(sandbox, work
     assert not result.success and "appears 2 times" in result.error
     assert (workspace / "calc.py").read_text() == CODE
     result = await edit(sandbox, "calc.py", "a + b", "a * b", replace_all=True)
-    assert result.result == "Edited calc.py: 2 places changed."
+    assert result.result == "Edited calc.py: 2 places changed, from line 2."
     assert (workspace / "calc.py").read_text().count("a * b") == 2
 
 

@@ -30,14 +30,17 @@ class Permissions:
         "truncate", "dd", "install", "sed",
     })
     GLOB: t.ClassVar[str] = "*?["  # a word with one of these is a pattern, not a name
+    # Something is given to an interpreter on its input: alone, or told to read it.
+    PIPED: t.ClassVar[tuple[str, ...]] = (
+        r"^(sh|bash|zsh|python3?)(\s+-)?$", r"^(sh|bash|zsh)\s+-s\b",
+    )
     # Always asked, whatever the tool or the user's allow list say.
     DANGEROUS: t.ClassVar[tuple[str, ...]] = (
         r"^rm\b", r"^sudo\b", r"^dd\b", r"^mkfs", r"^shutdown\b", r"^reboot\b",
         r"^(chmod|chown)\s+(-\w*R|--recursive)", r"^git\s+push\b.*(--force|-f\b)",
         r"^git\s+reset\s+--hard", r"^git\s+clean\b", r"^kill(all)?\b", r"^eval\b", r"^doas\b",
         r"^find\b.*\s-(delete|exec|execdir|ok|okdir)\b",  # find that deletes or runs a command
-        # Something is piped into an interpreter: alone, or told to read its input.
-        r"^(sh|bash|zsh|python3?)(\s+-)?$", r"^(sh|bash|zsh)\s+-s\b",
+        *PIPED,
     )
     # Files that hold keys: a call that names one is always asked, whatever the tool.
     SECRETS: t.ClassVar[tuple[str, ...]] = (
@@ -47,6 +50,13 @@ class Permissions:
         r"\bcredentials(\.\w+)?($|[\s'\";|&)<>])",
         r"(^|[\s/'\"=<>])\.netrc\b",
     )
+    # Why a call is asked, said to the user in the approval.
+    WHY_SETTINGS: t.ClassVar[str] = "it reaches the settings or the skills: always asked"
+    WHY_SECRETS: t.ClassVar[str] = "it names a file of keys: always asked"
+    WHY_UNREADABLE: t.ClassVar[str] = "the command cannot be read safely: always asked"
+    WHY_DANGEROUS: t.ClassVar[str] = "{command} deletes or takes control: always asked"
+    WHY_PIPED: t.ClassVar[str] = "{command} runs code given on its input: always asked"
+    WHY_RULE: t.ClassVar[str] = "one of your rules asks for it"
     # Commands that only run another one: what they run is what counts.
     WRAPPERS: t.ClassVar[frozenset[str]] = frozenset({
         "timeout", "env", "nohup", "nice", "command", "time", "xargs", "exec", "stdbuf", "ionice",
@@ -123,26 +133,46 @@ class Permissions:
 
     @staticmethod
     def dangerous(tool_name: str, target: str) -> bool:
-        """A call the user must see: it touches the settings or a file of
-        keys, or it is a command that deletes, takes control or cannot be
+        """A call the user must see, whatever the rules say."""
+        return Permissions.danger(tool_name, target) is not None
+
+    @staticmethod
+    def danger(tool_name: str, target: str) -> str | None:
+        """Why a call must be seen by the user, in words for them; None when
+        the harness does not ask for it: it touches the settings or a file
+        of keys, or it is a command that deletes, takes control or cannot be
         read safely."""
         if Permissions.SETTINGS in target:
-            return True
+            return Permissions.WHY_SETTINGS
         # A file of keys, named by any tool.
         if any(re.search(pattern, target) for pattern in Permissions.SECRETS):
-            return True
+            return Permissions.WHY_SECRETS
         if tool_name != Permissions.BASH:
-            return False
+            return None
         if any(mark in target for mark in Permissions.UNREADABLE):
-            return True
+            return Permissions.WHY_UNREADABLE
         if Permissions.protected(target):
-            return True
+            return Permissions.WHY_SETTINGS
         # Each part of the command is looked at alone: ``ls && rm x`` has an rm.
         for part in Permissions.parts(target):
             for command in Permissions.bare(part):
+                name = command.split()[0]
+                if any(re.search(pattern, command) for pattern in Permissions.PIPED):
+                    return Permissions.WHY_PIPED.format(command=name)
                 if any(re.search(pattern, command) for pattern in Permissions.DANGEROUS):
-                    return True
-        return False
+                    return Permissions.WHY_DANGEROUS.format(command=name)
+        return None
+
+    def why(self, tool_name: str, parameters: Mapping[str, t.Any]) -> str | None:
+        """Why the rules ask the user for this call; None when they do not."""
+        target = str(parameters.get("command") or parameters.get("path") or "")
+        reason = self.danger(tool_name, target)
+        if reason is not None:
+            return reason
+        parts = self.parts(target) if tool_name == self.BASH else [target]
+        if any(self.matches(self.ask, tool_name, part, wide=True) for part in [target, *parts]):
+            return self.WHY_RULE
+        return None
 
     @staticmethod
     def bare(part: str) -> list[str]:
