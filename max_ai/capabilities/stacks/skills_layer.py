@@ -20,7 +20,7 @@ class SkillsLayer(Component[StackConfig], CoreLayer):
 
     component_schema = StackConfig
     component_type = "prompts"
-    component_provider_override = "maxai.stacks.SkillsLayer"
+    component_provider_override = "max_ai.capabilities.stacks.SkillsLayer"
 
     def __init__(
         self,

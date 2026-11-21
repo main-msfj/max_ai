@@ -226,7 +226,7 @@ async def test_clicking_a_menu_command_runs_it(tmp_path):
         await pilot.click("#menu", offset=(3, 0))
         await pilot.pause()
         panel = app.query_one(InfoPanel)
-        assert panel.display and panel.title_text == "Help"
+        assert panel.display and str(panel.border_title) == "Help"
 
 
 def _question_response(*questions: tuple[str, list[str]]):

@@ -16,7 +16,7 @@ from ..types.completions import Usage
 from ..types.todos import Todo
 from ..types.tool_call import ToolResult
 from .ids import short_id
-from .messages import CoreMessage, Message
+from .messages import CoreMessage
 
 
 # -------- -----------------------------------------------------------
@@ -179,7 +179,7 @@ class UserInputRequestEvent(ReasoningEvent):
     """A tool needs a person; the turn pauses until they answer.
 
     Mirrors ``ToolApprovalEvent``. The consumer answers via
-    ``ctx.tool_state.provide_result(tool_call_id, result)`` and resumes.
+    ``record.store_result(result)`` on that record and resumes.
     """
 
     EVENT_TYPE = "user_input_request"
@@ -187,7 +187,7 @@ class UserInputRequestEvent(ReasoningEvent):
     parameters: dict[str, t.Any] = Field(default_factory=dict)
     tool_call_id: str | None = Field(
         default=None,
-        description="Record id to answer via tool_state.provide_result().",
+        description="Id of the record to answer with record.store_result().",
     )
 
 
@@ -197,16 +197,9 @@ class UserInputRequestEvent(ReasoningEvent):
 
 
 class CompactionEvent(AgentEvent):
-    """Emitted when context compaction starts and when it ends.
-
-    ``old_messages`` (end only) are the messages that left the window, for
-    hosts that archive the full conversation; the RunContext no longer has them.
-    """
+    """Emitted when a compaction ends and changed the conversation."""
 
     EVENT_TYPE = "compaction"
-    phase: t.Literal["start", "end"] = Field(
-        ..., description="Whether compaction is starting or finished"
-    )
     strategy: str = Field(..., description="Compaction strategy class name")
     changed: bool = Field(default=False, description="Whether the window changed")
     pruned_only: bool = Field(
@@ -218,11 +211,12 @@ class CompactionEvent(AgentEvent):
         default=0, description="Messages left in the window"
     )
     usage: Usage | None = Field(default=None, description="What the summary call cost")
-    old_messages: list[Message] = Field(  # type: ignore[valid-type]
-        default_factory=list, description="Messages that left the window"
-    )
     summary: str | None = Field(
         default=None, description="What the model now sees of the past (render())"
+    )
+    removed: int = Field(default=0, description="Messages that left the window")
+    summary_failed: bool = Field(
+        default=False, description="They left with no summary: it could not be written"
     )
 
 
@@ -319,15 +313,6 @@ class ToolAutoApprovalEvent(ToolEvent):
 # -------- -----------------------------------------------------------
 #  Error Events
 # -------- -----------------------------------------------------------
-class ErrorEvent(ErrorsEvent):
-    """Event emitted for recoverable errors."""
-
-    EVENT_TYPE = "error"
-    error_message: str = Field(..., description="Description of the error")
-    error_type: str = Field(..., description="Type/category of error")
-    is_recoverable: bool = Field(default=True)
-
-
 class FatalErrorEvent(ErrorsEvent):
     """Event emitted for unrecoverable errors that terminate execution."""
 

@@ -68,7 +68,6 @@ async def test_a_conversation_that_fits_is_left_alone():
 async def test_cutting_the_old_long_results_can_be_enough():
     messages = conversation(3, size=250)
     window = SlidingWindowCompaction(max_result_chars=200)
-    assert window.needed(messages, Model())
     result = await window.compact(messages, Model())
     assert result.changed and result.removed == 0 and len(result.messages) == len(messages)
     assert "[result cut to make room:" in result.messages[2].content
@@ -138,6 +137,7 @@ async def test_the_loop_compacts_before_the_model_and_leaves_ctx_in_order():
     assert "Current folder: /w/repo" in system and "- [in_progress] run tests" in system
     assert not any("build fizz" in str(m.content) for m in ctx.messages)  # the summary is not a message
     assert ctx.summary == Summary(goal="build fizz") and ctx.files_seen == {} and seen and state.compactions == 1
+    assert ctx.compaction.compactions == 1  # what the list of sessions shows
     assert state.usage.llm_calls == 3  # the summary call is counted with the two of the turn
     assert ctx.messages[-1].content == "really done"
 
@@ -173,7 +173,7 @@ async def test_the_window_is_shared_out_part_by_part_and_kept_in_ctx():
     assert (context.window, context.prompt, context.tools, context.output) == (10_000, 1000, 500, 500)
     assert context.margin == 1600 and context.capacity == 6400  # 80% of the 8000 left
     total = context.prompt + context.tools + context.output + context.margin + context.capacity
-    assert total == context.window and context.free == context.capacity - context.messages
+    assert total == context.window
     assert ModelConfig(max_context_window=200_000).max_output_tokens == 20_000  # never zero
     # The loop leaves it in ctx on every call, compaction or not.
     ctx = RunContext(user_id="u", session_id="s", messages=conversation(1, size=10))
@@ -248,6 +248,8 @@ async def test_a_failure_looking_at_them_does_not_stop_the_summary_nor_the_other
         conversation(8), Model(ClientError.authentication_failed("x")), leaving=look
     )
     assert failed.removed > 0 and looked == [failed.removed]
+    # Nothing is kept of them, and the result says so.
+    assert failed.summary is None and failed.summary_failed
 
 
 async def test_at_compaction_what_the_user_said_goes_to_the_memory(tmp_path, monkeypatch):

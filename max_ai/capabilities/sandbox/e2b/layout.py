@@ -67,7 +67,6 @@ class E2BSandbox(SandboxCore):
     """
 
     component_schema = E2BSandboxConfig
-    isolated = True
     component_provider_override = "max_ai.capabilities.sandbox.e2b.E2BSandbox"
 
     def __init__(

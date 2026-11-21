@@ -127,8 +127,9 @@ Pausing for the user:
 ```python
 state = await agent.run("Clean the build folder", ctx)
 if state.finish_reason == "waiting_for_user":
-    for record in ctx.tool_state.pending_approvals:
-        await agent.approve(ctx, record.id)       # or record.reject()
+    for record in ctx.tool_state.records.values():
+        if record.is_pending_approval:
+            await agent.approve(ctx, record.id)   # or record.reject()
     state = await agent.run(None, ctx)
 ```
 
@@ -212,8 +213,9 @@ to that model on OpenRouter's decisions endpoint. If it is at least
 `HARNESS_JUDGE_MIN_SAFE` (0.9) sure the command is safe, it runs without asking.
 It only removes questions; it never overrides deny, ask or dangerous rules, and
 any failure falls back to asking. **Data flow:** each judged call sends the
-command, the model's description of it, and the user's last message (up to
-4,000 characters each) to OpenRouter.
+command whole, and the model's description of it and the user's last message
+cut at 4,000 characters, to OpenRouter. A command longer than that is not
+sent: the user is asked.
 
 **Memory at compaction** (`hooks.py`): when messages leave the window, a model
 extracts up to 5 facts the user stated about themselves or their work and saves
@@ -436,6 +438,9 @@ ones the code uses today:
 | `TOOL_TIMEOUT_SECONDS` | 360 | most one tool call may run |
 | `HARNESS_SANDBOX_SECONDS` | 600 | idle life of a sandbox; must be at least the tool timeout |
 | `HARNESS_RETRY_ATTEMPTS` | 3 | tries per model call |
+| `HARNESS_MAX_ITERATIONS` | 50 | model calls one turn may make |
+| `HARNESS_PARALLEL_TOOLS` | 8 | read-only calls of one reply that run at once |
+| `HARNESS_TOOL_RESULT_CHARS` | 40000 | a longer tool result is saved to a file and shown cut |
 | `HARNESS_TOOLS_MAX_TOKENS` | 20000 | most all loaded tools may take |
 | `HARNESS_DEFERRED_TOOLS_MIN_TOKENS` | 5000 | below this, deferred tools are loaded directly |
 | `HARNESS_PROMPT_MAX_SHARE` | 0.10 | most of the window the system prompt may take |
@@ -451,13 +456,16 @@ ones the code uses today:
 
 Checked against the code on this branch:
 
-- **`knowledge=` is not wired.** The agent validates and serializes knowledge
-  registries (local, SQLite, MongoDB), but never adds their `search_knowledge`
-  tool to the registry, and the knowledge prompt layer receives no tool names,
-  so it renders empty. The model cannot query knowledge today.
-- **Completion gates are not used.** `max_ai/capabilities/completion_gate` and
-  `base/completion_gate.py` still exist, but no loop calls them and `Agent`
-  has no `gates` argument.
+- **`knowledge=` still has to be connected.** The agent validates and
+  serializes knowledge registries (local, SQLite, MongoDB), but never adds
+  their `search_knowledge` tool to the registry, and the knowledge prompt
+  layer receives no tool names, so it renders empty. The model cannot query
+  knowledge today. The code is kept on purpose: connecting it well is the
+  next piece of work.
+- **Completion gates still have to be connected.**
+  `max_ai/capabilities/completion_gate` and `base/completion_gate.py` are
+  kept on purpose, but no loop calls them and `Agent` has no `gates`
+  argument yet.
 - **Quota stores** (`LocalQuotaStore`, `MongoDBQuotaStore`) are used only by
   `BudgetMiddleware(quota=..., quota_store=...)`; nothing else reads them.
 - **`AnthropicClient` has not been run against the real API yet**, only
@@ -508,11 +516,30 @@ uv run pytest -m "not integration"
 
 ## Roadmap
 
-Planned, not started; order is not a commitment.
+Planned, not started; order inside a group is not a commitment.
 
-- Wire knowledge search into the agent, or remove it.
-- Multi-agent delegation on the stateless `Agent`.
-- Native clients: Anthropic first, then Gemini and Azure OpenAI.
+**Gaps to close first**
+
+- Connect knowledge search to the agent: the tool in the registry and the
+  prompt layer that names it.
+- Connect completion gates to the loop.
+- Run `AnthropicClient` against the real API.
+- Bring `examples/` up to the current API.
+
+**Milestones**
+
+- **Multi-agent:** an agent starts other agents and gathers their work, on
+  the stateless `Agent`.
+- **Background tasks:** work that keeps running while the conversation goes
+  on, and reports when it ends.
+- **A2A:** talk to agents of other frameworks over the Agent2Agent protocol,
+  as a client and as a server.
+- **Always-on agent:** an agent that stays up and wakes on a schedule or an
+  event, not only on a user message.
+
+**Later**
+
+- Native clients for Gemini and Azure OpenAI.
 - Optimistic concurrency in session stores.
 - Guardrail middleware for PII and prompt injection.
 

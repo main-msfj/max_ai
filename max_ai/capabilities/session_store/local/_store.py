@@ -20,7 +20,7 @@ class LocalSessionStore(CoreSessionStore):
     """
 
     component_schema = LocalSessionStoreConfig
-    component_provider_override = "maxai.session_store.LocalSessionStore"
+    component_provider_override = "max_ai.capabilities.session_store.local.LocalSessionStore"
 
     def __init__(self, base_path: str | Path) -> None:
         super().__init__()

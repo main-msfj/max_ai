@@ -19,7 +19,7 @@ class WorkspaceLayer(Component[StackConfig], CoreLayer):
 
     component_schema = StackConfig
     component_type = "prompts"
-    component_provider_override = "maxai.stacks.WorkspaceLayer"
+    component_provider_override = "max_ai.capabilities.stacks.WorkspaceLayer"
 
     def __init__(
         self,

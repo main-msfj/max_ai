@@ -47,7 +47,7 @@ class KnowledgeLayer(Component[StackConfig], CoreLayer):
 
     component_schema = StackConfig
     component_type = "prompts"
-    component_provider_override = "maxai.stacks.KnowledgeLayer"
+    component_provider_override = "max_ai.capabilities.stacks.KnowledgeLayer"
 
     def __init__(
         self,

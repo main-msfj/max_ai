@@ -21,7 +21,7 @@ class ToolsLayer(Component[StackConfig], CoreLayer):
 
     component_schema = StackConfig
     component_type = "prompts"
-    component_provider_override = "maxai.stacks.ToolsLayer"
+    component_provider_override = "max_ai.capabilities.stacks.ToolsLayer"
 
     def __init__(
         self,

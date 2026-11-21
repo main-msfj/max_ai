@@ -19,7 +19,7 @@ class SessionLayer(Component[StackConfig], CoreLayer):
 
     component_schema = StackConfig
     component_type = "prompts"
-    component_provider_override = "maxai.stacks.SessionLayer"
+    component_provider_override = "max_ai.capabilities.stacks.SessionLayer"
 
     def __init__(
         self,

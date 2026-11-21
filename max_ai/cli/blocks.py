@@ -355,7 +355,6 @@ class CompactionBlock(FoldBlock):
         super().__init__()
         self.strategy = strategy
         self.done = False
-        self.failed: str | None = None
         self.event: t.Any = None
 
     @property
@@ -366,18 +365,10 @@ class CompactionBlock(FoldBlock):
         self.done, self.event = True, event
         self.collapse()
 
-    def fail(self, message: str) -> None:
-        self.done, self.failed = True, message
-        self.collapse()
-
     def _header(self) -> Text:
         header = Text("◇ ", style=f"bold {PRIMARY}")
         if not self.done:
             header.append("Compacting context…", style=f"italic {MUTED}")
-            return header
-        if self.failed is not None:
-            header.append("Compaction failed", style=f"bold {ERROR}")
-            header.append(f" · {self.failed[:80]} · continuing uncompacted", style=MUTED)
             return header
         event = self.event
         kept = _plural(event.kept_message_count, "message")
@@ -388,6 +379,10 @@ class CompactionBlock(FoldBlock):
         else:
             header.append(f"Window slid · {kept} kept", style=f"bold {TEXT}")
         header.append(f" · {_k(event.tokens_before)} → {_k(event.tokens_after)} tokens", style=MUTED)
+        # The messages left with nothing kept of them: the user must know.
+        if event.summary_failed:
+            lost = _plural(event.removed, "message")
+            header.append(f" · the summary failed: {lost} left without one", style=WARNING)
         return self._fold_hint(header)
 
     def _details(self) -> str:

@@ -615,6 +615,7 @@ class CoreLoop(ComponentBase[ConfigT], ABC):
         ctx.summary = result.summary
         state.usage = state.usage + result.usage
         state.compactions += 1
+        ctx.compaction.compactions += 1  # the session's own count, kept with it
         # 3. Messages left: where the agent is goes to the system prompt, the
         #    model forgot the files it read, and the closed calls are not needed.
         if result.removed:
@@ -626,10 +627,11 @@ class CoreLoop(ComponentBase[ConfigT], ABC):
                 del records[call_id]
         await hook.after_compact(ctx, state)
         return CompactionEvent(
-            source=self.SOURCE, phase="end", strategy=type(self.compaction).__name__,
+            source=self.SOURCE, strategy=type(self.compaction).__name__,
             changed=True, pruned_only=not result.removed, tokens_before=result.tokens_before,
             tokens_after=result.tokens_after, kept_message_count=len(result.messages),
             summary=result.summary.text() if result.summary else None, usage=result.usage,
+            removed=result.removed, summary_failed=result.summary_failed,
         )
 
     def measure(

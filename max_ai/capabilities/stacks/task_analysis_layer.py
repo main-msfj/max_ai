@@ -21,7 +21,7 @@ class TaskAnalysisLayer(Component[StackConfig], CoreLayer):
 
     component_schema = StackConfig
     component_type = "prompts"
-    component_provider_override = "maxai.stacks.TaskAnalysisLayer"
+    component_provider_override = "max_ai.capabilities.stacks.TaskAnalysisLayer"
 
     def __init__(
         self,

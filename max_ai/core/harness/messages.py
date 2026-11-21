@@ -7,26 +7,6 @@ functions. They all reach the model as messages with ``source="harness"``.
 
 from __future__ import annotations
 
-import typing as t
-
-if t.TYPE_CHECKING:
-    from ...types.tool_call import ToolCallRecord
-
-
-# -------- REASONING LOOP -----------------------------------------------------------
-
-
-def tool_denied(denied: t.Sequence[ToolCallRecord], ask_tool: str) -> str:
-    """After a denial: explain it, then let the user decide how to go on."""
-    listing = ", ".join(f"{r.tool_name} ({r.approval_reason or 'denied'})" for r in denied)
-    return (
-        f"The user denied: {listing}. Assess how much this blocks the task. "
-        f"Explain to the user what happened and why, then call {ask_tool} with "
-        "exactly one of: (1) cancel the remaining task, (2) retry the tool, "
-        "or (3) other instructions on how to proceed."
-    )
-
-
 # -------- DEFERRED TOOLS -----------------------------------------------------------
 
 

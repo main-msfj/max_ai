@@ -17,8 +17,3 @@ class Context(BaseModel):
     def capacity(self) -> int:
         """Tokens the messages may take before a compaction."""
         return max(0, self.window - self.prompt - self.tools - self.output - self.margin)
-
-    @property
-    def free(self) -> int:
-        """Tokens the messages can still grow."""
-        return max(0, self.capacity - self.messages)

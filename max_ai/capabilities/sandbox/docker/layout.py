@@ -72,7 +72,6 @@ class DockerSandbox(SandboxCore):
     """
 
     component_schema = DockerSandboxConfig
-    isolated = True
     component_provider_override = "max_ai.capabilities.sandbox.docker.DockerSandbox"
 
     def __init__(

@@ -5,8 +5,6 @@ from __future__ import annotations
 import logging
 import typing as t
 
-import httpx
-
 from ....core.messages import AssistantMessage
 from ....core.model.llm import ModelConfig
 from ....core.retry import RetryPolicy
@@ -135,20 +133,3 @@ class OpenRouterChatCompletionClient(ChatCompletionsClient[OpenRouterChatComplet
             provider=self.PROVIDER_NAME, status=code if isinstance(code, int) else None,
             detail=detail,
         )
-
-    @classmethod
-    def context_window(
-        cls, models: t.Sequence[str], *, base_url: str | None = None, timeout: float = 10
-    ) -> int:
-        """The smallest context window among ``models``, read from
-        OpenRouter's public list; 0 when it cannot be read."""
-        url = (base_url or cls.DEFAULT_BASE_URL or "").rstrip("/") + "/models"
-        try:
-            answer = httpx.get(url, timeout=timeout).raise_for_status()
-            listed: list[dict[str, t.Any]] = answer.json()["data"]
-        except (httpx.HTTPError, KeyError, ValueError) as error:
-            logger.warning("Could not read OpenRouter model windows: %s", error)
-            return 0
-        windows = {model.get("id"): int(model.get("context_length") or 0) for model in listed}
-        sizes = [windows[model] for model in models if windows.get(model)]
-        return min(sizes) if sizes else 0

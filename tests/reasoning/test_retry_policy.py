@@ -17,7 +17,6 @@ from max_ai.errors.client import ClientError
     ClientError.api_error("openai", status=409),
     ClientError.api_error("openai", status=500),
     ClientError.api_error("openai", status=503),
-    ClientError.provider_error("x", status_code=502),
 ])
 def test_transient_errors_are_retried(error):
     assert error.transient

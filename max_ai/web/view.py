@@ -26,7 +26,6 @@ from pygments.util import ClassNotFound
 from ..core.event_type import (
     CompactionEvent,
     CoreEvent,
-    ErrorEvent,
     FatalErrorEvent,
     LoopNoticeEvent,
     ModelCallEvent,
@@ -267,12 +266,15 @@ class TurnView:
             return [self.html.swap(str(parts.tool(card.finish(event.tool_result))))]
 
         # 3. Compaction, harness rules and errors, as notes.
-        if isinstance(event, CompactionEvent) and event.phase == "end" and event.changed:
+        if isinstance(event, CompactionEvent) and event.changed:
             note = f"Context compacted: {event.tokens_before:,} → {event.tokens_after:,} tokens"
+            if event.summary_failed:
+                failed = f"{note} · the summary failed: {event.removed} messages left without one"
+                return self.finish() + [self.html.append(parts.note(failed, "warn"))]
             return self.finish() + [self.html.append(parts.note(note))]
         if isinstance(event, LoopNoticeEvent) and event.message:
             return [self.html.append(parts.note(f"harness · {event.kind}", "warn"))]
-        if isinstance(event, (ErrorEvent, FatalErrorEvent)):
+        if isinstance(event, FatalErrorEvent):
             return self.finish() + [self.html.append(parts.note(event.error_message, "error"))]
         return []
 

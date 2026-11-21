@@ -22,7 +22,7 @@ class RetryPolicy(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    attempts: int = Field(default=4, ge=1, description="Tries in total: 1 call + retries.")
+    attempts: int = Field(default=3, ge=1, description="Tries in total: 1 call + retries.")
     base_delay: float = Field(default=1.0, ge=0, description="First wait, in seconds.")
     # Rate limits often ask for 30-60 s; a lower cap retries too early.
     max_delay: float = Field(default=60.0, ge=0, description="Longest wait, in seconds.")

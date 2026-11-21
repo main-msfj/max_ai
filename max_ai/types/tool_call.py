@@ -185,7 +185,7 @@ class ToolCallRecord(BaseModel):
     delivers it. The pause is record state: it survives process death.
 
     Records left in ``EXECUTING`` after a process crash or connection
-    drop are visible via ``ToolState.stale_executions``. The agent
+    drop say so with ``is_stale_execution``. The agent
     decides what to do with them on rehydration via
     ``mark_stale_as_failed()`` (default policy) or by resetting
     them back to approved (custom policy).

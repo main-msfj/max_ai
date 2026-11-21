@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 from ..messages import (
-    HARNESS_SOURCE,
     AssistantMessage,
     CoreMessage,
     ToolMessage,
-    UserMessage,
 )
 from ..model.compaction import MessageGroup
 from ..tokenizer import TokenCounter
@@ -108,23 +106,4 @@ def split_recent_messages(
     return old_messages, recent_messages
 
 
-def turn_starts(blocks: list[MessageGroup]) -> list[int]:
-    """Indexes of the blocks that open a turn: a real user message.
-
-    Harness-written user messages (e.g. "max iterations reached") don't
-    start a turn.
-    """
-    return [
-        index for index, block in enumerate(blocks)
-        if isinstance(block.messages[0], UserMessage)
-        and block.messages[0].source != HARNESS_SOURCE
-    ]
-
-
-def current_turn_start(blocks: list[MessageGroup]) -> int:
-    """Index of the block holding the last real user message (0 if none)."""
-    starts = turn_starts(blocks)
-    return starts[-1] if starts else 0
-
-
-__all__ = ["current_turn_start", "turn_starts", "group_atomic_messages", "split_recent_messages"]
+__all__ = ["group_atomic_messages", "split_recent_messages"]
