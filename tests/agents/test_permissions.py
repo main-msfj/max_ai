@@ -260,6 +260,7 @@ def test_a_name_that_only_looks_like_one_is_not(tool, target):
         ({}, "ls && rm -rf build", "rm deletes or takes control: always asked"),
         ({}, "cat .agent/setting.json", Permissions.WHY_SETTINGS),
         ({"ask": ["bash(pytest*)"]}, "pytest -q", Permissions.WHY_RULE),
+        ({}, "python3 - <<'PY'\nprint(1)\nPY", "python3 runs code given on its input: always asked"),
         ({}, "ls -la", None),
     ],
 )

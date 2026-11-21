@@ -30,14 +30,17 @@ class Permissions:
         "truncate", "dd", "install", "sed",
     })
     GLOB: t.ClassVar[str] = "*?["  # a word with one of these is a pattern, not a name
+    # Something is given to an interpreter on its input: alone, or told to read it.
+    PIPED: t.ClassVar[tuple[str, ...]] = (
+        r"^(sh|bash|zsh|python3?)(\s+-)?$", r"^(sh|bash|zsh)\s+-s\b",
+    )
     # Always asked, whatever the tool or the user's allow list say.
     DANGEROUS: t.ClassVar[tuple[str, ...]] = (
         r"^rm\b", r"^sudo\b", r"^dd\b", r"^mkfs", r"^shutdown\b", r"^reboot\b",
         r"^(chmod|chown)\s+(-\w*R|--recursive)", r"^git\s+push\b.*(--force|-f\b)",
         r"^git\s+reset\s+--hard", r"^git\s+clean\b", r"^kill(all)?\b", r"^eval\b", r"^doas\b",
         r"^find\b.*\s-(delete|exec|execdir|ok|okdir)\b",  # find that deletes or runs a command
-        # Something is piped into an interpreter: alone, or told to read its input.
-        r"^(sh|bash|zsh|python3?)(\s+-)?$", r"^(sh|bash|zsh)\s+-s\b",
+        *PIPED,
     )
     # Files that hold keys: a call that names one is always asked, whatever the tool.
     SECRETS: t.ClassVar[tuple[str, ...]] = (
@@ -52,6 +55,7 @@ class Permissions:
     WHY_SECRETS: t.ClassVar[str] = "it names a file of keys: always asked"
     WHY_UNREADABLE: t.ClassVar[str] = "the command cannot be read safely: always asked"
     WHY_DANGEROUS: t.ClassVar[str] = "{command} deletes or takes control: always asked"
+    WHY_PIPED: t.ClassVar[str] = "{command} runs code given on its input: always asked"
     WHY_RULE: t.ClassVar[str] = "one of your rules asks for it"
     # Commands that only run another one: what they run is what counts.
     WRAPPERS: t.ClassVar[frozenset[str]] = frozenset({
@@ -152,8 +156,11 @@ class Permissions:
         # Each part of the command is looked at alone: ``ls && rm x`` has an rm.
         for part in Permissions.parts(target):
             for command in Permissions.bare(part):
+                name = command.split()[0]
+                if any(re.search(pattern, command) for pattern in Permissions.PIPED):
+                    return Permissions.WHY_PIPED.format(command=name)
                 if any(re.search(pattern, command) for pattern in Permissions.DANGEROUS):
-                    return Permissions.WHY_DANGEROUS.format(command=command.split()[0])
+                    return Permissions.WHY_DANGEROUS.format(command=name)
         return None
 
     def why(self, tool_name: str, parameters: Mapping[str, t.Any]) -> str | None:
