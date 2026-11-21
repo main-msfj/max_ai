@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 # Kinds worth calling again: the provider or the network, not the request.
-_TRANSIENT_KINDS = frozenset({"rate_limit", "timeout", "stream_interrupted", "api_error", "provider"})
+_TRANSIENT_KINDS = frozenset({"rate_limit", "timeout", "stream_interrupted", "api_error"})
 # HTTP 4xx that are not the request's fault: timeout, conflict, rate limit.
 _RETRYABLE_4XX = frozenset({408, 409, 429})
 
@@ -110,15 +110,6 @@ class ClientError(Exception):
         return error
 
     # -------- PROVIDER & TRANSPORT ERRORS -----------------------------------------------------------
-    @classmethod
-    def provider_error(
-        cls, provider: str, status_code: int | None = None, detail: str = ""
-    ) -> "ClientError":
-        prefix = f"{provider} error"
-        if status_code is not None:
-            prefix = f"{prefix} (HTTP {status_code})"
-        msg = f"{prefix}: {detail}" if detail else prefix
-        return cls(msg, kind="provider", status=status_code)
 
     @classmethod
     def request_timeout(cls, seconds: float) -> "ClientError":

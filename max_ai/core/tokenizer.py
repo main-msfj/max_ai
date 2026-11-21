@@ -2,7 +2,7 @@
 tools and the CLI.
 
 Depends on messages only for typing: ``core.messages`` imports this module
-(``CoreMessage.with_token_count``), so a runtime import back would cycle.
+(to count its own tokens), so a runtime import back would cycle.
 """
 
 from __future__ import annotations

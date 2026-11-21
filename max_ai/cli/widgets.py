@@ -236,10 +236,6 @@ class InfoPanel(VerticalScroll):
         self.display = False
 
     @property
-    def title_text(self) -> str:
-        return str(self.border_title or "")
-
-    @property
     def body(self) -> str:
         return str(self.query_one("#info-body", Static).render())
 

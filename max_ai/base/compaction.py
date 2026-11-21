@@ -109,14 +109,6 @@ class CoreCompaction(ComponentBase[ConfigT], ABC):
             margin=room - int(self.threshold * room),
         )
 
-    def needed(
-        self, messages: list[Message], client: AnyClient, prompt_tokens: int = 0,
-        tool_tokens: int = 0,
-    ) -> bool:
-        """The messages passed what they may take."""
-        context = self.measure(messages, client, prompt_tokens, tool_tokens)
-        return context.messages > context.capacity
-
     async def compact(
         self,
         messages: list[Message],

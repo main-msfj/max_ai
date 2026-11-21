@@ -17,7 +17,6 @@ Design principles:
 
 from __future__ import annotations
 
-import base64
 import importlib
 import typing as t
 from datetime import datetime, timezone
@@ -34,7 +33,6 @@ from pydantic import (
 )
 
 from .ids import short_id
-from .tokenizer import TokenCounter, default_counter
 
 # Source of messages the harness itself writes (gate rejections, limits),
 # as opposed to the user or the model.
@@ -69,11 +67,6 @@ class ImagePart(BaseModel):
             raise ValueError("ImagePart requires exactly one of: url or data")
         return self
 
-    def to_base64(self) -> str | None:
-        if self.data is None:
-            return None
-        return base64.b64encode(self.data).decode("utf-8")
-
 
 class AudioPart(BaseModel):
     """Audio clip (e.g. mp3, wav). NOTE: not every provider supports audio."""
@@ -90,11 +83,6 @@ class AudioPart(BaseModel):
         if (self.url is None) == (self.data is None):
             raise ValueError("AudioPart requires exactly one of: url or data")
         return self
-
-    def to_base64(self) -> str | None:
-        if self.data is None:
-            return None
-        return base64.b64encode(self.data).decode("utf-8")
 
 
 class FilePart(BaseModel):
@@ -113,11 +101,6 @@ class FilePart(BaseModel):
         if sum(s is not None for s in sources) != 1:
             raise ValueError("FilePart requires exactly one of: file_id, url, or data")
         return self
-
-    def to_base64(self) -> str | None:
-        if self.data is None:
-            return None
-        return base64.b64encode(self.data).decode("utf-8")
 
 
 ContentPart = Annotated[
@@ -189,16 +172,6 @@ class CoreMessage(BaseModel):
         """
         return _MESSAGE_ADAPTER.validate_python(data)
 
-    def with_token_count(self, counter: TokenCounter | None = None) -> t.Self:
-        """Return a copy with ``token_count`` set by ``counter``.
-
-        Defaults to the shared counter for ``setting.default_tokenizer``.
-        """
-        if self.token_count > 0:
-            return self
-        count = (counter or default_counter()).count_message(self)
-        return self.model_copy(update={"token_count": count})
-
 
 # -------- CONCRETE MESSAGE TYPES -----------------------------------------------------------
 class SystemMessage(CoreMessage):
@@ -216,67 +189,6 @@ class UserMessage(CoreMessage):
 
     role: Literal["user"] = "user"
     name: str | None = Field(default=None, description="Optional name of the user")
-
-    @classmethod
-    def with_image(
-        cls,
-        *,
-        source: str,
-        text: str | None,
-        image_url: str | None = None,
-        image_data: bytes | None = None,
-        mime_type: str = "image/png",
-        name: str | None = None,
-    ) -> "UserMessage":
-        parts: list[ContentPart] = []
-        if text:
-            parts.append(TextPart(text=text))
-        parts.append(ImagePart(url=image_url, data=image_data, mime_type=mime_type))
-        return cls(source=source, content=parts, name=name)
-
-    @classmethod
-    def with_audio(
-        cls,
-        *,
-        source: str,
-        text: str | None,
-        audio_url: str | None = None,
-        audio_data: bytes | None = None,
-        mime_type: str = "audio/mpeg",
-        name: str | None = None,
-    ) -> "UserMessage":
-        parts: list[ContentPart] = []
-        if text:
-            parts.append(TextPart(text=text))
-        parts.append(AudioPart(url=audio_url, data=audio_data, mime_type=mime_type))
-        return cls(source=source, content=parts, name=name)
-
-    @classmethod
-    def with_file(
-        cls,
-        *,
-        source: str,
-        text: str | None,
-        file_id: str | None = None,
-        file_url: str | None = None,
-        file_data: bytes | None = None,
-        mime_type: str = "application/pdf",
-        filename: str | None = None,
-        name: str | None = None,
-    ) -> "UserMessage":
-        parts: list[ContentPart] = []
-        if text:
-            parts.append(TextPart(text=text))
-        parts.append(
-            FilePart(
-                file_id=file_id,
-                url=file_url,
-                data=file_data,
-                mime_type=mime_type,
-                filename=filename,
-            )
-        )
-        return cls(source=source, content=parts, name=name)
 
 
 class AssistantMessage(CoreMessage):
@@ -377,18 +289,6 @@ class ToolMessage(CoreMessage):
         )
 
     @classmethod
-    def success_message(
-        cls, tool_call_id: str, tool_name: str, content: MessageContent, source: str
-    ) -> t.Self:
-        return cls._create(
-            tool_call_id=tool_call_id,
-            tool_name=tool_name,
-            content=content,
-            source=source,
-            success=True,
-        )
-
-    @classmethod
     def error_message(
         cls, tool_call_id: str, tool_name: str, error: str, source: str
     ) -> t.Self:
@@ -399,24 +299,6 @@ class ToolMessage(CoreMessage):
             source=source,
             success=False,
             error=error,
-        )
-
-    @classmethod
-    def rejected_by_user(
-        cls, tool_call_id: str, tool_name: str, reason: str, source: str
-    ) -> t.Self:
-        content = (
-            f"Tool '{tool_name}' was rejected by the user. "
-            f"Reason: {reason}. "
-            "Do not attempt to fulfill this request by other means. "
-            "Acknowledge and ask how to proceed."
-        )
-        return cls._create(
-            tool_call_id=tool_call_id,
-            tool_name=tool_name,
-            content=content,
-            source=source,
-            success=True,
         )
 
 

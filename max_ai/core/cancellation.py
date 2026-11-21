@@ -39,21 +39,6 @@ class CancellationToken:
         with self._lock:
             return self._cancelled
 
-    def add_callback(self, callback: Callable[[], None]) -> None:
-        """
-        Register a callback to be executed when cancellation occurs.
-
-        If already cancelled, the callback is executed immediately.
-        """
-        with self._lock:
-            if self._cancelled:
-                try:
-                    callback()
-                except Exception:
-                    pass
-            else:
-                self._callbacks.append(callback)
-
     def link_future(
         self,
         future: Union[Future[Any], asyncio.Future[Any], asyncio.Task[Any]],

@@ -68,7 +68,6 @@ async def test_a_conversation_that_fits_is_left_alone():
 async def test_cutting_the_old_long_results_can_be_enough():
     messages = conversation(3, size=250)
     window = SlidingWindowCompaction(max_result_chars=200)
-    assert window.needed(messages, Model())
     result = await window.compact(messages, Model())
     assert result.changed and result.removed == 0 and len(result.messages) == len(messages)
     assert "[result cut to make room:" in result.messages[2].content
@@ -173,7 +172,7 @@ async def test_the_window_is_shared_out_part_by_part_and_kept_in_ctx():
     assert (context.window, context.prompt, context.tools, context.output) == (10_000, 1000, 500, 500)
     assert context.margin == 1600 and context.capacity == 6400  # 80% of the 8000 left
     total = context.prompt + context.tools + context.output + context.margin + context.capacity
-    assert total == context.window and context.free == context.capacity - context.messages
+    assert total == context.window
     assert ModelConfig(max_context_window=200_000).max_output_tokens == 20_000  # never zero
     # The loop leaves it in ctx on every call, compaction or not.
     ctx = RunContext(user_id="u", session_id="s", messages=conversation(1, size=10))

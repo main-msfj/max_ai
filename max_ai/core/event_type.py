@@ -179,7 +179,7 @@ class UserInputRequestEvent(ReasoningEvent):
     """A tool needs a person; the turn pauses until they answer.
 
     Mirrors ``ToolApprovalEvent``. The consumer answers via
-    ``ctx.tool_state.provide_result(tool_call_id, result)`` and resumes.
+    ``record.store_result(result)`` on that record and resumes.
     """
 
     EVENT_TYPE = "user_input_request"
@@ -187,7 +187,7 @@ class UserInputRequestEvent(ReasoningEvent):
     parameters: dict[str, t.Any] = Field(default_factory=dict)
     tool_call_id: str | None = Field(
         default=None,
-        description="Record id to answer via tool_state.provide_result().",
+        description="Id of the record to answer with record.store_result().",
     )
 
 

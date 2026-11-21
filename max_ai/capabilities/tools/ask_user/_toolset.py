@@ -3,7 +3,7 @@ Human-in-the-loop: the native ask-the-user tool.
 
 A tool like any other, except that a person produces its result. The
 dispatcher pauses the turn; the consumer answers with
-``ctx.tool_state.provide_result(record.id, AskUserTool.answer(record, answers))``
+``record.store_result(AskUserTool.answer(record, answers))``
 and resumes. The pause is record state: it survives process death.
 """
 
