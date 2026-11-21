@@ -520,3 +520,11 @@ async def test_what_happened_outside_is_told_to_the_model_before_its_next_call()
     events = await run(ReactLoop(), ctx, model, tools, hook=Tasks())
     assert kinds(events) == ["note"] and notes(ctx) == ["[harness] The task t1 ended: 42"]
     assert model.sent[1][0] == ["user", "assistant", "tool", "user"]
+
+
+def test_the_answer_is_read_as_text_even_when_there_is_none():
+    from max_ai.base.loop import LoopState
+    from max_ai.core.messages import AssistantMessage
+
+    assert LoopState().text == ""  # the turn stopped before the model answered
+    assert LoopState(message=AssistantMessage(source="llm", content="hola")).text == "hola"

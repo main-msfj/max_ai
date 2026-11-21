@@ -52,14 +52,14 @@ async def main() -> None:
     )
     ctx = RunContext(user_id="ana", session_id="first")
     state = await agent.run("What is 21 + 21?", ctx)
-    print(state.finish_reason, state.message.text() if state.message else "")
+    print(state.finish_reason, state.text)
     await agent.close()
 
 
 asyncio.run(main())
 ```
 
-`run()` returns a `LoopState`: the last assistant message (`state.message`),
+`run()` returns a `LoopState`: the answer as text (`state.text`) and as a message (`state.message`),
 why the turn ended (`state.finish_reason`), the token `usage` and the number of
 model calls (`iteration`). The conversation stays in `ctx`; pass the same `ctx`
 to continue it.
@@ -472,9 +472,9 @@ Checked against the code on this branch:
   against a fake SDK. Claude's newer models drop the thinking blocks of a
   conversation whose history was edited: compaction and the removal of
   blocked content do edit it, so that thinking is lost (nothing fails).
-- **Examples:** most files in `examples/` use the old API, and
-  `advance/04_custom_middleware.py` imports the removed `AgentResponse`. See
-  [examples/README.md](examples/README.md).
+- **Examples** were checked with a model that is faked, not against a real
+  one; `examples/basic/12_skills.py` could not be checked (GitHub's rate
+  limit). `example-deploy/` was run against real models.
 
 ## Repository map
 
@@ -502,7 +502,8 @@ max_ai/
   cli/              Textual terminal UI
   web/              browser UI
   types/            RunContext and other runtime types
-examples/           see examples/README.md (mostly outdated)
+examples/           one idea per file: basic/ and advance/
+example-deploy/     one agent that uses most of the framework, from the CLI
 docker-infra/       MongoDB Atlas Local, MCP server, Langfuse
 tests/
 ```
@@ -524,7 +525,6 @@ Planned, not started; order inside a group is not a commitment.
   prompt layer that names it.
 - Connect completion gates to the loop.
 - Run `AnthropicClient` against the real API.
-- Bring `examples/` up to the current API.
 
 **Milestones**
 

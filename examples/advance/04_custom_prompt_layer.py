@@ -1,4 +1,4 @@
-"""Define an instruction layer by extending CoreLayer."""
+"""A prompt layer of your own: a part of the system prompt with its own text."""
 
 import asyncio
 
@@ -9,12 +9,12 @@ from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
 from max_ai.core.model.stacks import StackConfig
 
 
-class EnglishStyleLayer(Component[StackConfig], CoreLayer):
+class PlainStyleLayer(Component[StackConfig], CoreLayer):
     component_schema = StackConfig
     component_type = "prompts"
 
     def __init__(self) -> None:
-        super().__init__(name="EnglishStyleLayer")
+        super().__init__(name="PlainStyleLayer")
 
     def _default_template(self) -> str:
         return "Write in plain English and use short sentences."
@@ -23,14 +23,16 @@ class EnglishStyleLayer(Component[StackConfig], CoreLayer):
 async def main() -> None:
     agent = Agent(
         name="Assistant",
-        description="An assistant with a custom style layer.",
+        description="An assistant with a style layer of its own.",
         instructions="Help with general questions.",
-        client=OpenAIChatCompletionClient(model="gpt-5.6-luna", api_key="YOUR_API_KEY"),
-        prompt_layers=[EnglishStyleLayer()],
+        client=OpenAIChatCompletionClient(model="gpt-5.4-nano"),
+        prompt_layers=[PlainStyleLayer()],  # added after the framework's own layers
     )
-    async with agent:
-        response = await agent.run("Explain what an API is.")
-        print(response.final_text)
+    try:
+        state = await agent.run("Explain what an API is.")
+        print(state.text)
+    finally:
+        await agent.close()
 
 
 if __name__ == "__main__":

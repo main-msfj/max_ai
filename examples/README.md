@@ -1,27 +1,31 @@
-# Max AI Examples
+# Max AI examples
 
-- [Basic](basic/README.md): one feature per file.
-- [Advanced](advance/README.md): implementing base interfaces.
+Small files, one idea each, written for the current API.
 
-> **Most examples are outdated.** They were written for the framework before
-> the November 2026 rewrite and have not been ported yet. Each folder's README
-> lists which files still match the current API and what changed. For the
-> current API, start from the quick start in the [main README](../README.md).
+- [basic/](basic/README.md): one feature per file, in the order you would learn them.
+- [advance/](advance/README.md): pieces of your own (a tool, a middleware, a session store, a prompt layer).
+- [../example-deploy/](../example-deploy/README.md): whole agents, one per folder, run from the CLI.
 
-What changed, in short:
+Run any of them from the repository root:
 
-| Old | Now |
-|---|---|
-| `async with agent:` | no context manager; call `await agent.close()` at the end |
-| `agent.run(task, run_context=ctx)` | `agent.run(task, ctx)` |
-| `response.final_text`, `response.context` (`AgentResponse`) | `state.message.text()`, `state.finish_reason` (`LoopState`); the conversation stays in `ctx` |
-| `response.pending_approvals`, `agent.resume(ctx)` | `ctx.tool_state.pending_approvals`, `agent.approve(ctx, id)`, then `agent.run(None, ctx)` |
-| `OllamaChatCompletionClient` | removed; OpenAI and OpenRouter clients only |
-| `LocalMemoryRegistry`, `max_ai.base.memory` | `max_ai.capabilities.memory.Memory` (needs a sandbox) |
-| `LocalWorkspace`, `max_ai.base.workspace` | sandboxes: `max_ai.capabilities.sandbox.{local,docker,e2b}` |
-| `GithubSkillRegistry` | `max_ai.capabilities.skills.GitHubSkills` / `LocalSkills` (need a sandbox and `BashTool()`) |
-| `compaction=` on `Agent` | `reasoning=ReactLoop(compaction=...)` |
-| `MiddlewareContext`, `on_*` hooks | `CoreMiddleware.turn / model / stream / tool` |
+```sh
+uv run python examples/basic/01_basic_agent.py
+```
 
-The `example-for-deployment/` folder mentioned in older docs is not in this
-repository.
+Most need `OPENAI_API_KEY`; each file says in its first lines what else it
+needs. What they write goes to `./local/`, which git ignores.
+
+Every example follows the same shape:
+
+```python
+agent = Agent(name, description, instructions, client, ...)   # the pieces
+ctx = RunContext(user_id="ana")                               # the conversation lives here
+try:
+    state = await agent.run("task", ctx)                      # one turn
+    print(state.text)                                         # the answer
+finally:
+    await agent.close()                                       # MCP, sandboxes, client
+```
+
+Not here yet: knowledge search, which is not connected to the agent (see
+"Status and known gaps" in the [main README](../README.md)).

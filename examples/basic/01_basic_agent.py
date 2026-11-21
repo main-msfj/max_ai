@@ -1,4 +1,4 @@
-"""Minimal OpenAI agent."""
+"""The smallest agent: one question, one answer. Needs OPENAI_API_KEY."""
 
 import asyncio
 
@@ -7,20 +7,17 @@ from max_ai.capabilities.clients.openai import OpenAIChatCompletionClient
 
 
 async def main() -> None:
-    client = OpenAIChatCompletionClient(
-        model="gpt-5.6-luna",
-        api_key="YOUR_API_KEY",
-    )
     agent = Agent(
         name="Assistant",
         description="A simple assistant.",
         instructions="Answer briefly and clearly.",
-        client=client,
+        client=OpenAIChatCompletionClient(model="gpt-5.4-nano"),  # the key comes from the environment
     )
-
-    async with agent:
-        response = await agent.run("Explain an AI agent in one sentence.")
-        print(response.final_text)
+    try:
+        state = await agent.run("Explain an AI agent in one sentence.")
+        print(state.text)
+    finally:
+        await agent.close()
 
 
 if __name__ == "__main__":

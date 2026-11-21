@@ -227,7 +227,7 @@ devcontainer puedes comprobar los puentes con `curl -I http://localhost:8081`
 `bash /max_ai/.devcontainer/post-start.sh` en el devcontainer para reconectar
 las redes y reiniciar los puentes.
 
-Con esas variables, los agentes de `example-for-deployment/` activan el
+Con esas variables, los agentes de `example-deploy/` activan el
 tracing solos. En código: `provider = configure_langfuse()` y
 `Agent(..., middlewares=[TracingMiddleware()])`.
 
@@ -236,12 +236,12 @@ borrar también las trazas guardadas).
 
 ## Probar todo junto
 
-Con Langfuse arriba, `example-for-deployment/full_test.py` abre la CLI con
-búsqueda web (Exa), un skill de GitHub, el sandbox, memoria y trazas en Langfuse:
+Con Langfuse arriba, `example-deploy/bookkeeper/agent.py` abre la CLI con
+búsqueda web (Exa), dos skills locales, el sandbox, memoria y trazas en Langfuse:
 
 ```bash
 docker compose --profile observability up -d --wait
-cd .. && .venv/bin/python example-for-deployment/full_test.py
+cd .. && .venv/bin/python example-deploy/bookkeeper/agent.py
 ```
 
 Las trazas se ven en Langfuse (http://localhost:3000).

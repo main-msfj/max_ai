@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{title}}</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; color: #1f2933; background: #f5f6f8; margin: 0; padding: 32px 16px; }
+  main { max-width: 760px; margin: auto; }
+  h1 { margin: 0; font-size: 28px; }
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .06em; color: #667085; margin: 32px 0 12px; }
+  .business { color: #667085; margin: 0 0 24px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .card, .rows, .notes { background: #fff; border-radius: 10px; padding: 16px; box-shadow: 0 1px 2px #0001; }
+  .card span { color: #667085; font-size: 13px; }
+  .card strong { display: block; font-size: 22px; }
+  .row { display: grid; grid-template-columns: 150px 1fr 110px; gap: 12px; align-items: center; padding: 6px 0; }
+  .bar { height: 10px; border-radius: 5px; background: #3b82f6; }
+  .row b { text-align: right; font-variant-numeric: tabular-nums; }
+  .notes { margin: 0; padding-left: 36px; color: #475467; font-size: 14px; }
+</style>
+<main>
+  <h1>{{title}}</h1>
+  <p class="business">{{business}} · amounts in {{currency}}</p>
+  <div class="cards">{{cards}}</div>
+  <h2>Sales</h2>
+  <div class="rows">{{sales}}</div>
+  <h2>Expenses</h2>
+  <div class="rows">{{expenses}}</div>
+  <h2>Notes</h2>
+  <ul class="notes">{{notes}}</ul>
+</main>
+</html>

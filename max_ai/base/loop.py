@@ -56,6 +56,11 @@ class LoopState(BaseModel):
     last_calls: str = ""  # the tool calls of the last round, as text
     repeats: int = 0  # rounds in a row with those same calls
 
+    @property
+    def text(self) -> str:
+        """The answer as text; empty when the turn ended without one."""
+        return self.message.text() if self.message else ""
+
 
 class Stop(BaseModel):
     """A hook's order to end the turn. ``answer`` is given to the user as
