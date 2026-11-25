@@ -47,7 +47,7 @@ class CompactionResult(BaseModel):
 class WindowCompactionConfig(BaseModel):
     threshold: float = Field(default=0.8, gt=0, le=1)  # part of the room the messages may fill
     keep: float = Field(default=0.1, gt=0, lt=1)  # part of it the newest messages keep after
-    max_result_chars: int = Field(default=2000, gt=0)  # an old tool result longer than this is cut
+    max_result_chars: int = Field(default=2000, ge=100)  # an old tool result longer than this is cut
     keep_groups: int = Field(default=2, gt=0)  # last exchanges never touched
 
 
@@ -62,7 +62,7 @@ class CoreCompaction(ComponentBase[ConfigT], ABC):
 
     component_type = "compaction"
 
-    CUT: t.ClassVar[str] = "[result cut to make room: {left} more characters removed]"
+    CUT: t.ClassVar[str] = "[result cut to make room: the whole result had {total} characters]"
 
     def __init__(
         self,
@@ -194,7 +194,8 @@ class CoreCompaction(ComponentBase[ConfigT], ABC):
         return t.cast("list[Message]", [m for group in groups for m in group.messages])
 
     def cut(self, messages: list[Message]) -> list[Message]:
-        """``messages`` with the long tool results cut, except in the last exchanges."""
+        """``messages`` with the long tool results cut, except in the last
+        exchanges. A cut result fits in the limit, so it is never cut again."""
         groups = self.groups(messages)
         fresh = {id(m) for group in groups[-self.keep_groups :] for m in group.messages}
         limit = self.max_result_chars
@@ -204,8 +205,10 @@ class CoreCompaction(ComponentBase[ConfigT], ABC):
             long = isinstance(message, ToolMessage) and isinstance(content, str) and len(content) > limit
             if long and id(message) not in fresh:
                 assert isinstance(content, str)
-                note = self.CUT.format(left=len(content) - limit)
-                message = message.model_copy(update={"content": f"{content[:limit]}\n{note}"})
+                # The note takes its place inside the limit, not after it.
+                note = self.CUT.format(total=len(content))
+                head = max(0, limit - len(note) - 1)
+                message = message.model_copy(update={"content": f"{content[:head]}\n{note}"})
             done.append(message)
         return done
 

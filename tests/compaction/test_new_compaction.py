@@ -76,6 +76,9 @@ async def test_cutting_the_old_long_results_can_be_enough():
     assert "[result cut to make room:" in result.messages[2].content
     assert "result cut" not in result.messages[-2].content  # the last exchanges are not touched
     assert result.tokens_after < result.tokens_before
+    # A cut result fits in the limit and says how long it was: cutting again changes nothing.
+    assert len(result.messages[2].content) == 200 and "had 1750 characters" in result.messages[2].content
+    assert window.cut(result.messages) == result.messages
 
 
 async def test_old_exchanges_leave_whole_and_no_message_is_written():
