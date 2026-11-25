@@ -95,6 +95,19 @@ class MessagesClient(CoreLLMClient[ConfigT]):
         system = [SystemMessage(source="system", content=prompts)] if prompts.strip() else []
         return [*system, *ctx.messages]
 
+    def edited(self, messages: list[Message]) -> list[Message]:
+        """Claude signs each thinking block against the conversation before
+        it: once that changed, the API refuses them. The blocks leave; the
+        text and the tool calls stay, and so does the thinking to show."""
+        kept: list[Message] = []
+        for message in messages:
+            # Only an answer that still holds its blocks is touched.
+            if isinstance(message, AssistantMessage) and self.FORMAT in message.reasoning_state:
+                state = {k: v for k, v in message.reasoning_state.items() if k != self.FORMAT}
+                message = message.model_copy(update={"reasoning_state": state})
+            kept.append(message)
+        return kept
+
     # -------- MESSAGES ---------------------------------------------------------------
     def build_api_messages(self, messages: list[Message]) -> list[dict[str, t.Any]]:
         """The conversation in the Messages format. A system message keeps

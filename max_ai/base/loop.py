@@ -616,7 +616,8 @@ class CoreLoop(ComponentBase[ConfigT], ABC):
         ctx.context = result.context
         if not result.changed:
             return None
-        ctx.messages[:] = result.messages
+        # A provider may refuse its old thinking once the conversation changed.
+        ctx.messages[:] = client.edited(result.messages)
         ctx.summary = result.summary
         state.usage = state.usage + result.usage
         state.compactions += 1

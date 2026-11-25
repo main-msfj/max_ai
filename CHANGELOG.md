@@ -67,7 +67,8 @@ First public version. The core was rewritten between 2026-11-15 and
 
 ### Known gaps
 - `AnthropicClient` (Messages API: streaming, thinking blocks, provider cache)
-  is tested against a fake SDK only, not the real API.
+  was run against the real API. After a compaction Claude's thinking blocks
+  are no longer sent back: the API refuses them once the conversation changed.
 - `knowledge=` is accepted and serialized but no tool queries it; it is kept
   to be connected.
 - Completion gates are kept in the package to be connected; the loop does

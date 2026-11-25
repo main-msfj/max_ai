@@ -583,10 +583,10 @@ Checked against the code on this branch:
   argument yet.
 - **Quota stores** (`LocalQuotaStore`, `MongoDBQuotaStore`) are used only by
   `BudgetMiddleware(quota=..., quota_store=...)`; nothing else reads them.
-- **`AnthropicClient` has not been run against the real API yet**, only
-  against a fake SDK. Claude's newer models drop the thinking blocks of a
-  conversation whose history was edited: compaction and the removal of
-  blocked content do edit it, so that thinking is lost (nothing fails).
+- **Claude's thinking does not survive a compaction.** Claude refuses a
+  thinking block once the conversation before it changed, so after each
+  compaction the blocks of the messages that stay are taken out (their text
+  and tool calls stay) and the model thinks again from there.
 - **Examples** were run against a real model (DeepSeek through OpenRouter),
   except `examples/basic/12_skills.py`: GitHub's rate limit stops it without
   a token. What is still missing is listed in [MILESTONES.md](MILESTONES.md).
@@ -639,7 +639,6 @@ Planned, not started; order inside a group is not a commitment.
 - Connect knowledge search to the agent: the tool in the registry and the
   prompt layer that names it.
 - Connect completion gates to the loop.
-- Run `AnthropicClient` against the real API.
 
 **Milestones**
 
