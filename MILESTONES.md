@@ -27,13 +27,31 @@ Pieces that exist in the code but do not work end to end yet.
 - [ ] **An MCP stdio server can still get a secret through `args`.** Keys go
   only through `secret=`; `args` is not checked.
 
-- [ ] **Check the prompt cache.** It looks like little of a call is read from
-  the provider's cache. Measure first: cached tokens per call, per provider
-  (OpenAI, OpenRouter, Anthropic), over a long session. Then look at what
-  breaks the prefix: the order of the prompt layers, text that changes each
-  turn (date, memory index, todos), the tool list, and compaction. A small
-  agent's system prompt is about 1,840 tokens, under the 2,000 the harness
-  warns about.
+- [>] **Check the prompt cache.** Measured on 2026-11-25 with one long
+  conversation (22 turns, one tool, about 10 compactions forced by a small
+  window). Share of the input read from the provider's cache:
+
+  | Route | Read from cache |
+  |---|---|
+  | Claude Haiku, at Anthropic | 69% |
+  | Claude Haiku, through OpenRouter | 0% |
+  | GPT 6 Luna, through OpenRouter | 74% |
+  | DeepSeek, through OpenRouter | 75% |
+
+  Without a compaction a turn reads 77 to 83%. What is left to decide:
+
+  - [ ] **Claude through OpenRouter reads nothing from the cache.** Our
+    OpenRouter client sends no cache mark. Read OpenRouter's documentation
+    first: it may handle this by itself, or need a mark or a setting.
+  - [ ] **A compaction costs one rewrite of the whole conversation**, even
+    when only one old tool result changed: the cache keeps marked points, not
+    any prefix. Tried outside the repository with Haiku: a mark at the end of
+    the system prompt gives 74%, and one more before the first tool result a
+    compaction would cut gives 80% (36% less written to the cache). Open
+    question: the client does not know which result will be cut; the
+    compaction does.
+  - [ ] Not measured yet: the order of the prompt layers and text that
+    changes each turn (date, memory index, todos).
 
 ## 2. Examples
 
