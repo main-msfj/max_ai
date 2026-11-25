@@ -220,6 +220,12 @@ class CoreLLMClient(ComponentBase[ConfigT], ABC):
             return t.cast("dict[str, t.Any]", source).get(key)
         return getattr(source, key, None)
 
+    def edited(self, messages: list[Message]) -> list[Message]:
+        """``messages`` after the harness changed the conversation before
+        them (a compaction). A client whose provider then refuses the old
+        thinking takes it out here; the rest keep everything."""
+        return messages
+
     # -------- EACH PROVIDER ----------------------------------------------------------
     @abstractmethod
     def format_messages(self, ctx: RunContext, prompts: str) -> list[Message]:

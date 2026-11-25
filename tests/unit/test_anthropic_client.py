@@ -135,6 +135,24 @@ async def test_an_answer_with_thinking_goes_back_block_by_block_as_it_came():
     assert made.build_api_messages([AssistantMessage(source="llm", content="")]) == []
 
 
+async def test_once_the_conversation_changed_its_thinking_blocks_are_not_sent_back():
+    blocks = [THOUGHT, {"type": "text", "text": "Let me see."}, CALL]
+    made = client(answer(*blocks, stop="tool_use"), answer({"type": "text", "text": "sun"}))
+    first = (await made.run(HOLA, tools=[WEATHER])).message
+    other = first.model_copy(update={"reasoning_state": {**first.reasoning_state, "responses": [{"id": "r"}]}})
+
+    # The blocks leave; the text, the tool calls, the thinking to show and others' state stay.
+    plain, kept = made.edited([*HOLA, first]), made.edited([other])[0]
+    assert plain[:-1] == HOLA and plain[-1].reasoning_state == {}
+    assert plain[-1].thinking == first.thinking and plain[-1].tool_calls == first.tool_calls
+    assert kept.reasoning_state == {"responses": [{"id": "r"}]}
+    result = ToolMessage(source="t", content="sun", tool_call_id="toolu_1", tool_name="weather", success=True)
+    await made.run([*plain, result], tools=[WEATHER])
+    assert made.sent[1]["messages"][1] == {
+        "role": "assistant", "content": [{"type": "text", "text": "Let me see."}, CALL],
+    }
+
+
 @pytest.mark.parametrize(
     ("stop", "finish"),
     [("end_turn", "stop"), ("max_tokens", "length"), ("refusal", "content_filter"), ("pause_turn", "stop")],

@@ -16,8 +16,10 @@ Pieces that exist in the code but do not work end to end yet.
 - [ ] **Completion gates.** `capabilities/completion_gate` is kept, but no
   loop calls it and `Agent` has no `gates` argument. The gate should read
   `ctx.todos`; after that `AgentPlan` and `ctx.plan` can be deleted.
-- [ ] **Anthropic client against the real API.** Only run against a fake SDK
-  so far. Waits for a key.
+- [x] **Anthropic client against the real API.** Run on 2026-11-25 with
+  `claude-haiku-5-5`: answer, stream, tools, structured output, thinking,
+  cache, compaction and the bookkeeper. Found and fixed: thinking blocks
+  sent back after a compaction were refused.
 - [ ] **Save the session after each batch of tools.** Today a turn that dies
   in the middle loses what its tools already did.
 - [ ] **After a compaction, put the working directory and the todos in the

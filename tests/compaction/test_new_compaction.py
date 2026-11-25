@@ -32,6 +32,9 @@ class Model:
         self.prompts = prompts
         return list(ctx.messages)
 
+    def edited(self, messages):
+        return messages
+
     async def run(self, messages, tools=None, output_format=None, **options):
         self.asked.append((messages, output_format))
         reply = self.replies.pop(0)
@@ -140,6 +143,30 @@ async def test_the_loop_compacts_before_the_model_and_leaves_ctx_in_order():
     assert ctx.compaction.compactions == 1  # what the list of sessions shows
     assert state.usage.llm_calls == 3  # the summary call is counted with the two of the turn
     assert ctx.messages[-1].content == "really done"
+
+
+async def test_after_a_compaction_the_client_says_what_of_its_thinking_stays():
+    class Signs(Model):
+        """A client whose provider refuses its old thinking once the conversation changed."""
+
+        def edited(self, messages):
+            return [m.model_copy(update={"reasoning_state": {}}) for m in messages]
+
+    def thought(messages):
+        return [
+            m.model_copy(update={"reasoning_state": {"messages": [{"type": "thinking"}]}})
+            if isinstance(m, AssistantMessage) else m
+            for m in messages
+        ]
+
+    for kind, stays in ((Signs, False), (Model, True)):
+        ctx = RunContext(user_id="u", session_id="s", messages=thought(conversation(8)))
+        model = kind(Summary(goal="g"), "done")
+        loop = ReactLoop(compaction=SummaryCompaction())
+        [e async for e in loop.run(ctx, "p", model, ToolDispatcher(ToolRegistry([])), state=LoopState())]
+        old = [m for m in ctx.messages[:-1] if isinstance(m, AssistantMessage)]
+        assert ctx.compaction.compactions == 1 and old
+        assert all(bool(m.reasoning_state) is stays for m in old)
 
 
 async def test_a_model_that_refuses_the_conversation_as_too_long_gets_it_compacted_by_force():
