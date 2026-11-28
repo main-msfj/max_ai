@@ -32,6 +32,6 @@ def test_the_script_uses_only_the_standard_library():
     compile(SCRIPT, "script.py", "exec")
     imports = {line.split()[1] for line in SCRIPT.splitlines() if line.startswith("import ")}
     assert imports <= {
-        "contextlib", "fcntl", "hashlib", "json", "os", "shutil", "signal", "subprocess", "sys",
-            "tarfile", "tempfile", "time",
+        "__future__", "contextlib", "fcntl", "hashlib", "json", "os", "shutil", "signal",
+        "subprocess", "sys", "tarfile", "tempfile", "time", "typing",
     }

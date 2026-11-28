@@ -10,6 +10,8 @@ temporary name and renamed into place, and what arrives is checked against
 its sha256 first, so a connection cut in the middle changes nothing.
 """
 
+from __future__ import annotations
+
 import contextlib
 import fcntl
 import hashlib
@@ -22,6 +24,10 @@ import sys
 import tarfile
 import tempfile
 import time
+import typing as t
+
+# A request and its answer: what JSON carries.
+Json = t.Dict[str, t.Any]
 
 # Temporary names start like this; what a killed run left behind is removed
 # by a later install, once it is old enough.
@@ -29,7 +35,7 @@ INCOMING = ".incoming-"
 STALE_SECONDS = 3600
 
 
-def inside(folder, path):
+def inside(folder: str, path: str) -> str:
     """``path`` under ``folder`` with symlinks followed, or an error."""
     folder = os.path.realpath(folder)
     full = os.path.realpath(os.path.join(folder, path))
@@ -38,7 +44,7 @@ def inside(folder, path):
     return full
 
 
-def receive(folder, sha256):
+def receive(folder: str, sha256: str) -> str:
     """Stdin saved under a temporary name in ``folder``, only if all of it
     arrived. The caller renames it into place."""
     handle, temp = tempfile.mkstemp(dir=folder, prefix=INCOMING)
@@ -58,7 +64,7 @@ def receive(folder, sha256):
     return temp
 
 
-def write_settings(path, content):
+def write_settings(path: str, content: Json) -> None:
     """Replace ``setting.json`` in one step: a reader sees the old one or
     the new one, never half."""
     handle, temp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=INCOMING)
@@ -70,13 +76,13 @@ def write_settings(path, content):
     os.replace(temp, path)
 
 
-def read_settings(path):
+def read_settings(path: str) -> Json:
     with open(path, encoding="utf-8") as file:
         return json.load(file)
 
 
 @contextlib.contextmanager
-def locked(path):
+def locked(path: str) -> t.Generator[None, None, None]:
     """One install at a time in this ``.agent/``. The system frees the lock
     when the process ends, also when it is killed."""
     with open(path, "a") as file:
@@ -84,7 +90,7 @@ def locked(path):
         yield
 
 
-def create(request):
+def create(request: Json) -> Json:
     for folder in request["folders"]:
         os.makedirs(folder, exist_ok=True)
     # Where the harness is another user: the agent's one writes only here.
@@ -105,11 +111,11 @@ def create(request):
     return {}
 
 
-def settings(request):
+def settings(request: Json) -> Json:
     return {"settings": read_settings(request["settings"])}
 
 
-def permit(request):
+def permit(request: Json) -> Json:
     """Add one rule to a list of ``permissions``; the same rule is kept once."""
     with locked(request["lock"]):
         current = read_settings(request["settings"])
@@ -120,7 +126,7 @@ def permit(request):
     return {}
 
 
-def unpermit(request):
+def unpermit(request: Json) -> Json:
     """Take one rule out of a list of ``permissions``."""
     with locked(request["lock"]):
         current = read_settings(request["settings"])
@@ -131,7 +137,7 @@ def unpermit(request):
     return {}
 
 
-def upload(request):
+def upload(request: Json) -> Json:
     full = inside(request["folder"], request["path"])
     os.makedirs(os.path.dirname(full), exist_ok=True)
     temp = receive(os.path.dirname(full), request["sha256"])
@@ -141,7 +147,7 @@ def upload(request):
     return {"path": full}
 
 
-def unpack(packed, folder):
+def unpack(packed: str, folder: str) -> None:
     """Only plain files and folders: no links, nothing outside ``folder``."""
     with tarfile.open(packed) as archive:
         for member in archive:
@@ -151,11 +157,12 @@ def unpack(packed, folder):
                 full = inside(folder, member.name)
                 os.makedirs(os.path.dirname(full), exist_ok=True)
                 with open(full, "wb") as file:
-                    shutil.copyfileobj(archive.extractfile(member), file)
+                    # A plain file always has its content in the archive.
+                    shutil.copyfileobj(t.cast("t.IO[bytes]", archive.extractfile(member)), file)
                 os.chmod(full, 0o755 if member.mode & 0o100 else 0o644)
 
 
-def digest(folder):
+def digest(folder: str) -> str | None:
     """One hash of everything in ``folder``: each file's path, whether it
     runs, and its content. None when the folder is not there."""
     if not os.path.isdir(folder):
@@ -178,12 +185,14 @@ def digest(folder):
     return total.hexdigest()
 
 
-def hashes(request):
+def hashes(request: Json) -> Json:
     """The hash of each skill folder asked for, as it is on disk now."""
-    return {"hashes": {name: digest(os.path.join(request["folder"], name)) for name in request["names"]}}
+    folder: str = request["folder"]
+    names: list[str] = request["names"]
+    return {"hashes": {name: digest(os.path.join(folder, name)) for name in names}}
 
 
-def install(request):
+def install(request: Json) -> Json:
     name, key, target = request["name"], request["key"], request["folder"]
     parent = os.path.dirname(target)
     # Receive everything BEFORE taking the lock: a slow connection never
@@ -197,7 +206,7 @@ def install(request):
             skills = current.setdefault("skills", {})
             # Someone installed it while this call waited for the lock, and
             # what is on disk is still what was installed.
-            known = skills.get(name) or {}
+            known: Json = skills.get(name) or {}
             found = digest(target)
             if known.get("key") == key and found is not None and known.get("hash") == found:
                 return {"installed": False}
@@ -224,7 +233,9 @@ def install(request):
             # 3. Record the new key, what the prompt says of the skill, and the
             #    hash of its files: a later change to them is noticed.
             skills[name] = {
-                "key": key, "description": request.get("description", ""), "hash": digest(target),
+                "key": key,
+                "description": request.get("description", ""),
+                "hash": digest(target),
             }
             write_settings(request["settings"], current)
     finally:
@@ -233,7 +244,7 @@ def install(request):
     return {"installed": True}
 
 
-def sweep(folder):
+def sweep(folder: str) -> None:
     """Remove what a killed install left behind long ago. Recent temporary
     names may belong to an install still receiving its content."""
     for entry in os.listdir(folder):
@@ -246,7 +257,7 @@ def sweep(folder):
                 shutil.rmtree(leftover) if os.path.isdir(leftover) else os.unlink(leftover)
 
 
-def put(folder, name, value):
+def put(folder: str, name: str, value: t.Any) -> None:
     """Write one small file of a task whole: under another name, then renamed."""
     temp = os.path.join(folder, INCOMING + name)
     with open(temp, "w", encoding="utf-8") as file:
@@ -254,14 +265,18 @@ def put(folder, name, value):
     os.replace(temp, os.path.join(folder, name))
 
 
-def watch(folder, command, cwd, seconds):
+def watch(folder: str, command: str, cwd: str, seconds: float) -> None:
     """Stays beside one background task: runs it, ends it at the cap and
     writes how it ended."""
     with open(os.path.join(folder, "output"), "wb") as output:
         # 1. The command in its own group: killing the group kills all it started.
         process = subprocess.Popen(
-            ["bash", "-c", command], cwd=cwd, stdin=subprocess.DEVNULL,
-            stdout=output, stderr=subprocess.STDOUT, start_new_session=True,
+            ["bash", "-c", command],
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
         )
         put(folder, "pid", process.pid)
         # 2. It ends by itself, or the cap ends it.
@@ -275,9 +290,9 @@ def watch(folder, command, cwd, seconds):
     put(folder, "exit", {"reason": reason, "code": code})
 
 
-def task_start(request):
+def task_start(request: Json) -> Json:
     # 1. The folder of the task: the next number of its session.
-    root = request["folder"]
+    root: str = request["folder"]
     os.makedirs(root, exist_ok=True)
     with locked(os.path.join(root, ".lock")):
         number = 1 + max((int(name) for name in os.listdir(root) if name.isdigit()), default=0)
@@ -300,15 +315,22 @@ def task_start(request):
     return {"id": str(number)}
 
 
-OPERATIONS = {"create": create, "settings": settings, "upload": upload, "install": install,
-              "hashes": hashes, "permit": permit, "unpermit": unpermit,
-              "task_start": task_start}
+OPERATIONS: dict[str, t.Callable[[Json], Json]] = {
+    "create": create,
+    "settings": settings,
+    "upload": upload,
+    "install": install,
+    "hashes": hashes,
+    "permit": permit,
+    "unpermit": unpermit,
+    "task_start": task_start,
+}
 
 
-def main():
+def main() -> None:
     request = json.loads(sys.argv[1])
     try:
-        answer = {"ok": True, **OPERATIONS[request["op"]](request)}
+        answer: dict[str, t.Any] = {"ok": True, **OPERATIONS[request["op"]](request)}
     except (ValueError, OSError, tarfile.TarError) as error:
         answer = {"ok": False, "error": str(error)}
     print(json.dumps(answer))
