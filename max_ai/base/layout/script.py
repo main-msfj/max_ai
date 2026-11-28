@@ -17,6 +17,7 @@ import fcntl
 import hashlib
 import json
 import os
+import select
 import shutil
 import signal
 import subprocess
@@ -37,6 +38,12 @@ STALE_SECONDS = 3600
 GRACE_SECONDS = 5
 # How much of the end of an output is read to show its last lines.
 TAIL_BYTES = 1 << 16
+# How many tasks that ended a session keeps; older ones are removed.
+KEPT_TASKS = 10
+# How often a watcher looks whether its command ended without printing.
+POLL_SECONDS = 0.2
+# What takes the place of the middle of an output too long to keep.
+CUT = "\n[output cut to make room: {left} characters left out here]\n"
 
 
 def inside(folder: str, path: str) -> str:
@@ -319,16 +326,42 @@ def task_folder(root: str, name: str) -> str:
     return folder
 
 
-def watch(folder: str, command: str, cwd: str, seconds: float) -> None:
-    """Stays beside one background task: runs it, ends it at the cap and
-    writes how it ended."""
-    with open(os.path.join(folder, "output"), "wb") as output:
+class Output:
+    """What a task prints, on disk: all of it while it fits in ``limit``,
+    then only its beginning and its end."""
+
+    def __init__(self, file: t.IO[bytes], limit: int) -> None:
+        self.file = file
+        self.half = limit // 2
+        self.total = 0  # everything printed so far
+        self.end = b""  # the last half, once the first one is written
+
+    def add(self, chunk: bytes) -> None:
+        # 1. The first half is written as it comes; of the rest, only the end.
+        first = chunk[: max(0, self.half - self.total)]
+        self.file.write(first)
+        self.end = (self.end + chunk[len(first) :])[-self.half :]
+        self.total += len(chunk)
+        # 2. The end is written again behind the first half, with what was left out.
+        if self.total > self.half:
+            left = self.total - 2 * self.half
+            self.file.seek(self.half)
+            self.file.truncate()
+            self.file.write((CUT.format(left=left).encode() if left > 0 else b"") + self.end)
+        self.file.flush()
+
+
+def watch(folder: str, command: str, cwd: str, seconds: float, limit: int) -> None:
+    """Stays beside one background task: runs it, keeps what it prints, ends
+    it at the cap and writes how it ended."""
+    deadline = time.monotonic() + seconds
+    with open(os.path.join(folder, "output"), "wb") as file:
         # 1. The command in its own group: killing the group kills all it started.
         process = subprocess.Popen(
             ["bash", "-c", command],
             cwd=cwd,
             stdin=subprocess.DEVNULL,
-            stdout=output,
+            stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
@@ -336,30 +369,62 @@ def watch(folder: str, command: str, cwd: str, seconds: float) -> None:
         # A stop that came before the pid was written.
         if get(folder, "exit") is not None:
             os.killpg(process.pid, signal.SIGKILL)
-        # 2. It ends by itself, or the cap ends it.
-        try:
-            code, reason = process.wait(seconds), "done"
-        except subprocess.TimeoutExpired:
+        # 2. What it prints is kept until it ends by itself, or the cap ends it.
+        output, pipe = Output(file, limit), t.cast("t.IO[bytes]", process.stdout).fileno()
+        code, reason = None, "cap"
+        while time.monotonic() < deadline:
+            over = process.poll() is not None
+            ready = select.select([pipe], [], [], 0 if over else POLL_SECONDS)[0]
+            chunk = os.read(pipe, 1 << 16) if ready else b""
+            if chunk:
+                output.add(chunk)
+            elif ready or over:
+                # Nothing more will come: it ended, or it closed its output.
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    code = process.wait(max(0.0, deadline - time.monotonic()))
+                    reason = "done"
+                break
+        if reason == "cap":
             os.killpg(process.pid, signal.SIGKILL)
             process.wait()
-            code, reason = None, "cap"
     # 3. How it ended.
     put(folder, "exit", {"reason": reason, "code": code}, once=True)
 
 
+def numbered(root: str) -> list[str]:
+    """The tasks of a session, in the order they started."""
+    if not os.path.isdir(root):
+        return []
+    return sorted((name for name in os.listdir(root) if name.isdigit()), key=int)
+
+
 def task_start(request: Json) -> Json:
-    # 1. The folder of the task: the next number of its session.
     root: str = request["folder"]
     os.makedirs(root, exist_ok=True)
     with locked(os.path.join(root, ".lock")):
-        number = 1 + max((int(name) for name in os.listdir(root) if name.isdigit()), default=0)
+        sweep(root)
+        # 1. No more than the session may have running at once.
+        states = [task_state(os.path.join(root, name), 0) for name in numbered(root)]
+        if sum(task["state"] == "running" for task in states) >= request["max"]:
+            raise ValueError(
+                f"this session already has {request['max']} background tasks running; "
+                "wait for one to end or stop one"
+            )
+        # 2. Of the ones that ended, only the last ones are kept.
+        ended = [task["id"] for task in states if task["state"] != "running"]
+        for name in ended[:-KEPT_TASKS]:
+            shutil.rmtree(os.path.join(root, name), ignore_errors=True)
+        # 3. The folder of the task, whole from the start: the next number.
+        number = 1 + max((int(task["id"]) for task in states), default=0)
+        fresh = tempfile.mkdtemp(dir=root, prefix=INCOMING)
+        os.chmod(fresh, 0o755)
+        put(fresh, "command", request["command"])
+        put(fresh, "started", time.time())
+        put(fresh, "seconds", request["seconds"])
         folder = os.path.join(root, str(number))
-        os.mkdir(folder)
-    put(folder, "command", request["command"])
-    put(folder, "started", time.time())
-    put(folder, "seconds", request["seconds"])
+        os.rename(fresh, folder)
 
-    # 2. A copy of this process stays to watch; the call itself answers and ends.
+    # 4. A copy of this process stays to watch; the call itself answers and ends.
     watcher = os.fork()
     if watcher == 0:
         try:
@@ -368,7 +433,7 @@ def task_start(request: Json) -> Json:
             null = os.open(os.devnull, os.O_RDWR)
             for stream in (0, 1, 2):
                 os.dup2(null, stream)
-            watch(folder, request["command"], request["cwd"], request["seconds"])
+            watch(folder, request["command"], request["cwd"], request["seconds"], request["limit"])
         finally:
             os._exit(0)
     put(folder, "watcher", watcher)
@@ -379,9 +444,11 @@ def task_state(folder: str, lines: int) -> Json:
     """What is known of one task: how it ended, or whether it still runs."""
     ended = get(folder, "exit")
     if ended is None:
-        # No end written: it runs while its watcher lives and its cap has not passed.
+        # No end written: it runs while its watcher lives (or is about to be
+        # written down) and its cap has not passed.
         limit = (get(folder, "started") or 0) + (get(folder, "seconds") or 0) + GRACE_SECONDS
-        running = time.time() < limit and alive(get(folder, "watcher"))
+        watcher = get(folder, "watcher")
+        running = time.time() < limit and (watcher is None or alive(watcher))
         ended = {"reason": "running" if running else "lost", "code": None}
     return {
         "id": os.path.basename(folder),
@@ -398,12 +465,7 @@ def task_list(request: Json) -> Json:
     root: str = request["folder"]
     wanted: str | None = request.get("id")
     # 1. The one asked for, or all of the session in the order they started.
-    if wanted is not None:
-        names = [wanted]
-    elif os.path.isdir(root):
-        names = sorted((name for name in os.listdir(root) if name.isdigit()), key=int)
-    else:
-        names = []
+    names = [wanted] if wanted is not None else numbered(root)
     # 2. What is known of each.
     lines: int = request["lines"]
     return {"tasks": [task_state(task_folder(root, name), lines) for name in names]}

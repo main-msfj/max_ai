@@ -144,3 +144,51 @@ async def test_a_task_is_only_reached_from_its_own_session(tmp_path):
             await sandbox.stop_task("s2", task_id)
     assert (await sandbox.tasks("s1"))[0].state == "running"
     await sandbox.stop_task("s1", "1")
+
+
+async def test_a_session_runs_only_so_many_tasks_at_once(tmp_path):
+    sandbox = await box(tmp_path)
+    for _ in range(setting.harness_task_max):
+        await sandbox.start_task("s1", "sleep 30", str(tmp_path))
+    with pytest.raises(SandboxError, match="already has 3 background tasks running"):
+        await sandbox.start_task("s1", "true", str(tmp_path))
+    # Another session has its own count, and room comes back when one ends.
+    assert await sandbox.start_task("s2", "true", str(tmp_path)) == "1"
+    await sandbox.stop_task("s1", "2")
+    assert await sandbox.start_task("s1", "true", str(tmp_path)) == "4"
+    for task in await sandbox.tasks("s1"):
+        await sandbox.stop_task("s1", task.id)
+
+
+async def test_only_the_last_tasks_that_ended_are_kept(tmp_path):
+    sandbox = await box(tmp_path)
+    root = Path(str(sandbox.layout.tasks)) / "s1"
+    await sandbox.start_task("s1", "sleep 30", str(tmp_path))
+    for number in range(2, 14):
+        await sandbox.start_task("s1", "true", str(tmp_path))
+        await ended(root / str(number))
+    # The one still running stays, however old; of the rest, the last ten at each launch.
+    kept = [task.id for task in await sandbox.tasks("s1")]
+    assert kept == ["1", *(str(number) for number in range(3, 14))]
+    await sandbox.stop_task("s1", "1")
+
+
+async def test_a_long_output_keeps_its_beginning_and_its_end(tmp_path, monkeypatch):
+    monkeypatch.setattr(setting, "harness_task_output_chars", 1000)
+    sandbox = await box(tmp_path)
+    await sandbox.start_task("s1", "seq 1 2000; sleep 0.8; echo last", str(tmp_path))
+    await sandbox.start_task("s1", "seq 1 200", str(tmp_path))
+    folder = Path(str(sandbox.layout.tasks)) / "s1"
+    # While it runs, the last lines are already there.
+    await asyncio.sleep(0.4)
+    (running,) = await sandbox.tasks("s1", "1", lines=1)
+    assert (running.state, running.output) == ("running", "2000")
+    assert await ended(folder / "1") == {"reason": "done", "code": 0}
+    text = (folder / "1" / "output").read_text()
+    left = len("".join(f"{n}\n" for n in range(1, 2001)) + "last\n") - 1000
+    assert text.startswith("1\n2\n3\n") and text.endswith("1999\n2000\nlast\n")
+    assert f"[output cut to make room: {left} characters left out here]" in text
+    assert len(text) < 1100
+    # One that fits is kept whole.
+    await ended(folder / "2")
+    assert (folder / "2" / "output").read_text() == "".join(f"{n}\n" for n in range(1, 201))

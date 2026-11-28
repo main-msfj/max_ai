@@ -141,6 +141,7 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
         answer = await self._run(
             "task_start", folder=str(self.layout.tasks / session_id),
             command=command, cwd=cwd, seconds=setting.harness_task_seconds,
+            max=setting.harness_task_max, limit=setting.harness_task_output_chars,
         )
         return answer["id"]
 
