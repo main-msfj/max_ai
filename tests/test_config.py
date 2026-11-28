@@ -36,3 +36,14 @@ def test_compaction_settings_can_be_overridden_from_env(monkeypatch):
     assert settings.compaction_live_message_threshold == 0.35
     assert settings.compaction_live_message_keep_ratio == 0.22
     assert settings.compaction_min_output_tokens == 1200
+
+
+def test_background_task_settings(monkeypatch):
+    settings = Settings(_env_file=None)
+    assert (settings.harness_task_max, settings.harness_task_seconds) == (3, 600)
+    assert settings.harness_task_output_chars == 100_000
+
+    monkeypatch.setenv("HARNESS_TASK_MAX", "5")
+    monkeypatch.setenv("HARNESS_TASK_SECONDS", "120")
+    changed = Settings(_env_file=None)
+    assert (changed.harness_task_max, changed.harness_task_seconds) == (5, 120)

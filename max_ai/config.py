@@ -131,6 +131,25 @@ class Settings(BaseSettings):
         description="Most the judge may take; after it the user is asked.",
     )
 
+    harness_task_max: int = Field(
+        default=3,
+        ge=1,
+        validation_alias="HARNESS_TASK_MAX",
+        description="Background tasks one session may have running at once.",
+    )
+    harness_task_seconds: float = Field(
+        default=600,
+        gt=0,
+        validation_alias="HARNESS_TASK_SECONDS",
+        description="Most a background task may run; no longer than a sandbox lives.",
+    )
+    harness_task_output_chars: int = Field(
+        default=100_000,
+        ge=1_000,
+        validation_alias="HARNESS_TASK_OUTPUT_CHARS",
+        description="Most that is kept of what a background task prints.",
+    )
+
     # -------- COMPACTION -------------------------------------------------------
     compaction_prompt_budget_tokens: int = Field(default=6000, gt=0)
     compaction_summary_max_share: float = Field(
