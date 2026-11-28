@@ -121,7 +121,9 @@ class BashTool(CoreTool):
             except SandboxError as error:
                 return ToolResult.execution_error(tool_request.id, str(error))
             ctx.tasks[task_id] = command
-            return ToolResult.success_result(tool_request.id, self.STARTED.format(id=task_id))
+            return ToolResult.success_result(
+                tool_request.id, self.STARTED.format(id=task_id), metadata={"task_id": task_id}
+            )
         layout = sandbox.layout
         allowed = [paths["workspace"], paths["tmp"], str(layout.skills), str(layout.memory)]
         mark = f"__cwd_{short_id()}__"

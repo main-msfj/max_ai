@@ -54,6 +54,7 @@ async def test_a_background_command_returns_at_once_with_its_task(sandbox, ctx):
     started = await call(sandbox, ctx, "bash", command="pwd -P; sleep 30", background=True)
     assert started.success and started.result.startswith("Started in the background as task 1.")
     assert ctx.tasks == {"1": "pwd -P; sleep 30"}
+    assert started.metadata["task_id"] == "1"  # what the CLI shows
     # It started where the last command ended.
     await asyncio.sleep(0.3)
     seen = await call(sandbox, ctx, "task_output", task_id="1")
