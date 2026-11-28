@@ -507,12 +507,32 @@ depends on the agent's process staying alive. Its record is the folder
 - **Closing:** `agent.close()`, which the CLI and the web UI call when they
   end, stops the tasks still running. A process killed outright cannot do
   that: its tasks end by themselves or at the time limit.
-- A command that waits (no `background`) runs as before and leaves no folder.
-  Sending a command that already runs to the background is not built yet.
+
+**Every command runs the same way.** A command that waits (no `background`) is
+started exactly as a background one; the only difference is that the harness
+waits for it. When it ends its result is returned and nothing of it is left.
+The same text reaches the model as always: exit code, output, notes.
+
+So a command that already runs can be sent to the background, without
+starting it again:
+
+| How it stops being waited for | What happens to the command |
+|---|---|
+| it ends, or its `timeout` passes | its result is returned (after a timeout: stopped, exit code 124) |
+| the turn is cancelled (`esc` in the CLI) | it is stopped |
+| `agent.send_to_background(ctx)` (`ctrl+g` in the CLI) | it goes on as one more task of the session; the call answers with its task id and the turn continues |
+
+A command sent this way is a task like any other: the model is told when it
+ends and `task_output` / `stop_task` work on it. It may be a fourth one
+running, since a person asked for it; the model still cannot start more than
+`HARNESS_TASK_MAX`. What it changes is not checked when it ends: the folder
+it ended in is not kept, and a file the model had read is noticed at the
+next write.
 
 In the CLI a background command has its own tag, the line at the bottom counts
-the tasks that run, and `/tasks` lists them. `example-deploy/runner/` is an
-agent to see it working.
+the tasks that run, and `/tasks` lists them. While a command is waited for,
+its card and the status line name the key that sends it to the background.
+`example-deploy/runner/` is an agent to see it working.
 
 ### Skills
 
@@ -699,9 +719,6 @@ Planned, not started; order inside a group is not a commitment.
 
 - **Multi-agent:** an agent starts other agents and gathers their work, on
   the stateless `Agent`.
-- **Send a running command to the background:** today only the model decides,
-  when it starts the command. Every command would start with its own
-  watcher, so that the user can stop waiting for one without restarting it.
 - **A2A:** talk to agents of other frameworks over the Agent2Agent protocol,
   as a client and as a server.
 - **Always-on agent:** an agent that stays up and wakes on a schedule or an
