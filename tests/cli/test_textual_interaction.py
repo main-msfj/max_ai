@@ -160,7 +160,7 @@ async def test_question_button_and_token_events(tmp_path):
         assert app._tokens_input == 20
         assert app._tokens_output == 6
         usage = str(app.query_one("#usage", Static).render())
-        assert "↑ 20 ↓ 6 · cached 4" in usage
+        assert "total ↑ 20 ↓ 6 · cached 4 (20%)" in usage
 
 
 def test_tool_summaries_stay_on_one_short_line():

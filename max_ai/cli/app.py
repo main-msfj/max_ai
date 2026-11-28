@@ -390,9 +390,15 @@ class MaxAIApp(App[None]):
         line.append(self._agent_name, style=f"bold {PRIMARY}")
         line.append(" · ", style=DIM)
         line.append(self.agent.client.model, style=MODEL)
-        line.append(f" · ↑ {_k(self._tokens_input)} ↓ {_k(self._tokens_output)}", style=MUTED)
+        # Named a total: every call sends the whole conversation again, so it
+        # grows far past the window beside it.
+        line.append(" · total ", style=DIM)
+        line.append(f"↑ {_k(self._tokens_input)} ↓ {_k(self._tokens_output)}", style=MUTED)
         # Always shown: a zero says the provider is not reusing the prompt.
         line.append(f" · cached {_k(self._tokens_cached)}", style=DIM)
+        if self._tokens_input and self._tokens_cached:
+            share = round(100 * self._tokens_cached / self._tokens_input)
+            line.append(f" ({share}%)", style=DIM)
         # 2. The window as the last model call shared it out.
         parts = self.context.context
         window = (parts.window if parts else 0) or self.agent.client.config.max_context_window
