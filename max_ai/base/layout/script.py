@@ -34,6 +34,8 @@ Json = t.Dict[str, t.Any]
 # by a later install, once it is old enough.
 INCOMING = ".incoming-"
 STALE_SECONDS = 3600
+# The states of a task; the same words as TaskStatus on the host.
+RUNNING, DONE, CAP, STOPPED, LOST = "running", "done", "cap", "stopped", "lost"
 # A task with no end written still counts as running this long after its cap.
 GRACE_SECONDS = 5
 # How much of the end of an output is read to show its last lines.
@@ -371,7 +373,7 @@ def watch(folder: str, command: str, cwd: str, seconds: float, limit: int) -> No
             os.killpg(process.pid, signal.SIGKILL)
         # 2. What it prints is kept until it ends by itself, or the cap ends it.
         output, pipe = Output(file, limit), t.cast("t.IO[bytes]", process.stdout).fileno()
-        code, reason = None, "cap"
+        code, reason = None, CAP
         while time.monotonic() < deadline:
             over = process.poll() is not None
             ready = select.select([pipe], [], [], 0 if over else POLL_SECONDS)[0]
@@ -382,9 +384,9 @@ def watch(folder: str, command: str, cwd: str, seconds: float, limit: int) -> No
                 # Nothing more will come: it ended, or it closed its output.
                 with contextlib.suppress(subprocess.TimeoutExpired):
                     code = process.wait(max(0.0, deadline - time.monotonic()))
-                    reason = "done"
+                    reason = DONE
                 break
-        if reason == "cap":
+        if reason == CAP:
             os.killpg(process.pid, signal.SIGKILL)
             process.wait()
     # 3. How it ended.
@@ -407,13 +409,13 @@ def task_start(request: Json) -> Json:
         sweep(root)
         # 1. No more than the session may have running at once.
         states = [task_state(os.path.join(root, name), 0) for name in numbered(root)]
-        if sum(task["state"] == "running" for task in states) >= request["max"]:
+        if sum(task["state"] == RUNNING for task in states) >= request["max"]:
             raise ValueError(
                 f"this session already has {request['max']} background tasks running; "
                 "wait for one to end or stop one"
             )
         # 2. Of the ones that ended, only the last ones are kept.
-        ended = [task["id"] for task in states if task["state"] != "running"]
+        ended = [task["id"] for task in states if task["state"] != RUNNING]
         for name in ended[:-KEPT_TASKS]:
             shutil.rmtree(os.path.join(root, name), ignore_errors=True)
         # 3. The folder of the task, whole from the start: the next number.
@@ -451,7 +453,7 @@ def task_state(folder: str, lines: int) -> Json:
         limit = (get(folder, "started") or 0) + (get(folder, "seconds") or 0) + GRACE_SECONDS
         watcher = get(folder, "watcher")
         running = time.time() < limit and (watcher is None or alive(watcher))
-        ended = {"reason": "running" if running else "lost", "code": None}
+        ended = {"reason": RUNNING if running else LOST, "code": None}
     return {
         "id": os.path.basename(folder),
         "command": get(folder, "command"),
@@ -476,9 +478,9 @@ def task_list(request: Json) -> Json:
 def task_stop(request: Json) -> Json:
     folder = task_folder(request["folder"], request["id"])
     # Only a task that still runs is stopped.
-    if task_state(folder, 0)["state"] == "running":
+    if task_state(folder, 0)["state"] == RUNNING:
         # 1. Say why first: the watcher will not write over it.
-        put(folder, "exit", {"reason": "stopped", "code": None}, once=True)
+        put(folder, "exit", {"reason": STOPPED, "code": None}, once=True)
         # 2. Then kill the command and all it started.
         with contextlib.suppress(ProcessLookupError, TypeError):
             os.killpg(get(folder, "pid"), signal.SIGKILL)

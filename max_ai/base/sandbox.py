@@ -16,6 +16,7 @@ import shlex
 import typing as t
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from enum import Enum
 
 from pydantic import BaseModel
 
@@ -38,6 +39,16 @@ class CommandResult:
     timed_out: bool = False
 
 
+class TaskStatus(str, Enum):
+    """How a background task is."""
+
+    RUNNING = "running"
+    DONE = "done"  # it ended by itself
+    CAP = "cap"  # ended at the time limit
+    STOPPED = "stopped"  # someone stopped it
+    LOST = "lost"  # not running, and it never said how it ended
+
+
 @dataclass(frozen=True)
 class TaskState:
     """What is known of a background task."""
@@ -45,7 +56,7 @@ class TaskState:
     id: str
     command: str
     started: float  # when it was launched, seconds since 1970
-    state: str  # running, done, cap, stopped or lost
+    state: TaskStatus
     code: int | None  # its exit code, when it ended by itself
     output: str  # the last lines it printed
 
@@ -154,7 +165,9 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
         answer = await self._run(
             "task_list", folder=str(self.layout.tasks / session_id), id=task_id, lines=lines
         )
-        return [TaskState(**task) for task in answer["tasks"]]
+        return [
+            TaskState(**{**task, "state": TaskStatus(task["state"])}) for task in answer["tasks"]
+        ]
 
     async def stop_task(self, session_id: str, task_id: str) -> None:
         """Stop a background task of the session and all it started. One

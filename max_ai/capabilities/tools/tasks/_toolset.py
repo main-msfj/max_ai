@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import typing as t
 
-from ....base.sandbox import TaskState
+from ....base.sandbox import TaskState, TaskStatus
 from ....base.tools import CoreTool, ToolContext
 from ....errors.sandbox import SandboxError
 from ....types.tool_call import ToolCallRecord, ToolResult
@@ -25,9 +25,9 @@ class TaskOutputTool(CoreTool):
     COMMAND_CHARS: t.ClassVar[int] = 80  # of a command, in the list
     NONE: t.ClassVar[str] = "There are no background tasks in this session."
     # How a task that did not end by itself is told to the model.
-    STATES: t.ClassVar[dict[str, str]] = {
-        "cap": "stopped at the time limit",
-        "lost": "lost: it is not running and never said how it ended",
+    STATES: t.ClassVar[dict[TaskStatus, str]] = {
+        TaskStatus.CAP: "stopped at the time limit",
+        TaskStatus.LOST: "lost: it is not running and never said how it ended",
     }
 
     sandbox = True  # the tasks live in the sandbox
@@ -70,7 +70,7 @@ class TaskOutputTool(CoreTool):
 
         # 2. The ones that ended leave the context: the model has seen them now.
         for task in tasks:
-            if task.state != "running":
+            if task.state is not TaskStatus.RUNNING:
                 ctx.tasks.pop(task.id, None)
 
         # 3. One task whole, or one line for each.
@@ -83,7 +83,7 @@ class TaskOutputTool(CoreTool):
     @classmethod
     def state(cls, task: TaskState) -> str:
         """How a task is, in words: ``task 2: done, exit code 0``."""
-        said = cls.STATES.get(task.state, task.state)
+        said = cls.STATES.get(task.state, task.state.value)
         code = f", exit code {task.code}" if task.code is not None else ""
         return f"task {task.id}: {said}{code}"
 
@@ -135,7 +135,7 @@ class StopTaskTool(CoreTool):
         # 1. Only a task that still runs is stopped; then read how it is left.
         try:
             (before,) = await sandbox.tasks(tool_ctx.session_id, task_id, lines=0)
-            if before.state == "running":
+            if before.state is TaskStatus.RUNNING:
                 await sandbox.stop_task(tool_ctx.session_id, task_id)
             (task,) = await sandbox.tasks(tool_ctx.session_id, task_id, lines=0)
         except (SandboxError, ValueError) as error:
@@ -146,5 +146,5 @@ class StopTaskTool(CoreTool):
 
         # 3. Stopped now, or it had ended before by itself.
         state = TaskOutputTool.state(task)
-        text = state if before.state == "running" else self.ENDED.format(state=state)
+        text = state if before.state is TaskStatus.RUNNING else self.ENDED.format(state=state)
         return ToolResult.success_result(tool_request.id, text)

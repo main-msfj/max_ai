@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from max_ai.base import sandbox as host
+from max_ai.base.layout import SCRIPT
 from max_ai.capabilities.sandbox.local import LocalSandbox
 from max_ai.config import setting
 from max_ai.errors.sandbox import SandboxError
@@ -200,3 +202,11 @@ async def test_a_task_may_start_in_a_folder_that_is_not_there_yet(tmp_path):
     folder = Path(str(sandbox.layout.tasks)) / "s1" / "1"
     assert await ended(folder) == {"reason": "done", "code": 0}
     assert (folder / "output").read_text().strip() == str(tmp_path / "new" / "folder")
+
+
+def test_the_script_and_the_host_name_the_same_states():
+    # The script cannot import the host's enum: its own words must be the same.
+    script: dict = {}
+    exec(compile(SCRIPT, "script.py", "exec"), {"__name__": "script"}, script)
+    names = [status.name for status in host.TaskStatus]
+    assert {name: script[name] for name in names} == {s.name: s.value for s in host.TaskStatus}

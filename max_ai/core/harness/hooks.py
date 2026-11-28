@@ -5,7 +5,7 @@ import os
 import typing as t
 
 from ...base.loop import AnyClient, LoopHook, LoopState
-from ...base.sandbox import SandboxCore
+from ...base.sandbox import SandboxCore, TaskStatus
 from ...base.tools import CoreTool, ToolContext
 from ...capabilities.mcp import MCPClientManager
 from ...capabilities.memory import Memory
@@ -138,7 +138,7 @@ class HarnessLoopHook(LoopHook):
         notes: list[str] = []
         for task_id, command in list(ctx.tasks.items()):
             task = known.get(task_id)
-            if task is not None and task.state == "running":
+            if task is not None and task.state is TaskStatus.RUNNING:
                 continue
             del ctx.tasks[task_id]
             if task is None:
