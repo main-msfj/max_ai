@@ -210,3 +210,34 @@ def test_the_script_and_the_host_name_the_same_states():
     exec(compile(SCRIPT, "script.py", "exec"), {"__name__": "script"}, script)
     names = [status.name for status in host.TaskStatus]
     assert {name: script[name] for name in names} == {s.name: s.value for s in host.TaskStatus}
+
+
+async def test_closing_stops_the_tasks_of_every_session(tmp_path, monkeypatch):
+    sandbox = await box(tmp_path)
+    calls: list[str] = []
+    run = sandbox._run
+
+    async def counted(op, data=None, **request):
+        calls.append(op)
+        return await run(op, data, **request)
+
+    monkeypatch.setattr(sandbox, "_run", counted)
+    # 1. None was started from here: the sandbox is not asked.
+    await sandbox.stop_tasks()
+    assert calls == []
+    # 2. The ones that run are stopped in every session; one that ended stays as it ended.
+    marker = tmp_path / "late"
+    await sandbox.start_task("s1", f"(sleep 1; touch {marker}) & sleep 30", str(tmp_path))
+    await sandbox.start_task("s1", "exit 5", str(tmp_path))
+    await sandbox.start_task("s2", "sleep 30", str(tmp_path))
+    await ended(Path(str(sandbox.layout.tasks)) / "s1" / "2")
+    await sandbox.stop_tasks()
+    first, second = await sandbox.tasks("s1")
+    assert (first.state, second.state, second.code) == ("stopped", "done", 5)
+    assert (await sandbox.tasks("s2"))[0].state == "stopped"
+    await asyncio.sleep(1.2)
+    assert not marker.exists()
+    # 3. Nothing is left to stop: a second time does not ask again.
+    calls.clear()
+    await sandbox.stop_tasks()
+    assert calls == []

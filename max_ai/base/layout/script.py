@@ -487,6 +487,17 @@ def task_stop(request: Json) -> Json:
     return {}
 
 
+def task_stop_all(request: Json) -> Json:
+    """Stop every task still running, of every session."""
+    root: str = request["folder"]
+    sessions = sorted(os.listdir(root)) if os.path.isdir(root) else []
+    for session in sessions:
+        folder = os.path.join(root, session)
+        for name in numbered(folder):
+            task_stop({"folder": folder, "id": name})
+    return {}
+
+
 OPERATIONS: dict[str, t.Callable[[Json], Json]] = {
     "create": create,
     "settings": settings,
@@ -498,6 +509,7 @@ OPERATIONS: dict[str, t.Callable[[Json], Json]] = {
     "task_start": task_start,
     "task_list": task_list,
     "task_stop": task_stop,
+    "task_stop_all": task_stop_all,
 }
 
 

@@ -81,6 +81,7 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
         # Set by bind(): whose machine this is and what its commands see.
         self.identifier: str | None = None
         self.variables: dict[str, str] = {}
+        self._started_tasks = False  # a background task was started from here
 
     # -------- EACH PROVIDER ------------------------------------------------------
     @abstractmethod
@@ -154,6 +155,7 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
             command=command, cwd=cwd, seconds=setting.harness_task_seconds,
             max=setting.harness_task_max, limit=setting.harness_task_output_chars,
         )
+        self._started_tasks = True
         return answer["id"]
 
     async def tasks(
@@ -174,6 +176,16 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
         that already ended stays as it ended."""
         validate_id("session_id", session_id)
         await self._run("task_stop", folder=str(self.layout.tasks / session_id), id=task_id)
+
+    async def stop_tasks(self) -> None:
+        """Stop every background task this sandbox started and that still
+        runs, of every session. Called before the sandbox is closed."""
+        # 1. None was started from here: the sandbox is not woken up to ask.
+        if not self._started_tasks:
+            return
+        # 2. One call stops them all.
+        await self._run("task_stop_all", folder=str(self.layout.tasks))
+        self._started_tasks = False
 
     async def outdated_skills(self, wanted: dict[str, str]) -> list[str]:
         """The skills of ``wanted`` (name → hash or commit) that are not
