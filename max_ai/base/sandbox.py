@@ -121,6 +121,17 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
         )
         return answer["path"]
 
+    async def start_task(self, session_id: str, command: str, cwd: str) -> str:
+        """Start ``command`` as a background task of the session and return
+        its id. It runs inside the sandbox for at most ``harness_task_seconds``,
+        whatever happens to this process."""
+        validate_id("session_id", session_id)
+        answer = await self._run(
+            "task_start", folder=str(self.layout.tasks / session_id),
+            command=command, cwd=cwd, seconds=setting.harness_task_seconds,
+        )
+        return answer["id"]
+
     async def outdated_skills(self, wanted: dict[str, str]) -> list[str]:
         """The skills of ``wanted`` (name → hash or commit) that are not
         installed, whose key in ``setting.json`` is another one, or whose

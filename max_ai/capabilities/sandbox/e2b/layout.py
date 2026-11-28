@@ -159,11 +159,13 @@ class E2BSandbox(SandboxCore):
 
     async def prepare(self) -> None:
         """Create ``.agent/`` as root; the model's user may write only the
-        workspace, the memory and tmp."""
+        workspace, the memory, tmp and the tasks."""
         layout = self.layout
         await self._run(
             "create", **layout.skeleton(),
-            open=[str(layout.workspace), str(layout.tmp), str(layout.memory)],
+            open=[
+                str(layout.workspace), str(layout.tmp), str(layout.memory), str(layout.tasks),
+            ],
         )
 
     async def close(self) -> None:

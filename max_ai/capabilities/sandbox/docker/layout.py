@@ -148,7 +148,7 @@ class DockerSandbox(SandboxCore):
 
     async def prepare(self) -> None:
         """Create ``.agent/`` as the harness's user; the model's user may
-        write only the workspace, the memory and tmp."""
+        write only the workspace, the memory, tmp and the tasks."""
         layout = self.layout
         # 1. The volume must be root's: else the model could swap ``.agent/`` whole.
         owner = await self.execute_command(f"stat -c %u {HOME}", harness=True)
@@ -157,10 +157,12 @@ class DockerSandbox(SandboxCore):
                 f"{HOME} belongs to user {owner.stdout.strip() or '?'} in this image; it must "
                 "not exist in the image, so the volume mounted there belongs to root"
             )
-        # 2. The folders, and the three the model's user writes.
+        # 2. The folders, and the four the model's user writes.
         await self._run(
             "create", **layout.skeleton(),
-            open=[str(layout.workspace), str(layout.tmp), str(layout.memory)],
+            open=[
+                str(layout.workspace), str(layout.tmp), str(layout.memory), str(layout.tasks),
+            ],
         )
 
     async def close(self) -> None:

@@ -16,6 +16,8 @@ import hashlib
 import json
 import os
 import shutil
+import signal
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -244,8 +246,63 @@ def sweep(folder):
                 shutil.rmtree(leftover) if os.path.isdir(leftover) else os.unlink(leftover)
 
 
+def put(folder, name, value):
+    """Write one small file of a task whole: under another name, then renamed."""
+    temp = os.path.join(folder, INCOMING + name)
+    with open(temp, "w", encoding="utf-8") as file:
+        file.write(json.dumps(value))
+    os.replace(temp, os.path.join(folder, name))
+
+
+def watch(folder, command, cwd, seconds):
+    """Stays beside one background task: runs it, ends it at the cap and
+    writes how it ended."""
+    with open(os.path.join(folder, "output"), "wb") as output:
+        # 1. The command in its own group: killing the group kills all it started.
+        process = subprocess.Popen(
+            ["bash", "-c", command], cwd=cwd, stdin=subprocess.DEVNULL,
+            stdout=output, stderr=subprocess.STDOUT, start_new_session=True,
+        )
+        put(folder, "pid", process.pid)
+        # 2. It ends by itself, or the cap ends it.
+        try:
+            code, reason = process.wait(seconds), "done"
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+            code, reason = None, "cap"
+    # 3. How it ended.
+    put(folder, "exit", {"reason": reason, "code": code})
+
+
+def task_start(request):
+    # 1. The folder of the task: the next number of its session.
+    root = request["folder"]
+    os.makedirs(root, exist_ok=True)
+    with locked(os.path.join(root, ".lock")):
+        number = 1 + max((int(name) for name in os.listdir(root) if name.isdigit()), default=0)
+        folder = os.path.join(root, str(number))
+        os.mkdir(folder)
+    put(folder, "command", request["command"])
+    put(folder, "started", time.time())
+
+    # 2. A copy of this process stays to watch; the call itself answers and ends.
+    if os.fork() == 0:
+        try:
+            os.setsid()
+            # Nothing of the call stays open, or whoever called would wait for it.
+            null = os.open(os.devnull, os.O_RDWR)
+            for stream in (0, 1, 2):
+                os.dup2(null, stream)
+            watch(folder, request["command"], request["cwd"], request["seconds"])
+        finally:
+            os._exit(0)
+    return {"id": str(number)}
+
+
 OPERATIONS = {"create": create, "settings": settings, "upload": upload, "install": install,
-              "hashes": hashes, "permit": permit, "unpermit": unpermit}
+              "hashes": hashes, "permit": permit, "unpermit": unpermit,
+              "task_start": task_start}
 
 
 def main():
