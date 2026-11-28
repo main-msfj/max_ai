@@ -29,6 +29,8 @@ _client: dict[str, t.Any] = {
     "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
     "fallback_models": ["openai/gpt-6-luna", "anthropic/claude-haiku-5.5"],
     "app_name": "bookkeeper",
+    # Claude uses the provider's cache only when asked; other models ignore this.
+    "options": {"cache_control": {"type": "ephemeral"}},
 }
 
 # How it behaves, in a few lines: the harness allows no more.
