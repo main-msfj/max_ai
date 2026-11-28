@@ -298,6 +298,7 @@ and `max_output_tokens` you pass are replaced by its own defaults, with a warnin
 | `save_memory` | with a memory that is not `read_only` |
 | `read_skill` | with skills |
 | `enter_worktree`, `exit_worktree` | when `bash` is in the toolset |
+| `task_output`, `stop_task` | when `bash` is in the toolset: they look at its [background tasks](#background-tasks) and stop one |
 | `search_tools`, `call_tool` | when deferred tools (`deferred=True`) take 5,000 tokens or more; below that they are loaded directly |
 
 A plan the agent writes with `write_todos` waits for the user: it becomes the
@@ -441,7 +442,7 @@ process, not in the sandbox.
 
 Commands, file tools, skills and memory live in the user's sandbox, in an
 `.agent/` folder with `setting.json`, `skills/`, `workspace/<session>/`,
-`tmp/<session>/` and `memory/`.
+`tmp/<session>/`, `memory/` and `tasks/<session>/`.
 
 ```python
 from max_ai.capabilities.sandbox.local import LocalSandbox
@@ -465,7 +466,7 @@ Security:
 - **`DockerSandbox`** runs one container per user (`docker-sandbox-<user_id>`)
   with a volume of the same name. The model's commands run as uid 1000 with
   `--cap-drop ALL`, `no-new-privileges` and a read-only root filesystem; they can
-  write only the workspace, tmp and memory, not `setting.json` or the skills.
+  write only the workspace, tmp, memory and tasks, not `setting.json` or the skills.
   With no `networks` there is no network; `networks=[...]` is an allowlist of
   domains reached through a proxy (HTTP(S) clients that honour `HTTPS_PROXY`).
   An open domain such as github.com is also a way to send files out. Limits:
@@ -474,6 +475,44 @@ Security:
   without sudo, with the same network allowlist model.
 - Only variables named in `extra_env` (and the skills' `skill_env`) reach the
   commands.
+
+### Background tasks
+
+A command that takes long does not have to hold the turn. The model calls
+`bash(command, background=true)`: the command starts inside the sandbox and
+the call returns at once with a task id, so the agent goes on with the
+conversation.
+
+| Tool | What it does | Asks the user |
+|---|---|---|
+| `bash(command, background=true)` | starts the command and returns its task id | as any bash command |
+| `task_output(task_id)` | how a task is and its last lines; without an id, the list | no |
+| `stop_task(task_id)` | stops a task and everything it started | no |
+
+A small process stays beside each task inside the sandbox: it applies the time
+limit, keeps what the task prints and writes how it ended, so none of it
+depends on the agent's process staying alive. Its record is the folder
+`.agent/tasks/<session>/<id>/`.
+
+- **How it ends:** `done` (by itself, with its exit code), `cap` (stopped at
+  `HARNESS_TASK_SECONDS`), `stopped` (by `stop_task` or by closing the agent)
+  or `lost` (it is not running and never said how it ended).
+- **The model is told:** before each model call the harness checks the tasks
+  the conversation still expects and adds one `[harness]` message for each
+  that ended, with how it ended and its last lines. It is told at the next
+  model call, not while the agent sits idle.
+- **Limits:** `HARNESS_TASK_MAX` tasks at once per session; the output keeps
+  its beginning and its end up to `HARNESS_TASK_OUTPUT_CHARS`; the last ten
+  tasks that ended are kept, older ones are removed when a new one starts.
+- **Closing:** `agent.close()`, which the CLI and the web UI call when they
+  end, stops the tasks still running. A process killed outright cannot do
+  that: its tasks end by themselves or at the time limit.
+- A command that waits (no `background`) runs as before and leaves no folder.
+  Sending a command that already runs to the background is not built yet.
+
+In the CLI a background command has its own tag, the line at the bottom counts
+the tasks that run, and `/tasks` lists them. `example-deploy/runner/` is an
+agent to see it working.
 
 ### Skills
 
@@ -565,6 +604,9 @@ ones the code uses today:
 | `OPENAI_API_KEY`, `OPENROUTER_API_KEY` | | client keys |
 | `TOOL_TIMEOUT_SECONDS` | 360 | most one tool call may run |
 | `HARNESS_SANDBOX_SECONDS` | 600 | idle life of a sandbox; must be at least the tool timeout |
+| `HARNESS_TASK_SECONDS` | 600 | most a background task may run; no longer than a sandbox lives |
+| `HARNESS_TASK_MAX` | 3 | background tasks one session may have running at once |
+| `HARNESS_TASK_OUTPUT_CHARS` | 100000 | most that is kept of what a background task prints |
 | `HARNESS_RETRY_ATTEMPTS` | 3 | tries per model call |
 | `HARNESS_MAX_ITERATIONS` | 50 | model calls one turn may make |
 | `HARNESS_PARALLEL_TOOLS` | 8 | read-only calls of one reply that run at once |
@@ -619,7 +661,7 @@ max_ai/
     sandbox/        local, docker, e2b
     skills/         local, github
     memory/         Memory (Markdown files in the sandbox)
-    tools/          bash, files, ask_user, todos, worktree, search/call_tool, read_skill, save_memory
+    tools/          bash, tasks, files, ask_user, todos, worktree, search/call_tool, read_skill, save_memory
     stacks/         prompt layers
     mcp/            MCP client
     middleware/     logging, budget, tracing
@@ -657,8 +699,9 @@ Planned, not started; order inside a group is not a commitment.
 
 - **Multi-agent:** an agent starts other agents and gathers their work, on
   the stateless `Agent`.
-- **Background tasks:** work that keeps running while the conversation goes
-  on, and reports when it ends.
+- **Send a running command to the background:** today only the model decides,
+  when it starts the command. Every command would start with its own
+  watcher, so that the user can stop waiting for one without restarting it.
 - **A2A:** talk to agents of other frameworks over the Agent2Agent protocol,
   as a client and as a server.
 - **Always-on agent:** an agent that stays up and wakes on a schedule or an
