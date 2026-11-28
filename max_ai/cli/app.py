@@ -174,6 +174,7 @@ class MaxAIApp(App[None]):
         Binding("ctrl+t", "toggle_thinking", "Thinking", priority=True),
         Binding("ctrl+o", "toggle_verbose", "Verbose", priority=True),
         Binding("ctrl+b", "toggle_sidebar", "Workspace"),
+        Binding(ToolBlock.SEND_KEY, "send_to_background", "Background", priority=True),
         Binding("ctrl+l", "clear_chat", "Clear screen"),
         Binding("pageup", "scroll_transcript(-1)", "Scroll up", show=False),
         Binding("pagedown", "scroll_transcript(1)", "Scroll down", show=False),
@@ -375,6 +376,9 @@ class MaxAIApp(App[None]):
         line.append(f" · ↓ {self._turn_tokens:,} tokens · ", style=DIM)
         line.append("esc", style=f"bold {MUTED}")
         line.append(" to interrupt", style=DIM)
+        # A command is waited for: the button and the key that send it to the background.
+        if any(block.can_send for block in self._tools.values()):
+            line.append_text(ToolBlock.send_hint())
         status.update(line)
 
     def _refresh_usage(self) -> None:
@@ -386,9 +390,15 @@ class MaxAIApp(App[None]):
         line.append(self._agent_name, style=f"bold {PRIMARY}")
         line.append(" · ", style=DIM)
         line.append(self.agent.client.model, style=MODEL)
-        line.append(f" · ↑ {_k(self._tokens_input)} ↓ {_k(self._tokens_output)}", style=MUTED)
+        # Named a total: every call sends the whole conversation again, so it
+        # grows far past the window beside it.
+        line.append(" · total ", style=DIM)
+        line.append(f"↑ {_k(self._tokens_input)} ↓ {_k(self._tokens_output)}", style=MUTED)
         # Always shown: a zero says the provider is not reusing the prompt.
         line.append(f" · cached {_k(self._tokens_cached)}", style=DIM)
+        if self._tokens_input and self._tokens_cached:
+            share = round(100 * self._tokens_cached / self._tokens_input)
+            line.append(f" ({share}%)", style=DIM)
         # 2. The window as the last model call shared it out.
         parts = self.context.context
         window = (parts.window if parts else 0) or self.agent.client.config.max_context_window
@@ -506,6 +516,11 @@ class MaxAIApp(App[None]):
         elif future is not None and not future.done():
             self._interrupting = True
             future.cancel()
+
+    def action_send_to_background(self) -> None:
+        # Only a command the turn waits for can go; it goes on and the turn too.
+        if any(block.can_send for block in self._tools.values()):
+            self.agent.send_to_background(self.context)
 
     async def action_submit_prompt(self) -> None:
         waiting = self._request_future is not None and not self._request_future.done()
@@ -716,6 +731,7 @@ class MaxAIApp(App[None]):
             ("ctrl+t", "thinking on/off"),
             ("ctrl+o", "verbose runtime events on/off"),
             ("ctrl+b", "workspace"),
+            (ToolBlock.SEND_KEY, "send the running command to the background"),
             ("ctrl+l", "clear the screen"),
             ("pgup/pgdn", "scroll the conversation"),
             ("@path", "attach a workspace file"),

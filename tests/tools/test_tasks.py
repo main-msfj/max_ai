@@ -65,7 +65,9 @@ async def test_a_background_command_returns_at_once_with_its_task(sandbox, ctx):
 async def test_a_command_that_waits_leaves_no_task(sandbox, ctx):
     await call(sandbox, ctx, "bash", command="echo hi")
     await call(sandbox, ctx, "bash", command="echo hi", background=False)
-    assert ctx.tasks == {} and not (Path(str(sandbox.layout.tasks)) / "s1").exists()
+    # It ran as a task does, and nothing of it is left.
+    left = [p.name for p in (Path(str(sandbox.layout.tasks)) / "s1").iterdir() if p.is_dir()]
+    assert ctx.tasks == {} and left == []
     assert (await call(sandbox, ctx, "task_output")).result == TaskOutputTool.NONE
 
 

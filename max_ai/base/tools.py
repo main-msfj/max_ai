@@ -5,6 +5,7 @@ Defines base classes and interfaces that enable agents
 to execute external actions (e.g., APIs, file I/O, services).
 """
 
+import asyncio
 import re
 import typing as t
 from abc import ABC, abstractmethod
@@ -31,7 +32,9 @@ class ToolContext:
     it may use and how to tell the outside what happens. The dispatcher
     builds it; who it is for comes from ``run_context``."""
 
-    __slots__ = ("run_context", "sandbox", "emit_event", "deps", "cancellation", "skills")
+    __slots__ = (
+        "run_context", "sandbox", "emit_event", "deps", "cancellation", "skills", "to_background",
+    )
 
     def __init__(
         self,
@@ -48,6 +51,7 @@ class ToolContext:
         self.deps = deps or {}  # the developer's own objects
         self.cancellation = cancellation  # for tools that leave something running
         self.skills = tuple(skills)  # the skills loaded for this agent: only these are read
+        self.to_background = asyncio.Event()  # set: stop waiting, what runs goes on by itself
 
     @property
     def cancelled(self) -> bool:

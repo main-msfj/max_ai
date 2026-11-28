@@ -6,6 +6,7 @@ import re
 import time
 import typing as t
 
+from rich.style import Style
 from rich.text import Text
 from textual import events
 from textual.containers import Horizontal, Vertical
@@ -832,6 +833,9 @@ class ToolBlock(Vertical):
     CARD_LINES = 30  # lines of a change shown when it asks to run
     QUIET: t.ClassVar[frozenset[str]] = frozenset({"read_file"})  # output counted, not shown
     OPEN: t.ClassVar[str] = " · click to open"
+    SEND_KEY: t.ClassVar[str] = "ctrl+g"  # sends the command that runs to the background
+    SEND: t.ClassVar[str] = " ↗ send to background "  # a button: a click does what the key does
+    SENT: t.ClassVar[str] = "sent to the background as task {id}"
 
     def __init__(self, tool_name: str, parameters: dict[str, t.Any]) -> None:
         super().__init__()
@@ -860,6 +864,28 @@ class ToolBlock(Vertical):
     def is_bash(self) -> bool:
         return self.tool_name == BASH
 
+    @property
+    def can_send(self) -> bool:
+        """A command the turn waits for: it can be sent to the background."""
+        asked = bool(self.parameters.get("background"))
+        return self.is_bash and self.running and not self._waiting and not asked
+
+    @classmethod
+    def send_hint(cls) -> Text:
+        """The button that sends a waited command to the background, and its key."""
+        click = Style.from_meta({"@click": "app.send_to_background"})
+        button = Style(color=TEXT, bgcolor=ELEMENT, bold=True, italic=False)
+        hint = Text(" · ", style=DIM)
+        hint.append(cls.SEND, style=button + click)
+        return hint.append(f" {cls.SEND_KEY}", style=Style(color=DIM, italic=False))
+
+    @property
+    def sent(self) -> str | None:
+        """The task this command became when the user sent it to the background."""
+        if self.result is None or not self.is_bash or self.parameters.get("background"):
+            return None
+        return self.result.metadata.get("task_id") if self.result.success else None
+
     def _part(self, name: str) -> Static | None:
         found = self.query(f".{name}")
         return found.first(Static) if found else None
@@ -875,7 +901,7 @@ class ToolBlock(Vertical):
         else:
             dot.append("◆ ", style=f"bold {ERROR}")
         # A command left running says so beside its name, where it is seen.
-        background = self.is_bash and bool(self.parameters.get("background"))
+        background = self.is_bash and (bool(self.parameters.get("background")) or bool(self.sent))
         summary = tool_summary(self.tool_name, {**self.parameters, "background": False})
         if len(summary) > 90:
             summary = summary[:87] + "…"
@@ -1022,7 +1048,9 @@ class ToolBlock(Vertical):
         if self.result is None:
             if self._waiting:
                 return Text("OUT  waiting for approval…", style=WARNING)
-            return Text("OUT  running…", style=f"italic {DIM}")
+            line = Text("OUT  running…", style=f"italic {DIM}")
+            # A command that is waited for: the button and the key that let it go.
+            return line.append_text(self.send_hint()) if self.can_send else line
         if self._interrupted:
             return self.rows("OUT", [Text("cancelled", style=MUTED)])
         # 2. A failure: what went wrong, in red.
@@ -1073,7 +1101,8 @@ class ToolBlock(Vertical):
         text = result_text(self.result)
         if len(text) > self.MAX_OUTPUT:
             text = text[: self.MAX_OUTPUT] + f"\n… ({len(text) - self.MAX_OUTPUT:,} more chars)"
-        self._output = text
+        # Sent to the background: the long text is for the model, here one line says it.
+        self._output = text if self.sent is None else self.SENT.format(id=self.sent)
         self._redraw()
 
     def set_expanded(self, expanded: bool = True) -> None:

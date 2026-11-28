@@ -196,6 +196,7 @@ class Agent(ComponentBase[AgentSpec]):
             weakref.WeakValueDictionary()
         )
         self._boxes: dict[str, SandboxCore] = {}  # closed when idle, and by close()
+        self._dispatchers: dict[tuple[str, str], ToolDispatcher] = {}  # of the turns running now
         self._used: dict[str, float] = {}  # when each user's sandbox was last used
         self._closed = False
 
@@ -362,14 +363,27 @@ class Agent(ComponentBase[AgentSpec]):
                 source=self.name, error_message=str(error), error_type=type(error).__name__
             )
             raise
-        # 4. The loop.
+        # 4. The loop; while it goes, its dispatcher can be told from outside.
         events = self.reasoning.run(
             ctx, prompt, self.client, dispatcher, stream=stream, hook=loop_hook,
             state=state, output_format=self.output_format,
             retry=Harness.retry_rules(self.client.retry),
         )
-        async for event in events:
-            yield event
+        turn = (ctx.user_id, ctx.session_id or ctx.run_id)
+        self._dispatchers[turn] = dispatcher
+        try:
+            async for event in events:
+                yield event
+        finally:
+            self._dispatchers.pop(turn, None)
+
+    def send_to_background(self, ctx: RunContext) -> None:
+        """Stop waiting for the command the turn of ``ctx`` is running: it
+        goes on as a background task and the turn continues. Nothing happens
+        when no turn runs, or it runs no command."""
+        dispatcher = self._dispatchers.get((ctx.user_id, ctx.session_id or ctx.run_id))
+        if dispatcher is not None:
+            dispatcher.send_to_background()
 
     def _lock(self, ctx: RunContext, what: str = "") -> asyncio.Lock:
         """The lock of this user's session, or of ``what`` for the user

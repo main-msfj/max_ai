@@ -94,11 +94,12 @@ Planned, not started. Each one is designed before it is built.
   three at once, the output kept, the model told when one ends, closing
   stops them, and the CLI shows them. Run by a person with the `runner`
   agent and DeepSeek. What is left:
-  - [ ] **Send a command that already runs to the background.** Other
-    harnesses do not restart it: every command is born with its own watcher
-    and "in the foreground" only means the harness waits. Here it means
-    running every bash as a task and removing its folder when it ends while
-    the harness waits.
+  - [x] **Send a command that already runs to the background.** Built on
+    2026-11-28 and run in Local, Docker and E2B. As in other harnesses, it
+    is not started again: every bash runs as a task and "in the foreground"
+    only means the harness waits, removing its folder when it ends.
+    `agent.send_to_background(ctx)`, `ctrl+g` in the CLI, makes the harness
+    stop waiting and the command goes on as one more task.
   - [ ] A task that ends while the agent sits idle is told only at the next
     model call.
   - [ ] A background command that changes a file the model had read does not

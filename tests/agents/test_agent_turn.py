@@ -3,6 +3,8 @@ sandbox made ready once per user, and a rule kept before any turn ran."""
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from max_ai.agents import Agent
@@ -10,7 +12,7 @@ from max_ai.capabilities.sandbox.local import LocalSandbox
 from max_ai.capabilities.skills.local import LocalSkills
 from max_ai.capabilities.tools.bash import BashTool
 from max_ai.core.event_type import FatalErrorEvent
-from max_ai.core.messages import UserMessage
+from max_ai.core.messages import AssistantMessage, ToolCall, UserMessage
 from max_ai.types.run_context import RunContext
 from max_ai.types.tool_call import ToolCallRecord
 from tests.middleware.fakes import FakeClient, say
@@ -189,3 +191,32 @@ async def test_closing_the_agent_stops_the_background_tasks(tmp_path, caplog):
     await agent.close()
     assert ClosedSandbox.closed == ["u", "ana"]
     assert "The background tasks could not be stopped" in caplog.text
+
+
+async def test_a_command_the_turn_waits_for_can_be_sent_to_the_background(tmp_path):
+    (tmp_path / "work").mkdir()
+    command = "sleep 20"
+    asks = AssistantMessage(source="llm", content="", tool_calls=[
+        ToolCall(id="c1", tool_name="bash", parameters={"command": command, "description": "d"})
+    ])
+    agent = Agent("a", "d", "i", FakeClient(asks, say("it goes on")), toolset=[BashTool()],
+                  sandbox=LocalSandbox(str(tmp_path / "work")))
+    ctx = RunContext(user_id="u", session_id="s1")
+    # Nothing runs yet: telling it changes nothing.
+    agent.send_to_background(ctx)
+    await agent.run("wait for it", ctx)
+    await agent.approve(ctx, "c1")
+    # The turn waits for the command until it is told to stop waiting.
+    turn = asyncio.create_task(agent.run(None, ctx))
+    await asyncio.sleep(1)
+    assert not turn.done()
+    agent.send_to_background(ctx)
+    state = await asyncio.wait_for(turn, 10)
+    # The turn went on, and the command is a task the model knows about.
+    assert state.message is not None and state.message.text() == "it goes on"
+    assert ctx.tasks == {"1": command}
+    assert ctx.tool_state.records["c1"].result.result == BashTool.SENT.format(id="1")
+    box = await agent._sandbox(ctx)
+    assert (await box.tasks("s1"))[0].state == "running"
+    await agent.close()
+    assert (await box.tasks("s1"))[0].state == "stopped"

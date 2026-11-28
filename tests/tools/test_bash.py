@@ -1,5 +1,7 @@
 """bash runs commands in the sandbox and starts where the last one ended."""
 
+import asyncio
+import os
 from pathlib import Path
 
 import pytest
@@ -219,3 +221,62 @@ def test_a_check_that_gave_no_answer_changes_nothing():
     # A path the model never read is not taken as told by the sandbox.
     assert BashTool.forget(seen, '{"changed": ["/etc/passwd"], "deleted": []}') == []
     assert seen == {"/w/app.py": "abc"}
+
+
+async def test_a_command_leaves_no_task_behind(sandbox, ctx):
+    await bash(sandbox, ctx, "echo hi")
+    tasks = Path(str(sandbox.layout.tasks)) / "s1"
+    assert [p.name for p in tasks.iterdir() if p.is_dir()] == []
+    # Closing does not have to ask the sandbox: nothing can be running.
+    assert sandbox._started_tasks is False and ctx.tasks == {}
+
+
+async def test_a_command_whose_call_is_cancelled_does_not_stay_running(sandbox, ctx, workspace):
+    call = asyncio.create_task(bash(sandbox, ctx, "echo $$ > pid.txt; sleep 30"))
+    while not (workspace / "pid.txt").exists():
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(0.1)
+    call.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await call
+    # The command is dead and nothing of it is left.
+    with pytest.raises(ProcessLookupError):
+        os.kill(int((workspace / "pid.txt").read_text()), 0)
+    tasks = Path(str(sandbox.layout.tasks)) / "s1"
+    assert [p.name for p in tasks.iterdir() if p.is_dir()] == []
+
+
+async def sent(sandbox, ctx, command, after=0.5):
+    """A bash call that is told to stop waiting ``after`` seconds into it."""
+    record = ToolCallRecord(tool_name="bash", parameters={"command": command, "description": "t"})
+    dispatcher = ToolDispatcher(ToolRegistry([BashTool()]), sandbox, hook=Approves())
+    call = asyncio.create_task(dispatcher.dispatch(record, ctx))
+    await asyncio.sleep(after)
+    dispatcher.send_to_background()
+    return await call
+
+
+async def test_a_command_sent_to_the_background_goes_on_as_a_task(sandbox, ctx, workspace):
+    result = await sent(sandbox, ctx, "echo begin; sleep 1; echo end > done.txt; exit 7")
+    # The call answers at once, and the command is one more task of the session.
+    assert result.success and result.result == BashTool.SENT.format(id="1")
+    assert result.metadata["task_id"] == "1" and ctx.tasks == {"1": "echo begin; sleep 1; echo end > done.txt; exit 7"}
+    assert not (workspace / "done.txt").exists()
+    # It was not started again: it ends by itself, with its own exit code.
+    for _ in range(100):
+        (task,) = await sandbox.tasks("s1", "1")
+        if task.state.value != "running":
+            break
+        await asyncio.sleep(0.05)
+    assert (task.state.value, task.code) == ("done", 7) and task.output == "begin"
+    assert (workspace / "done.txt").exists()
+
+
+async def test_telling_a_command_that_already_ended_changes_nothing(sandbox, ctx):
+    dispatcher = ToolDispatcher(ToolRegistry([BashTool()]), sandbox, hook=Approves())
+    record = ToolCallRecord(tool_name="bash", parameters={"command": "echo hi", "description": "t"})
+    result = await dispatcher.dispatch(record, ctx)
+    # Nothing runs any more: nobody is told, and the next command waits as always.
+    dispatcher.send_to_background()
+    assert result.result == "exit code: 0\nhi" and ctx.tasks == {}
+    assert (await bash(sandbox, ctx, "echo again")).result == "exit code: 0\nagain"

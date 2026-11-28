@@ -78,6 +78,13 @@ class ToolDispatcher:
         self.timeout = timeout  # seconds one call may run
         self.max_parallel = max_parallel  # read-only calls that may run at once
         self._active: set[str] = set()
+        self._running: dict[str, asyncio.Event] = {}  # calls running now: id -> its to_background
+
+    def send_to_background(self) -> None:
+        """Tell the calls running now to stop waiting for what they started:
+        it goes on by itself. Only a tool that can do that listens (bash)."""
+        for told in self._running.values():
+            told.set()
 
     # -------- MANY CALLS ---------------------------------------------------------
     async def dispatch_many(
@@ -372,6 +379,7 @@ class ToolDispatcher:
 
         record.start_execution()
         limit = self.timeout
+        self._running[record.id] = tool_ctx.to_background
         try:
             task = asyncio.create_task(invoke())
             if cancellation_token is not None:
@@ -390,6 +398,8 @@ class ToolDispatcher:
             raise
         except Exception as error:
             result = ToolResult.execution_error(record.id, str(error))
+        finally:
+            self._running.pop(record.id, None)
         return result
 
     def _finish(self, record: ToolCallRecord, result: ToolResult, emit: Emit) -> ToolResult:
