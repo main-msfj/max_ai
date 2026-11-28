@@ -1,3 +1,5 @@
+import asyncio
+
 from max_ai.base.loop import LoopState
 from max_ai.base.tools import ToolContext
 from max_ai.capabilities.memory import Memory
@@ -39,3 +41,47 @@ async def test_the_loop_hook_renews_the_memory_index_after_a_compaction(tmp_path
     await hook.after_compact(ctx, state)
     assert ctx.memory_index == "- fact.md: likes tea"
     assert await HarnessLoopHook().notes(ctx, state) == []
+
+
+async def test_a_background_task_that_ended_is_told_once(tmp_path):
+    sandbox = LocalSandbox(root=str(tmp_path)).bind("u")
+    await sandbox.prepare()
+    hook, state = HarnessLoopHook(sandbox=sandbox), LoopState()
+    ctx = RunContext(user_id="u", session_id="s")
+    ctx.tasks[await sandbox.start_task("s", "sleep 30", str(tmp_path))] = "sleep 30"
+    ctx.tasks[await sandbox.start_task("s", "echo one; echo two; exit 3", str(tmp_path))] = "echo"
+    for _ in range(100):
+        if (await sandbox.tasks("s", "2"))[0].state != "running":
+            break
+        await asyncio.sleep(0.05)
+    # The one that ended is told with how it ended and what it printed; the other stays.
+    assert await hook.notes(ctx, state) == [
+        "Background task 2: done, exit code 3.\nCommand: echo\nIts last lines:\none\ntwo"
+    ]
+    assert ctx.tasks == {"1": "sleep 30"}
+    assert await hook.notes(ctx, state) == []
+    # Stopped from outside, and one whose folder is gone: each told, then forgotten.
+    await sandbox.stop_task("s", "1")
+    ctx.tasks["7"] = "make all"
+    assert await hook.notes(ctx, state) == [
+        "Background task 1: stopped.\nCommand: sleep 30\nIts last lines:\n(it printed nothing)",
+        "Background task 7 is no longer in the sandbox; how it ended was lost.\nCommand: make all",
+    ]
+    assert ctx.tasks == {}
+
+
+async def test_the_sandbox_is_asked_about_tasks_only_when_some_are_pending(tmp_path, caplog):
+    class Counts(LocalSandbox):
+        asked = 0
+
+        async def tasks(self, session_id, task_id=None, lines=20):
+            type(self).asked += 1
+            raise RuntimeError("the sandbox is down")
+
+    hook, state = HarnessLoopHook(sandbox=Counts(str(tmp_path))), LoopState()
+    ctx = RunContext(user_id="u", session_id="s")
+    assert await hook.notes(ctx, state) == [] and Counts.asked == 0
+    # A sandbox that fails does not break the turn, and the task is asked for again.
+    ctx.tasks["1"] = "sleep 30"
+    assert await hook.notes(ctx, state) == [] and await hook.notes(ctx, state) == []
+    assert Counts.asked == 2 and ctx.tasks == {"1": "sleep 30"}
