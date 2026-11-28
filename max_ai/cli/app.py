@@ -376,11 +376,9 @@ class MaxAIApp(App[None]):
         line.append(f" · ↓ {self._turn_tokens:,} tokens · ", style=DIM)
         line.append("esc", style=f"bold {MUTED}")
         line.append(" to interrupt", style=DIM)
-        # A command is waited for: the key that sends it to the background.
+        # A command is waited for: the button and the key that send it to the background.
         if any(block.can_send for block in self._tools.values()):
-            line.append(" · ", style=DIM)
-            line.append(ToolBlock.SEND_KEY, style=f"bold {MUTED}")
-            line.append(ToolBlock.SEND, style=DIM)
+            line.append_text(ToolBlock.send_hint())
         status.update(line)
 
     def _refresh_usage(self) -> None:

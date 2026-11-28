@@ -6,6 +6,7 @@ import re
 import time
 import typing as t
 
+from rich.style import Style
 from rich.text import Text
 from textual import events
 from textual.containers import Horizontal, Vertical
@@ -833,7 +834,7 @@ class ToolBlock(Vertical):
     QUIET: t.ClassVar[frozenset[str]] = frozenset({"read_file"})  # output counted, not shown
     OPEN: t.ClassVar[str] = " · click to open"
     SEND_KEY: t.ClassVar[str] = "ctrl+g"  # sends the command that runs to the background
-    SEND: t.ClassVar[str] = " to send to background"
+    SEND: t.ClassVar[str] = " ↗ send to background "  # a button: a click does what the key does
     SENT: t.ClassVar[str] = "sent to the background as task {id}"
 
     def __init__(self, tool_name: str, parameters: dict[str, t.Any]) -> None:
@@ -868,6 +869,15 @@ class ToolBlock(Vertical):
         """A command the turn waits for: it can be sent to the background."""
         asked = bool(self.parameters.get("background"))
         return self.is_bash and self.running and not self._waiting and not asked
+
+    @classmethod
+    def send_hint(cls) -> Text:
+        """The button that sends a waited command to the background, and its key."""
+        click = Style.from_meta({"@click": "app.send_to_background"})
+        button = Style(color=TEXT, bgcolor=ELEMENT, bold=True, italic=False)
+        hint = Text(" · ", style=DIM)
+        hint.append(cls.SEND, style=button + click)
+        return hint.append(f" {cls.SEND_KEY}", style=Style(color=DIM, italic=False))
 
     @property
     def sent(self) -> str | None:
@@ -1039,12 +1049,8 @@ class ToolBlock(Vertical):
             if self._waiting:
                 return Text("OUT  waiting for approval…", style=WARNING)
             line = Text("OUT  running…", style=f"italic {DIM}")
-            # A command that is waited for: the key that lets it go.
-            if self.can_send:
-                line.append(" · ", style=DIM)
-                line.append(self.SEND_KEY, style=f"bold {MUTED}")
-                line.append(self.SEND, style=DIM)
-            return line
+            # A command that is waited for: the button and the key that let it go.
+            return line.append_text(self.send_hint()) if self.can_send else line
         if self._interrupted:
             return self.rows("OUT", [Text("cancelled", style=MUTED)])
         # 2. A failure: what went wrong, in red.

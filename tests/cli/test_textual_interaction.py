@@ -501,9 +501,13 @@ async def test_ctrl_g_sends_the_command_that_is_waited_for_to_the_background(tmp
         await app._write_event(ToolCallEvent(source="t", tool_call_id="c1", tool_name="bash", parameters=call))
         await pilot.pause(0.2)
         block = app.query_one(ToolBlock)
-        assert block._out().plain == "OUT  running… · ctrl+g to send to background"
+        assert block._out().plain == "OUT  running… ·  ↗ send to background  ctrl+g"
         await pilot.press("ctrl+g")
         assert told == [app.context]
+        # The button in the card does the same, for a terminal that keeps the key.
+        column = block._out().plain.index("send to")
+        await pilot.click(block._part("output"), offset=(column, 1))  # under the line
+        assert told == [app.context, app.context]
         # 3. It went: the card says so in one line, and one line gives its number.
         await app._write_event(ToolCallResponseEvent(
             source="t", tool_call_id="c1",

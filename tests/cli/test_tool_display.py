@@ -73,7 +73,7 @@ def test_a_command_and_what_it_printed_show_a_few_lines_until_opened():
 
     script = "python3 - <<'EOF'\n" + "\n".join(f"step_{n}()" for n in range(8)) + "\nEOF"
     block = ToolBlock("bash", {"command": script, "description": "Run the steps"})
-    assert block._out().plain == "OUT  running… · ctrl+g to send to background"
+    assert block._out().plain == "OUT  running… ·  ↗ send to background  ctrl+g"
     block.result = ToolResult.success_result("c1", "exit code: 3\n" + "\n".join(f"out {n}" for n in range(9)))
     block._output = "\n".join(f"out {n}" for n in range(9))
     assert block._input().plain.splitlines() == [
