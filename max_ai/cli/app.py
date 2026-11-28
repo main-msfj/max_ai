@@ -174,6 +174,7 @@ class MaxAIApp(App[None]):
         Binding("ctrl+t", "toggle_thinking", "Thinking", priority=True),
         Binding("ctrl+o", "toggle_verbose", "Verbose", priority=True),
         Binding("ctrl+b", "toggle_sidebar", "Workspace"),
+        Binding(ToolBlock.SEND_KEY, "send_to_background", "Background", priority=True),
         Binding("ctrl+l", "clear_chat", "Clear screen"),
         Binding("pageup", "scroll_transcript(-1)", "Scroll up", show=False),
         Binding("pagedown", "scroll_transcript(1)", "Scroll down", show=False),
@@ -375,6 +376,11 @@ class MaxAIApp(App[None]):
         line.append(f" · ↓ {self._turn_tokens:,} tokens · ", style=DIM)
         line.append("esc", style=f"bold {MUTED}")
         line.append(" to interrupt", style=DIM)
+        # A command is waited for: the key that sends it to the background.
+        if any(block.can_send for block in self._tools.values()):
+            line.append(" · ", style=DIM)
+            line.append(ToolBlock.SEND_KEY, style=f"bold {MUTED}")
+            line.append(ToolBlock.SEND, style=DIM)
         status.update(line)
 
     def _refresh_usage(self) -> None:
@@ -506,6 +512,11 @@ class MaxAIApp(App[None]):
         elif future is not None and not future.done():
             self._interrupting = True
             future.cancel()
+
+    def action_send_to_background(self) -> None:
+        # Only a command the turn waits for can go; it goes on and the turn too.
+        if any(block.can_send for block in self._tools.values()):
+            self.agent.send_to_background(self.context)
 
     async def action_submit_prompt(self) -> None:
         waiting = self._request_future is not None and not self._request_future.done()
@@ -716,6 +727,7 @@ class MaxAIApp(App[None]):
             ("ctrl+t", "thinking on/off"),
             ("ctrl+o", "verbose runtime events on/off"),
             ("ctrl+b", "workspace"),
+            (ToolBlock.SEND_KEY, "send the running command to the background"),
             ("ctrl+l", "clear the screen"),
             ("pgup/pgdn", "scroll the conversation"),
             ("@path", "attach a workspace file"),

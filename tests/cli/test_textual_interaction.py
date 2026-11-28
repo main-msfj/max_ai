@@ -480,3 +480,41 @@ async def test_the_background_tasks_are_counted_listed_and_told_when_they_end(tm
         await pilot.pause(0.3)
         lines = [str(line.render()) for line in app.query(NoteLine)]
         assert "◇ Background task 1: stopped." in lines and "running" not in usage()
+
+
+@pytest.mark.asyncio
+async def test_ctrl_g_sends_the_command_that_is_waited_for_to_the_background(tmp_path, monkeypatch):
+    from max_ai.capabilities.tools.bash import BashTool
+    from max_ai.cli.blocks import NoteLine, ToolBlock
+    from max_ai.core.event_type import ToolCallEvent, ToolCallResponseEvent
+    from max_ai.types.tool_call import ToolResult
+
+    app = make_app(tmp_path)
+    told: list[RunContext] = []
+    monkeypatch.setattr(app.agent, "send_to_background", told.append)
+    async with app.run_test() as pilot:
+        # 1. Nothing runs: the key does nothing.
+        await pilot.press("ctrl+g")
+        assert told == []
+        # 2. A command is waited for: its card names the key, and the key tells the agent.
+        call = {"command": "pytest -q", "description": "Run the tests"}
+        await app._write_event(ToolCallEvent(source="t", tool_call_id="c1", tool_name="bash", parameters=call))
+        await pilot.pause(0.2)
+        block = app.query_one(ToolBlock)
+        assert block._out().plain == "OUT  running… · ctrl+g to send to background"
+        await pilot.press("ctrl+g")
+        assert told == [app.context]
+        # 3. It went: the card says so in one line, and one line gives its number.
+        await app._write_event(ToolCallResponseEvent(
+            source="t", tool_call_id="c1",
+            tool_result=ToolResult.success_result("c1", BashTool.SENT.format(id="1"), metadata={"task_id": "1"}),
+        ))
+        await pilot.pause(0.2)
+        assert "Bash  ↗ background  Run the tests" in block._title().plain
+        assert "sent to the background as task 1" in block._out().plain
+        assert "The user sent" not in block._out().plain
+        lines = [str(line.render()) for line in app.query(NoteLine)]
+        assert any(line.startswith("◇ Background task 1 started") for line in lines)
+        # A command the model itself left running never offers the key.
+        asked = ToolBlock("bash", {**call, "background": True})
+        assert not asked.can_send
