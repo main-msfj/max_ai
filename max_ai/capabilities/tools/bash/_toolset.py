@@ -42,6 +42,11 @@ class BashTool(CoreTool):
         "Started in the background as task {id}. You will be told when it ends; "
         "task_output shows what it has printed so far, stop_task stops it."
     )
+    SENT: t.ClassVar[str] = (
+        "The user sent this command to the background while it ran: it goes on "
+        "as task {id}. You will be told when it ends; task_output shows what it "
+        "has printed so far, stop_task stops it."
+    )
     MAX_OUTPUT_BYTES: t.ClassVar[int] = 30_000  # more is cut in the middle
     DEFAULT_TIMEOUT: t.ClassVar[int] = 120  # seconds, when the model gives none
     MAX_TIMEOUT: t.ClassVar[int] = 600  # seconds the model can ask for
@@ -134,13 +139,31 @@ class BashTool(CoreTool):
         seen = dict(list(ctx.files_seen.items())[-self.MAX_SEEN:])
         check = f"python3 -c {shlex.quote(CHECK)} {shlex.quote(json.dumps(seen))}"
 
-        # 2. Run it and wait: started as a task is, nothing left when it ends.
+        # 2. Run it and wait, for it to end or to be told to stop waiting:
+        #    started as a task is, nothing left when it ends.
         token = short_id()
-        try:
-            ran = await sandbox.run_task(
+        waiting = asyncio.ensure_future(
+            sandbox.run_task(
                 tool_ctx.session_id, command, ctx.cwd or paths["workspace"],
                 wait=limit, token=token, chars=self.MAX_OUTPUT_BYTES, log=log, after=check,
             )
+        )
+        told = asyncio.ensure_future(tool_ctx.to_background.wait())
+        try:
+            await asyncio.wait({waiting, told}, return_when=asyncio.FIRST_COMPLETED)
+            # 3. Told to stop waiting: it goes on as one more task of the session.
+            if not waiting.done():
+                try:
+                    task_id = await sandbox.keep_task(tool_ctx.session_id, token)
+                except SandboxError:
+                    task_id = None  # it ended just now: its result is the answer
+                if task_id is not None:
+                    ctx.tasks[task_id] = command
+                    return ToolResult.success_result(
+                        tool_request.id, self.SENT.format(id=task_id),
+                        metadata={"task_id": task_id},
+                    )
+            ran = await waiting
         except (asyncio.CancelledError, SandboxError) as error:
             # Nobody waits any more (esc, or the sandbox failed): nothing stays running.
             with contextlib.suppress(SandboxError):
@@ -148,9 +171,14 @@ class BashTool(CoreTool):
             if isinstance(error, asyncio.CancelledError):
                 raise
             return ToolResult.execution_error(tool_request.id, str(error))
+        finally:
+            # Neither wait is left behind, whatever way this ends.
+            told.cancel()
+            waiting.cancel()
+            await asyncio.gather(told, waiting, return_exceptions=True)
         code, notes = ran.code, list[str]()
 
-        # 3. Out of time: it was stopped, with what it had printed.
+        # 4. Out of time: it was stopped, with what it had printed.
         if ran.timed_out:
             code = 124
             notes.append(f"[stopped after {limit} seconds]")
@@ -158,7 +186,7 @@ class BashTool(CoreTool):
         elif code is None:
             notes.append("[the command was stopped before it ended]")
 
-        # 4. Keep the folder for the next call only if it is an allowed one.
+        # 5. Keep the folder for the next call only if it is an allowed one.
         elif ran.cwd and self.within(ran.cwd, allowed):
             ctx.cwd = None if ran.cwd == paths["workspace"] else ran.cwd
         elif ran.cwd:
@@ -168,11 +196,11 @@ class BashTool(CoreTool):
                 "the next command starts in the workspace]"
             )
 
-        # 5. Files the model had read and the command changed: it is told now,
+        # 6. Files the model had read and the command changed: it is told now,
         #    and they count as not seen, so an edit asks to read them first.
         notes += self.forget(ctx.files_seen, ran.after)
 
-        # 6. Exit code first, then the output, then the notes.
+        # 7. Exit code first, then the output, then the notes.
         first = "" if code is None else f"exit code: {code}"
         parts = [first, ran.output.strip("\n"), *notes]
         return ToolResult.success_result(tool_request.id, "\n".join(p for p in parts if p))
