@@ -68,6 +68,10 @@ class Harness:
         "A tool may run {tool:.0f} seconds (tool_timeout_seconds) but a sandbox lives "
         "{sandbox:.0f} (harness_sandbox_seconds); lower the first or raise the second."
     )
+    TASK_OUTLIVES_SANDBOX: t.ClassVar[str] = (
+        "A background task may run {task:.0f} seconds (HARNESS_TASK_SECONDS) but a sandbox "
+        "lives {sandbox:.0f} (HARNESS_SANDBOX_SECONDS); lower the first or raise the second."
+    )
     MEMORY_NEEDS_SANDBOX: t.ClassVar[str] = (
         "The memory is kept in a sandbox: pass sandbox=... to the agent."
     )
@@ -138,10 +142,15 @@ class Harness:
 
     @classmethod
     def sandbox_rules(cls) -> float:
-        """Seconds a sandbox lives; no tool may be allowed to run longer."""
+        """Seconds a sandbox lives; no tool and no background task may be
+        allowed to run longer: launching one starts the sandbox's idle clock
+        again, so it always ends before the sandbox can close."""
         tool, sandbox = setting.tool_timeout_seconds, setting.harness_sandbox_seconds
         if tool > sandbox:
             raise HarnessError(cls.TOOL_OUTLIVES_SANDBOX.format(tool=tool, sandbox=sandbox))
+        task = setting.harness_task_seconds
+        if task > sandbox:
+            raise HarnessError(cls.TASK_OUTLIVES_SANDBOX.format(task=task, sandbox=sandbox))
         return sandbox
 
     # -------- RULES THAT COMPLETE ------------------------------------------------
@@ -178,6 +187,7 @@ class Harness:
         from ...capabilities.tools.filesystem import EditFileTool, ReadFileTool, WriteFileTool
         from ...capabilities.tools.memory import SaveMemoryTool
         from ...capabilities.tools.skill import ReadSkillTool
+        from ...capabilities.tools.tasks import StopTaskTool, TaskOutputTool
         from ...capabilities.tools.todos import WriteTodosTool
         from ...capabilities.tools.worktree import EnterWorktreeTool, ExitWorktreeTool
 
@@ -199,9 +209,10 @@ class Harness:
         if skills is not None:
             ours.append(ReadSkillTool())
 
-        # 4. Whoever runs commands can also work on a separate copy of the repository.
+        # 4. Whoever runs commands can also work on a separate copy of the
+        #    repository, and look at or stop what it left in the background.
         if cls.BASH in names:
-            ours += [EnterWorktreeTool(), ExitWorktreeTool()]
+            ours += [EnterWorktreeTool(), ExitWorktreeTool(), TaskOutputTool(), StopTaskTool()]
 
         # 5. A tool of the developer with the same name wins.
         return tools + [tool for tool in ours if tool.name not in names]

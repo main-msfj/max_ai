@@ -285,6 +285,11 @@ class Agent(ComponentBase[AgentSpec]):
         await self._mcp.disconnect_all()
         # The users' sandboxes, not self.sandbox: that one has no user.
         for box in self._boxes.values():
+            # Its background tasks first: one that cannot be stopped is only told.
+            try:
+                await box.stop_tasks()
+            except Exception:  # noqa: BLE001 — never keeps the sandbox from closing
+                logger.warning("The background tasks could not be stopped", exc_info=True)
             await box.close()
         self._boxes.clear()
         self._used.clear()

@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from ....base.tools import CoreTool, CoreToolParameters, ToolContext
 from ....core.ids import short_id
+from ....errors.sandbox import SandboxError
 from ....types.tool_call import ToolCallRecord, ToolResult
 
 SCRIPT = Path(__file__).with_name("script.sh").read_text()  # sent to the sandbox
@@ -31,7 +32,14 @@ class BashTool(CoreTool):
     DESCRIPTION: t.ClassVar[str] = (
         "Run a command with bash. The working directory is kept between calls; "
         "variables are not, every call is a new shell. The command cannot ask "
-        "for input. Long output is cut in the middle."
+        "for input. Long output is cut in the middle. A command you expect to "
+        "take a minute or more (a server, a build, a long test run, a sleep) "
+        "must use background=true: it starts and the call returns at once with "
+        "a task id. Do not wait for it with a long timeout."
+    )
+    STARTED: t.ClassVar[str] = (
+        "Started in the background as task {id}. You will be told when it ends; "
+        "task_output shows what it has printed so far, stop_task stops it."
     )
     MAX_OUTPUT_BYTES: t.ClassVar[int] = 30_000  # more is cut in the middle
     DEFAULT_TIMEOUT: t.ClassVar[int] = 120  # seconds, when the model gives none
@@ -84,6 +92,14 @@ class BashTool(CoreTool):
                     "maximum": self.MAX_TIMEOUT,
                     "description": f"Seconds to wait. Default {self.DEFAULT_TIMEOUT}.",
                 },
+                "background": {
+                    "type": "boolean",
+                    "description": (
+                        "True for a command expected to take a minute or more: it "
+                        "starts and the call returns at once with a task id. The "
+                        "timeout does not apply."
+                    ),
+                },
             },
             "required": ["command", "description"],
             "additionalProperties": False,
@@ -98,6 +114,18 @@ class BashTool(CoreTool):
         if sandbox is None:
             return ToolResult.execution_error(tool_request.id, "bash needs a sandbox.")
         paths = sandbox.session_paths(tool_ctx.session_id)
+        # A background command: the sandbox starts it and the call returns at once.
+        if tool_request.parameters.get("background"):
+            try:
+                task_id = await sandbox.start_task(
+                    tool_ctx.session_id, command, ctx.cwd or paths["workspace"]
+                )
+            except SandboxError as error:
+                return ToolResult.execution_error(tool_request.id, str(error))
+            ctx.tasks[task_id] = command
+            return ToolResult.success_result(
+                tool_request.id, self.STARTED.format(id=task_id), metadata={"task_id": task_id}
+            )
         layout = sandbox.layout
         allowed = [paths["workspace"], paths["tmp"], str(layout.skills), str(layout.memory)]
         mark = f"__cwd_{short_id()}__"

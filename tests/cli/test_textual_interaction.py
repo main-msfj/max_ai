@@ -430,3 +430,53 @@ async def test_status_shows_a_model_retry_until_the_answer_comes(tmp_path):
         assert "Retrying in 4s" in status and "rate limit, try 2/4" in status
         await app._write_event(ModelResponseEvent(source="a", response=""))
         assert "Thinking" in str(app.query_one("#status", Static).render())
+
+
+@pytest.mark.asyncio
+async def test_the_background_tasks_are_counted_listed_and_told_when_they_end(tmp_path):
+    from max_ai.cli.blocks import NoteLine
+    from max_ai.core.event_type import LoopNoticeEvent
+
+    (tmp_path / "work").mkdir()
+    app = make_app(tmp_path)
+    async with app.run_test() as pilot:
+        usage = lambda: str(app.query_one("#usage", Static).render())  # noqa: E731
+        # 1. None yet: nothing is counted and the panel says so.
+        assert "running" not in usage()
+        await app._run_command("/tasks")
+        assert "None in this conversation." in app.query_one(InfoPanel).body
+        # 2. One runs: the line below counts it and the panel lists it.
+        box = app._box()
+        await box.prepare()
+        task_id = await box.start_task(app.context.session_id, "sleep 30", str(tmp_path))
+        app.context.tasks[task_id] = "sleep 30"
+        await pilot.pause(0.3)
+        assert "1 task running" in usage()
+        await app._run_command("/tasks")
+        body = app.query_one(InfoPanel).body
+        assert "running" in body and "sleep 30" in body
+        # A command the model leaves running: its block says so and one line gives its number.
+        from max_ai.cli.blocks import ToolBlock
+        from max_ai.core.event_type import ToolCallEvent, ToolCallResponseEvent
+        from max_ai.types.tool_call import ToolResult
+
+        call = {"command": "sleep 30", "description": "Wait", "background": True}
+        await app._write_event(ToolCallEvent(source="t", tool_call_id="c1", tool_name="bash", parameters=call))
+        await app._write_event(ToolCallResponseEvent(
+            source="t", tool_call_id="c1",
+            tool_result=ToolResult.success_result("c1", "Started", metadata={"task_id": "1"}),
+        ))
+        await pilot.pause(0.2)
+        assert "Bash  ↗ background  Wait" in app.query_one(ToolBlock)._title().plain
+        started = [str(line.render()) for line in app.query(NoteLine)]
+        assert any(line.startswith("◇ Background task 1 started") for line in started)
+        # 3. It ends: the harness's note is shown as one line, verbose or not.
+        await box.stop_task(app.context.session_id, task_id)
+        del app.context.tasks[task_id]
+        await app._write_event(LoopNoticeEvent(
+            source="loop", kind="note",
+            message="Background task 1: stopped.\nCommand: sleep 30\nIts last lines:\n(none)",
+        ))
+        await pilot.pause(0.3)
+        lines = [str(line.render()) for line in app.query(NoteLine)]
+        assert "◇ Background task 1: stopped." in lines and "running" not in usage()

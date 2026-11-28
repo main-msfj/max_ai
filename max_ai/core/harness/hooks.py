@@ -5,11 +5,12 @@ import os
 import typing as t
 
 from ...base.loop import AnyClient, LoopHook, LoopState
-from ...base.sandbox import SandboxCore
+from ...base.sandbox import SandboxCore, TaskStatus
 from ...base.tools import CoreTool, ToolContext
 from ...capabilities.mcp import MCPClientManager
 from ...capabilities.memory import Memory
 from ...capabilities.tools.memory import SaveMemoryTool
+from ...capabilities.tools.tasks import TaskOutputTool
 from ...config import setting
 from ...errors.middleware import StopRun
 from ...types.run_context import RunContext
@@ -24,13 +25,21 @@ logger = logging.getLogger(__name__)
 
 
 class HarnessLoopHook(LoopHook):
-    """Around the model: the memory index stays fresh and the MCP tasks
-    that ended are told."""
+    """Around the model: the memory index stays fresh, and the tasks that
+    ended are told: the ones on the MCP servers and bash's background ones."""
 
     TASK_ENDED: t.ClassVar[str] = "The task you left running with {tool} ended. Its result:\n{result}"
     TASK_LOST: t.ClassVar[str] = (
         "The task you left running with {tool} is no longer on its server; its result was lost."
     )
+    BACKGROUND_ENDED: t.ClassVar[str] = (
+        "Background {state}.\nCommand: {command}\nIts last lines:\n{output}"
+    )
+    BACKGROUND_GONE: t.ClassVar[str] = (
+        "Background task {id} is no longer in the sandbox; how it ended was lost.\n"
+        "Command: {command}"
+    )
+    BACKGROUND_LINES: t.ClassVar[int] = 20  # of the end of its output, told with the task
 
     def __init__(
         self,
@@ -86,16 +95,24 @@ class HarnessLoopHook(LoopHook):
         await self.refresh_memory(ctx)
 
     async def notes(self, ctx: RunContext, state: LoopState) -> list[str]:
-        # 1. The usual notes, then the tasks that ended on the MCP servers.
+        # The usual notes, then the tasks that ended: on the MCP servers and in the sandbox.
         notes = await super().notes(ctx, state)
+        notes += await self.ended_mcp_tasks(ctx)
+        notes += await self.ended_tasks(ctx)
+        return notes
+
+    async def ended_mcp_tasks(self, ctx: RunContext) -> list[str]:
+        """The MCP tasks of ``ctx`` that ended, one note for each."""
+        # 1. Nothing pending: the servers are not asked.
         if self.mcp is None or not ctx.mcp_tasks:
-            return notes
+            return []
         try:
             ended = await self.mcp.collect_tasks(ctx)
         except Exception:
             logger.exception("The MCP tasks could not be read")
-            return notes
+            return []
         # 2. One note per task, with its result or saying it was lost.
+        notes: list[str] = []
         for task, result in ended:
             if result is None:
                 notes.append(self.TASK_LOST.format(tool=task.tool_name))
@@ -103,6 +120,34 @@ class HarnessLoopHook(LoopHook):
             texts = [str(getattr(part, "text", "")) for part in result.content]
             text = "\n".join(text for text in texts if text) or "(no text)"
             notes.append(self.TASK_ENDED.format(tool=task.tool_name, result=text))
+        return notes
+
+    async def ended_tasks(self, ctx: RunContext) -> list[str]:
+        """The background tasks of ``ctx`` that ended: forget them and
+        return one note for each."""
+        # 1. Nothing pending: the sandbox is not asked.
+        if self.sandbox is None or not ctx.tasks or not ctx.session_id:
+            return []
+        try:
+            found = await self.sandbox.tasks(ctx.session_id, lines=self.BACKGROUND_LINES)
+        except Exception:
+            logger.exception("The background tasks could not be read")
+            return []
+        # 2. One note per task that no longer runs, told once.
+        known = {task.id: task for task in found}
+        notes: list[str] = []
+        for task_id, command in list(ctx.tasks.items()):
+            task = known.get(task_id)
+            if task is not None and task.state is TaskStatus.RUNNING:
+                continue
+            del ctx.tasks[task_id]
+            if task is None:
+                notes.append(self.BACKGROUND_GONE.format(id=task_id, command=command))
+                continue
+            notes.append(self.BACKGROUND_ENDED.format(
+                state=TaskOutputTool.state(task), command=command,
+                output=task.output or "(it printed nothing)",
+            ))
         return notes
 
 

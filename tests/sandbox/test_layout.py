@@ -22,6 +22,7 @@ def test_the_skeleton_names_the_folders_and_the_first_settings():
     skeleton = Layout("/x").skeleton()
     assert skeleton["folders"] == [
         "/x/.agent/skills", "/x/.agent/workspace", "/x/.agent/tmp", "/x/.agent/memory",
+        "/x/.agent/tasks",
     ]
     assert skeleton["settings"] == "/x/.agent/setting.json"
     assert skeleton["content"] == {"skills": {}}
@@ -31,5 +32,6 @@ def test_the_script_uses_only_the_standard_library():
     compile(SCRIPT, "script.py", "exec")
     imports = {line.split()[1] for line in SCRIPT.splitlines() if line.startswith("import ")}
     assert imports <= {
-        "contextlib", "fcntl", "hashlib", "json", "os", "shutil", "sys", "tarfile", "tempfile", "time",
+        "__future__", "contextlib", "fcntl", "hashlib", "json", "os", "select", "shutil", "signal",
+        "subprocess", "sys", "tarfile", "tempfile", "time", "typing",
     }

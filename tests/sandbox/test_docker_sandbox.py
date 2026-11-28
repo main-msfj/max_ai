@@ -71,7 +71,7 @@ async def test_commands_run_in_the_users_container(docker):
     await sandbox.prepare()
     result = await sandbox.execute_command("pwd; echo $MY_VARIABLE; ls .agent")
     assert result.stdout.split() == [
-        "/home/agent", "x", "memory", "setting.json", "skills", "tmp", "workspace",
+        "/home/agent", "x", "memory", "setting.json", "skills", "tasks", "tmp", "workspace",
     ]
     assert (await sandbox.execute_command("cat", stdin=b"hello")).stdout == "hello"
     assert (await sandbox.execute_command("exit 3")).exit_code == 3

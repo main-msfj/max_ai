@@ -16,6 +16,7 @@ import shlex
 import typing as t
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from enum import Enum
 
 from pydantic import BaseModel
 
@@ -38,6 +39,28 @@ class CommandResult:
     timed_out: bool = False
 
 
+class TaskStatus(str, Enum):
+    """How a background task is."""
+
+    RUNNING = "running"
+    DONE = "done"  # it ended by itself
+    CAP = "cap"  # ended at the time limit
+    STOPPED = "stopped"  # someone stopped it
+    LOST = "lost"  # not running, and it never said how it ended
+
+
+@dataclass(frozen=True)
+class TaskState:
+    """What is known of a background task."""
+
+    id: str
+    command: str
+    started: float  # when it was launched, seconds since 1970
+    state: TaskStatus
+    code: int | None  # its exit code, when it ended by itself
+    output: str  # the last lines it printed
+
+
 class SandboxCore(ComponentBase[BaseModel], ABC):
     """Implement once per provider: Local, Docker, ACA, Firecracker.
 
@@ -58,6 +81,7 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
         # Set by bind(): whose machine this is and what its commands see.
         self.identifier: str | None = None
         self.variables: dict[str, str] = {}
+        self._started_tasks = False  # a background task was started from here
 
     # -------- EACH PROVIDER ------------------------------------------------------
     @abstractmethod
@@ -120,6 +144,48 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
             "upload", content, folder=str(root / session_id), path=path,
         )
         return answer["path"]
+
+    async def start_task(self, session_id: str, command: str, cwd: str) -> str:
+        """Start ``command`` as a background task of the session and return
+        its id. It runs inside the sandbox for at most ``harness_task_seconds``,
+        whatever happens to this process."""
+        validate_id("session_id", session_id)
+        answer = await self._run(
+            "task_start", folder=str(self.layout.tasks / session_id),
+            command=command, cwd=cwd, seconds=setting.harness_task_seconds,
+            max=setting.harness_task_max, limit=setting.harness_task_output_chars,
+        )
+        self._started_tasks = True
+        return answer["id"]
+
+    async def tasks(
+        self, session_id: str, task_id: str | None = None, lines: int = 20
+    ) -> list[TaskState]:
+        """The background tasks of the session, or only ``task_id``, each
+        with the last ``lines`` it printed."""
+        validate_id("session_id", session_id)
+        answer = await self._run(
+            "task_list", folder=str(self.layout.tasks / session_id), id=task_id, lines=lines
+        )
+        return [
+            TaskState(**{**task, "state": TaskStatus(task["state"])}) for task in answer["tasks"]
+        ]
+
+    async def stop_task(self, session_id: str, task_id: str) -> None:
+        """Stop a background task of the session and all it started. One
+        that already ended stays as it ended."""
+        validate_id("session_id", session_id)
+        await self._run("task_stop", folder=str(self.layout.tasks / session_id), id=task_id)
+
+    async def stop_tasks(self) -> None:
+        """Stop every background task this sandbox started and that still
+        runs, of every session. Called before the sandbox is closed."""
+        # 1. None was started from here: the sandbox is not woken up to ask.
+        if not self._started_tasks:
+            return
+        # 2. One call stops them all.
+        await self._run("task_stop_all", folder=str(self.layout.tasks))
+        self._started_tasks = False
 
     async def outdated_skills(self, wanted: dict[str, str]) -> list[str]:
         """The skills of ``wanted`` (name → hash or commit) that are not

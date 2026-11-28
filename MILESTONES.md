@@ -4,7 +4,7 @@ What is still missing in `max_ai`, in the order it is meant to be done.
 `[ ]` not started, `[>]` in progress, `[x]` done. The README's roadmap is the
 short version of this file.
 
-Last updated: 2026-11-21.
+Last updated: 2026-11-28.
 
 ## 1. Gaps to close first
 
@@ -89,8 +89,24 @@ Planned, not started. Each one is designed before it is built.
 
 - [ ] **Agent spawn and multi-agent.** An agent starts other agents and
   gathers their work, on the stateless `Agent`.
-- [ ] **Background tasks.** Work that keeps running while the conversation
-  goes on, and reports when it ends. MCP `cancel_task` is kept for this.
+- [>] **Background tasks.** Built on 2026-11-28 and run in Local, Docker and
+  E2B: `bash(background=true)`, `task_output`, `stop_task`, the time limit,
+  three at once, the output kept, the model told when one ends, closing
+  stops them, and the CLI shows them. Run by a person with the `runner`
+  agent and DeepSeek. What is left:
+  - [ ] **Send a command that already runs to the background.** Other
+    harnesses do not restart it: every command is born with its own watcher
+    and "in the foreground" only means the harness waits. Here it means
+    running every bash as a task and removing its folder when it ends while
+    the harness waits.
+  - [ ] A task that ends while the agent sits idle is told only at the next
+    model call.
+  - [ ] A background command that changes a file the model had read does not
+    say so when it ends; the next write still notices.
+  - [ ] Subagents in the background: they need the model's key, which never
+    enters the sandbox, so they cannot be a sandbox process.
+  - [ ] MCP `cancel_task` is kept, but nothing calls it yet: an MCP task
+    cannot be stopped by the model.
 - [ ] **A2A.** Talk to agents of other frameworks over the Agent2Agent
   protocol, as a client and as a server.
 - [ ] **Always-on agent.** An agent that stays up and wakes on a schedule or

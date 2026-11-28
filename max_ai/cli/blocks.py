@@ -37,7 +37,6 @@ from .theme import (
     ERROR,
     LOGO,
     MUTED,
-    PANEL,
     PATH,
     PRIMARY,
     SUCCESS,
@@ -802,34 +801,37 @@ _INTERRUPTED = "interrupted"
 
 
 class ToolBlock(Vertical):
-    """``◆ Name  what it does``, then ``IN`` with what goes in (the command,
-    or the lines a file tool changes) in its own box, then ``OUT`` with how
-    it went. Output folds; click to expand.
+    """``◆ Name  what it does``, then a short card: ``IN`` with what goes in
+    (the command, or the lines a file tool changes) and ``OUT`` with how it
+    went. Folded it shows a few lines of each; a click opens it whole.
 
-    A bash call reads ``◆ Bash  description``, then ``$ command`` and
-    ``OUT`` with what it printed. State lives on the block and
-    ``_redraw`` draws from it, so updates that land before the children are
-    mounted (the spinner tick, a fast result) are drawn on mount.
+    State lives on the block and ``_redraw`` draws from it, so updates that
+    land before the children are mounted (the spinner tick, a fast result)
+    are drawn on mount.
     """
 
     DEFAULT_CSS = f"""
     ToolBlock {{ height: auto; margin: 1 0 0 0; }}
-    ToolBlock:hover > .summary {{ color: {TEXT}; }}
-    ToolBlock > .input {{
-        color: {MUTED}; background: {PANEL}; margin: 0 2; padding: 0 1; max-height: 20;
-        overflow-y: auto;
+    ToolBlock > .card {{
+        height: auto; margin: 0 0 0 2; padding: 0 1; border: round {BORDER_SUBTLE};
     }}
-    ToolBlock > .summary {{ color: {MUTED}; padding-left: 2; }}
-    ToolBlock > .output {{
-        display: none; color: {TEXT}; padding: 0 1; margin-left: 5;
-        border-left: solid {BORDER}; max-height: 20; overflow-y: auto;
+    ToolBlock:hover > .card {{ border: round {BORDER}; }}
+    ToolBlock .input, ToolBlock .output {{
+        height: auto; color: {MUTED}; text-wrap: nowrap; text-overflow: ellipsis;
     }}
-    ToolBlock.-expanded > .output {{ display: block; }}
+    /* A line between what goes in and what comes out, when there are both. */
+    ToolBlock .output.-below {{ border-top: solid {BORDER_SUBTLE}; }}
+    ToolBlock.-expanded .input, ToolBlock.-expanded .output {{
+        max-height: 20; overflow-y: auto; text-wrap: wrap;
+    }}
     """
 
     MAX_OUTPUT = 6000
-    DIFF_LINES = 12  # lines of a change shown before the block is opened
+    PREVIEW_LINES = 3  # of a command and of what it printed, before the block is opened
+    DIFF_LINES = 4  # of a change, before the block is opened
     CARD_LINES = 30  # lines of a change shown when it asks to run
+    QUIET: t.ClassVar[frozenset[str]] = frozenset({"read_file"})  # output counted, not shown
+    OPEN: t.ClassVar[str] = " · click to open"
 
     def __init__(self, tool_name: str, parameters: dict[str, t.Any]) -> None:
         super().__init__()
@@ -838,15 +840,14 @@ class ToolBlock(Vertical):
         self.changed = changes(tool_name, parameters)  # the lines a file tool changes
         self.result: ToolResult | None = None
         self._waiting = False
-        self._summary = Text()
         self._output = ""
         self._frame = 0
 
     def compose(self):
         yield Static(classes="title")
-        yield Static(classes="input")
-        yield Static(classes="summary")
-        yield Static(classes="output")
+        with Vertical(classes="card"):
+            yield Static(classes="input")
+            yield Static(classes="output")
 
     def on_mount(self) -> None:
         self._redraw()
@@ -873,15 +874,19 @@ class ToolBlock(Vertical):
             dot.append("◆ ", style=f"bold {SUCCESS}")
         else:
             dot.append("◆ ", style=f"bold {ERROR}")
-        summary = tool_summary(self.tool_name, self.parameters)
+        # A command left running says so beside its name, where it is seen.
+        background = self.is_bash and bool(self.parameters.get("background"))
+        summary = tool_summary(self.tool_name, {**self.parameters, "background": False})
         if len(summary) > 90:
             summary = summary[:87] + "…"
         # Bash: its description is the title; the command goes on the IN line.
         if self.is_bash:
             dot.append("Bash", style=f"bold {TEXT}")
+            if background:
+                dot.append("  ↗ background", style=f"bold {PRIMARY}")
             if summary:
                 dot.append(f"  {summary}", style=MUTED)
-            return dot
+            return dot.append_text(self._meta())
         dot.append(tool_label(self.tool_name), style=f"bold {TEXT}")
         if summary:
             dot.append("  ")
@@ -893,7 +898,19 @@ class ToolBlock(Vertical):
             dot.append(f"  +{marks.count('+')}", style=SUCCESS)
             if "-" in marks:
                 dot.append(f" −{marks.count('-')}", style=ERROR)
-        return dot
+        return dot.append_text(self._meta())
+
+    def _meta(self) -> Text:
+        """How a call that ended went, at the end of its title: ``exit 1 · 27ms``."""
+        meta = Text()
+        if self.result is None or self._interrupted or not self.result.success:
+            return meta
+        code, ms = exit_code(self.result), self.result.duration_ms
+        if code not in (None, 0):
+            meta.append(f"  exit {code}", style=ERROR)
+        if ms is not None:
+            meta.append(f"  {ms}ms" if ms < 1000 else f"  {ms / 1000:.1f}s", style=DIM)
+        return meta
 
     @staticmethod
     def _argument_color(parameters: dict[str, t.Any]) -> str:
@@ -906,10 +923,15 @@ class ToolBlock(Vertical):
             return SYSTEM
         return MUTED
 
-    def _diff(self) -> Text:
-        """The lines this call changes; folded, only the first ``DIFF_LINES``."""
-        limit = None if self.has_class("-expanded") else self.DIFF_LINES
-        return self.diff(self.changed, first_line(self.tool_name, self.result), limit)
+    def _diff(self, opened: bool) -> tuple[list[Text], int]:
+        """The lines this call changes and how many more are hidden. Folded,
+        a few of them, from just before the first one that changes."""
+        lines = list(self.diff(self.changed, first_line(self.tool_name, self.result)).split("\n"))
+        if opened:
+            return lines, 0
+        first = next((n for n, (mark, _) in enumerate(self.changed) if mark != " "), 0)
+        shown = lines[max(0, first - 1) :][: self.DIFF_LINES]
+        return shown, len(lines) - len(shown)
 
     @staticmethod
     def diff(changed: list[tuple[str, str]], start: int | None, limit: int | None = None) -> Text:
@@ -965,40 +987,70 @@ class ToolBlock(Vertical):
             shown.append_text(line)
         return shown
 
+    @classmethod
+    def rows(cls, label: str, lines: list[Text], hidden: int = 0) -> Text:
+        """``lines`` under a short label, the rest aligned with the first;
+        ``hidden`` more are only counted, with how to see them."""
+        shown = Text()
+        shown.append(f"{label:<5}", style=f"bold {DIM}")
+        for index, line in enumerate(lines):
+            shown.append("\n     " if index else "")
+            shown.append_text(line)
+        if hidden:
+            shown.append(f"\n     … +{_plural(hidden, 'line')}{cls.OPEN}", style=DIM)
+        return shown
+
     def _input(self) -> Text:
-        """``IN  command``: the whole command once expanded, its first line
-        before. For a file tool, the lines it changes."""
+        """``IN``: the command, or the lines a file tool changes. A few of
+        them folded, all of them once opened."""
+        opened = self.has_class("-expanded")
         if self.changed:
-            return self._diff()
+            lines, hidden = self._diff(opened)
+            return self.rows("IN", lines, hidden)
         if not self.is_bash:
             return Text()
-        command = str(self.parameters.get("command") or "")
-        shown = command.strip() if self.has_class("-expanded") else _first_line(command)
-        line = Text()
-        line.append("IN   ", style=f"bold {DIM}")
-        line.append(shown.replace("\n", "\n     "), style=COMMAND)
-        return line
+        command = str(self.parameters.get("command") or "").strip()
+        lines = [Text(line, style=COMMAND) for line in command.splitlines()] or [Text("")]
+        shown = lines if opened else lines[: self.PREVIEW_LINES]
+        return self.rows("IN", shown, len(lines) - len(shown))
 
-    def _summary_line(self) -> Text:
+    def _out(self) -> Text:
+        """``OUT``: how it went. A few lines of what it printed folded, all
+        of it once opened; a failure in one line."""
+        opened = self.has_class("-expanded")
+        # 1. Not ended yet, or stopped by the user.
         if self.result is None:
             if self._waiting:
                 return Text("OUT  waiting for approval…", style=WARNING)
             return Text("OUT  running…", style=f"italic {DIM}")
-        summary = self._summary.copy()
-        hint = "▾ click to collapse" if self.has_class("-expanded") else "▸ click to expand"
-        summary.append(f"   {hint}", style="dim")
-        return summary
+        if self._interrupted:
+            return self.rows("OUT", [Text("cancelled", style=MUTED)])
+        # 2. A failure: what went wrong, in red.
+        printed = self._output.splitlines() or [""]
+        if not self.result.success:
+            lines = [Text(line, style=ERROR) for line in printed]
+            lines[0] = Text(f"Error: {printed[0] or 'failed'}", style=ERROR)
+            shown = lines if opened else lines[:1]
+            return self.rows("OUT", shown, len(lines) - len(shown))
+        # 3. A tool whose output is the file itself: counted until opened.
+        if self.tool_name in self.QUIET and not opened:
+            return Text.assemble(
+                ("OUT  ", f"bold {DIM}"), (_plural(len(printed), "line"), MUTED), (self.OPEN, DIM)
+            )
+        # 4. What it printed.
+        lines = [Text(line, style=TEXT if opened else MUTED) for line in printed]
+        shown = lines if opened else lines[: self.PREVIEW_LINES]
+        return self.rows("OUT", shown, len(lines) - len(shown))
 
     def _redraw(self) -> None:
-        title, summary, output = self._part("title"), self._part("summary"), self._part("output")
-        given = self._part("input")
-        if title is None or summary is None or output is None or given is None:
+        title, given, output = self._part("title"), self._part("input"), self._part("output")
+        if title is None or given is None or output is None:
             return
         title.update(self._title())
         given.display = self.is_bash or bool(self.changed)
         given.update(self._input())
-        summary.update(self._summary_line())
-        output.update(Text(self._output))
+        output.set_class(bool(given.display), "-below")
+        output.update(self._out())
 
     def set_waiting(self, waiting: bool) -> None:
         self._waiting = waiting
@@ -1019,22 +1071,6 @@ class ToolBlock(Vertical):
         """``None`` means the turn was cancelled before the tool finished."""
         self.result = result or ToolResult(success=False, error=_INTERRUPTED, tool_call_id="")
         text = result_text(self.result)
-        lines = text.count("\n") + 1
-        ms = self.result.duration_ms
-        summary = Text()
-        summary.append("OUT  ", style=f"bold {DIM}")
-        if self._interrupted:
-            summary.append("cancelled", style=MUTED)
-        elif not self.result.success:
-            summary.append(f"Error: {text.splitlines()[0][:120] if text else 'failed'}", style=ERROR)
-        else:
-            code = exit_code(self.result)
-            if code not in (None, 0):
-                summary.append(f"exit {code} · ", style=ERROR)
-            summary.append(_plural(lines, "line"), style=MUTED)
-            if ms is not None:
-                summary.append(f" · {ms}ms", style=DIM)
-        self._summary = summary
         if len(text) > self.MAX_OUTPUT:
             text = text[: self.MAX_OUTPUT] + f"\n… ({len(text) - self.MAX_OUTPUT:,} more chars)"
         self._output = text

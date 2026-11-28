@@ -65,6 +65,13 @@ def test_no_tool_may_run_longer_than_the_sandbox_lives(monkeypatch):
         Harness.sandbox_rules()
 
 
+def test_no_background_task_may_run_longer_than_the_sandbox_lives(monkeypatch):
+    assert setting.harness_task_seconds <= Harness.sandbox_rules()
+    monkeypatch.setattr(setting, "harness_task_seconds", 900)
+    with pytest.raises(HarnessError, match="A background task may run 900 seconds"):
+        Harness.sandbox_rules()
+
+
 def test_our_tools_are_added_and_the_developers_win(tmp_path):
     assert names(Harness.tool_combination([], None, None)) == ["ask_user", "write_todos"]
     sandbox = LocalSandbox(str(tmp_path))
@@ -72,7 +79,7 @@ def test_our_tools_are_added_and_the_developers_win(tmp_path):
     got = names(Harness.tool_combination([mine, BashTool()], sandbox, None))
     assert got == [
         "read_file", "bash", "ask_user", "write_todos", "write_file", "edit_file",
-        "enter_worktree", "exit_worktree",  # they come with bash
+        "enter_worktree", "exit_worktree", "task_output", "stop_task",  # they come with bash
     ]
     assert "enter_worktree" not in names(Harness.tool_combination([], sandbox, None))
 

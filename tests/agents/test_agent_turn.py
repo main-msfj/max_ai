@@ -167,3 +167,25 @@ async def test_an_idle_sandbox_is_closed_and_made_again_when_its_user_returns(tm
     assert agent._boxes["ana"] is not first
     await agent.close()
     assert sorted(ClosedSandbox.closed) == ["ana", "ana", "luis"] and agent._boxes == {}
+
+
+async def test_closing_the_agent_stops_the_background_tasks(tmp_path, caplog):
+    (tmp_path / "work").mkdir()
+    agent = Agent("a", "d", "i", FakeClient(), toolset=[BashTool()],
+                  sandbox=ClosedSandbox(str(tmp_path / "work")))
+    ClosedSandbox.closed = []
+    box = await agent._sandbox(RunContext(user_id="u"))
+    await box.start_task("s1", "sleep 30", str(tmp_path))
+    await agent.close()
+    assert (await box.tasks("s1"))[0].state == "stopped" and ClosedSandbox.closed == ["u"]
+
+    # Tasks that cannot be stopped never keep the sandbox from closing.
+    class Broken(ClosedSandbox):
+        async def stop_tasks(self) -> None:
+            raise RuntimeError("the sandbox is down")
+
+    agent = Agent("a", "d", "i", FakeClient(), sandbox=Broken(str(tmp_path / "work")))
+    await agent._sandbox(RunContext(user_id="ana"))
+    await agent.close()
+    assert ClosedSandbox.closed == ["u", "ana"]
+    assert "The background tasks could not be stopped" in caplog.text

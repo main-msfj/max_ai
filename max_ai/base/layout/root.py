@@ -50,6 +50,11 @@ class Layout:
         return self.root / "memory"
 
     @property
+    def tasks(self) -> PurePosixPath:
+        """The background tasks of each session: one folder per task."""
+        return self.root / "tasks"
+
+    @property
     def lock(self) -> PurePosixPath:
         """Held while a skill is installed: one install at a time."""
         return self.root / ".lock"
@@ -58,7 +63,10 @@ class Layout:
         """What ``SCRIPT`` needs to create ``.agent/``: the folders, and the
         settings file with its first content."""
         return {
-            "folders": [str(self.skills), str(self.workspace), str(self.tmp), str(self.memory)],
+            "folders": [
+                str(self.skills), str(self.workspace), str(self.tmp), str(self.memory),
+                str(self.tasks),
+            ],
             "settings": str(self.settings),
             "content": {"skills": {}},
         }
