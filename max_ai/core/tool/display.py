@@ -13,8 +13,15 @@ from ...types.tool_call import ToolResult
 BASH = "bash"
 EDIT_FILE = "edit_file"
 WRITE_FILE = "write_file"
+TASK_OUTPUT = "task_output"
+STOP_TASK = "stop_task"
 # How a tool is named to a person; the rest keep their own name.
-LABELS = {BASH: "Bash", EDIT_FILE: "Edit", WRITE_FILE: "Write", "read_file": "Read"}
+LABELS = {
+    BASH: "Bash", EDIT_FILE: "Edit", WRITE_FILE: "Write", "read_file": "Read",
+    TASK_OUTPUT: "Task output", STOP_TASK: "Stop task",
+}
+# Said before the summary of a command that is left running.
+BACKGROUND = "in background · "
 
 
 def tool_label(tool_name: str) -> str:
@@ -47,6 +54,12 @@ _EXIT_LINE = re.compile(r"^exit code: (-?\d+|None)\n?")
 def tool_summary(tool_name: str, parameters: dict[str, t.Any]) -> str:
     """The one argument that says what the call does, not the whole payload.
     A bash call is named by its ``description``, else by its command."""
+    # 1. A command left running says so; a task tool names its task.
+    if tool_name == BASH and parameters.get("background"):
+        return BACKGROUND + tool_summary(tool_name, {**parameters, "background": False})
+    if tool_name in (TASK_OUTPUT, STOP_TASK):
+        return f"task {parameters['task_id']}" if parameters.get("task_id") else "all tasks"
+    # 2. The rest: the description of a command, or the argument that says most.
     if tool_name == BASH and str(parameters.get("description") or "").strip():
         return _first_line(str(parameters["description"]))
     for key in ("command", "file_path", "path", "pattern", "query", "url", "city", "to"):

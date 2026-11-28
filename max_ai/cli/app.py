@@ -26,7 +26,7 @@ from textual.widgets import Button, OptionList, Static, TextArea
 
 from ..agents.agent import Agent
 from ..base.loop import LoopState
-from ..base.sandbox import SandboxCore
+from ..base.sandbox import SandboxCore, TaskStatus
 from ..base.session_store import CoreSessionStore
 from ..base.tools import CoreTool
 from ..capabilities.loop import ReactLoop
@@ -37,6 +37,7 @@ from ..capabilities.tools.todos import WriteTodosTool
 from ..core.event_type import (
     CompactionEvent,
     CoreEvent,
+    LoopNoticeEvent,
     ModelCallEvent,
     ModelResponseEvent,
     ModelRetryEvent,
@@ -47,6 +48,7 @@ from ..core.event_type import (
     ToolCallResponseEvent,
 )
 from ..core.harness import messages as harness
+from ..core.harness.hooks import HarnessLoopHook
 from ..core.harness.permissions import Permissions
 from ..core.ids import short_id
 from ..core.messages import HARNESS_SOURCE, HARNESS_TAG, AssistantMessage, UserMessage
@@ -101,6 +103,7 @@ COMMANDS = {
     "/skills": "list the agent's skills",
     "/tools": "list the tools the agent can call",
     "/mcp": "list the MCP servers with their tools",
+    "/tasks": "list the commands running in the background",
     "/resume": "pick a saved conversation and continue it",
     "/new": "start a new conversation (the current one stays saved)",
     "/session": "show this conversation's id and how to resume it",
@@ -126,6 +129,8 @@ _NEVER_SHOWN = {
     "user_input_request", "tool_call", "tool_call_response", "tool_approval",
     "reasoning_complete", "fatal_error",
 }
+# How the harness's note of a background task that ended begins.
+_TASK_NOTE = HarnessLoopHook.BACKGROUND_ENDED.partition("{")[0]
 # Seconds a ``!command`` may run.
 _SHELL_TIMEOUT = 120.0
 
@@ -212,6 +217,7 @@ class MaxAIApp(App[None]):
         self._form: QuestionForm | None = None
         self._todo_call_ids: set[str] = set()
         self._todos: TodoBlock | None = None
+        self._tasks_shown = 0  # background tasks the usage line counts now
         self._skills: list[tuple[str, str]] = []  # name and description
         self._tools: dict[str, ToolBlock] = {}
         self._thinking: ThinkingBlock | None = None
@@ -327,6 +333,9 @@ class MaxAIApp(App[None]):
         for block in self._tools.values():
             block.tick()
         self._refresh_status()
+        # A background task started or ended: the count below follows.
+        if len(self.context.tasks) != self._tasks_shown:
+            self._refresh_usage()
 
     def _static(self, selector: str) -> Static | None:
         """``None`` once the screen is gone — timers and a finishing worker
@@ -386,6 +395,12 @@ class MaxAIApp(App[None]):
         used = parts.prompt + parts.tools + parts.messages if parts else 0
         line.append(" · ctx ", style=DIM)
         line.append_text(context_bar(used, window))
+        # 3. The commands left running in the background, when there are some.
+        self._tasks_shown = len(self.context.tasks)
+        if self._tasks_shown:
+            plural = "s" if self._tasks_shown > 1 else ""
+            line.append(" · ", style=DIM)
+            line.append(f"{self._tasks_shown} task{plural} running", style=f"bold {PRIMARY}")
         usage = self._static("#usage")
         if usage is not None:
             usage.update(line)
@@ -659,6 +674,8 @@ class MaxAIApp(App[None]):
             self._show("Tools", body)
         elif command == "/mcp":
             await self._show_mcp()
+        elif command == "/tasks":
+            await self._show_tasks()
         elif command in ("/new", "/clear"):
             await self._switch_to(self._new_context())
             await self._write_system(f"New conversation · session {self.context.session_id}.")
@@ -748,6 +765,42 @@ class MaxAIApp(App[None]):
                 body.append(f"    {tool.name.removeprefix(sid + '_'):<26}", style="bold")
                 body.append("asks approval\n" if ask else "auto\n", style=WARNING if ask else DIM)
         self._show("MCP servers", body)
+
+    async def _show_tasks(self) -> None:
+        """The background tasks of this conversation, as the sandbox has them."""
+        # 1. They live in the sandbox: without one there is none.
+        box, sid = self._box(), self.context.session_id
+        if box is None or not sid:
+            self._show("Background tasks", Text("This agent runs no commands.", style=MUTED))
+            return
+        try:
+            tasks = await box.tasks(sid, lines=0)
+        except Exception as error:  # noqa: BLE001 — the panel must not kill the UI
+            self._show("Background tasks", Text(f"They could not be read: {error}", style=WARNING))
+            return
+        if not tasks:
+            self._show("Background tasks", Text("None in this conversation.", style=MUTED))
+            return
+        # 2. One line each: its number, how it is, when it started, its command.
+        body = Text()
+        for task in tasks:
+            running = task.state is TaskStatus.RUNNING
+            said = task.state.value + (f" ({task.code})" if task.code is not None else "")
+            body.append(f"  {task.id:<4}", style=f"bold {PRIMARY}")
+            body.append(f"{said:<12}", style=TEXT if running else MUTED)
+            body.append(f"{self._ago(time.time() - task.started):<10}", style=DIM)
+            body.append(f"{self._first_line(task.command)}\n", style=TEXT if running else MUTED)
+        body.append("\nThe agent is told when one ends. Ask it to show one or to stop it.", style=DIM)
+        self._show("Background tasks", body)
+
+    @staticmethod
+    def _ago(seconds: float) -> str:
+        """How long ago, in a few characters: ``45s ago``, ``12m ago``, ``3h ago``."""
+        if seconds < 60:
+            return f"{int(seconds)}s ago"
+        if seconds < 3600:
+            return f"{int(seconds // 60)}m ago"
+        return f"{int(seconds // 3600)}h ago"
 
     def _info(self) -> InfoPanel:
         return self.query_one("#info", InfoPanel)
@@ -877,6 +930,10 @@ class MaxAIApp(App[None]):
         # 3. Compaction, and everything else as one line.
         if isinstance(event, CompactionEvent):
             await self._render_compaction(event)
+            return
+        # A background task ended: said always, with how it ended.
+        if isinstance(event, LoopNoticeEvent) and event.message.startswith(_TASK_NOTE):
+            await self._mount(NoteLine(f"◇ {event.message.splitlines()[0]}", style=SYSTEM))
             return
         etype = event.event_type
         if etype in _NEVER_SHOWN:

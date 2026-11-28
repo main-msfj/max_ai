@@ -134,3 +134,14 @@ def test_a_compaction_whose_summary_failed_says_what_was_lost():
 
     assert "failed" not in header(summary="Goal: build fizz", removed=14)
     assert "the summary failed: 14 messages left without one" in header(removed=14, summary_failed=True)
+
+
+def test_a_background_command_and_the_task_tools_say_what_they_do():
+    from max_ai.core.tool.display import tool_summary
+
+    command = {"command": "pytest -q", "description": "Run the tests"}
+    assert tool_summary("bash", {**command, "background": True}) == "in background · Run the tests"
+    assert tool_summary("bash", {**command, "background": False}) == "Run the tests"
+    assert tool_summary("task_output", {"task_id": "2"}) == "task 2"
+    assert tool_summary("task_output", {}) == "all tasks"
+    assert [tool_label(name) for name in ("task_output", "stop_task")] == ["Task output", "Stop task"]

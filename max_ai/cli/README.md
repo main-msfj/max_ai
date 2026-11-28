@@ -38,7 +38,7 @@ stack of widgets, not a text log, so every piece of a turn stays live:
 | `@relative/path` | attach a workspace file |
 | `!command` | run a shell command in the workspace |
 | `/` then `↑↓`, `tab`, `enter` | command menu: move, complete, run |
-| `/help` `/skills` `/tools` `/mcp` `/resume` `/new` `/session` `/clear` `/thinking` `/verbose` `/workspace` `/theme` `/exit` | commands |
+| `/help` `/skills` `/tools` `/mcp` `/tasks` `/resume` `/new` `/session` `/clear` `/thinking` `/verbose` `/workspace` `/theme` `/exit` | commands |
 | `/<skill-name> [args]` | run a skill (every loaded skill is listed in the menu) |
 | `esc` · `ctrl+t` · `ctrl+o` · `ctrl+b` · `ctrl+l` · `pgup/pgdn` | interrupt · thinking · verbose events · workspace panel · clear screen · scroll |
 

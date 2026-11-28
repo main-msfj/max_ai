@@ -430,3 +430,38 @@ async def test_status_shows_a_model_retry_until_the_answer_comes(tmp_path):
         assert "Retrying in 4s" in status and "rate limit, try 2/4" in status
         await app._write_event(ModelResponseEvent(source="a", response=""))
         assert "Thinking" in str(app.query_one("#status", Static).render())
+
+
+@pytest.mark.asyncio
+async def test_the_background_tasks_are_counted_listed_and_told_when_they_end(tmp_path):
+    from max_ai.cli.blocks import NoteLine
+    from max_ai.core.event_type import LoopNoticeEvent
+
+    (tmp_path / "work").mkdir()
+    app = make_app(tmp_path)
+    async with app.run_test() as pilot:
+        usage = lambda: str(app.query_one("#usage", Static).render())  # noqa: E731
+        # 1. None yet: nothing is counted and the panel says so.
+        assert "running" not in usage()
+        await app._run_command("/tasks")
+        assert "None in this conversation." in app.query_one(InfoPanel).body
+        # 2. One runs: the line below counts it and the panel lists it.
+        box = app._box()
+        await box.prepare()
+        task_id = await box.start_task(app.context.session_id, "sleep 30", str(tmp_path))
+        app.context.tasks[task_id] = "sleep 30"
+        await pilot.pause(0.3)
+        assert "1 task running" in usage()
+        await app._run_command("/tasks")
+        body = app.query_one(InfoPanel).body
+        assert "running" in body and "sleep 30" in body
+        # 3. It ends: the harness's note is shown as one line, verbose or not.
+        await box.stop_task(app.context.session_id, task_id)
+        del app.context.tasks[task_id]
+        await app._write_event(LoopNoticeEvent(
+            source="loop", kind="note",
+            message="Background task 1: stopped.\nCommand: sleep 30\nIts last lines:\n(none)",
+        ))
+        await pilot.pause(0.3)
+        lines = [str(line.render()) for line in app.query(NoteLine)]
+        assert "◇ Background task 1: stopped." in lines and "running" not in usage()
