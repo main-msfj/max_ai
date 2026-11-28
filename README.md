@@ -347,6 +347,19 @@ both on the Chat Completions API. Without `api_key` they read `OPENAI_API_KEY`
 `options={...}` is sent as is (temperature, top_p...). There is no Ollama
 client; an OpenAI-compatible server can be used through `base_url`.
 
+Through OpenRouter most models use the provider's cache by themselves; Claude
+does only when asked. Without this option a Claude model reads nothing from
+the cache; with it, about three quarters of a conversation's input:
+
+```python
+OpenRouterChatCompletionClient(
+    model="anthropic/claude-haiku-5.5",
+    options={"cache_control": {"type": "ephemeral"}},
+)
+```
+
+Other models ignore the option, so it is safe beside `fallback_models`.
+
 `OpenAIResponsesClient(model, ...)`, from `max_ai.capabilities.clients.openai`,
 calls OpenAI's Responses API: its newer models reason and call tools in the
 same turn there, which Chat Completions refuses. Thinking is

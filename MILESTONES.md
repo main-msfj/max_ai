@@ -40,9 +40,11 @@ Pieces that exist in the code but do not work end to end yet.
 
   Without a compaction a turn reads 77 to 83%. What is left to decide:
 
-  - [ ] **Claude through OpenRouter reads nothing from the cache.** Our
-    OpenRouter client sends no cache mark. Read OpenRouter's documentation
-    first: it may handle this by itself, or need a mark or a setting.
+  - [x] **Claude through OpenRouter read nothing from the cache.** OpenRouter
+    caches by itself for most providers, but Claude only when the request
+    asks. No change in the client: `options={"cache_control": {"type":
+    "ephemeral"}}` takes Haiku from 0% to 76% (2026-11-28). Documented in the
+    README and set in the OpenRouter example and the bookkeeper.
   - [ ] **A compaction costs one rewrite of the whole conversation**, even
     when only one old tool result changed: the cache keeps marked points, not
     any prefix. Tried outside the repository with Haiku: a mark at the end of

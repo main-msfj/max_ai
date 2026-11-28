@@ -11,6 +11,8 @@ async def main() -> None:
         model="openai/gpt-6-luna",
         fallback_models=["anthropic/claude-haiku-5.5"],  # tried in order when the first fails
         app_name="max_ai_examples",
+        # Claude uses the provider's cache only when asked; other models ignore this.
+        options={"cache_control": {"type": "ephemeral"}},
     )
     agent = Agent(
         name="Assistant",
