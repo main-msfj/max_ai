@@ -44,6 +44,13 @@ TAIL_BYTES = 1 << 16
 KEPT_TASKS = 10
 # How often a watcher looks whether its command ended without printing.
 POLL_SECONDS = 0.2
+# How often a command the harness waits for is looked at.
+WAIT_SECONDS = 0.02
+# The folder of a command the harness waits for: this, then the harness's token.
+WAITED = "waited-"
+# The shell of a task: it runs the command and, as it leaves, writes where it
+# was into the file its first argument numbers.
+SHELL = 'trap "pwd -P >&$0" EXIT; eval "$1"'
 # What takes the place of the middle of an output too long to keep.
 CUT = "\n[output cut to make room: {left} characters left out here]\n"
 
@@ -296,6 +303,15 @@ def get(folder: str, name: str) -> t.Any:
         return None
 
 
+def get_text(folder: str, name: str) -> str | None:
+    """One file of a task that is plain text, or None when it has nothing."""
+    try:
+        with open(os.path.join(folder, name), encoding="utf-8") as file:
+            return file.read().strip() or None
+    except FileNotFoundError:
+        return None
+
+
 def alive(pid: t.Any) -> bool:
     """Whether a process with this number exists."""
     if not isinstance(pid, int):
@@ -357,10 +373,14 @@ def watch(folder: str, command: str, cwd: str, seconds: float, limit: int) -> No
     """Stays beside one background task: runs it, keeps what it prints, ends
     it at the cap and writes how it ended."""
     deadline = time.monotonic() + seconds
-    with open(os.path.join(folder, "output"), "wb") as file:
+    # It works from inside the folder: the folder may get another name meanwhile.
+    os.chdir(folder)
+    folder = "."
+    with open("output", "wb") as file, open("cwd", "wb") as where:
         # 1. The command in its own group: killing the group kills all it started.
         process = subprocess.Popen(
-            ["bash", "-c", command],
+            ["bash", "-c", SHELL, str(where.fileno()), command],
+            pass_fds=(where.fileno(),),
             cwd=cwd,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
@@ -400,35 +420,42 @@ def numbered(root: str) -> list[str]:
     return sorted((name for name in os.listdir(root) if name.isdigit()), key=int)
 
 
-def task_start(request: Json) -> Json:
+def launch(request: Json, waited: str | None = None) -> str:
+    """Start one task and return its folder. ``waited``: the harness waits
+    for it, so it has no number and is not one of the session's tasks."""
     root: str = request["folder"]
     os.makedirs(root, exist_ok=True)
     # Where it starts is there, also for the first command of a session.
     os.makedirs(request["cwd"], exist_ok=True)
     with locked(os.path.join(root, ".lock")):
         sweep(root)
-        # 1. No more than the session may have running at once.
         states = [task_state(os.path.join(root, name), 0) for name in numbered(root)]
-        if sum(task["state"] == RUNNING for task in states) >= request["max"]:
+        # 1. No more than the session may have running at once; one waited for is free.
+        if waited is None and sum(task["state"] == RUNNING for task in states) >= request["max"]:
             raise ValueError(
                 f"this session already has {request['max']} background tasks running; "
                 "wait for one to end or stop one"
             )
-        # 2. Of the ones that ended, only the last ones are kept.
+        # 2. Of the ones that ended, only the last ones are kept; and what a
+        #    harness that died while it waited left behind goes.
         ended = [task["id"] for task in states if task["state"] != RUNNING]
         for name in ended[:-KEPT_TASKS]:
             shutil.rmtree(os.path.join(root, name), ignore_errors=True)
-        # 3. The folder of the task, whole from the start: the next number.
+        for name in os.listdir(root):
+            left = os.path.join(root, name)
+            if name.startswith(WAITED) and task_state(left, 0)["state"] != RUNNING:
+                shutil.rmtree(left, ignore_errors=True)
+        # 3. The folder of the task, whole from the start: the next number, or its token.
         number = 1 + max((int(task["id"]) for task in states), default=0)
         fresh = tempfile.mkdtemp(dir=root, prefix=INCOMING)
         os.chmod(fresh, 0o755)
         put(fresh, "command", request["command"])
         put(fresh, "started", time.time())
         put(fresh, "seconds", request["seconds"])
-        folder = os.path.join(root, str(number))
+        folder = inside(root, str(number) if waited is None else WAITED + waited)
         os.rename(fresh, folder)
 
-    # 4. A copy of this process stays to watch; the call itself answers and ends.
+    # 4. A copy of this process stays to watch; the call itself goes on.
     watcher = os.fork()
     if watcher == 0:
         try:
@@ -441,7 +468,78 @@ def task_start(request: Json) -> Json:
         finally:
             os._exit(0)
     put(folder, "watcher", watcher)
+    return folder
+
+
+def task_start(request: Json) -> Json:
+    return {"id": os.path.basename(launch(request))}
+
+
+def task_run(request: Json) -> Json:
+    """Start a command and wait for it: how it ended, what it printed and
+    where it was. Nothing of it is left when this answers."""
+    # 1. Start it, with the token of who waits.
+    folder = launch(request, waited=request["token"])
+    watcher: int = get(folder, "watcher")
+    # 2. Wait until it says how it ended, or its time passes.
+    deadline = time.monotonic() + request["wait"]
+    while get(folder, "exit") is None and time.monotonic() < deadline:
+        time.sleep(WAIT_SECONDS)
+    # 3. Out of time: stop it, and say so.
+    timed_out = get(folder, "exit") is None
+    if timed_out:
+        stop(folder)
+    # The watcher closes the output before it leaves.
+    for _ in range(100):
+        if os.waitpid(watcher, os.WNOHANG)[0]:
+            break
+        time.sleep(WAIT_SECONDS)
+    # 4. What it printed: whole, or its beginning and its end with the rest in a file.
+    with open(os.path.join(folder, "output"), "rb") as file:
+        printed = file.read()
+    log: str | None = None
+    chars: int = request["chars"]
+    if len(printed) > chars:
+        log = str(request["log"])
+        os.makedirs(os.path.dirname(log), exist_ok=True)
+        shutil.move(os.path.join(folder, "output"), log)
+        note = f"\n[... {len(printed) - chars} bytes cut; the full output is in {log} ...]\n"
+        printed = printed[: chars // 2] + note.encode() + printed[-(chars // 2) :]
+    ended = get(folder, "exit") or {"reason": LOST, "code": None}
+    answer = {
+        "state": ended["reason"],
+        "code": ended["code"],
+        "output": printed.decode("utf-8", "replace"),
+        "cwd": get_text(folder, "cwd"),
+        "timed_out": timed_out,
+        "log": log,
+    }
+    # 5. Nothing is left of a command that was waited for.
+    shutil.rmtree(folder, ignore_errors=True)
+    return answer
+
+
+def task_keep(request: Json) -> Json:
+    """The harness stopped waiting for a command and the user wants it to go
+    on: it becomes one more task of the session, with the next number."""
+    root: str = request["folder"]
+    with locked(os.path.join(root, ".lock")):
+        waited = inside(root, WAITED + request["token"])
+        if not os.path.isdir(waited):
+            raise ValueError("no command is waited for with that token")
+        number = 1 + max((int(name) for name in numbered(root)), default=0)
+        os.rename(waited, os.path.join(root, str(number)))
     return {"id": str(number)}
+
+
+def task_drop(request: Json) -> Json:
+    """The harness stopped waiting for a command and nobody wants it: stop it
+    and remove what it left."""
+    waited = inside(request["folder"], WAITED + request["token"])
+    if os.path.isdir(waited):
+        stop(waited)
+        shutil.rmtree(waited, ignore_errors=True)
+    return {}
 
 
 def task_state(folder: str, lines: int) -> Json:
@@ -475,26 +573,33 @@ def task_list(request: Json) -> Json:
     return {"tasks": [task_state(task_folder(root, name), lines) for name in names]}
 
 
-def task_stop(request: Json) -> Json:
-    folder = task_folder(request["folder"], request["id"])
-    # Only a task that still runs is stopped.
+def stop(folder: str) -> None:
+    """Stop the task of ``folder`` and all it started, if it still runs."""
     if task_state(folder, 0)["state"] == RUNNING:
         # 1. Say why first: the watcher will not write over it.
         put(folder, "exit", {"reason": STOPPED, "code": None}, once=True)
         # 2. Then kill the command and all it started.
         with contextlib.suppress(ProcessLookupError, TypeError):
             os.killpg(get(folder, "pid"), signal.SIGKILL)
+
+
+def task_stop(request: Json) -> Json:
+    stop(task_folder(request["folder"], request["id"]))
     return {}
 
 
 def task_stop_all(request: Json) -> Json:
-    """Stop every task still running, of every session."""
+    """Stop every task still running, of every session: the ones in the
+    background and the ones a harness was waiting for."""
     root: str = request["folder"]
     sessions = sorted(os.listdir(root)) if os.path.isdir(root) else []
     for session in sessions:
         folder = os.path.join(root, session)
-        for name in numbered(folder):
-            task_stop({"folder": folder, "id": name})
+        if not os.path.isdir(folder):
+            continue
+        for name in os.listdir(folder):
+            if name.isdigit() or name.startswith(WAITED):
+                stop(os.path.join(folder, name))
     return {}
 
 
@@ -510,6 +615,9 @@ OPERATIONS: dict[str, t.Callable[[Json], Json]] = {
     "task_list": task_list,
     "task_stop": task_stop,
     "task_stop_all": task_stop_all,
+    "task_run": task_run,
+    "task_keep": task_keep,
+    "task_drop": task_drop,
 }
 
 

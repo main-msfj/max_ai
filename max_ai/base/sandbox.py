@@ -61,6 +61,18 @@ class TaskState:
     output: str  # the last lines it printed
 
 
+@dataclass(frozen=True)
+class TaskRun:
+    """How a command the harness waited for ended."""
+
+    state: TaskStatus
+    code: int | None  # its exit code, when it ended by itself
+    output: str  # what it printed; a long one keeps its beginning and its end
+    cwd: str | None  # the folder it ended in; None when it was killed
+    timed_out: bool  # its time passed and it was stopped
+    log: str | None  # the file with the whole output, when ``output`` was cut
+
+
 class SandboxCore(ComponentBase[BaseModel], ABC):
     """Implement once per provider: Local, Docker, ACA, Firecracker.
 
@@ -71,6 +83,7 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
 
     # What only the harness does: these write setting.json or the skills.
     HARNESS_OPS: t.ClassVar[frozenset[str]] = frozenset({"create", "install", "permit", "unpermit"})
+    WAIT_MARGIN: t.ClassVar[float] = 15  # seconds a waited command's call outlives its wait
 
     component_type = "sandbox"
 
@@ -177,6 +190,45 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
         validate_id("session_id", session_id)
         await self._run("task_stop", folder=str(self.layout.tasks / session_id), id=task_id)
 
+    async def run_task(
+        self, session_id: str, command: str, cwd: str, *, wait: float, token: str,
+        chars: int, log: str,
+    ) -> TaskRun:
+        """Run ``command`` and wait up to ``wait`` seconds for it: started as
+        a background task is, but nothing of it is left when it ends. Whoever
+        stops waiting (cancels this call) leaves it running: ``keep_task``
+        makes it a task of the session, ``drop_task`` stops it. ``token``
+        names it meanwhile; a longer output than ``chars`` goes whole to ``log``."""
+        validate_id("session_id", session_id)
+        validate_id("token", token)
+        # Said before the call: whoever stops waiting leaves it running.
+        self._started_tasks = True
+        answer = await self._run(
+            "task_run", timeout=wait + self.WAIT_MARGIN,
+            folder=str(self.layout.tasks / session_id), command=command, cwd=cwd,
+            seconds=setting.harness_task_seconds, max=setting.harness_task_max,
+            limit=setting.harness_task_output_chars,
+            wait=wait, token=token, chars=chars, log=log,
+        )
+        return TaskRun(**{**answer, "state": TaskStatus(answer["state"])})
+
+    async def keep_task(self, session_id: str, token: str) -> str:
+        """The command ``run_task`` was waiting for with ``token`` goes on as
+        a background task of the session; its id is returned."""
+        validate_id("session_id", session_id)
+        validate_id("token", token)
+        answer = await self._run(
+            "task_keep", folder=str(self.layout.tasks / session_id), token=token
+        )
+        return answer["id"]
+
+    async def drop_task(self, session_id: str, token: str) -> None:
+        """Stop the command ``run_task`` was waiting for with ``token`` and
+        remove what it left."""
+        validate_id("session_id", session_id)
+        validate_id("token", token)
+        await self._run("task_drop", folder=str(self.layout.tasks / session_id), token=token)
+
     async def stop_tasks(self) -> None:
         """Stop every background task this sandbox started and that still
         runs, of every session. Called before the sandbox is closed."""
@@ -253,7 +305,9 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
             lock=str(self.layout.lock),
         )
 
-    async def _run(self, op: str, data: bytes | None = None, **request: t.Any) -> dict[str, t.Any]:
+    async def _run(
+        self, op: str, data: bytes | None = None, timeout: float | None = None, **request: t.Any
+    ) -> dict[str, t.Any]:
         """Run one operation of ``layout/script.py`` inside the sandbox. The
         request goes as an argument; ``data`` goes as it is on stdin, with
         its sha256 in the request so the script knows all of it arrived."""
@@ -262,7 +316,7 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
             request["sha256"] = hashlib.sha256(data).hexdigest()
         result = await self.execute_command(
             f"python3 -c {shlex.quote(SCRIPT)} {shlex.quote(json.dumps(request))}",
-            timeout=setting.tool_timeout_seconds,
+            timeout=timeout or setting.tool_timeout_seconds,
             stdin=data,
             harness=op in self.HARNESS_OPS,
         )

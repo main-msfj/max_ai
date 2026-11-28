@@ -241,3 +241,99 @@ async def test_closing_stops_the_tasks_of_every_session(tmp_path, monkeypatch):
     calls.clear()
     await sandbox.stop_tasks()
     assert calls == []
+
+
+def waited(sandbox, command, cwd, **more):
+    """A command the harness waits for, with what the bash tool would pass."""
+    given = {"wait": 30, "token": "tok1", "chars": 1000, "log": str(cwd / "full.log"), **more}
+    return sandbox.run_task("s1", command, str(cwd), **given)
+
+
+def folders(sandbox) -> list[str]:
+    root = Path(str(sandbox.layout.tasks)) / "s1"
+    return sorted(p.name for p in root.iterdir() if p.is_dir()) if root.exists() else []
+
+
+async def test_a_command_that_is_waited_for_leaves_nothing_behind(tmp_path):
+    sandbox = await box(tmp_path)
+    ran = await waited(sandbox, "mkdir -p sub && cd sub && echo hi; echo err >&2; exit 3", tmp_path)
+    assert (ran.state, ran.code, ran.output, ran.timed_out, ran.log) == ("done", 3, "hi\nerr\n", False, None)
+    # It says where it ended, and its folder is gone.
+    assert ran.cwd == str((tmp_path / "sub").resolve()) and folders(sandbox) == []
+    assert await sandbox.tasks("s1") == []
+
+
+async def test_a_command_out_of_time_is_stopped_with_what_it_printed(tmp_path):
+    sandbox = await box(tmp_path)
+    marker = tmp_path / "late"
+    ran = await waited(sandbox, f"echo begin; (sleep 1; touch {marker}) & sleep 30", tmp_path, wait=0.5)
+    assert (ran.state, ran.code, ran.output, ran.timed_out) == ("stopped", None, "begin\n", True)
+    assert folders(sandbox) == []
+    await asyncio.sleep(1.2)
+    assert not marker.exists()
+
+
+async def test_a_long_output_of_a_waited_command_goes_whole_to_a_file(tmp_path):
+    sandbox = await box(tmp_path)
+    ran = await waited(sandbox, "seq 1 2000", tmp_path)
+    whole = "".join(f"{n}\n" for n in range(1, 2001))
+    assert ran.output.startswith("1\n2\n") and ran.output.endswith("1999\n2000\n")
+    assert f"[... {len(whole) - 1000} bytes cut; the full output is in {ran.log} ...]" in ran.output
+    assert Path(ran.log).read_text() == whole and folders(sandbox) == []
+
+
+async def test_a_waited_command_is_not_one_of_the_sessions_tasks(tmp_path):
+    sandbox = await box(tmp_path)
+    for _ in range(setting.harness_task_max):
+        await sandbox.start_task("s1", "sleep 30", str(tmp_path))
+    # It runs with the three places taken, and takes no number.
+    assert (await waited(sandbox, "echo free", tmp_path)).output == "free\n"
+    assert folders(sandbox) == ["1", "2", "3"]
+    await sandbox.stop_tasks()
+    assert await sandbox.start_task("s1", "true", str(tmp_path)) == "4"
+
+
+async def test_a_command_nobody_waits_for_any_more_is_kept_or_dropped(tmp_path):
+    sandbox = await box(tmp_path)
+    # 1. Kept: it goes on as the next task, and ends by itself with its code.
+    waiting = asyncio.create_task(waited(sandbox, "echo one; sleep 1; echo two; exit 7", tmp_path))
+    await asyncio.sleep(0.4)
+    waiting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting
+    assert folders(sandbox) == ["waited-tok1"] and await sandbox.tasks("s1") == []
+    assert await sandbox.keep_task("s1", "tok1") == "1"
+    assert (await sandbox.tasks("s1"))[0].state == "running"
+    assert await ended(Path(str(sandbox.layout.tasks)) / "s1" / "1") == {"reason": "done", "code": 7}
+    assert (await sandbox.tasks("s1", "1"))[0].output == "one\ntwo"
+    # 2. Dropped: stopped with all it started, and nothing left of it.
+    marker = tmp_path / "late"
+    waiting = asyncio.create_task(waited(sandbox, f"(sleep 1; touch {marker}) & sleep 30", tmp_path, token="tok2"))
+    await asyncio.sleep(0.4)
+    waiting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting
+    await sandbox.drop_task("s1", "tok2")
+    assert folders(sandbox) == ["1"]
+    await asyncio.sleep(1.2)
+    assert not marker.exists()
+    # A token nobody waits with is an error to keep, and nothing to drop.
+    with pytest.raises(SandboxError, match="no command is waited for"):
+        await sandbox.keep_task("s1", "nobody")
+    await sandbox.drop_task("s1", "nobody")
+
+
+async def test_what_a_harness_that_died_waiting_left_is_removed_and_closing_stops_it(tmp_path):
+    sandbox = await box(tmp_path)
+    waiting = asyncio.create_task(waited(sandbox, "sleep 30", tmp_path))
+    await asyncio.sleep(0.4)
+    waiting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting
+    # Closing stops it too, though it has no number.
+    await sandbox.stop_tasks()
+    left = Path(str(sandbox.layout.tasks)) / "s1" / "waited-tok1"
+    assert json.loads((left / "exit").read_text())["reason"] == "stopped"
+    # The next command of the session removes what was left.
+    await waited(sandbox, "true", tmp_path, token="tok2")
+    assert folders(sandbox) == []
