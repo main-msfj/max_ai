@@ -32,9 +32,10 @@ class BashTool(CoreTool):
     DESCRIPTION: t.ClassVar[str] = (
         "Run a command with bash. The working directory is kept between calls; "
         "variables are not, every call is a new shell. The command cannot ask "
-        "for input. Long output is cut in the middle. With background=true the "
-        "command starts and the call returns at once with a task id: use it for "
-        "what takes long, like a server or a long test run."
+        "for input. Long output is cut in the middle. A command you expect to "
+        "take a minute or more (a server, a build, a long test run, a sleep) "
+        "must use background=true: it starts and the call returns at once with "
+        "a task id. Do not wait for it with a long timeout."
     )
     STARTED: t.ClassVar[str] = (
         "Started in the background as task {id}. You will be told when it ends; "
@@ -94,8 +95,9 @@ class BashTool(CoreTool):
                 "background": {
                     "type": "boolean",
                     "description": (
-                        "Start the command and return at once with a task id. "
-                        "The timeout does not apply."
+                        "True for a command expected to take a minute or more: it "
+                        "starts and the call returns at once with a task id. The "
+                        "timeout does not apply."
                     ),
                 },
             },

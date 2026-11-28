@@ -21,7 +21,7 @@ HERE = Path(__file__).parent
 BOX = HERE / "box"  # the sandbox: the work of each session, the skills and the tasks
 
 INSTRUCTIONS = """You help a developer with their project.
-A command that takes more than a few seconds runs in the background: say it
+A command that may take a minute or more runs in the background: say it
 started and go on with what else was asked. When you are told it ended, report
 its result. Look things up on the web when asked."""
 
