@@ -2,11 +2,16 @@
 
 import asyncio
 import json
+import os
+import signal
 import time
 from pathlib import Path
 
+import pytest
+
 from max_ai.capabilities.sandbox.local import LocalSandbox
 from max_ai.config import setting
+from max_ai.errors.sandbox import SandboxError
 
 
 async def box(tmp_path) -> LocalSandbox:
@@ -60,3 +65,82 @@ async def test_each_session_numbers_its_own_tasks(tmp_path):
     folder = Path(str(sandbox.layout.tasks)) / "s2" / "2"
     await ended(folder)
     assert (folder / "output").read_text().strip() == str(tmp_path / ".agent")
+
+
+async def test_a_task_is_read_while_it_runs_and_after_it_ends(tmp_path):
+    sandbox = await box(tmp_path)
+    assert await sandbox.tasks("s1") == []
+    await sandbox.start_task("s1", "echo one; echo two; sleep 0.6; echo three", str(tmp_path))
+    await sandbox.start_task("s1", "exit 4", str(tmp_path))
+    await asyncio.sleep(0.3)
+    first, second = await sandbox.tasks("s1", lines=1)
+    assert (first.id, first.state, first.code, first.output) == ("1", "running", None, "two")
+    assert (second.id, second.state, second.code) == ("2", "done", 4)
+    await ended(Path(str(sandbox.layout.tasks)) / "s1" / "1")
+    # Only the one asked for, with the last lines asked for.
+    (only,) = await sandbox.tasks("s1", "1", lines=2)
+    assert (only.state, only.code, only.output) == ("done", 0, "two\nthree")
+    assert only.command.endswith("echo three") and time.time() - only.started < 10
+
+
+async def test_stopping_a_task_ends_it_and_all_it_started(tmp_path):
+    sandbox = await box(tmp_path)
+    marker = tmp_path / "late"
+    await sandbox.start_task("s1", f"(sleep 1; touch {marker}) & echo started; sleep 30", str(tmp_path))
+    await asyncio.sleep(0.3)
+    await sandbox.stop_task("s1", "1")
+    (task,) = await sandbox.tasks("s1")
+    assert (task.state, task.code, task.output) == ("stopped", None, "started")
+    # The watcher does not write over the reason, and what was left running died.
+    await asyncio.sleep(1.2)
+    assert (await sandbox.tasks("s1"))[0].state == "stopped"
+    assert not marker.exists()
+
+
+async def test_stopping_a_task_that_ended_changes_nothing(tmp_path, monkeypatch):
+    monkeypatch.setattr(setting, "harness_task_seconds", 0.4)
+    sandbox = await box(tmp_path)
+    await sandbox.start_task("s1", "exit 2", str(tmp_path))
+    await sandbox.start_task("s1", "sleep 30", str(tmp_path))
+    for number in ("1", "2"):
+        await ended(Path(str(sandbox.layout.tasks)) / "s1" / number)
+        await sandbox.stop_task("s1", number)
+    done, cap = await sandbox.tasks("s1")
+    assert (done.state, done.code, cap.state, cap.code) == ("done", 2, "cap", None)
+
+
+async def test_a_task_whose_watcher_died_is_lost(tmp_path):
+    sandbox = await box(tmp_path)
+    await sandbox.start_task("s1", "sleep 30", str(tmp_path))
+    folder = Path(str(sandbox.layout.tasks)) / "s1" / "1"
+    await asyncio.sleep(0.3)
+    command = json.loads((folder / "pid").read_text())
+    os.kill(json.loads((folder / "watcher").read_text()), signal.SIGKILL)
+    await asyncio.sleep(0.3)
+    (task,) = await sandbox.tasks("s1")
+    assert task.state == "lost"
+    # A lost task is not stopped: its numbers may be someone else's by now.
+    await sandbox.stop_task("s1", "1")
+    os.kill(command, signal.SIGKILL)
+    assert (await sandbox.tasks("s1"))[0].state == "lost"
+
+
+async def test_a_task_past_its_cap_with_no_end_is_lost(tmp_path):
+    sandbox = await box(tmp_path)
+    await sandbox.start_task("s1", "sleep 2", str(tmp_path))
+    folder = Path(str(sandbox.layout.tasks)) / "s1" / "1"
+    # As after a restart: the watcher's number exists, but the cap passed long ago.
+    (folder / "started").write_text(json.dumps(time.time() - 10_000))
+    assert (await sandbox.tasks("s1"))[0].state == "lost"
+
+
+async def test_a_task_is_only_reached_from_its_own_session(tmp_path):
+    sandbox = await box(tmp_path)
+    await sandbox.start_task("s1", "sleep 2", str(tmp_path))
+    for task_id in ("7", "../s1/1", "x"):
+        with pytest.raises(SandboxError, match="there is no task|leaves"):
+            await sandbox.tasks("s2", task_id)
+        with pytest.raises(SandboxError, match="there is no task|leaves"):
+            await sandbox.stop_task("s2", task_id)
+    assert (await sandbox.tasks("s1"))[0].state == "running"
+    await sandbox.stop_task("s1", "1")

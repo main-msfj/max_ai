@@ -33,6 +33,10 @@ Json = t.Dict[str, t.Any]
 # by a later install, once it is old enough.
 INCOMING = ".incoming-"
 STALE_SECONDS = 3600
+# A task with no end written still counts as running this long after its cap.
+GRACE_SECONDS = 5
+# How much of the end of an output is read to show its last lines.
+TAIL_BYTES = 1 << 16
 
 
 def inside(folder: str, path: str) -> str:
@@ -257,12 +261,62 @@ def sweep(folder: str) -> None:
                 shutil.rmtree(leftover) if os.path.isdir(leftover) else os.unlink(leftover)
 
 
-def put(folder: str, name: str, value: t.Any) -> None:
-    """Write one small file of a task whole: under another name, then renamed."""
-    temp = os.path.join(folder, INCOMING + name)
-    with open(temp, "w", encoding="utf-8") as file:
+def put(folder: str, name: str, value: t.Any, once: bool = False) -> None:
+    """Write one small file of a task whole. With ``once`` the first to
+    write it wins, and a later one changes nothing."""
+    handle, temp = tempfile.mkstemp(dir=folder, prefix=INCOMING)
+    with os.fdopen(handle, "w", encoding="utf-8") as file:
         file.write(json.dumps(value))
-    os.replace(temp, os.path.join(folder, name))
+    os.chmod(temp, 0o644)
+    target = os.path.join(folder, name)
+    if not once:
+        os.replace(temp, target)
+        return
+    # link fails if the file exists: nobody writes over an end already told.
+    with contextlib.suppress(FileExistsError):
+        os.link(temp, target)
+    os.unlink(temp)
+
+
+def get(folder: str, name: str) -> t.Any:
+    """One small file of a task, or None when it is not there."""
+    try:
+        with open(os.path.join(folder, name), encoding="utf-8") as file:
+            return json.load(file)
+    except FileNotFoundError:
+        return None
+
+
+def alive(pid: t.Any) -> bool:
+    """Whether a process with this number exists."""
+    if not isinstance(pid, int):
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass
+    return True
+
+
+def tail(path: str, lines: int) -> str:
+    """The last ``lines`` lines of a file, reading only its end."""
+    if lines <= 0 or not os.path.isfile(path):
+        return ""
+    with open(path, "rb") as file:
+        file.seek(0, os.SEEK_END)
+        file.seek(max(0, file.tell() - TAIL_BYTES))
+        text = file.read().decode("utf-8", "replace")
+    return "\n".join(text.splitlines()[-lines:])
+
+
+def task_folder(root: str, name: str) -> str:
+    """The folder of one task of a session, or an error when there is none."""
+    folder = inside(root, name)
+    if not name.isdigit() or not os.path.isdir(folder):
+        raise ValueError(f"there is no task {name}")
+    return folder
 
 
 def watch(folder: str, command: str, cwd: str, seconds: float) -> None:
@@ -279,6 +333,9 @@ def watch(folder: str, command: str, cwd: str, seconds: float) -> None:
             start_new_session=True,
         )
         put(folder, "pid", process.pid)
+        # A stop that came before the pid was written.
+        if get(folder, "exit") is not None:
+            os.killpg(process.pid, signal.SIGKILL)
         # 2. It ends by itself, or the cap ends it.
         try:
             code, reason = process.wait(seconds), "done"
@@ -287,7 +344,7 @@ def watch(folder: str, command: str, cwd: str, seconds: float) -> None:
             process.wait()
             code, reason = None, "cap"
     # 3. How it ended.
-    put(folder, "exit", {"reason": reason, "code": code})
+    put(folder, "exit", {"reason": reason, "code": code}, once=True)
 
 
 def task_start(request: Json) -> Json:
@@ -300,9 +357,11 @@ def task_start(request: Json) -> Json:
         os.mkdir(folder)
     put(folder, "command", request["command"])
     put(folder, "started", time.time())
+    put(folder, "seconds", request["seconds"])
 
     # 2. A copy of this process stays to watch; the call itself answers and ends.
-    if os.fork() == 0:
+    watcher = os.fork()
+    if watcher == 0:
         try:
             os.setsid()
             # Nothing of the call stays open, or whoever called would wait for it.
@@ -312,7 +371,54 @@ def task_start(request: Json) -> Json:
             watch(folder, request["command"], request["cwd"], request["seconds"])
         finally:
             os._exit(0)
+    put(folder, "watcher", watcher)
     return {"id": str(number)}
+
+
+def task_state(folder: str, lines: int) -> Json:
+    """What is known of one task: how it ended, or whether it still runs."""
+    ended = get(folder, "exit")
+    if ended is None:
+        # No end written: it runs while its watcher lives and its cap has not passed.
+        limit = (get(folder, "started") or 0) + (get(folder, "seconds") or 0) + GRACE_SECONDS
+        running = time.time() < limit and alive(get(folder, "watcher"))
+        ended = {"reason": "running" if running else "lost", "code": None}
+    return {
+        "id": os.path.basename(folder),
+        "command": get(folder, "command"),
+        "started": get(folder, "started"),
+        "state": ended["reason"],
+        "code": ended["code"],
+        "output": tail(os.path.join(folder, "output"), lines),
+    }
+
+
+def task_list(request: Json) -> Json:
+    """The tasks of one session, or only the one asked for."""
+    root: str = request["folder"]
+    wanted: str | None = request.get("id")
+    # 1. The one asked for, or all of the session in the order they started.
+    if wanted is not None:
+        names = [wanted]
+    elif os.path.isdir(root):
+        names = sorted((name for name in os.listdir(root) if name.isdigit()), key=int)
+    else:
+        names = []
+    # 2. What is known of each.
+    lines: int = request["lines"]
+    return {"tasks": [task_state(task_folder(root, name), lines) for name in names]}
+
+
+def task_stop(request: Json) -> Json:
+    folder = task_folder(request["folder"], request["id"])
+    # Only a task that still runs is stopped.
+    if task_state(folder, 0)["state"] == "running":
+        # 1. Say why first: the watcher will not write over it.
+        put(folder, "exit", {"reason": "stopped", "code": None}, once=True)
+        # 2. Then kill the command and all it started.
+        with contextlib.suppress(ProcessLookupError, TypeError):
+            os.killpg(get(folder, "pid"), signal.SIGKILL)
+    return {}
 
 
 OPERATIONS: dict[str, t.Callable[[Json], Json]] = {
@@ -324,6 +430,8 @@ OPERATIONS: dict[str, t.Callable[[Json], Json]] = {
     "permit": permit,
     "unpermit": unpermit,
     "task_start": task_start,
+    "task_list": task_list,
+    "task_stop": task_stop,
 }
 
 

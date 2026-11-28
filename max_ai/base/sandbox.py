@@ -38,6 +38,18 @@ class CommandResult:
     timed_out: bool = False
 
 
+@dataclass(frozen=True)
+class TaskState:
+    """What is known of a background task."""
+
+    id: str
+    command: str
+    started: float  # when it was launched, seconds since 1970
+    state: str  # running, done, cap, stopped or lost
+    code: int | None  # its exit code, when it ended by itself
+    output: str  # the last lines it printed
+
+
 class SandboxCore(ComponentBase[BaseModel], ABC):
     """Implement once per provider: Local, Docker, ACA, Firecracker.
 
@@ -131,6 +143,23 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
             command=command, cwd=cwd, seconds=setting.harness_task_seconds,
         )
         return answer["id"]
+
+    async def tasks(
+        self, session_id: str, task_id: str | None = None, lines: int = 20
+    ) -> list[TaskState]:
+        """The background tasks of the session, or only ``task_id``, each
+        with the last ``lines`` it printed."""
+        validate_id("session_id", session_id)
+        answer = await self._run(
+            "task_list", folder=str(self.layout.tasks / session_id), id=task_id, lines=lines
+        )
+        return [TaskState(**task) for task in answer["tasks"]]
+
+    async def stop_task(self, session_id: str, task_id: str) -> None:
+        """Stop a background task of the session and all it started. One
+        that already ended stays as it ended."""
+        validate_id("session_id", session_id)
+        await self._run("task_stop", folder=str(self.layout.tasks / session_id), id=task_id)
 
     async def outdated_skills(self, wanted: dict[str, str]) -> list[str]:
         """The skills of ``wanted`` (name → hash or commit) that are not
