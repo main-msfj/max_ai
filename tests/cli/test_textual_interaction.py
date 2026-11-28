@@ -455,6 +455,21 @@ async def test_the_background_tasks_are_counted_listed_and_told_when_they_end(tm
         await app._run_command("/tasks")
         body = app.query_one(InfoPanel).body
         assert "running" in body and "sleep 30" in body
+        # A command the model leaves running: its block says so and one line gives its number.
+        from max_ai.cli.blocks import ToolBlock
+        from max_ai.core.event_type import ToolCallEvent, ToolCallResponseEvent
+        from max_ai.types.tool_call import ToolResult
+
+        call = {"command": "sleep 30", "description": "Wait", "background": True}
+        await app._write_event(ToolCallEvent(source="t", tool_call_id="c1", tool_name="bash", parameters=call))
+        await app._write_event(ToolCallResponseEvent(
+            source="t", tool_call_id="c1",
+            tool_result=ToolResult.success_result("c1", "Started", metadata={"task_id": "1"}),
+        ))
+        await pilot.pause(0.2)
+        assert "Bash  ↗ background  Wait" in app.query_one(ToolBlock)._title().plain
+        started = [str(line.render()) for line in app.query(NoteLine)]
+        assert any(line.startswith("◇ Background task 1 started") for line in started)
         # 3. It ends: the harness's note is shown as one line, verbose or not.
         await box.stop_task(app.context.session_id, task_id)
         del app.context.tasks[task_id]

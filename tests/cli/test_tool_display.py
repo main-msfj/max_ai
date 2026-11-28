@@ -32,15 +32,26 @@ def test_the_block_of_an_edit_counts_its_lines_and_shows_them():
     block = ToolBlock("edit_file", EDIT)
     assert block._title().plain.endswith("Edit  config.py  +1 −1")
     assert block._input().plain.splitlines() == [
-        "  limit: int = Field(", "−     default=50,", "+     default=80,", "      ge=1,",
+        "IN     limit: int = Field(", "     −     default=50,", "     +     default=80,", "           ge=1,",
     ]
 
 
 def test_a_long_change_is_cut_until_the_block_is_opened():
     content = "\n".join(f"line {n}" for n in range(20))
     block = ToolBlock("write_file", {"path": "a.md", "content": content})
-    assert block._input().plain.splitlines()[-1] == "… (+8 lines)"
+    folded = block._input().plain.splitlines()
+    assert len(folded) == ToolBlock.DIFF_LINES + 1 and folded[-1] == "     … +16 lines · click to open"
     assert block._title().plain.endswith("Write  a.md  +20")
+    block.add_class("-expanded")
+    assert len(block._input().plain.splitlines()) == 20
+
+
+def test_a_folded_change_starts_just_before_the_first_line_that_changes():
+    same = "\n".join(f"same {n}" for n in range(10))
+    edit = {"path": "a.py", "old_text": f"{same}\nold", "new_text": f"{same}\nnew"}
+    assert ToolBlock("edit_file", edit)._input().plain.splitlines() == [
+        "IN     same 9", "     − old", "     + new", "     … +9 lines · click to open",
+    ]
 
 
 def test_the_lines_are_numbered_once_the_tool_says_where_the_change_begins():
@@ -49,11 +60,45 @@ def test_the_lines_are_numbered_once_the_tool_says_where_the_change_begins():
     block = ToolBlock("edit_file", EDIT)
     block.result = ToolResult.success_result("c1", "Edited", metadata={"line": 38})
     assert block._input().plain.splitlines() == [
-        "  38   limit: int = Field(", "  39 −     default=50,", "  39 +     default=80,", "  40       ge=1,",
+        "IN     38   limit: int = Field(", "       39 −     default=50,",
+        "       39 +     default=80,", "       40       ge=1,",
     ]
     # A written file starts at its first line, known before it runs.
     written = ToolBlock("write_file", {"path": "a.md", "content": "one\ntwo"})
-    assert written._input().plain.splitlines() == ["   1 + one", "   2 + two"]
+    assert written._input().plain.splitlines() == ["IN      1 + one", "        2 + two"]
+
+
+def test_a_command_and_what_it_printed_show_a_few_lines_until_opened():
+    from max_ai.types.tool_call import ToolResult
+
+    script = "python3 - <<'EOF'\n" + "\n".join(f"step_{n}()" for n in range(8)) + "\nEOF"
+    block = ToolBlock("bash", {"command": script, "description": "Run the steps"})
+    assert block._out().plain == "OUT  running…"
+    block.result = ToolResult.success_result("c1", "exit code: 3\n" + "\n".join(f"out {n}" for n in range(9)))
+    block._output = "\n".join(f"out {n}" for n in range(9))
+    assert block._input().plain.splitlines() == [
+        "IN   python3 - <<'EOF'", "     step_0()", "     step_1()", "     … +7 lines · click to open",
+    ]
+    assert block._out().plain.splitlines() == [
+        "OUT  out 0", "     out 1", "     out 2", "     … +6 lines · click to open",
+    ]
+    # How it went is at the end of the title, not in a line of its own.
+    assert block._title().plain.startswith("◆ Bash  Run the steps  exit 3")
+    block.add_class("-expanded")
+    assert len(block._input().plain.splitlines()) == 10 and len(block._out().plain.splitlines()) == 9
+
+
+def test_a_failure_is_one_line_and_a_read_file_only_counts_its_lines():
+    from max_ai.types.tool_call import ToolResult
+
+    failed = ToolBlock("edit_file", EDIT)
+    failed.complete(ToolResult.execution_error("c1", "a.py: it resolves outside\nmore detail"))
+    assert failed._out().plain.splitlines() == [
+        "OUT  Error: a.py: it resolves outside", "     … +1 line · click to open",
+    ]
+    read = ToolBlock("read_file", {"path": "a.py"})
+    read.complete(ToolResult.success_result("c2", "one\ntwo\nthree"))
+    assert read._out().plain == "OUT  3 lines · click to open"
 
 
 def test_the_card_of_a_call_that_asks_shows_what_goes_in_and_why():

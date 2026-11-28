@@ -158,7 +158,7 @@ class MaxAIApp(App[None]):
         #main {{ width: 1fr; padding: 0 1; }}
     #transcript {{ height: 1fr; background: {BACKGROUND}; scrollbar-size: 1 1; padding: 0 1; scrollbar-background: {BACKGROUND}; scrollbar-background-hover: {BACKGROUND}; scrollbar-background-active: {BACKGROUND}; scrollbar-color: {ELEMENT}; scrollbar-color-hover: {PRIMARY}; scrollbar-color-active: {PRIMARY}; }}
     #request-card {{ height: auto; display: none; border: round {PRIMARY}; padding: 0 1; margin: 1 0 0 0; }}
-    #request-detail {{ height: auto; max-height: 24; overflow-y: auto; color: {TEXT}; margin-bottom: 1; }}
+    #request-detail {{ height: auto; max-height: 14; overflow-y: auto; color: {TEXT}; margin-bottom: 1; }}
     #decisions {{ height: auto; display: none; }}
     #decisions Button {{ width: 1fr; height: 1; min-height: 1; border: none; margin: 0; background: {PANEL}; color: {TEXT}; content-align: left middle; text-align: left; }}
     #decisions Button:hover, #decisions Button:focus {{ background: {ELEMENT}; color: {PRIMARY}; }}
@@ -980,6 +980,14 @@ class MaxAIApp(App[None]):
         block = self._tools.pop(event.tool_call_id, None)
         if block is not None:
             block.complete(event.tool_result)
+        # 5. A command was left running: one line says so, with its number.
+        result = event.tool_result
+        started = result.metadata.get("task_id") if result is not None and result.success else None
+        if started is not None:
+            line = Text(f"◇ Background task {started} started", style=SYSTEM)
+            line.append(" · /tasks lists them, and you are told when it ends", style=DIM)
+            await self._mount(NoteLine(line))
+            self._refresh_usage()
 
     def _close_finished_blocks(self) -> None:
         """Blocks whose calls were closed without an event (the user wrote
