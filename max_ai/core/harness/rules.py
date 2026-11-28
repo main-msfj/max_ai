@@ -187,6 +187,7 @@ class Harness:
         from ...capabilities.tools.filesystem import EditFileTool, ReadFileTool, WriteFileTool
         from ...capabilities.tools.memory import SaveMemoryTool
         from ...capabilities.tools.skill import ReadSkillTool
+        from ...capabilities.tools.tasks import StopTaskTool, TaskOutputTool
         from ...capabilities.tools.todos import WriteTodosTool
         from ...capabilities.tools.worktree import EnterWorktreeTool, ExitWorktreeTool
 
@@ -208,9 +209,10 @@ class Harness:
         if skills is not None:
             ours.append(ReadSkillTool())
 
-        # 4. Whoever runs commands can also work on a separate copy of the repository.
+        # 4. Whoever runs commands can also work on a separate copy of the
+        #    repository, and look at or stop what it left in the background.
         if cls.BASH in names:
-            ours += [EnterWorktreeTool(), ExitWorktreeTool()]
+            ours += [EnterWorktreeTool(), ExitWorktreeTool(), TaskOutputTool(), StopTaskTool()]
 
         # 5. A tool of the developer with the same name wins.
         return tools + [tool for tool in ours if tool.name not in names]

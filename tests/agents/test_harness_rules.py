@@ -79,7 +79,7 @@ def test_our_tools_are_added_and_the_developers_win(tmp_path):
     got = names(Harness.tool_combination([mine, BashTool()], sandbox, None))
     assert got == [
         "read_file", "bash", "ask_user", "write_todos", "write_file", "edit_file",
-        "enter_worktree", "exit_worktree",  # they come with bash
+        "enter_worktree", "exit_worktree", "task_output", "stop_task",  # they come with bash
     ]
     assert "enter_worktree" not in names(Harness.tool_combination([], sandbox, None))
 

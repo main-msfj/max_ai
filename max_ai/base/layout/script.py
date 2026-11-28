@@ -401,6 +401,8 @@ def numbered(root: str) -> list[str]:
 def task_start(request: Json) -> Json:
     root: str = request["folder"]
     os.makedirs(root, exist_ok=True)
+    # Where it starts is there, also for the first command of a session.
+    os.makedirs(request["cwd"], exist_ok=True)
     with locked(os.path.join(root, ".lock")):
         sweep(root)
         # 1. No more than the session may have running at once.

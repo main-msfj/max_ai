@@ -40,6 +40,7 @@ class RunContext(BaseModel):
     )
     middleware_state: dict[str, dict[str, JsonValue]] = Field(default_factory=dict)  # each middleware's own state, by class name
     mcp_tasks: dict[str, dict[str, JsonValue]] = Field(default_factory=dict)  # MCP tasks still running, by task id
+    tasks: dict[str, str] = Field(default_factory=dict)  # background tasks still running: id -> command
     cwd: str | None = None  # where bash ended, when not the workspace
     files_seen: dict[str, str] = Field(default_factory=dict)  # file path -> sha256 the model saw
     todos: list[Todo] = Field(default_factory=list)  # the agent's list of things to do

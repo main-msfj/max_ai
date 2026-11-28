@@ -192,3 +192,11 @@ async def test_a_long_output_keeps_its_beginning_and_its_end(tmp_path, monkeypat
     # One that fits is kept whole.
     await ended(folder / "2")
     assert (folder / "2" / "output").read_text() == "".join(f"{n}\n" for n in range(1, 201))
+
+
+async def test_a_task_may_start_in_a_folder_that_is_not_there_yet(tmp_path):
+    sandbox = await box(tmp_path)
+    await sandbox.start_task("s1", "pwd", str(tmp_path / "new" / "folder"))
+    folder = Path(str(sandbox.layout.tasks)) / "s1" / "1"
+    assert await ended(folder) == {"reason": "done", "code": 0}
+    assert (folder / "output").read_text().strip() == str(tmp_path / "new" / "folder")
