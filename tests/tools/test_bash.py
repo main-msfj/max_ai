@@ -1,5 +1,7 @@
 """bash runs commands in the sandbox and starts where the last one ended."""
 
+import asyncio
+import os
 from pathlib import Path
 
 import pytest
@@ -219,3 +221,26 @@ def test_a_check_that_gave_no_answer_changes_nothing():
     # A path the model never read is not taken as told by the sandbox.
     assert BashTool.forget(seen, '{"changed": ["/etc/passwd"], "deleted": []}') == []
     assert seen == {"/w/app.py": "abc"}
+
+
+async def test_a_command_leaves_no_task_behind(sandbox, ctx):
+    await bash(sandbox, ctx, "echo hi")
+    tasks = Path(str(sandbox.layout.tasks)) / "s1"
+    assert [p.name for p in tasks.iterdir() if p.is_dir()] == []
+    # Closing does not have to ask the sandbox: nothing can be running.
+    assert sandbox._started_tasks is False and ctx.tasks == {}
+
+
+async def test_a_command_whose_call_is_cancelled_does_not_stay_running(sandbox, ctx, workspace):
+    call = asyncio.create_task(bash(sandbox, ctx, "echo $$ > pid.txt; sleep 30"))
+    while not (workspace / "pid.txt").exists():
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(0.1)
+    call.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await call
+    # The command is dead and nothing of it is left.
+    with pytest.raises(ProcessLookupError):
+        os.kill(int((workspace / "pid.txt").read_text()), 0)
+    tasks = Path(str(sandbox.layout.tasks)) / "s1"
+    assert [p.name for p in tasks.iterdir() if p.is_dir()] == []

@@ -196,12 +196,15 @@ async def test_a_long_output_keeps_its_beginning_and_its_end(tmp_path, monkeypat
     assert (folder / "2" / "output").read_text() == "".join(f"{n}\n" for n in range(1, 201))
 
 
-async def test_a_task_may_start_in_a_folder_that_is_not_there_yet(tmp_path):
+async def test_the_first_command_of_a_session_may_be_a_task(tmp_path):
     sandbox = await box(tmp_path)
-    await sandbox.start_task("s1", "pwd", str(tmp_path / "new" / "folder"))
+    # The session's folder is not there yet: it is made, and the task starts in it.
+    workspace = sandbox.session_paths("s1")["workspace"]
+    assert not Path(workspace).exists()
+    await sandbox.start_task("s1", "pwd -P", workspace)
     folder = Path(str(sandbox.layout.tasks)) / "s1" / "1"
     assert await ended(folder) == {"reason": "done", "code": 0}
-    assert (folder / "output").read_text().strip() == str(tmp_path / "new" / "folder")
+    assert (folder / "output").read_text().strip() == workspace
 
 
 def test_the_script_and_the_host_name_the_same_states():
@@ -337,3 +340,19 @@ async def test_what_a_harness_that_died_waiting_left_is_removed_and_closing_stop
     # The next command of the session removes what was left.
     await waited(sandbox, "true", tmp_path, token="tok2")
     assert folders(sandbox) == []
+
+
+async def test_a_waited_command_starts_in_the_sessions_folder_when_its_own_is_gone(tmp_path):
+    sandbox = await box(tmp_path)
+    ran = await waited(sandbox, "pwd -P", tmp_path / "gone")
+    assert ran.output.strip() == sandbox.session_paths("s1")["workspace"]
+    # The folder that was gone is not made again.
+    assert not (tmp_path / "gone").exists()
+
+
+async def test_what_is_asked_for_after_a_waited_command_runs_also_when_it_is_stopped(tmp_path):
+    sandbox = await box(tmp_path)
+    ran = await waited(sandbox, "echo one > f.txt", tmp_path, after="cat f.txt")
+    assert ran.after == "one\n"
+    late = await waited(sandbox, "echo two > f.txt; sleep 30", tmp_path, wait=1, after="cat f.txt")
+    assert late.timed_out and late.after == "two\n"

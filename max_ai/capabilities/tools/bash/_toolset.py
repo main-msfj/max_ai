@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import shlex
 import typing as t
@@ -14,8 +16,7 @@ from ....core.ids import short_id
 from ....errors.sandbox import SandboxError
 from ....types.tool_call import ToolCallRecord, ToolResult
 
-SCRIPT = Path(__file__).with_name("script.sh").read_text()  # sent to the sandbox
-CHECK = Path(__file__).with_name("check.py").read_text()  # run by the script when the command ends
+CHECK = Path(__file__).with_name("check.py").read_text()  # run in the sandbox when the command ends
 
 
 class BashToolConfig(BaseModel):
@@ -128,52 +129,52 @@ class BashTool(CoreTool):
             )
         layout = sandbox.layout
         allowed = [paths["workspace"], paths["tmp"], str(layout.skills), str(layout.memory)]
-        mark = f"__cwd_{short_id()}__"
         log = f"{paths['tmp']}/tool_results/{short_id()}.log"
         # The last files the model read, with the hash it saw of each.
         seen = dict(list(ctx.files_seen.items())[-self.MAX_SEEN:])
-        values = {
-            "__start": ctx.cwd or paths["workspace"], "__workspace": paths["workspace"],
-            "__log": log, "__max": str(self.MAX_OUTPUT_BYTES), "__mark": mark,
-            "__check": CHECK, "__seen": json.dumps(seen), "__command": command,
-        }
+        check = f"python3 -c {shlex.quote(CHECK)} {shlex.quote(json.dumps(seen))}"
 
-        # 2. The script with its values on top, each one quoted.
-        script = "".join(f"{name}={shlex.quote(value)}\n" for name, value in values.items())
-        ran = await sandbox.execute_command(script + SCRIPT, timeout=limit)
-        rest, _, checked = ran.stdout.rpartition(mark)
-        output, found, cwd = rest.rpartition(mark)
-        code = ran.exit_code
-        notes: list[str] = []
+        # 2. Run it and wait: started as a task is, nothing left when it ends.
+        token = short_id()
+        try:
+            ran = await sandbox.run_task(
+                tool_ctx.session_id, command, ctx.cwd or paths["workspace"],
+                wait=limit, token=token, chars=self.MAX_OUTPUT_BYTES, log=log, after=check,
+            )
+        except (asyncio.CancelledError, SandboxError) as error:
+            # Nobody waits any more (esc, or the sandbox failed): nothing stays running.
+            with contextlib.suppress(SandboxError):
+                await asyncio.shield(sandbox.drop_task(tool_ctx.session_id, token))
+            if isinstance(error, asyncio.CancelledError):
+                raise
+            return ToolResult.execution_error(tool_request.id, str(error))
+        code, notes = ran.code, list[str]()
 
-        # 3. Killed by the time limit: the script printed nothing, take the end of its log.
+        # 3. Out of time: it was stopped, with what it had printed.
         if ran.timed_out:
-            rest = await sandbox.execute_command(
-                f"tail -c {self.MAX_OUTPUT_BYTES} {shlex.quote(log)}"
-            )
-            output, code = rest.stdout, 124
+            code = 124
             notes.append(f"[stopped after {limit} seconds]")
-            # The script was killed before its check: ask for it now.
-            again = await sandbox.execute_command(
-                f"python3 -c {shlex.quote(CHECK)} {shlex.quote(json.dumps(seen))}"
-            )
-            checked = again.stdout
+        # Stopped by something else (the agent is closing): there is no exit code.
+        elif code is None:
+            notes.append("[the command was stopped before it ended]")
 
         # 4. Keep the folder for the next call only if it is an allowed one.
-        elif found and self.within(cwd, allowed):
-            ctx.cwd = None if cwd == paths["workspace"] else cwd
-        elif found:
+        elif ran.cwd and self.within(ran.cwd, allowed):
+            ctx.cwd = None if ran.cwd == paths["workspace"] else ran.cwd
+        elif ran.cwd:
             ctx.cwd = None
             notes.append(
-                f"[you left the allowed folders ({cwd}); the next command starts in the workspace]"
+                f"[you left the allowed folders ({ran.cwd}); "
+                "the next command starts in the workspace]"
             )
 
         # 5. Files the model had read and the command changed: it is told now,
         #    and they count as not seen, so an edit asks to read them first.
-        notes += self.forget(ctx.files_seen, checked)
+        notes += self.forget(ctx.files_seen, ran.after)
 
         # 6. Exit code first, then the output, then the notes.
-        parts = [f"exit code: {code}", output.strip("\n"), *notes]
+        first = "" if code is None else f"exit code: {code}"
+        parts = [first, ran.output.strip("\n"), *notes]
         return ToolResult.success_result(tool_request.id, "\n".join(p for p in parts if p))
 
     @classmethod

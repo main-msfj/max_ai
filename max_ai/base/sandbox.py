@@ -71,6 +71,7 @@ class TaskRun:
     cwd: str | None  # the folder it ended in; None when it was killed
     timed_out: bool  # its time passed and it was stopped
     log: str | None  # the file with the whole output, when ``output`` was cut
+    after: str  # what the command given as ``after`` printed
 
 
 class SandboxCore(ComponentBase[BaseModel], ABC):
@@ -84,6 +85,7 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
     # What only the harness does: these write setting.json or the skills.
     HARNESS_OPS: t.ClassVar[frozenset[str]] = frozenset({"create", "install", "permit", "unpermit"})
     WAIT_MARGIN: t.ClassVar[float] = 15  # seconds a waited command's call outlives its wait
+    WAITED_OUTPUT_CHARS: t.ClassVar[int] = 10_000_000  # output kept of a waited command
 
     component_type = "sandbox"
 
@@ -165,7 +167,8 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
         validate_id("session_id", session_id)
         answer = await self._run(
             "task_start", folder=str(self.layout.tasks / session_id),
-            command=command, cwd=cwd, seconds=setting.harness_task_seconds,
+            command=command, cwd=cwd, home=self.session_paths(session_id)["workspace"],
+            seconds=setting.harness_task_seconds,
             max=setting.harness_task_max, limit=setting.harness_task_output_chars,
         )
         self._started_tasks = True
@@ -192,24 +195,31 @@ class SandboxCore(ComponentBase[BaseModel], ABC):
 
     async def run_task(
         self, session_id: str, command: str, cwd: str, *, wait: float, token: str,
-        chars: int, log: str,
+        chars: int, log: str, after: str | None = None,
     ) -> TaskRun:
         """Run ``command`` and wait up to ``wait`` seconds for it: started as
         a background task is, but nothing of it is left when it ends. Whoever
         stops waiting (cancels this call) leaves it running: ``keep_task``
         makes it a task of the session, ``drop_task`` stops it. ``token``
-        names it meanwhile; a longer output than ``chars`` goes whole to ``log``."""
+        names it meanwhile; a longer output than ``chars`` goes whole to ``log``.
+        ``after`` is a command run when it ended, also when it was stopped.
+        It starts in ``cwd``, or in the session's folder when ``cwd`` is gone."""
         validate_id("session_id", session_id)
         validate_id("token", token)
-        # Said before the call: whoever stops waiting leaves it running.
-        self._started_tasks = True
-        answer = await self._run(
-            "task_run", timeout=wait + self.WAIT_MARGIN,
-            folder=str(self.layout.tasks / session_id), command=command, cwd=cwd,
-            seconds=setting.harness_task_seconds, max=setting.harness_task_max,
-            limit=setting.harness_task_output_chars,
-            wait=wait, token=token, chars=chars, log=log,
-        )
+        try:
+            answer = await self._run(
+                "task_run", timeout=wait + self.WAIT_MARGIN,
+                folder=str(self.layout.tasks / session_id), command=command, cwd=cwd,
+                home=self.session_paths(session_id)["workspace"],
+                # The cap of a task never comes before the wait is over.
+                seconds=max(setting.harness_task_seconds, wait + self.WAIT_MARGIN),
+                max=setting.harness_task_max, limit=self.WAITED_OUTPUT_CHARS,
+                wait=wait, token=token, chars=chars, log=log, after=after,
+            )
+        except BaseException:
+            # Whoever stops waiting leaves it running: closing has to ask.
+            self._started_tasks = True
+            raise
         return TaskRun(**{**answer, "state": TaskStatus(answer["state"])})
 
     async def keep_task(self, session_id: str, token: str) -> str:

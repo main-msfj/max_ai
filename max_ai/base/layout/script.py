@@ -48,6 +48,8 @@ POLL_SECONDS = 0.2
 WAIT_SECONDS = 0.02
 # The folder of a command the harness waits for: this, then the harness's token.
 WAITED = "waited-"
+# Seconds for what runs when a waited command ended.
+AFTER_SECONDS = 5
 # The shell of a task: it runs the command and, as it leaves, writes where it
 # was into the file its first argument numbers.
 SHELL = 'trap "pwd -P >&$0" EXIT; eval "$1"'
@@ -425,8 +427,11 @@ def launch(request: Json, waited: str | None = None) -> str:
     for it, so it has no number and is not one of the session's tasks."""
     root: str = request["folder"]
     os.makedirs(root, exist_ok=True)
-    # Where it starts is there, also for the first command of a session.
-    os.makedirs(request["cwd"], exist_ok=True)
+    # Where it starts: the folder asked for, or the session's when that one is gone.
+    start: str = request["cwd"]
+    if not os.path.isdir(start):
+        start = request["home"]
+        os.makedirs(start, exist_ok=True)
     with locked(os.path.join(root, ".lock")):
         sweep(root)
         states = [task_state(os.path.join(root, name), 0) for name in numbered(root)]
@@ -464,7 +469,7 @@ def launch(request: Json, waited: str | None = None) -> str:
             null = os.open(os.devnull, os.O_RDWR)
             for stream in (0, 1, 2):
                 os.dup2(null, stream)
-            watch(folder, request["command"], request["cwd"], request["seconds"], request["limit"])
+            watch(folder, request["command"], start, request["seconds"], request["limit"])
         finally:
             os._exit(0)
     put(folder, "watcher", watcher)
@@ -505,6 +510,17 @@ def task_run(request: Json) -> Json:
         shutil.move(os.path.join(folder, "output"), log)
         note = f"\n[... {len(printed) - chars} bytes cut; the full output is in {log} ...]\n"
         printed = printed[: chars // 2] + note.encode() + printed[-(chars // 2) :]
+    # 5. What the caller wants run now that it ended, also when it was stopped.
+    after = ""
+    if request.get("after"):
+        with contextlib.suppress(subprocess.SubprocessError, OSError):
+            after = subprocess.run(
+                ["bash", "-c", request["after"]],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=AFTER_SECONDS,
+            ).stdout
     ended = get(folder, "exit") or {"reason": LOST, "code": None}
     answer = {
         "state": ended["reason"],
@@ -513,8 +529,9 @@ def task_run(request: Json) -> Json:
         "cwd": get_text(folder, "cwd"),
         "timed_out": timed_out,
         "log": log,
+        "after": after,
     }
-    # 5. Nothing is left of a command that was waited for.
+    # 6. Nothing is left of a command that was waited for.
     shutil.rmtree(folder, ignore_errors=True)
     return answer
 
